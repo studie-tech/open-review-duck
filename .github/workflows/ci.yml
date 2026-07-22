@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/open_review_duck
+      MIGRATION_DATABASE_URL: postgresql://user:password@localhost:5432/open_review_duck
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
+      CLERK_SECRET_KEY: sk_test_ci
+      CLERK_WEBHOOK_SIGNING_SECRET: whsec_ci
+      ENCRYPTION_KEY: ci-only-encryption-key-with-at-least-32-characters
+      FLUE_BASE_URL: http://localhost:3100
+      FLUE_INTERNAL_SECRET: ci-only-flue-secret-with-at-least-32-characters
+      FLUE_DATABASE_URL: postgresql://user:password@localhost:5432/flue
+      MANAGED_AI_DAILY_REQUEST_LIMIT: 40
+      MANAGED_AI_WEEKLY_TOKEN_LIMIT: 250000
+      MANAGED_AI_MODEL: gpt-5-mini
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: open_review_duck
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user -d open_review_duck"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit:prod
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:coverage
+      - run: pnpm db:migrate
+      - run: pnpm test:integration:coverage
+      - run: pnpm db:generate
+      - name: Verify committed migrations are current
+        run: git diff --exit-code
+      - run: pnpm build:agent
+      - run: pnpm build
+
+  local-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build the local image
+        run: docker build --tag reviewduck:ci .
+      - name: Scan the local image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: reviewduck:ci
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Start the local image
+        run: >-
+          docker run --detach --name reviewduck-ci
+          --publish 127.0.0.1:3666:3666
+          --volume reviewduck-ci-data:/data
+          reviewduck:ci
+      - name: Verify local startup and auth boundary
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:3666/dashboard; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs reviewduck-ci
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'Host: reviewduck.example' http://127.0.0.1:3666/dashboard)" = "403"
+      - name: Print local logs after failure
+        if: failure()
+        run: docker logs reviewduck-ci
+
+  publish-container:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [verify, local-container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/studie-tech/reviewduck
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - name: Sign the published image
+        run: cosign sign --yes ghcr.io/studie-tech/reviewduck@${{ steps.build.outputs.digest }}

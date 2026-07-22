@@ -1,0 +1,902 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AzureDevOpsProvider } from "./azure-devops";
+import { GitHubProvider } from "./github";
+import { GitLabProvider } from "./gitlab";
+
+vi.mock("~/server/security/remote-url", () => ({
+  safeRemoteFetch: (url: string, init: RequestInit) =>
+    globalThis.fetch(url, init),
+}));
+
+afterEach(() => vi.unstubAllGlobals());
+
+/** Stubs fetch with a successful JSON response for provider tests. */
+function mockJson(body: unknown) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+}
+
+/** Creates a successful JSON response with optional additional headers. */
+function jsonResponse(body: unknown, headers?: HeadersInit) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json", ...headers },
+  });
+}
+
+/** Extracts a comparable URL string from any supported fetch input. */
+function requestUrl(input: string | URL | Request) {
+  return typeof input === "string"
+    ? input
+    : input instanceof URL
+      ? input.href
+      : input.url;
+}
+
+describe("provider normalization", () => {
+  it("normalizes GitHub repositories", async () => {
+    mockJson([
+      {
+        id: 42,
+        name: "review-duck",
+        full_name: "acme/review-duck",
+        private: true,
+        html_url: "https://github.com/acme/review-duck",
+        default_branch: "main",
+      },
+    ]);
+    const repositories = await new GitHubProvider("token").listRepositories();
+    expect(repositories[0]).toMatchObject({
+      externalId: "42",
+      owner: "acme",
+      name: "review-duck",
+      isPrivate: true,
+    });
+  });
+
+  it("normalizes GitLab draft merge requests", async () => {
+    mockJson([
+      {
+        id: 81,
+        iid: 9,
+        title: "Safer sync",
+        description: null,
+        state: "opened",
+        draft: true,
+        web_url: "https://gitlab.com/acme/review/-/merge_requests/9",
+        source_branch: "sync",
+        target_branch: "main",
+        sha: "head",
+        diff_refs: { base_sha: "base", head_sha: "head" },
+        author: { username: "reviewer", avatar_url: null },
+        changes_count: "4",
+      },
+    ]);
+    const pulls = await new GitLabProvider("token").listOpenPullRequests("1");
+    expect(pulls[0]).toMatchObject({
+      number: 9,
+      state: "draft",
+      headSha: "head",
+      baseSha: "base",
+      changedFiles: 4,
+    });
+  });
+
+  it("normalizes merged Azure DevOps pull requests", async () => {
+    mockJson({
+      pullRequestId: 12,
+      title: "Complete review",
+      status: "completed",
+      isDraft: false,
+      sourceRefName: "refs/heads/feature",
+      targetRefName: "refs/heads/main",
+      lastMergeSourceCommit: { commitId: "head" },
+      lastMergeTargetCommit: { commitId: "base" },
+      repository: { webUrl: "https://dev.azure.com/acme/repo" },
+      createdBy: { displayName: "Alex Reviewer" },
+    });
+    const pull = await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).getPullRequest("repo", 12);
+    expect(pull).toMatchObject({
+      state: "merged",
+      sourceBranch: "feature",
+      targetBranch: "main",
+      authorLogin: "Alex Reviewer",
+    });
+  });
+
+  it("follows GitHub Link pagination without guessing a page limit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          [
+            {
+              id: 1,
+              name: "first",
+              full_name: "acme/first",
+              private: false,
+              html_url: "https://github.com/acme/first",
+              default_branch: "main",
+            },
+          ],
+          {
+            Link: '<https://api.github.com/user/repos?per_page=100&page=2>; rel="next"',
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            id: 2,
+            name: "second",
+            full_name: "acme/second",
+            private: true,
+            html_url: "https://github.com/acme/second",
+            default_branch: "trunk",
+          },
+        ]),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const repositories = await new GitHubProvider("token").listRepositories();
+
+    expect(repositories.map(({ name }) => name)).toEqual(["first", "second"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.github.com/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&direction=desc&per_page=100",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://api.github.com/user/repos?per_page=100&page=2",
+    );
+  });
+
+  it("never forwards GitHub credentials to a pagination URL on another origin", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse([], {
+          Link: '<https://attacker.example/collect>; rel="next"',
+        }),
+      ),
+    );
+
+    await expect(
+      new GitHubProvider("token").listRepositories(),
+    ).rejects.toThrow("unsafe pagination URL");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows Azure DevOps continuation tokens", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            value: [
+              {
+                id: "one",
+                name: "first",
+                defaultBranch: "refs/heads/main",
+                webUrl: "https://dev.azure.com/acme/project/_git/first",
+                project: { name: "project" },
+              },
+            ],
+          },
+          { "x-ms-continuationtoken": "next cursor" },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          value: [
+            {
+              id: "two",
+              name: "second",
+              defaultBranch: "refs/heads/main",
+              webUrl: "https://dev.azure.com/acme/project/_git/second",
+              project: { name: "project" },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const repositories = await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).listRepositories();
+
+    expect(repositories.map(({ externalId }) => externalId)).toEqual([
+      "one",
+      "two",
+    ]);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "continuationToken=next+cursor",
+    );
+  });
+
+  it("retrieves deleted GitHub source from the base revision", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/files?")) {
+        return jsonResponse([{ filename: "src/legacy.ts", status: "removed" }]);
+      }
+      if (url.includes("/contents/")) {
+        return new Response("export function legacy() { return true }");
+      }
+      return jsonResponse({
+        id: 11,
+        number: 7,
+        title: "Remove legacy code",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/7",
+        user: { login: "reviewer", avatar_url: "" },
+        head: { ref: "cleanup", sha: "head-sha" },
+        base: { ref: "main", sha: "base-sha" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitHubProvider("token").getChangedFiles("42", 7);
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "src/legacy.ts",
+        changeType: "deleted",
+        content: "export function legacy() { return true }",
+      }),
+    ]);
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        requestUrl(url).includes("ref=base-sha"),
+      ),
+    ).toBe(true);
+  });
+
+  it("loads a repository file at an exact provider revision", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("export const review = true;", {
+        headers: { "Content-Length": "27" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitHubProvider("token").getFileContent(
+        "42",
+        "src/review helpers.ts",
+        "head sha",
+        150_000,
+      ),
+    ).resolves.toBe("export const review = true;");
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.github.com/repositories/42/contents/src/review%20helpers.ts?ref=head%20sha",
+    );
+  });
+
+  it("keeps GitHub base content for precise first-revision comparison", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/files?")) {
+        return jsonResponse([
+          { filename: "src/format.ts", status: "modified" },
+        ]);
+      }
+      if (url.includes("/contents/") && url.includes("ref=base-sha")) {
+        return new Response("export const format = () => 'before';");
+      }
+      if (url.includes("/contents/") && url.includes("ref=head-sha")) {
+        return new Response("export const format = () => 'after';");
+      }
+      return jsonResponse({
+        id: 12,
+        number: 8,
+        title: "Update formatter",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/8",
+        user: { login: "reviewer", avatar_url: "" },
+        head: { ref: "format", sha: "head-sha" },
+        base: { ref: "main", sha: "base-sha" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [file] = await new GitHubProvider("token").getChangedFiles("42", 8);
+
+    expect(file).toMatchObject({
+      changeType: "modified",
+      content: "export const format = () => 'after';",
+      previousContent: "export const format = () => 'before';",
+    });
+  });
+
+  it("publishes GitHub comments on the selected current-revision line", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 901 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitHubProvider("token").publishInlineComment({
+        repositoryExternalId: "42",
+        pullRequestNumber: 8,
+        headSha: "head-sha",
+        path: "src/format.ts",
+        line: 17,
+        side: "right",
+        body: "Could this retain the previous behavior?",
+      }),
+    ).resolves.toEqual({ externalId: "901" });
+
+    const request = fetchMock.mock.calls[0];
+    expect(request?.[0]).toBe(
+      "https://api.github.com/repositories/42/pulls/8/comments",
+    );
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+      commit_id: "head-sha",
+      path: "src/format.ts",
+      line: 17,
+      side: "RIGHT",
+    });
+  });
+
+  it("replies to an existing GitHub review conversation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 902 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitHubProvider("token").replyToInlineThread({
+        repositoryExternalId: "42",
+        pullRequestNumber: 8,
+        threadExternalId: "901",
+        parentCommentExternalId: "901",
+        body: "I agree; the retry path should retain the original error.",
+      }),
+    ).resolves.toEqual({ externalId: "902" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.github.com/repositories/42/pulls/8/comments/901/replies",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      body: "I agree; the retry path should retain the original error.",
+    });
+  });
+
+  it("groups GitHub review comment replies into inline conversations", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse([
+          {
+            id: 901,
+            body: "Could this retain the previous behavior?",
+            path: "src/format.ts",
+            line: 17,
+            side: "RIGHT",
+            created_at: "2026-07-20T10:00:00Z",
+            html_url: "https://github.com/acme/review/pull/8#discussion_r901",
+            user: { login: "reviewer", avatar_url: "https://avatars/1" },
+          },
+          {
+            id: 902,
+            in_reply_to_id: 901,
+            body: "Yes, I restored that behavior.",
+            path: "src/format.ts",
+            line: 17,
+            side: "RIGHT",
+            created_at: "2026-07-20T10:05:00Z",
+            html_url: "https://github.com/acme/review/pull/8#discussion_r902",
+            user: { login: "author", avatar_url: "https://avatars/2" },
+          },
+        ]),
+      ),
+    );
+
+    await expect(
+      new GitHubProvider("token").listInlineCommentThreads("42", 8),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        externalId: "901",
+        path: "src/format.ts",
+        line: 17,
+        comments: [
+          expect.objectContaining({ externalId: "901", author: "reviewer" }),
+          expect.objectContaining({ externalId: "902", author: "author" }),
+        ],
+      }),
+    ]);
+  });
+
+  it("enriches GitHub conversations with GraphQL resolution state", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/pulls/8/comments?per_page=100")) {
+        return jsonResponse([
+          {
+            id: 901,
+            body: "Could this retain the previous behavior?",
+            path: "src/format.ts",
+            line: 17,
+            side: "RIGHT",
+            created_at: "2026-07-20T10:00:00Z",
+            html_url: "https://github.com/acme/review/pull/8#discussion_r901",
+            user: { login: "reviewer" },
+          },
+        ]);
+      }
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          node_id: "R_kgDOReviewDuck",
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+        });
+      }
+      if (url === "https://api.github.com/graphql") {
+        return jsonResponse({
+          data: {
+            node: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: true,
+                      comments: {
+                        nodes: [{ fullDatabaseId: "901" }],
+                      },
+                    },
+                  ],
+                  pageInfo: {
+                    hasNextPage: false,
+                    endCursor: null,
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected provider request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitHubProvider("token").listInlineCommentThreads("42", 8),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        externalId: "901",
+        status: "resolved",
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("normalizes GitLab repositories and authenticated identity", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/user")) {
+        return jsonResponse({ id: 42, username: "duck", name: "" });
+      }
+      return jsonResponse([
+        {
+          id: 9,
+          path: "review",
+          path_with_namespace: "acme/platform/review",
+          default_branch: "trunk",
+          web_url: "https://gitlab.example/acme/platform/review",
+          visibility: "public",
+        },
+      ]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitLabProvider(
+      "token",
+      "https://gitlab.example/api/v4",
+    );
+
+    await expect(provider.getConnectionIdentity()).resolves.toEqual({
+      externalAccountId: "42",
+      displayName: "duck",
+    });
+    await expect(provider.listRepositories()).resolves.toEqual([
+      expect.objectContaining({
+        externalId: "9",
+        owner: "acme/platform",
+        name: "review",
+        defaultBranch: "trunk",
+        isPrivate: false,
+      }),
+    ]);
+  });
+
+  it("retrieves renamed GitLab content from both revisions", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/diffs?")) {
+        return jsonResponse([
+          {
+            old_path: "src/old.ts",
+            new_path: "src/new.ts",
+            deleted_file: false,
+            renamed_file: true,
+          },
+          {
+            old_path: "assets/logo.png",
+            new_path: "assets/logo.png",
+            deleted_file: false,
+          },
+        ]);
+      }
+      if (url.includes("/repository/files/")) {
+        return new Response(url.includes("old.ts") ? "before" : "after");
+      }
+      return jsonResponse({
+        id: 81,
+        iid: 9,
+        title: "Rename utility",
+        description: null,
+        state: "opened",
+        draft: false,
+        web_url: "https://gitlab.example/review/9",
+        source_branch: "rename",
+        target_branch: "main",
+        sha: "head",
+        diff_refs: { base_sha: "base", head_sha: "head" },
+        author: { username: "duck", avatar_url: null },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitLabProvider(
+      "token",
+      "https://gitlab.example/api/v4",
+    ).getChangedFiles("group%2Freview", 9);
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "src/new.ts",
+        content: "after",
+        previousContent: "before",
+        changeType: "renamed",
+      }),
+      expect.objectContaining({
+        path: "assets/logo.png",
+        content: "",
+        changeType: "modified",
+      }),
+    ]);
+  });
+
+  it("rejects an invalid GitLab pagination cursor", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse([], {
+          "x-next-page": "not-a-page",
+        }),
+      ),
+    );
+
+    await expect(
+      new GitLabProvider("token").listRepositories(),
+    ).rejects.toThrow("invalid pagination cursor");
+  });
+
+  it("publishes GitLab discussions with a diff position", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          diff_refs: {
+            base_sha: "base",
+            start_sha: "start",
+            head_sha: "head",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "discussion-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitLabProvider("token").publishInlineComment({
+        repositoryExternalId: "9",
+        pullRequestNumber: 4,
+        headSha: "head",
+        path: "src/check.ts",
+        line: 21,
+        side: "right",
+        body: "This condition looks inverted.",
+      }),
+    ).resolves.toEqual({ externalId: "discussion-1" });
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)),
+    ).toMatchObject({
+      position: {
+        base_sha: "base",
+        start_sha: "start",
+        head_sha: "head",
+        new_path: "src/check.ts",
+        new_line: 21,
+      },
+    });
+  });
+
+  it("replies inside an existing GitLab discussion", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 17 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitLabProvider("token").replyToInlineThread({
+        repositoryExternalId: "9",
+        pullRequestNumber: 4,
+        threadExternalId: "discussion-1",
+        parentCommentExternalId: "16",
+        body: "Updated—the condition now preserves the previous behavior.",
+      }),
+    ).resolves.toEqual({ externalId: "17" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://gitlab.com/api/v4/projects/9/merge_requests/4/discussions/discussion-1/notes",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      body: "Updated—the condition now preserves the previous behavior.",
+    });
+  });
+
+  it("normalizes GitLab diff discussions and replies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse([
+          {
+            id: "discussion-1",
+            notes: [
+              {
+                id: 1,
+                body: "This condition looks inverted.",
+                created_at: "2026-07-20T10:00:00Z",
+                author: { name: "Reviewer", username: "reviewer" },
+                resolvable: true,
+                resolved: false,
+                position: {
+                  new_path: "src/check.ts",
+                  new_line: 21,
+                },
+              },
+              {
+                id: 2,
+                body: "Fixed in the latest push.",
+                created_at: "2026-07-20T10:05:00Z",
+                author: { name: "Author", username: "author" },
+              },
+            ],
+          },
+        ]),
+      ),
+    );
+
+    await expect(
+      new GitLabProvider(
+        "token",
+        "https://gitlab.example/api/v4",
+      ).listInlineCommentThreads("9", 4),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        externalId: "discussion-1",
+        path: "src/check.ts",
+        line: 21,
+        status: "open",
+        comments: [
+          expect.objectContaining({ author: "Reviewer" }),
+          expect.objectContaining({ author: "Author" }),
+        ],
+      }),
+    ]);
+  });
+
+  it("handles Azure identity and a pull request with no changes", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("connectionData")) {
+        return jsonResponse({
+          authenticatedUser: { id: "user-1", providerDisplayName: "Duck" },
+        });
+      }
+      return jsonResponse({ value: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    );
+
+    await expect(provider.getConnectionIdentity()).resolves.toEqual({
+      externalAccountId: "user-1",
+      displayName: "Duck",
+    });
+    await expect(provider.getChangedFiles("repo", 12)).resolves.toEqual([]);
+  });
+
+  it("retrieves modified Azure source from both revisions", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/iterations?")) {
+        return jsonResponse({ value: [{ id: 3 }] });
+      }
+      if (url.includes("/iterations/3/changes?")) {
+        return jsonResponse({
+          changeEntries: [
+            {
+              item: {
+                path: "/src/sync.py",
+                gitObjectType: "blob",
+              },
+              changeType: "edit",
+            },
+          ],
+        });
+      }
+      if (url.includes("/items?")) {
+        return new Response(
+          url.includes("version=base-sha") ? "before()" : "after()",
+        );
+      }
+      return jsonResponse({
+        pullRequestId: 12,
+        title: "Update sync",
+        status: "active",
+        isDraft: false,
+        sourceRefName: "refs/heads/sync",
+        targetRefName: "refs/heads/main",
+        lastMergeSourceCommit: { commitId: "head-sha" },
+        lastMergeTargetCommit: { commitId: "base-sha" },
+        repository: { webUrl: "https://dev.azure.com/acme/repo" },
+        createdBy: { displayName: "Duck", uniqueName: "duck@example.com" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).getChangedFiles("repo", 12);
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "src/sync.py",
+        content: "after()",
+        previousContent: "before()",
+        changeType: "modified",
+      }),
+    ]);
+  });
+
+  it("publishes Azure DevOps threads on the selected line", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 71 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new AzureDevOpsProvider(
+        "token",
+        "https://dev.azure.com/acme",
+      ).publishInlineComment({
+        repositoryExternalId: "repo",
+        pullRequestNumber: 12,
+        headSha: "head",
+        path: "src/sync.py",
+        line: 8,
+        side: "right",
+        body: "Should this be awaited?",
+      }),
+    ).resolves.toEqual({ externalId: "71" });
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
+    ).toMatchObject({
+      threadContext: {
+        filePath: "/src/sync.py",
+        rightFileStart: { line: 8, offset: 1 },
+      },
+    });
+  });
+
+  it("replies inside an existing Azure DevOps pull-request thread", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 2,
+        content: "It is awaited now.",
+        commentType: "text",
+        publishedDate: "2026-07-20T10:05:00Z",
+        author: { displayName: "Author" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new AzureDevOpsProvider(
+        "token",
+        "https://dev.azure.com/acme",
+      ).replyToInlineThread({
+        repositoryExternalId: "repo",
+        pullRequestNumber: 12,
+        threadExternalId: "71",
+        parentCommentExternalId: "1",
+        body: "It is awaited now.",
+      }),
+    ).resolves.toEqual({ externalId: "2" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://dev.azure.com/acme/_apis/git/repositories/repo/pullRequests/12/threads/71/comments?api-version=7.1",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      content: "It is awaited now.",
+      parentCommentId: 1,
+      commentType: 1,
+    });
+  });
+
+  it("normalizes Azure DevOps inline threads and replies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          value: [
+            {
+              id: 71,
+              status: "active",
+              threadContext: {
+                filePath: "/src/sync.py",
+                rightFileStart: { line: 8, offset: 1 },
+              },
+              comments: [
+                {
+                  id: 1,
+                  content: "Should this be awaited?",
+                  commentType: "text",
+                  publishedDate: "2026-07-20T10:00:00Z",
+                  author: { displayName: "Reviewer" },
+                },
+                {
+                  id: 2,
+                  content: "It is awaited now.",
+                  commentType: "text",
+                  publishedDate: "2026-07-20T10:05:00Z",
+                  author: { displayName: "Author" },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      new AzureDevOpsProvider(
+        "token",
+        "https://dev.azure.com/acme",
+      ).listInlineCommentThreads("repo", 12),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        externalId: "71",
+        path: "src/sync.py",
+        line: 8,
+        status: "open",
+        comments: [
+          expect.objectContaining({ author: "Reviewer" }),
+          expect.objectContaining({ author: "Author" }),
+        ],
+      }),
+    ]);
+  });
+});

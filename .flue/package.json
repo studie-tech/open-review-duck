@@ -1,0 +1,16 @@
+{
+  "name": "@reviewduck/flue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@flue/postgres": "1.0.0-beta.9",
+    "@flue/runtime": "1.0.0-beta.9",
+    "hono": "^4.12.30",
+    "pg": "^8.22.0",
+    "valibot": "^1.4.2"
+  }
+}
