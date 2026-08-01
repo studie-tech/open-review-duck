@@ -173,6 +173,8 @@ export interface AnalyzedUnit {
   endLine: number;
   source: string;
   previousSource?: string;
+  previousStartLine?: number;
+  previousEndLine?: number;
   contentHash: string;
   semanticHash: string;
   changeType: SourceChangeType;

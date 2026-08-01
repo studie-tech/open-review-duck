@@ -149,6 +149,39 @@ describe("review analysis engine", () => {
     },
   );
 
+  it("carries the exact base range for repeated source text", () => {
+    const previous = [
+      "class First {",
+      "  value() { return 1; }",
+      "}",
+      "",
+      "class Second {",
+      "  value() { return 1; }",
+      "}",
+    ].join("\n");
+    const current = previous.replace(
+      "class Second {\n  value() { return 1; }",
+      "class Second {\n  value() { return 2; }",
+    );
+
+    const changed = analyzeFiles([
+      {
+        path: "repeated.ts",
+        previousContent: previous,
+        content: current,
+        changeType: "modified",
+      },
+    ]).units.find(
+      ({ kind, changeType }) => kind !== "file" && changeType === "modified",
+    );
+
+    expect(changed?.previousSource).toContain("value() { return 1; }");
+    expect(changed?.previousStartLine).toBeGreaterThanOrEqual(5);
+    expect(changed?.previousEndLine).toBeGreaterThanOrEqual(
+      changed?.previousStartLine ?? 0,
+    );
+  });
+
   it("does not merge shadowed symbols across separate lexical scopes", () => {
     const previousContent = [
       "export function first() { const shared = 1; return shared; }",

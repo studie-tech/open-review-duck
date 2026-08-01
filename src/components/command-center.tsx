@@ -1,7 +1,14 @@
 "use client";
 
 import { Search, X } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   commandMenuShortcut,
   formatShortcut,
@@ -392,7 +399,12 @@ export function CommandCenter({
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const componentId = useId().replaceAll(":", "");
+  const titleId = `${componentId}-title`;
+  const listboxId = `${componentId}-listbox`;
   const visibleCommands = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return commands.filter((command) => {
@@ -430,14 +442,31 @@ export function CommandCenter({
 
   useEffect(() => {
     if (!mode) return;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setQuery("");
     setSelectedIndex(0);
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) {
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
     queueMicrotask(() => inputRef.current?.focus());
+    return () => {
+      if (dialog?.open && typeof dialog.close === "function") dialog.close();
+      previousFocusRef.current?.focus();
+      previousFocusRef.current = null;
+    };
   }, [mode]);
 
   useEffect(() => {
-    if (selectedIndex >= visibleCommands.length) setSelectedIndex(0);
-  }, [selectedIndex, visibleCommands.length]);
+    const selected = visibleCommands[selectedIndex];
+    if (selected && !selected.disabled) return;
+    const firstEnabled = visibleCommands.findIndex(({ disabled }) => !disabled);
+    setSelectedIndex(Math.max(0, firstEnabled));
+  }, [selectedIndex, visibleCommands]);
 
   if (!mode) return null;
 
@@ -448,20 +477,43 @@ export function CommandCenter({
     command.onSelect();
   }
 
+  /** Selects the next enabled option without moving beyond the list boundary. */
+  function moveSelection(direction: -1 | 1) {
+    for (
+      let index = selectedIndex + direction;
+      index >= 0 && index < visibleCommands.length;
+      index += direction
+    ) {
+      if (!visibleCommands[index]?.disabled) {
+        setSelectedIndex(index);
+        return;
+      }
+    }
+  }
+
+  const activeOptionId = visibleCommands[selectedIndex]
+    ? `${listboxId}-option-${selectedIndex}`
+    : undefined;
+
   return (
-    <div className="fixed inset-0 z-[70] flex justify-center px-3 pt-[10dvh] sm:px-6 sm:pt-[14dvh]">
-      <button
-        type="button"
-        aria-label="Close command center"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/65 backdrop-blur-sm"
-      />
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="command-center-title"
-        className="bg-panel relative flex max-h-[72dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line shadow-2xl"
-      >
+    <dialog
+      ref={dialogRef}
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && event.key === "Escape") {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-[70] m-0 h-dvh max-h-none w-full max-w-none justify-center border-0 bg-black/65 px-3 pt-[10dvh] backdrop:bg-black/65 backdrop:backdrop-blur-sm open:flex sm:px-6 sm:pt-[14dvh]"
+    >
+      <section className="bg-panel relative flex max-h-[72dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line shadow-2xl">
         <header className="flex items-center gap-3 border-b border-line px-4">
           <Search className="text-fog size-4 shrink-0" aria-hidden="true" />
           <input
@@ -477,18 +529,21 @@ export function CommandCenter({
                 onClose();
               } else if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setSelectedIndex((current) =>
-                  Math.min(current + 1, visibleCommands.length - 1),
-                );
+                moveSelection(1);
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
-                setSelectedIndex((current) => Math.max(current - 1, 0));
+                moveSelection(-1);
               } else if (event.key === "Enter") {
                 event.preventDefault();
                 const command = visibleCommands[selectedIndex];
                 if (command) run(command);
               }
             }}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls={listboxId}
+            aria-expanded="true"
+            aria-activedescendant={activeOptionId}
             aria-label={
               mode === "commands"
                 ? "Search commands"
@@ -510,27 +565,42 @@ export function CommandCenter({
             <X className="size-4" />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          <h2 id="command-center-title" className="sr-only">
-            {mode === "commands" ? "Quick actions" : "Keyboard shortcuts"}
-          </h2>
+        <h2 id={titleId} className="sr-only">
+          {mode === "commands" ? "Quick actions" : "Keyboard shortcuts"}
+        </h2>
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-label={
+            mode === "commands" ? "Available actions" : "Available shortcuts"
+          }
+          className="min-h-0 flex-1 overflow-y-auto p-2"
+        >
           {visibleCommands.length === 0 ? (
-            <p className="text-mist px-4 py-12 text-center text-sm">
-              No matching actions.
-            </p>
+            <div role="presentation">
+              <p className="text-mist px-4 py-12 text-center text-sm">
+                No matching actions.
+              </p>
+            </div>
           ) : (
             groups.map(({ group, commands: groupCommands }) => (
-              <div key={group} className="mb-2 last:mb-0">
-                <p className="text-fog px-3 py-2 text-[9px] font-semibold tracking-[.14em] uppercase">
+              <fieldset
+                key={group}
+                className="m-0 mb-2 min-w-0 border-0 p-0 last:mb-0"
+              >
+                <legend className="text-fog block w-full px-3 py-2 text-[9px] font-semibold tracking-[.14em] uppercase">
                   {group}
-                </p>
+                </legend>
                 {groupCommands.map((command) => {
                   const index = visibleCommands.indexOf(command);
                   const selected = index === selectedIndex;
                   return (
                     <button
                       key={command.id}
+                      id={`${listboxId}-option-${index}`}
                       type="button"
+                      role="option"
+                      aria-selected={selected}
                       disabled={command.disabled}
                       onMouseMove={() => setSelectedIndex(index)}
                       onClick={() => run(command)}
@@ -575,7 +645,7 @@ export function CommandCenter({
                     </button>
                   );
                 })}
-              </div>
+              </fieldset>
             ))
           )}
         </div>
@@ -602,6 +672,6 @@ export function CommandCenter({
           )}
         </footer>
       </section>
-    </div>
+    </dialog>
   );
 }

@@ -25,7 +25,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 28;
+export const CURRENT_ANALYSIS_VERSION = 29;
 
 type RawUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
@@ -203,6 +203,11 @@ function fallbackDeclaration(file: SourceFile) {
     endLine: binary ? 1 : Math.max(1, source.split("\n").length),
     source,
     previousSource: binary || oversized ? undefined : file.previousContent,
+    previousStartLine: file.previousContent === undefined ? undefined : 1,
+    previousEndLine:
+      file.previousContent === undefined
+        ? undefined
+        : Math.max(1, file.previousContent.split("\n").length),
     contentHash: sha256(binary ? semanticContent : source),
     semanticHash: sha256(`${changeType}:${semanticContent}`),
     changeType,
@@ -235,6 +240,11 @@ function moduleReviewUnits(
         endLine: Math.max(1, file.content.split("\n").length),
         source: file.content,
         previousSource: file.previousContent,
+        previousStartLine: file.previousContent === undefined ? undefined : 1,
+        previousEndLine:
+          file.previousContent === undefined
+            ? undefined
+            : Math.max(1, file.previousContent.split("\n").length),
         contentHash: sha256(file.content),
         semanticHash: sha256(
           `${changeType}:${semanticSource(file.content, language)}`,
@@ -467,6 +477,8 @@ function changeFragment(
     endLine: labelEnd + 1,
     source: hasCurrent ? currentSource : (previousSource ?? ""),
     previousSource,
+    previousStartLine: hasPrevious ? previousStart + 1 : undefined,
+    previousEndLine: hasPrevious ? previousEnd + 1 : undefined,
     contentHash: sha256(hasCurrent ? currentSource : (previousSource ?? "")),
     semanticHash: sha256(
       `${changeType}:${semanticSource(
@@ -731,6 +743,8 @@ function prScopedReviewUnits(
     changedCurrent.push({
       ...unit,
       previousSource: previous?.source,
+      previousStartLine: previous?.startLine,
+      previousEndLine: previous?.endLine,
       semanticHash: previous
         ? unit.semanticHash
         : sha256(`added:${semanticSource(unit.source, language)}`),
@@ -757,6 +771,8 @@ function prScopedReviewUnits(
       {
         ...unit,
         previousSource: unit.source,
+        previousStartLine: unit.startLine,
+        previousEndLine: unit.endLine,
         semanticHash: sha256(
           `deleted:${semanticSource(unit.source, language)}`,
         ),
@@ -840,22 +856,6 @@ const conceptSymbolStopWords = new Set([
   "undefined",
   "value",
 ]);
-
-/** Returns the one-based location of an exact source slice. */
-function locatedSourceRange(
-  source: string,
-  slice: string | undefined,
-  fallback: { startLine: number; endLine: number },
-) {
-  if (!slice) return undefined;
-  const offset = source.indexOf(slice);
-  if (offset < 0) return fallback;
-  const startLine = source.slice(0, offset).split("\n").length;
-  return {
-    startLine,
-    endLine: startLine + Math.max(0, slice.split("\n").length - 1),
-  };
-}
 
 /** Indexes semantic occurrences whose source coordinates overlap one range. */
 function symbolsWithinRange(
@@ -1000,6 +1000,8 @@ function mergeConceptUnits(file: SourceFile, members: UnitSymbolProfile[]) {
     endLine: currentRanges.length > 0 ? currentEnd : Math.max(1, previousEnd),
     source: currentRanges.length > 0 ? currentSource : (previousSource ?? ""),
     previousSource,
+    previousStartLine: previousRanges.length > 0 ? previousStart : undefined,
+    previousEndLine: previousRanges.length > 0 ? previousEnd : undefined,
     contentHash: sha256(
       members
         .map(({ unit }) => unit.contentHash)
@@ -1054,11 +1056,13 @@ function clusterRelatedChangeUnits(
       unit.changeType === "deleted"
         ? undefined
         : { startLine: unit.startLine, endLine: unit.endLine };
-    const previousRange = locatedSourceRange(
-      file.previousContent ?? "",
-      unit.previousSource,
-      { startLine: unit.startLine, endLine: unit.endLine },
-    );
+    const previousRange =
+      unit.previousStartLine !== undefined && unit.previousEndLine !== undefined
+        ? {
+            startLine: unit.previousStartLine,
+            endLine: unit.previousEndLine,
+          }
+        : undefined;
     const current = symbolsWithinRange(currentOccurrences, currentRange);
     const previous = symbolsWithinRange(previousOccurrences, previousRange);
     return {
@@ -1380,6 +1384,12 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
       endLine: Math.max(1, file.content.split("\n").length),
       source: fileContextSource,
       previousSource: file.isBinary ? undefined : file.previousContent,
+      previousStartLine:
+        file.isBinary || file.previousContent === undefined ? undefined : 1,
+      previousEndLine:
+        file.isBinary || file.previousContent === undefined
+          ? undefined
+          : Math.max(1, file.previousContent.split("\n").length),
       contentHash: sha256(file.binaryHash ?? fileContextSource),
       semanticHash: sha256(
         `${changeType}:${

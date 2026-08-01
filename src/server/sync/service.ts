@@ -38,6 +38,18 @@ const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 
 /** Converts an inclusive line range to UTF-8 byte offsets. */
 function sourceRange(source: string, startLine: number, endLine: number) {
+  const lineCount = source.split("\n").length;
+  if (
+    !Number.isInteger(startLine) ||
+    !Number.isInteger(endLine) ||
+    startLine < 1 ||
+    endLine < startLine ||
+    endLine > lineCount
+  ) {
+    throw new Error(
+      `Source range ${startLine}-${endLine} is outside a ${lineCount}-line object`,
+    );
+  }
   const lines = source.match(/[^\n]*(?:\n|$)/g) ?? [];
   const before = lines.slice(0, Math.max(0, startLine - 1)).join("");
   const selected = lines.slice(Math.max(0, startLine - 1), endLine).join("");
@@ -45,15 +57,23 @@ function sourceRange(source: string, startLine: number, endLine: number) {
   return { startByte, endByte: startByte + Buffer.byteLength(selected) };
 }
 
-/** Locates an analyzed previous-source slice inside its immutable object. */
-function previousSourceRange(source: string, previousSource?: string) {
-  if (!previousSource) return {};
-  const characterOffset = source.indexOf(previousSource);
-  if (characterOffset < 0) return {};
-  const startByte = Buffer.byteLength(source.slice(0, characterOffset));
+/** Converts an analyzed base-side line range to immutable object byte offsets. */
+function previousSourceRange(source: string, unit: AnalyzedUnit) {
+  if (unit.previousSource === undefined) return {};
+  if (
+    unit.previousStartLine === undefined ||
+    unit.previousEndLine === undefined
+  ) {
+    throw new Error(`Previous source range is missing for ${unit.stableKey}`);
+  }
+  const range = sourceRange(
+    source,
+    unit.previousStartLine,
+    unit.previousEndLine,
+  );
   return {
-    previousStartByte: startByte,
-    previousEndByte: startByte + Buffer.byteLength(previousSource),
+    previousStartByte: range.startByte,
+    previousEndByte: range.endByte,
   };
 }
 
@@ -428,10 +448,7 @@ export async function syncPullRequest(
           unit.startLine,
           unit.endLine,
         ),
-        ...previousSourceRange(
-          storedFile.file.previousContent ?? "",
-          unit.previousSource,
-        ),
+        ...previousSourceRange(storedFile.file.previousContent ?? "", unit),
         relatedRanges: unit.relatedRanges,
         contentHash: unit.contentHash,
         semanticHash: unit.semanticHash,

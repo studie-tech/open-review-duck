@@ -1,8 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
-import {
-  redactSentryEvent,
-  tracesSampler,
-} from "./src/server/observability/sentry";
+import { redactSentryEvent, tracesSampler } from "./src/lib/sentry-safety";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,

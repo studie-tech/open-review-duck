@@ -12,6 +12,7 @@ import {
 import type { db as database } from "~/server/db";
 import type { ReviewQueueSource } from "~/server/review/queue";
 import { aiJobWorkflow } from "./ai-job";
+import { ensureWorkflowRunLink } from "./run-link";
 import { syncPullRequestWorkflow } from "./sync-pull-request";
 
 type Database = typeof database;
@@ -30,7 +31,7 @@ export async function startPullRequestSync(
     };
   },
 ) {
-  return db.transaction(async (tx) => {
+  const reservation = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`sync-workflow:${input.repositoryId}:${input.pullRequestNumber}`}))`,
     );
@@ -49,29 +50,30 @@ export async function startPullRequestSync(
       ),
       orderBy: [desc(syncRuns.createdAt)],
     });
-    if (active?.workflowRunId) {
-      if (input.queue) {
-        await tx
-          .insert(syncQueueRequests)
-          .values({
-            syncRunId: active.id,
-            userId: input.queue.userId,
+    if (active && input.queue) {
+      await tx
+        .insert(syncQueueRequests)
+        .values({
+          syncRunId: active.id,
+          userId: input.queue.userId,
+          source: input.queue.source,
+          explicit: input.queue.explicit,
+        })
+        .onConflictDoUpdate({
+          target: [syncQueueRequests.syncRunId, syncQueueRequests.userId],
+          set: {
             source: input.queue.source,
             explicit: input.queue.explicit,
-          })
-          .onConflictDoUpdate({
-            target: [syncQueueRequests.syncRunId, syncQueueRequests.userId],
-            set: {
-              source: input.queue.source,
-              explicit: input.queue.explicit,
-            },
-          });
-      }
+          },
+        });
+    }
+    if (active?.workflowRunId) {
       const workflow = await tx.query.workflowRuns.findFirst({
         where: eq(workflowRuns.id, active.workflowRunId),
       });
       if (workflow) {
         return {
+          shouldStart: false as const,
           status: active.status,
           syncId: active.id,
           workflowRunId: workflow.providerRunId,
@@ -79,14 +81,12 @@ export async function startPullRequestSync(
       }
     }
     if (active) {
-      await tx
-        .update(syncRuns)
-        .set({
-          status: "failed",
-          error: "Synchronization was not linked to a durable workflow",
-          completedAt: new Date(),
-        })
-        .where(eq(syncRuns.id, active.id));
+      return {
+        shouldStart: false as const,
+        status: active.status,
+        syncId: active.id,
+        workflowRunId: null,
+      };
     }
     const [sync] = await tx
       .insert(syncRuns)
@@ -105,33 +105,56 @@ export async function startPullRequestSync(
         explicit: input.queue.explicit,
       });
     }
-    const run = await start(syncPullRequestWorkflow, [sync.id]);
-    const [workflow] = await tx
-      .insert(workflowRuns)
-      .values({
-        workspaceId: input.workspaceId,
-        providerRunId: run.runId,
-        kind: "sync_pull_request",
-        targetId: sync.id,
-        deploymentId: process.env.VERCEL_DEPLOYMENT_ID,
-      })
-      .returning();
-    if (!workflow) throw new Error("Could not persist workflow run");
-    await tx
-      .update(syncRuns)
-      .set({ workflowRunId: workflow.id })
-      .where(eq(syncRuns.id, sync.id));
     return {
+      shouldStart: true as const,
       status: "queued" as const,
       syncId: sync.id,
-      workflowRunId: run.runId,
+      workflowRunId: null,
     };
   });
+
+  if (!reservation.shouldStart) {
+    const workflowRunId =
+      reservation.workflowRunId ??
+      (await waitForWorkflowLink(db, "sync_pull_request", reservation.syncId));
+    return {
+      status: reservation.status,
+      syncId: reservation.syncId,
+      workflowRunId,
+    };
+  }
+
+  let run: Awaited<ReturnType<typeof start>>;
+  try {
+    run = await start(syncPullRequestWorkflow, [reservation.syncId]);
+  } catch (cause) {
+    await db
+      .update(syncRuns)
+      .set({
+        status: "failed",
+        error: cause instanceof Error ? cause.message : "Workflow start failed",
+        completedAt: new Date(),
+      })
+      .where(
+        and(eq(syncRuns.id, reservation.syncId), eq(syncRuns.status, "queued")),
+      );
+    throw cause;
+  }
+  await ensureWorkflowRunLink(db, {
+    kind: "sync_pull_request",
+    targetId: reservation.syncId,
+    providerRunId: run.runId,
+  });
+  return {
+    status: reservation.status,
+    syncId: reservation.syncId,
+    workflowRunId: run.runId,
+  };
 }
 
 /** Starts one AI workflow exactly once and links its durable run to the job. */
 export async function startAiJob(db: Database, jobId: string) {
-  return db.transaction(async (tx) => {
+  const reservation = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`ai-workflow:${jobId}`}))`,
     );
@@ -145,28 +168,71 @@ export async function startAiJob(db: Database, jobId: string) {
       });
       if (!existing) throw new Error("AI workflow link is invalid");
       return {
+        shouldStart: false as const,
         jobId,
         workflowRunId: existing.providerRunId,
       };
     }
-    const run = await start(aiJobWorkflow, [job.id]);
-    const [workflow] = await tx
-      .insert(workflowRuns)
-      .values({
-        workspaceId: job.workspaceId,
-        providerRunId: run.runId,
-        kind: "ai_job",
-        targetId: job.id,
-        deploymentId: process.env.VERCEL_DEPLOYMENT_ID,
-      })
-      .returning();
-    if (!workflow) throw new Error("Could not persist AI workflow run");
+    if (job.status === "waiting_for_provider") {
+      return {
+        shouldStart: false as const,
+        jobId,
+        workflowRunId: null,
+      };
+    }
+    if (job.status !== "queued") {
+      throw new Error(`Cannot start an AI job in ${job.status} state`);
+    }
     await tx
       .update(aiJobs)
-      .set({ workflowRunId: workflow.id })
+      .set({ status: "waiting_for_provider" })
       .where(eq(aiJobs.id, job.id));
-    return { jobId, workflowRunId: run.runId };
+    return { shouldStart: true as const, jobId, workflowRunId: null };
   });
+
+  if (!reservation.shouldStart) {
+    const workflowRunId =
+      reservation.workflowRunId ??
+      (await waitForWorkflowLink(db, "ai_job", reservation.jobId));
+    return { jobId, workflowRunId };
+  }
+
+  let run: Awaited<ReturnType<typeof start>>;
+  try {
+    run = await start(aiJobWorkflow, [jobId]);
+  } catch (cause) {
+    const { failAiJob } = await import("~/server/ai/agent-loop");
+    await failAiJob(db, jobId, cause);
+    throw cause;
+  }
+  await ensureWorkflowRunLink(db, {
+    kind: "ai_job",
+    targetId: jobId,
+    providerRunId: run.runId,
+  });
+  return { jobId, workflowRunId: run.runId };
+}
+
+/** Waits briefly for a concurrent starter or the workflow itself to persist its link. */
+async function waitForWorkflowLink(
+  db: Database,
+  kind: "sync_pull_request" | "ai_job",
+  targetId: string,
+) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const workflow = await db.query.workflowRuns.findFirst({
+      where: and(
+        eq(workflowRuns.kind, kind),
+        eq(workflowRuns.targetId, targetId),
+      ),
+      orderBy: [desc(workflowRuns.createdAt)],
+    });
+    if (workflow) return workflow.providerRunId;
+    await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
+  }
+  throw new Error(
+    "Workflow start is still being established; try again shortly",
+  );
 }
 
 /** Cancels a durable run and records the application terminal state. */

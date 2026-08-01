@@ -1,36 +1,6 @@
+import "server-only";
+
 import { createHmac } from "node:crypto";
-
-const SECRET_FIELD =
-  /authorization|cookie|token|secret|source|prompt|model.?output|signed.?url|file.?key|custom.?id|oauth.?code|request.?body|repository.?path/i;
-
-/** Removes repository and credential material before an event leaves the process. */
-export function redactSentryEvent<T>(value: T): T {
-  if (!value) return value;
-  const serialized = JSON.stringify(value, (key, nested) =>
-    SECRET_FIELD.test(key) ? "[REDACTED]" : nested,
-  );
-  return JSON.parse(serialized) as T;
-}
-
-/** Applies the production trace budget to high-value and ordinary operations. */
-export function tracesSampler(context: { name?: string }) {
-  const name = context.name ?? "";
-  if (
-    name.includes("/health") ||
-    name.includes("/_next/") ||
-    name.includes("/tree-sitter/")
-  ) {
-    return 0;
-  }
-  if (
-    /sync|workflow|\/api\/ai\/|\/api\/webhooks\/|\/api\/integrations\/|billing/i.test(
-      name,
-    )
-  ) {
-    return 0.1;
-  }
-  return 0.01;
-}
 
 /** Adds a SaaS-only Sentry span without loading Sentry in the local target. */
 export async function observeOperation<T>(

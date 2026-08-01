@@ -15,7 +15,7 @@ export function stableReviewKey(path: string, kind: string, name: string) {
     : `${readable.slice(0, 335)}:${sha256(readable)}`;
 }
 
-/** Normalizes source text so non-semantic formatting changes preserve sign-offs. */
+/** Ignores parser whitespace while retaining comments, literals, and code tokens. */
 export function semanticSource(source: string, language: SupportedLanguage) {
   if (language === "text") return source;
   return withSyntaxTree(language, source, (tree) => tokenStream(source, tree));

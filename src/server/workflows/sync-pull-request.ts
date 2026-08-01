@@ -1,18 +1,26 @@
 import { eq } from "drizzle-orm";
+import { getWorkflowMetadata } from "workflow";
 import { syncQueueRequests, syncRuns, workflowRuns } from "@/drizzle/schema";
 import { db } from "~/server/db";
 import { assignPullRequestToQueue } from "~/server/review/queue";
 import { syncPullRequest } from "~/server/sync/service";
+import { ensureWorkflowRunLink } from "./run-link";
 
 /** Durably synchronizes one pull request using identifier-only workflow state. */
 export async function syncPullRequestWorkflow(syncId: string) {
   "use workflow";
-  return executeSynchronization(syncId);
+  const { workflowRunId } = getWorkflowMetadata();
+  return executeSynchronization(syncId, workflowRunId);
 }
 
 /** Runs one coarse, idempotent synchronization step from persisted identity. */
-async function executeSynchronization(syncId: string) {
+async function executeSynchronization(syncId: string, providerRunId: string) {
   "use step";
+  const workflow = await ensureWorkflowRunLink(db, {
+    kind: "sync_pull_request",
+    targetId: syncId,
+    providerRunId,
+  });
   const sync = await db.query.syncRuns.findFirst({
     where: eq(syncRuns.id, syncId),
   });
@@ -21,12 +29,10 @@ async function executeSynchronization(syncId: string) {
     .update(syncRuns)
     .set({ status: "running", progress: 5, startedAt: new Date() })
     .where(eq(syncRuns.id, sync.id));
-  if (sync.workflowRunId) {
-    await db
-      .update(workflowRuns)
-      .set({ status: "running", startedAt: new Date() })
-      .where(eq(workflowRuns.id, sync.workflowRunId));
-  }
+  await db
+    .update(workflowRuns)
+    .set({ status: "running", startedAt: new Date() })
+    .where(eq(workflowRuns.id, workflow.id));
   try {
     const result = await syncPullRequest(
       db,
@@ -49,12 +55,10 @@ async function executeSynchronization(syncId: string) {
       .update(syncRuns)
       .set({ status: "completed", progress: 100, completedAt: new Date() })
       .where(eq(syncRuns.id, sync.id));
-    if (sync.workflowRunId) {
-      await db
-        .update(workflowRuns)
-        .set({ status: "completed", completedAt: new Date() })
-        .where(eq(workflowRuns.id, sync.workflowRunId));
-    }
+    await db
+      .update(workflowRuns)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(eq(workflowRuns.id, workflow.id));
     return {
       snapshotCreated: result.snapshotCreated,
       snapshotId: result.snapshot.id,
@@ -68,12 +72,10 @@ async function executeSynchronization(syncId: string) {
       .update(syncRuns)
       .set({ status: "failed", error, completedAt: new Date() })
       .where(eq(syncRuns.id, sync.id));
-    if (sync.workflowRunId) {
-      await db
-        .update(workflowRuns)
-        .set({ status: "failed", error, completedAt: new Date() })
-        .where(eq(workflowRuns.id, sync.workflowRunId));
-    }
+    await db
+      .update(workflowRuns)
+      .set({ status: "failed", error, completedAt: new Date() })
+      .where(eq(workflowRuns.id, workflow.id));
     throw cause;
   }
 }

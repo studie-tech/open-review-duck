@@ -1,5 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 
+import { redactSentryEvent } from "./src/lib/sentry-safety";
+
 if (
   process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "saas" &&
   process.env.NEXT_PUBLIC_SENTRY_DSN
@@ -35,21 +37,6 @@ if (
     },
     integrations: [],
   });
-}
-
-/** Recursively strips sensitive client telemetry fields before transport. */
-function redactSentryEvent<T>(value: T): T {
-  const serialized = JSON.stringify(value, (key, nested) => {
-    if (
-      /authorization|cookie|token|secret|source|prompt|output|signed.?url|file.?key|custom.?id|oauth.?code|request.?body/i.test(
-        key,
-      )
-    ) {
-      return "[REDACTED]";
-    }
-    return nested;
-  });
-  return JSON.parse(serialized) as T;
 }
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;

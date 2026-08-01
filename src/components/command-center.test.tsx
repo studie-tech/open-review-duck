@@ -59,6 +59,9 @@ function CommandCenterHarness({
   return (
     <>
       <input aria-label="Comment editor" />
+      <button type="button" onClick={() => setMode("commands")}>
+        Open command center
+      </button>
       <CommandCenter
         commands={commands}
         mode={mode}
@@ -272,6 +275,13 @@ describe("CommandCenter", () => {
     expect(
       screen.getByRole("dialog", { name: "Quick actions" }),
     ).toBeInTheDocument();
+    const search = screen.getByRole("combobox", { name: "Search commands" });
+    const selectedOption = screen.getByRole("option", {
+      name: /Go to pull requests/,
+    });
+    expect(search).toHaveAttribute("aria-controls");
+    expect(search).toHaveAttribute("aria-activedescendant", selectedOption.id);
+    expect(selectedOption).toHaveAttribute("aria-selected", "true");
     await user.keyboard("{Enter}");
     expect(onNavigate).toHaveBeenCalledOnce();
   });
@@ -283,6 +293,23 @@ describe("CommandCenter", () => {
     expect(
       screen.getByRole("dialog", { name: "Keyboard shortcuts" }),
     ).toBeInTheDocument();
+  });
+
+  it("restores focus after the modal closes", async () => {
+    const user = userEvent.setup();
+    render(<CommandCenterHarness onNavigate={vi.fn()} />);
+    const trigger = screen.getByRole("button", {
+      name: "Open command center",
+    });
+
+    await user.click(trigger);
+    expect(
+      screen.getByRole("combobox", { name: "Search commands" }),
+    ).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("supports navigation sequences but suppresses them while typing", () => {
@@ -479,15 +506,15 @@ describe("CommandCenter", () => {
     fireEvent.keyDown(document, { key: "q" });
 
     expect(
-      screen.queryByRole("button", { name: /Open utility function/ }),
+      screen.queryByRole("option", { name: /Open utility function/ }),
     ).not.toBeInTheDocument();
 
     await user.type(
-      screen.getByRole("textbox", { name: "Search commands" }),
+      screen.getByRole("combobox", { name: "Search commands" }),
       "utility",
     );
     expect(
-      screen.getByRole("button", { name: /Open utility function/ }),
+      screen.getByRole("option", { name: /Open utility function/ }),
     ).toBeInTheDocument();
   });
 });
