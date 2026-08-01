@@ -25,7 +25,7 @@ RUN pnpm --filter @reviewduck/workflow-runtime deploy --prod /workflow-runtime
 
 FROM postgres:18-bookworm AS runtime
 ARG REVIEWDUCK_VERSION=development
-COPY --from=node-base /usr/local/ /usr/local/
+COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
 ENV NODE_ENV=production
 ENV DEPLOYMENT_MODE=local
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -41,8 +41,9 @@ ENV ALLOW_PRIVATE_PROVIDER_HOSTS=true
 ENV REVIEWDUCK_VERSION=$REVIEWDUCK_VERSION
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git tini util-linux \
+    && apt-get install -y --no-install-recommends ca-certificates curl git libatomic1 tini util-linux \
     && rm -rf /var/lib/apt/lists/* \
+    && rm -f /usr/local/bin/gosu \
     && useradd --uid 10001 --user-group --create-home --shell /usr/sbin/nologin reviewduck \
     && install -d -m 0755 -o reviewduck -g reviewduck /app /data
 
@@ -59,7 +60,10 @@ COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-bootstrap.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-admin.mjs ./scripts/local-admin.mjs
 COPY --chown=root:root docker/local-entrypoint.sh /usr/local/bin/reviewduck-local
 
-RUN chmod 0755 /usr/local/bin/reviewduck-local
+RUN find /app/node_modules/.pnpm -maxdepth 1 -type d \
+      \( -name '@esbuild+*' -o -name '@typescript+typescript-*' \) \
+      -exec rm -rf {} + \
+    && chmod 0755 /usr/local/bin/reviewduck-local
 
 VOLUME ["/data"]
 EXPOSE 3000
