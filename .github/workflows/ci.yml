@@ -83,8 +83,8 @@ jobs:
           load: true
           tags: open-review-duck:ci
           platforms: linux/amd64
-          provenance: mode=max
-          sbom: true
+          provenance: false
+          sbom: false
       - name: Scan the local appliance
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
