@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { clerkMiddleware } from "@clerk/nextjs/server";
 import {
   type NextFetchEvent,
   type NextRequest,
@@ -8,34 +7,15 @@ import {
 import { localContentSecurityPolicy } from "~/lib/content-security-policy";
 import { hostnameFromHostHeader, isLoopbackHostname } from "~/lib/deployment";
 
-const saasMiddleware =
-  process.env.DEPLOYMENT_MODE === "local"
-    ? undefined
-    : clerkMiddleware({
-        contentSecurityPolicy: {
-          strict: true,
-          directives: {
-            "base-uri": ["'self'"],
-            "frame-ancestors": ["'none'"],
-            "object-src": ["'none'"],
-          },
-        },
-      });
-
-/** Applies Clerk in SaaS mode and confines local mode to loopback. */
-export function proxy(request: NextRequest, event: NextFetchEvent) {
-  if (process.env.DEPLOYMENT_MODE !== "local") {
-    if (!saasMiddleware) {
-      throw new Error("Authentication middleware was not initialized");
-    }
-    return saasMiddleware(request, event);
-  }
+/** Confines the local appliance to loopback and applies its response policy. */
+export function deploymentProxy(request: NextRequest, _event: NextFetchEvent) {
   const requestHostname = hostnameFromHostHeader(request.headers.get("host"));
   if (!isLoopbackHostname(requestHostname)) {
     return new NextResponse("Local mode is available only through localhost.", {
       status: 403,
     });
   }
+
   const nonce = Buffer.from(randomUUID()).toString("base64");
   const policy = localContentSecurityPolicy(
     nonce,
@@ -48,10 +28,3 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
   response.headers.set("Content-Security-Policy", policy);
   return response;
 }
-
-export const config = {
-  matcher: [
-    "/((?!\\.well-known/workflow|_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    "/(api|trpc)(.*)",
-  ],
-};
