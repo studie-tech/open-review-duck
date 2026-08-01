@@ -24,6 +24,17 @@ export interface ImportStatement {
   references: ImportReference[];
 }
 
+export type PairedImportStatement =
+  | {
+      kind: "unchanged" | "added" | "modified";
+      current: ImportStatement;
+      previous?: ImportStatement;
+    }
+  | {
+      kind: "deleted";
+      previous: ImportStatement;
+    };
+
 const SOURCE_EXTENSIONS = [
   ".ts",
   ".tsx",
@@ -54,290 +65,105 @@ const SOURCE_EXTENSIONS = [
   ".mk",
 ] as const;
 
-/** Adds a unique parsed import reference to the result set. */
-function addReference(
-  references: ImportReference[],
-  input: Omit<ImportReference, "from" | "to">,
-  source: string,
-  searchFrom: number,
-  searchTo: number,
-  token: string,
+/** Scores how closely two import statements describe the same dependency edge. */
+function importStatementMatchScore(
+  previous: ImportStatement,
+  current: ImportStatement,
 ) {
-  const from = source.indexOf(token, searchFrom);
-  if (from < searchFrom || from + token.length > searchTo) return;
-  references.push({ ...input, from, to: from + token.length });
+  if (previous.source === current.source) return 1_000;
+  const previousLocals = new Set(
+    previous.references.map((reference) => reference.local),
+  );
+  const currentLocals = new Set(
+    current.references.map((reference) => reference.local),
+  );
+  let sharedLocals = 0;
+  for (const local of currentLocals) {
+    if (previousLocals.has(local)) sharedLocals += 1;
+  }
+  const previousSpecifiers = new Set(
+    previous.references.map((reference) => reference.specifier),
+  );
+  const currentSpecifiers = new Set(
+    current.references.map((reference) => reference.specifier),
+  );
+  let sharedSpecifiers = 0;
+  for (const specifier of currentSpecifiers) {
+    if (previousSpecifiers.has(specifier)) sharedSpecifiers += 1;
+  }
+  return (
+    sharedLocals * 100 +
+    sharedSpecifiers * 20 -
+    Math.abs(previous.startLine - current.startLine)
+  );
 }
 
-/** Parses imported bindings from a JavaScript or TypeScript import clause. */
-function parseBindings(
-  references: ImportReference[],
-  source: string,
-  bindings: string,
-  bindingsFrom: number,
-  specifier: string,
-) {
-  let cursor = bindingsFrom;
-  for (const part of bindings.split(",")) {
-    const binding =
-      /(?:^|\s)type\s+([\w$]+)(?:\s+as\s+([\w$]+))?|([\w$]+)(?:\s+as\s+([\w$]+))?/.exec(
-        part.trim(),
-      );
-    const imported = binding?.[1] ?? binding?.[3];
-    const local = binding?.[2] ?? binding?.[4] ?? imported;
-    const partFrom = source.indexOf(part, cursor);
-    const partTo = partFrom + part.length;
-    cursor = partTo + 1;
-    if (!imported || !local || partFrom < bindingsFrom) continue;
-    addReference(
-      references,
-      { specifier, imported, local, kind: "named" },
-      source,
-      partFrom,
-      partTo,
-      imported,
+/**
+ * Pairs base/head import statements so context can render rewrites as changes
+ * instead of bare additions.
+ */
+export function pairImportStatements(
+  previous: readonly ImportStatement[],
+  current: readonly ImportStatement[],
+): PairedImportStatement[] {
+  const previousUsed = new Array<boolean>(previous.length).fill(false);
+  const pairs: PairedImportStatement[] = [];
+
+  for (const statement of current) {
+    const exactIndex = previous.findIndex(
+      (candidate, index) =>
+        !previousUsed[index] && candidate.source === statement.source,
     );
-  }
-}
-
-/** Parses navigable imports from JavaScript or TypeScript source. */
-function parseJavaScriptImports(source: string) {
-  const references: ImportReference[] = [];
-
-  for (const match of source.matchAll(
-    /\bimport\s+(?:(?:type\s+)?[\w$]+\s*,\s*)?(?:type\s+)?\{([\s\S]*?)\}\s+from\s+(["'])([^"'`]+)\2/g,
-  )) {
-    const statementFrom = match.index;
-    const bindings = match[1];
-    const specifier = match[3];
-    if (statementFrom === undefined || !bindings || !specifier) continue;
-    const bindingsFrom = source.indexOf(bindings, statementFrom);
-    parseBindings(references, source, bindings, bindingsFrom, specifier);
-  }
-
-  for (const match of source.matchAll(
-    /\bimport\s+(?:type\s+)?([\w$]+)\s*(?:,\s*(?:\{[\s\S]*?\}|\*\s+as\s+[\w$]+))?\s+from\s+(["'])([^"'`]+)\2/g,
-  )) {
-    const statementFrom = match.index;
-    const local = match[1];
-    const specifier = match[3];
-    if (statementFrom === undefined || !local || !specifier) continue;
-    addReference(
-      references,
-      { specifier, imported: "default", local, kind: "default" },
-      source,
-      statementFrom,
-      statementFrom + match[0].length,
-      local,
-    );
-  }
-
-  for (const match of source.matchAll(
-    /\bimport\s+\*\s+as\s+([\w$]+)\s+from\s+(["'])([^"'`]+)\2/g,
-  )) {
-    const statementFrom = match.index;
-    const local = match[1];
-    const specifier = match[3];
-    if (statementFrom === undefined || !local || !specifier) continue;
-    addReference(
-      references,
-      { specifier, imported: "*", local, kind: "namespace" },
-      source,
-      statementFrom,
-      statementFrom + match[0].length,
-      local,
-    );
-  }
-
-  for (const match of source.matchAll(
-    /\bimport\s*(?:\(\s*)?(["'])([^"'`]+)\1\s*\)?/g,
-  )) {
-    const statementFrom = match.index;
-    const quoted = match[0].match(/(["'])[^"'`]+\1/)?.[0];
-    const specifier = match[2];
-    if (statementFrom === undefined || !quoted || !specifier) continue;
-    addReference(
-      references,
-      { specifier, imported: "*", local: "*", kind: "module" },
-      source,
-      statementFrom,
-      statementFrom + match[0].length,
-      quoted,
-    );
-  }
-
-  for (const match of source.matchAll(
-    /\brequire\s*\(\s*(["'])([^"'`]+)\1\s*\)/g,
-  )) {
-    const statementFrom = match.index;
-    const quoted = match[0].match(/(["'])[^"'`]+\1/)?.[0];
-    const specifier = match[2];
-    if (statementFrom === undefined || !quoted || !specifier) continue;
-    addReference(
-      references,
-      { specifier, imported: "*", local: "*", kind: "module" },
-      source,
-      statementFrom,
-      statementFrom + match[0].length,
-      quoted,
-    );
-  }
-
-  return references;
-}
-
-/** Parses navigable imports from Python source. */
-function parsePythonImports(source: string) {
-  const references: ImportReference[] = [];
-  for (const match of source.matchAll(
-    /^[ \t]*from\s+([.\w]+)\s+import\s+(?:\(([\s\S]*?)\)|([^\n#]+))/gm,
-  )) {
-    const statementFrom = match.index;
-    const specifier = match[1];
-    const bindings = match[2] ?? match[3];
-    if (statementFrom === undefined || !specifier || !bindings) continue;
-    const bindingsFrom = source.indexOf(bindings, statementFrom);
-    let cursor = bindingsFrom;
-    for (const part of bindings.split(",")) {
-      const partFrom = source.indexOf(part, cursor);
-      const partTo = partFrom + part.length;
-      cursor = partTo + 1;
-      const binding = /^\s*([A-Za-z_]\w*|\*)(?:\s+as\s+([A-Za-z_]\w*))?/.exec(
-        part.replace(/#[^\n]*/g, "").trim(),
-      );
-      const imported = binding?.[1];
-      const local = binding?.[2] ?? imported;
-      if (!imported || !local || partFrom < bindingsFrom) continue;
-      addReference(
-        references,
-        {
-          specifier,
-          imported,
-          local,
-          kind: imported === "*" ? "namespace" : "named",
-        },
-        source,
-        partFrom,
-        partTo,
-        local,
-      );
+    if (exactIndex >= 0) {
+      previousUsed[exactIndex] = true;
+      pairs.push({
+        kind: "unchanged",
+        current: statement,
+        previous: previous[exactIndex],
+      });
+      continue;
     }
-  }
 
-  for (const match of source.matchAll(/^[ \t]*import\s+([^\n#]+)/gm)) {
-    const statementFrom = match.index;
-    const modules = match[1];
-    if (statementFrom === undefined || !modules) continue;
-    let cursor = source.indexOf(modules, statementFrom);
-    for (const part of modules.split(",")) {
-      const partFrom = source.indexOf(part, cursor);
-      const partTo = partFrom + part.length;
-      cursor = partTo + 1;
-      const binding =
-        /^\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?/.exec(
-          part.trim(),
-        );
-      const specifier = binding?.[1];
-      const local = binding?.[2] ?? specifier?.split(".")[0];
-      if (!specifier || !local) continue;
-      addReference(
-        references,
-        { specifier, imported: "*", local, kind: "module" },
-        source,
-        partFrom,
-        partTo,
-        local,
-      );
-    }
-  }
-  return references;
-}
-
-/** Parses navigable import references for a supported language. */
-export function parseImportReferences(source: string, language: string) {
-  const references =
-    language === "python"
-      ? parsePythonImports(source)
-      : parseJavaScriptImports(source);
-  return references
-    .filter(
-      (reference, index) =>
-        references.findIndex(
-          (candidate) =>
-            candidate.from === reference.from && candidate.to === reference.to,
-        ) === index,
-    )
-    .sort((left, right) => left.from - right.from);
-}
-
-/** Returns complete static import statements with their source positions. */
-export function parseImportStatements(source: string, language: string) {
-  const patterns: Partial<Record<string, RegExp>> = {
-    python:
-      /(?:^|\n)((?:from\s+[.\w]+\s+import\s+(?:\([\s\S]*?\)|[^\n#]+)|import\s+[^\n#]+))/g,
-    java: /(?:^|\n)([ \t]*(?:package|import(?:\s+static)?)\s+[^;\n]+;)/g,
-    kotlin: /(?:^|\n)([ \t]*(?:package|import)\s+[^\n;]+;?)/g,
-    csharp: /(?:^|\n)([ \t]*(?:global\s+)?using\s+[^;\n]+;)/g,
-    c: /(?:^|\n)([ \t]*#[ \t]*(?:include|import)\b[^\n]*(?:\\\n[^\n]*)*)/g,
-    cpp: /(?:^|\n)([ \t]*(?:#[ \t]*(?:include|import)\b[^\n]*(?:\\\n[^\n]*)*|import\s+[^;\n]+;))/g,
-    php: /(?:^|\n)([ \t]*(?:use\s+[^;]+|(?:require|include)(?:_once)?\s+[^;]+);)/g,
-    shell: /(?:^|\n)([ \t]*(?:source|\.)[ \t]+[^\n]+)/g,
-    ruby: /(?:^|\n)([ \t]*(?:require|require_relative|load)[ \t]+[^\n]+)/g,
-    rust: /(?:^|\n)([ \t]*(?:use|extern\s+crate|mod)\s+[\s\S]*?;)/g,
-    lua: /(?:^|\n)([ \t]*(?:local\s+[A-Za-z_]\w*\s*=\s*)?require\s*\([^\n]+\))/g,
-    go: /(?:^|\n)([ \t]*import\s*(?:\([\s\S]*?\)|"[^"\n]+"|`[^`\n]+`))/g,
-    makefile: /(?:^|\n)([ \t]*-?include[ \t]+[^\n]+)/g,
-  };
-  const pattern =
-    patterns[language] ??
-    /(?:^|\n)([ \t]*import\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?(?:(?:type\s+)?\{[\s\S]*?\}|\*\s+as\s+[\w$]+|[\w$]+)?\s*(?:from\s+)?["'][^"'`\n]+["']\s*;?)/g;
-  const references = parseImportReferences(source, language);
-  const statements: ImportStatement[] = [];
-  for (const match of source.matchAll(pattern)) {
-    const statement = match[1];
-    if (match.index === undefined || !statement) continue;
-    const leadingOffset = match[0].indexOf(statement);
-    const from = match.index + leadingOffset;
-    const to = from + statement.length;
-    statements.push({
-      from,
-      to,
-      startLine: source.slice(0, from).split("\n").length,
-      endLine: source.slice(0, to).split("\n").length,
-      source: statement,
-      references: references.filter(
-        (reference) => reference.from >= from && reference.to <= to,
-      ),
+    const candidates = previous.flatMap((candidate, index) => {
+      if (previousUsed[index]) return [];
+      const score = importStatementMatchScore(candidate, statement);
+      return score > 0 ? [{ index, candidate, score }] : [];
     });
-  }
-  return statements;
-}
+    candidates.sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.candidate.startLine - right.candidate.startLine,
+    );
+    const best = candidates[0];
+    if (best && best.score !== candidates[1]?.score) {
+      previousUsed[best.index] = true;
+      pairs.push({
+        kind: "modified",
+        current: statement,
+        previous: best.candidate,
+      });
+      continue;
+    }
 
-/** Checks whether source contains imports plus only inert module preamble. */
-export function isImportOnlySource(source: string, language: string) {
-  const statements = parseImportStatements(source, language);
-  if (statements.length === 0) return false;
-  const remainder = [...source];
-  for (const statement of statements) {
-    remainder.fill(" ", statement.from, statement.to);
+    pairs.push({ kind: "added", current: statement });
   }
-  const withoutComments =
-    language === "python"
-      ? remainder.join("").replace(/^[ \t]*#[^\n]*/gm, "")
-      : remainder
-          .join("")
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-          .replace(/\/\/[^\n]*/g, "");
-  const withoutPreamble =
-    language === "python"
-      ? withoutComments.replace(
-          /^\s*(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"[^"\n]*"|'[^'\n]*')\s*/,
-          "",
-        )
-      : withoutComments.replace(
-          /^[ \t]*(?:"[^"\n]*"|'[^'\n]*')\s*;?[ \t]*$/gm,
-          "",
-        );
-  return withoutPreamble.trim().length === 0;
+
+  for (const [index, statement] of previous.entries()) {
+    if (previousUsed[index] || !statement) continue;
+    pairs.push({ kind: "deleted", previous: statement });
+  }
+
+  return pairs.sort((left, right) => {
+    const leftLine =
+      left.kind === "deleted"
+        ? left.previous.startLine
+        : left.current.startLine;
+    const rightLine =
+      right.kind === "deleted"
+        ? right.previous.startLine
+        : right.current.startLine;
+    return leftLine - rightLine;
+  });
 }
 
 /** Checks whether an imported binding is referenced by the active code unit. */

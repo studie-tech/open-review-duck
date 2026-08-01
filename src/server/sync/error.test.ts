@@ -45,6 +45,38 @@ describe("provider sync errors", () => {
     ).toBe("GitLab rate-limited this sync. Wait a moment and try again.");
   });
 
+  it("distinguishes GitHub rate-limit and SSO authorization failures", () => {
+    expect(
+      providerSyncErrorMessage(
+        "github",
+        new ProviderError("github", "403 Forbidden: rate limit exceeded", 403),
+      ),
+    ).toBe("GitHub rate-limited this sync. Wait a moment and try again.");
+    expect(
+      providerSyncErrorMessage(
+        "github",
+        new ProviderError(
+          "github",
+          "403 Forbidden: organization single sign-on authorization required",
+          403,
+        ),
+      ),
+    ).toBe(
+      "GitHub requires organization SSO authorization for this token. Authorize the token with the repository's organization, then sync again.",
+    );
+  });
+
+  it("names the GitHub repository permissions required for sync", () => {
+    expect(
+      providerSyncErrorMessage(
+        "github",
+        new ProviderError("github", "403 Forbidden", 403),
+      ),
+    ).toBe(
+      "GitHub blocked access to this pull request. Confirm the token includes this repository with Contents: Read-only and Pull requests: Read and write.",
+    );
+  });
+
   it("does not expose raw network failures", () => {
     expect(
       providerSyncErrorMessage("azure_devops", new TypeError("fetch failed")),

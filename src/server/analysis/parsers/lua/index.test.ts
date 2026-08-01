@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { isContextOnly, luaAdapter, luaParserInternals } from ".";
+import { isContextOnly, luaAdapter } from ".";
 
 /** Analyzes an in-memory Lua fixture with a representative source path. */
 function analyze(content: string, path = "src/service.lua") {
@@ -232,11 +232,6 @@ end
     expect(named(units, "TEMPLATE").kind).toBe("constant");
     expect(named(units, "quoted").kind).toBe("variable");
     expect(named(units, "real").source).toContain("until value <= 0");
-    expect(
-      luaParserInternals
-        .tokenizeLua(content)
-        .some(({ value }) => value === "hidden"),
-    ).toBe(false);
   });
 
   it("keeps require-only preambles as context while reviewing executable setup", () => {

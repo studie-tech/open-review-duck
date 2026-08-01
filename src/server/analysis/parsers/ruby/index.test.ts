@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import {
-  isContextOnly,
-  rubyAdapter,
-  rubyExtensions,
-  rubyFileNames,
-  rubyParserInternals,
-} from ".";
+import { isContextOnly, rubyAdapter, rubyExtensions, rubyFileNames } from ".";
 
 /** Analyzes an in-memory Ruby fixture. */
 function analyze(content: string, path = "lib/review_duck/service.rb") {
@@ -339,9 +333,6 @@ end
       false,
     );
     expect(named(units, "Real#actual").source).toContain("12 / 3");
-    expect(rubyParserInternals.maskRubySource(source)).toHaveLength(
-      source.length,
-    );
   });
 
   it("treats frozen-string, comments, and load-only preambles as context", () => {

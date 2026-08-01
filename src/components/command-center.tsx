@@ -42,6 +42,36 @@ export type PendingShortcutSequence = {
   }>;
 };
 
+type CommandBinding = {
+  bindingId: string;
+  command: CommandCenterItem;
+  shortcut: KeyboardShortcut;
+};
+
+/** Expands primary and alternate command shortcuts into matchable bindings. */
+function commandBindings(commands: CommandCenterItem[]) {
+  return commands.flatMap((command): CommandBinding[] => [
+    ...(command.shortcut
+      ? [
+          {
+            bindingId: `${command.id}:primary`,
+            command,
+            shortcut: command.shortcut,
+          },
+        ]
+      : []),
+    ...(command.alternateShortcut
+      ? [
+          {
+            bindingId: `${command.id}:alternate`,
+            command,
+            shortcut: command.alternateShortcut,
+          },
+        ]
+      : []),
+  ]);
+}
+
 /** Renders the shortcut hint interface. */
 export function ShortcutHint({
   shortcut,
@@ -115,8 +145,8 @@ export function useCommandCenterBindings({
   const onOpenShortcutsRef = useRef(onOpenShortcuts);
   const pendingRef = useRef<
     | {
-        commandIds: string[];
-        fallbackCommandId?: string;
+        bindingIds: string[];
+        fallbackBindingId?: string;
         strokeIndex: number;
         timeout: ReturnType<typeof setTimeout>;
       }
@@ -169,44 +199,30 @@ export function useCommandCenterBindings({
         return;
       }
 
-      if (!pendingRef.current) {
-        const alternateMatch = commandsRef.current.find((command) =>
-          command.alternateShortcut?.some(
-            (stroke, index) =>
-              index === 0 &&
-              command.alternateShortcut?.length === 1 &&
-              matchesShortcutStroke(event, stroke),
-          ),
-        );
-        if (alternateMatch) {
-          event.preventDefault();
-          resetPending();
-          if (!alternateMatch.disabled) alternateMatch.onSelect();
-          return;
-        }
-      }
+      const bindings = commandBindings(commandsRef.current);
 
-      if (pendingRef.current?.fallbackCommandId && event.key === "Enter") {
+      if (pendingRef.current?.fallbackBindingId && event.key === "Enter") {
         event.preventDefault();
-        const fallback = commandsRef.current.find(
-          ({ id }) => id === pendingRef.current?.fallbackCommandId,
+        const fallback = bindings.find(
+          ({ bindingId }) =>
+            bindingId === pendingRef.current?.fallbackBindingId,
         );
         resetPending();
-        if (fallback && !fallback.disabled) fallback.onSelect();
+        if (fallback && !fallback.command.disabled) fallback.command.onSelect();
         return;
       }
 
       const pending = pendingRef.current;
       const candidates = pending
-        ? commandsRef.current.filter((command) =>
-            pending.commandIds.includes(command.id),
+        ? bindings.filter((binding) =>
+            pending.bindingIds.includes(binding.bindingId),
           )
-        : commandsRef.current;
+        : bindings;
       const strokeIndex = pending?.strokeIndex ?? 0;
       const matches = candidates.filter(
-        (command) =>
-          command.shortcut?.[strokeIndex] &&
-          matchesShortcutStroke(event, command.shortcut[strokeIndex]),
+        (binding) =>
+          binding.shortcut[strokeIndex] &&
+          matchesShortcutStroke(event, binding.shortcut[strokeIndex]),
       );
 
       if (matches.length === 0) {
@@ -216,43 +232,44 @@ export function useCommandCenterBindings({
 
       event.preventDefault();
       const completed = matches.find(
-        (command) => command.shortcut?.length === strokeIndex + 1,
+        (binding) => binding.shortcut.length === strokeIndex + 1,
       );
       const continuing = matches.filter(
-        (command) => (command.shortcut?.length ?? 0) > strokeIndex + 1,
+        (binding) => binding.shortcut.length > strokeIndex + 1,
       );
       if (completed && continuing.length === 0) {
         resetPending();
-        if (!completed.disabled) completed.onSelect();
+        if (!completed.command.disabled) completed.command.onSelect();
         return;
       }
 
       resetPending();
       const nextStrokeIndex = strokeIndex + 1;
       setPendingSequence({
-        prefix: matches[0]?.shortcut?.slice(0, nextStrokeIndex) ?? [],
-        fallbackLabel: completed?.label,
-        options: matches.flatMap((command) => {
-          const stroke = command.shortcut?.[nextStrokeIndex];
+        prefix: matches[0]?.shortcut.slice(0, nextStrokeIndex) ?? [],
+        fallbackLabel: completed?.command.label,
+        options: matches.flatMap((binding) => {
+          const stroke = binding.shortcut[nextStrokeIndex];
           return stroke
             ? [
                 {
-                  label: command.label,
+                  label: binding.command.label,
                   stroke,
-                  disabled: Boolean(command.disabled),
+                  disabled: Boolean(binding.command.disabled),
                 },
               ]
             : [];
         }),
       });
       pendingRef.current = {
-        commandIds: matches.map((command) => command.id),
-        fallbackCommandId: completed?.id,
+        bindingIds: matches.map(({ bindingId }) => bindingId),
+        fallbackBindingId: completed?.bindingId,
         strokeIndex: nextStrokeIndex,
         timeout: setTimeout(
           () => {
             resetPending();
-            if (completed && !completed.disabled) completed.onSelect();
+            if (completed && !completed.command.disabled)
+              completed.command.onSelect();
           },
           completed
             ? AMBIGUOUS_SHORTCUT_TIMEOUT_MS

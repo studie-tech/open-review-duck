@@ -9,6 +9,7 @@ describe("sidebar guidance", () => {
         hasAiConfiguration: false,
         reviewedToday: false,
         currentStreak: 0,
+        localMode: false,
       }),
     ).toMatchObject({ kind: "provider", href: "/settings/providers" });
   });
@@ -20,8 +21,24 @@ describe("sidebar guidance", () => {
         hasAiConfiguration: false,
         reviewedToday: false,
         currentStreak: 0,
+        localMode: false,
       }),
     ).toMatchObject({ kind: "ai", href: "/settings/ai" });
+  });
+
+  it("guides local users to a provider connection", () => {
+    expect(
+      sidebarGuidance({
+        hasProviderConnection: false,
+        hasAiConfiguration: false,
+        reviewedToday: false,
+        currentStreak: 0,
+        localMode: true,
+      }),
+    ).toMatchObject({
+      title: "Connect your code",
+      action: "Connect provider",
+    });
   });
 
   it("shows streak guidance after onboarding", () => {
@@ -31,6 +48,7 @@ describe("sidebar guidance", () => {
         hasAiConfiguration: true,
         reviewedToday: false,
         currentStreak: 4,
+        localMode: false,
       }),
     ).toMatchObject({
       kind: "streak",
@@ -45,6 +63,7 @@ describe("sidebar guidance", () => {
         hasAiConfiguration: true,
         reviewedToday: true,
         currentStreak: 4,
+        localMode: false,
       }),
     ).toBeNull();
   });

@@ -124,6 +124,7 @@ function AlternateShortcutHarness({
       label: "Scroll code down",
       group: "Review navigation",
       shortcut: [{ key: "ArrowDown" }],
+      alternateShortcut: [{ key: "g" }, { key: "d" }],
       onSelect: onScroll,
     },
   ];
@@ -201,14 +202,14 @@ function ReviewPanelShortcutHarness({
         id: "toggle-path",
         label: "Toggle review path",
         group: "Review navigation",
-        shortcut: [{ key: "[" }],
+        shortcut: [{ key: "b", mod: true }],
         onSelect: onTogglePath,
       },
       {
         id: "toggle-insights",
         label: "Toggle AI assistance",
         group: "Review navigation",
-        shortcut: [{ key: "]" }],
+        shortcut: [{ key: "g", mod: true }],
         onSelect: onToggleInsights,
       },
     ],
@@ -219,15 +220,13 @@ function ReviewPanelShortcutHarness({
   return <input aria-label="Inline comment" />;
 }
 
-/** Renders conflicting sync and nested AI review shortcuts. */
+/** Renders direct sync and AI action shortcuts. */
 function AiActionShortcutHarness({
-  onExplain,
-  onExplainPending,
+  onAsk,
   onReview,
   onSync,
 }: {
-  onExplain: () => void;
-  onExplainPending: () => void;
+  onAsk: () => void;
   onReview: () => void;
   onSync: () => void;
 }) {
@@ -241,24 +240,17 @@ function AiActionShortcutHarness({
         onSelect: onSync,
       },
       {
-        id: "explain",
-        label: "Explain this unit",
+        id: "ask",
+        label: "Ask AI about this code",
         group: "Review actions",
-        shortcut: [{ key: "e" }, { key: "e" }],
-        onSelect: onExplain,
-      },
-      {
-        id: "explain-pending",
-        label: "Explain pending units",
-        group: "Review actions",
-        shortcut: [{ key: "e" }, { key: "a" }],
-        onSelect: onExplainPending,
+        shortcut: [{ key: "e" }],
+        onSelect: onAsk,
       },
       {
         id: "review",
         label: "Review the full pull request",
         group: "Review actions",
-        shortcut: [{ key: "e" }, { key: "r" }],
+        shortcut: [{ key: "a" }],
         onSelect: onReview,
       },
     ],
@@ -270,18 +262,27 @@ function AiActionShortcutHarness({
 }
 
 describe("CommandCenter", () => {
-  it("opens with Control+K and runs the selected command", async () => {
+  it("opens with Q and runs the selected command", async () => {
     const onNavigate = vi.fn();
     const user = userEvent.setup();
     render(<CommandCenterHarness onNavigate={onNavigate} />);
 
-    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(document, { key: "q" });
 
     expect(
       screen.getByRole("dialog", { name: "Quick actions" }),
     ).toBeInTheDocument();
     await user.keyboard("{Enter}");
     expect(onNavigate).toHaveBeenCalledOnce();
+  });
+
+  it("opens keyboard shortcuts with the browser-safe help binding", () => {
+    render(<CommandCenterHarness onNavigate={vi.fn()} />);
+
+    fireEvent.keyDown(document, { key: "?", shiftKey: true });
+    expect(
+      screen.getByRole("dialog", { name: "Keyboard shortcuts" }),
+    ).toBeInTheDocument();
   });
 
   it("supports navigation sequences but suppresses them while typing", () => {
@@ -296,7 +297,7 @@ describe("CommandCenter", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
     const editor = screen.getByRole("textbox", { name: "Comment editor" });
-    fireEvent.keyDown(editor, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(editor, { key: "q" });
     fireEvent.keyDown(editor, { key: "g" });
     fireEvent.keyDown(editor, { key: "r" });
     expect(onNavigate).toHaveBeenCalledOnce();
@@ -328,16 +329,25 @@ describe("CommandCenter", () => {
       />,
     );
 
-    fireEvent.keyDown(document, { key: "[" });
+    fireEvent.keyDown(document, { key: "b", ctrlKey: true });
     expect(onTogglePath).toHaveBeenCalledOnce();
     expect(onToggleInsights).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(document, { key: "]" });
+    fireEvent.keyDown(document, { key: "g", ctrlKey: true });
     expect(onToggleInsights).toHaveBeenCalledOnce();
 
     const comment = screen.getByRole("textbox", { name: "Inline comment" });
-    fireEvent.keyDown(comment, { key: "[" });
-    fireEvent.keyDown(comment, { key: "]" });
+    fireEvent.keyDown(comment, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(comment, { key: "g", ctrlKey: true });
+    expect(onTogglePath).toHaveBeenCalledOnce();
+    expect(onToggleInsights).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(document, { key: "[" });
+    fireEvent.keyDown(document, { key: "]" });
+    expect(onTogglePath).toHaveBeenCalledOnce();
+    expect(onToggleInsights).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(document, { key: "n", ctrlKey: true });
     expect(onTogglePath).toHaveBeenCalledOnce();
     expect(onToggleInsights).toHaveBeenCalledOnce();
   });
@@ -396,7 +406,7 @@ describe("CommandCenter", () => {
   it("suspends global commands during a focused keyboard interaction", () => {
     render(<CommandCenterHarness onNavigate={vi.fn()} suspended />);
 
-    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(document, { key: "q" });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -411,11 +421,15 @@ describe("CommandCenter", () => {
     expect(onNext).toHaveBeenCalledOnce();
     expect(onScroll).toHaveBeenCalledOnce();
 
+    fireEvent.keyDown(document, { key: "g" });
+    fireEvent.keyDown(document, { key: "d" });
+    expect(onScroll).toHaveBeenCalledTimes(2);
+
     const note = screen.getByRole("textbox", { name: "Review note" });
     fireEvent.keyDown(note, { key: "ArrowRight" });
     fireEvent.keyDown(note, { key: "ArrowDown" });
     expect(onNext).toHaveBeenCalledOnce();
-    expect(onScroll).toHaveBeenCalledOnce();
+    expect(onScroll).toHaveBeenCalledTimes(2);
   });
 
   it("runs a single-key review action without intercepting typed text", () => {
@@ -434,35 +448,26 @@ describe("CommandCenter", () => {
     expect(onLoad).toHaveBeenCalledOnce();
   });
 
-  it("routes E then R to AI review without triggering the direct sync shortcut", () => {
-    const onExplain = vi.fn();
-    const onExplainPending = vi.fn();
+  it("routes direct AI shortcuts without entering a prefix sequence", () => {
+    const onAsk = vi.fn();
     const onReview = vi.fn();
     const onSync = vi.fn();
     render(
       <AiActionShortcutHarness
-        onExplain={onExplain}
-        onExplainPending={onExplainPending}
+        onAsk={onAsk}
         onReview={onReview}
         onSync={onSync}
       />,
     );
 
     fireEvent.keyDown(document, { key: "e" });
-    expect(screen.getByRole("status")).toHaveTextContent("Ask AI to…");
-    expect(screen.getByRole("status")).toHaveTextContent("Explain this unit");
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Explain pending units",
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Review the full pull request",
-    );
-    fireEvent.keyDown(document, { key: "r" });
+    expect(onAsk).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "a" });
 
     expect(onReview).toHaveBeenCalledOnce();
     expect(onSync).not.toHaveBeenCalled();
-    expect(onExplain).not.toHaveBeenCalled();
-    expect(onExplainPending).not.toHaveBeenCalled();
 
     fireEvent.keyDown(document, { key: "r" });
     expect(onSync).toHaveBeenCalledOnce();
@@ -471,7 +476,7 @@ describe("CommandCenter", () => {
   it("keeps large switcher lists hidden until the user searches", async () => {
     const user = userEvent.setup();
     render(<CommandCenterHarness onNavigate={vi.fn()} />);
-    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(document, { key: "q" });
 
     expect(
       screen.queryByRole("button", { name: /Open utility function/ }),

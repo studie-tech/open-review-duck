@@ -11,7 +11,8 @@ describe("analysis source classification", () => {
     expect(isSupportedSourcePath("build/Makefile")).toBe(true);
     expect(isSupportedSourcePath("scripts/.zshrc")).toBe(true);
     expect(isSupportedSourcePath("infra/main.tf")).toBe(true);
-    expect(isSupportedSourcePath("config/settings.json")).toBe(false);
+    expect(isSupportedSourcePath("config/settings.json")).toBe(true);
+    expect(isSupportedSourcePath("notes.unknown")).toBe(false);
     expect(supportedLanguages).toContain("text");
   });
 

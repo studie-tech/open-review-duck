@@ -59,6 +59,20 @@ describe("ConfirmationDialog", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it("cancels with Escape even when focus has moved outside the dialog", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    renderDialog({ onCancel });
+    outside.focus();
+
+    await user.keyboard("{Escape}");
+
+    expect(onCancel).toHaveBeenCalledOnce();
+    outside.remove();
+  });
+
   it("blocks confirmation and cancellation while pending", async () => {
     const user = userEvent.setup();
     const onCancel = vi.fn();

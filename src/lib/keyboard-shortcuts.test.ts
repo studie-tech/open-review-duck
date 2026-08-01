@@ -2,10 +2,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  commandMenuShortcut,
   formatShortcut,
   isApplePlatform,
   isEditableTarget,
   matchesShortcutStroke,
+  shortcutHelpShortcut,
 } from "./keyboard-shortcuts";
 
 describe("keyboard shortcuts", () => {
@@ -63,5 +65,10 @@ describe("keyboard shortcuts", () => {
     expect(isEditableTarget(contentEditable)).toBe(true);
     expect(isEditableTarget(customEditor)).toBe(true);
     expect(isEditableTarget(button)).toBe(false);
+  });
+
+  it("keeps global launchers clear of browser-reserved modifier shortcuts", () => {
+    expect(commandMenuShortcut).toEqual([{ key: "q" }]);
+    expect(shortcutHelpShortcut).toEqual([{ key: "?" }]);
   });
 });

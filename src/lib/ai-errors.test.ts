@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { aiErrorPresentation } from "./ai-errors";
 
 describe("aiErrorPresentation", () => {
-  it("upgrades legacy fetch failures into actionable copy", () => {
+  it("upgrades opaque fetch failures into actionable copy", () => {
     expect(aiErrorPresentation("fetch failed")).toEqual({
       title: "AI service unavailable",
       detail:

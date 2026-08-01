@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildReviewHierarchy,
   createReviewNavigationHistory,
+  deletedFileSignOffUnits,
   nextPendingReviewIndex,
+  nextPendingReviewIndexPreferring,
   optimisticallySignOffReviewUnit,
+  optimisticallySignOffReviewUnits,
   pushReviewNavigationHistory,
   restoreReviewUnitAfterFailedSignOff,
   reviewNavigationHistoryTarget,
@@ -81,6 +84,37 @@ describe("nextPendingReviewIndex", () => {
   });
 });
 
+describe("nextPendingReviewIndexPreferring", () => {
+  it("moves past deletion fragments after whole-file deletions are signed off", () => {
+    const units = [
+      { changeType: "deleted", status: "signed_off" as const },
+      { changeType: "deleted", status: "pending" as const },
+      { changeType: "modified", status: "pending" as const },
+    ];
+
+    expect(
+      nextPendingReviewIndexPreferring(
+        units,
+        (unit) => unit.changeType !== "deleted",
+      ),
+    ).toBe(2);
+  });
+
+  it("falls back to a deletion when it is the only remaining work", () => {
+    const units = [
+      { changeType: "deleted", status: "pending" as const },
+      { changeType: "modified", status: "signed_off" as const },
+    ];
+
+    expect(
+      nextPendingReviewIndexPreferring(
+        units,
+        (unit) => unit.changeType !== "deleted",
+      ),
+    ).toBe(0);
+  });
+});
+
 describe("optimisticallySignOffReviewUnit", () => {
   it("updates only the selected unit without mutating the prior state", () => {
     const units = [
@@ -121,6 +155,43 @@ describe("optimisticallySignOffReviewUnit", () => {
     expect(optimisticallySignOffReviewUnit(units, "missing")).toBe(units);
   });
 
+  it("signs off several selected units in one immutable update", () => {
+    const units = [
+      {
+        id: "first",
+        status: "changed" as const,
+        changedSinceSignOff: true,
+      },
+      {
+        id: "second",
+        status: "pending" as const,
+        changedSinceSignOff: false,
+      },
+      {
+        id: "third",
+        status: "pending" as const,
+        changedSinceSignOff: false,
+      },
+    ];
+
+    expect(optimisticallySignOffReviewUnits(units, ["first", "third"])).toEqual(
+      [
+        {
+          id: "first",
+          status: "signed_off",
+          changedSinceSignOff: false,
+        },
+        units[1],
+        {
+          id: "third",
+          status: "signed_off",
+          changedSinceSignOff: false,
+        },
+      ],
+    );
+    expect(units[0]?.status).toBe("changed");
+  });
+
   it("rolls back only the failed unit after later optimistic saves", () => {
     type Unit = {
       id: string;
@@ -149,6 +220,25 @@ describe("optimisticallySignOffReviewUnit", () => {
       original,
       current[1],
     ]);
+  });
+});
+
+describe("deletedFileSignOffUnits", () => {
+  it("selects actionable units only when their entire file was deleted", () => {
+    const units = [
+      { path: "removed.ts", status: "pending" as const },
+      { path: "removed.ts", status: "changed" as const },
+      { path: "removed.ts", status: "signed_off" as const },
+      { path: "removed.ts", status: "waiting" as const },
+      { path: "modified.ts", status: "pending" as const },
+    ];
+
+    expect(
+      deletedFileSignOffUnits(units, [
+        { path: "removed.ts", changeType: "deleted" },
+        { path: "modified.ts", changeType: "modified" },
+      ]),
+    ).toEqual([units[0], units[1]]);
   });
 });
 

@@ -8,24 +8,89 @@ const PROVIDER_USER_AGENT =
 
 /** Performs a DNS-pinned provider request with a bounded lifetime. */
 async function requestProvider(url: string, init: RequestInit) {
-  const timeout = AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS);
-  const signal = init.signal
-    ? AbortSignal.any([init.signal, timeout])
-    : timeout;
   const headers = new Headers(init.headers);
   if (!headers.has("User-Agent")) {
     headers.set("User-Agent", PROVIDER_USER_AGENT);
   }
-  return safeRemoteFetch(
-    url,
-    { ...init, headers, redirect: "manual", signal },
-    process.env.ALLOW_PRIVATE_PROVIDER_HOSTS === "true",
-  );
+  const method = (init.method ?? "GET").toUpperCase();
+  const retryableMethod = method === "GET" || method === "HEAD";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const timeout = AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS);
+    const signal = init.signal
+      ? AbortSignal.any([init.signal, timeout])
+      : timeout;
+    try {
+      const response = await safeRemoteFetch(
+        url,
+        { ...init, headers, redirect: "manual", signal },
+        process.env.ALLOW_PRIVATE_PROVIDER_HOSTS === "true",
+      );
+      if (
+        !retryableMethod ||
+        attempt === 2 ||
+        ![408, 425, 429, 500, 502, 503, 504].includes(response.status)
+      ) {
+        return response;
+      }
+      const retryAfter = Number(response.headers.get("retry-after"));
+      await response.body?.cancel();
+      await retryDelay(
+        Number.isFinite(retryAfter)
+          ? Math.min(5_000, retryAfter * 1_000)
+          : 100 * 2 ** attempt,
+      );
+    } catch (cause) {
+      if (!retryableMethod || attempt === 2 || init.signal?.aborted)
+        throw cause;
+      await retryDelay(100 * 2 ** attempt);
+    }
+  }
+  throw new Error("Provider retry loop ended unexpectedly");
+}
+
+/** Waits for one bounded exponential provider retry interval. */
+function retryDelay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 export interface ProviderResponse<T> {
   data: T;
   headers: Headers;
+}
+
+/** Classifies a provider failure without exposing its raw response body. */
+async function providerFailureMessage(
+  provider: ProviderName,
+  response: Response,
+) {
+  const status = `${response.status} ${response.statusText}`.trim();
+  const content = (await boundedResponseText(response, 16_000)) ?? "";
+  const normalized = content.toLowerCase();
+  if (response.status === 403 || response.status === 429) {
+    if (
+      response.headers.has("retry-after") ||
+      normalized.includes("secondary rate limit") ||
+      normalized.includes("abuse detection")
+    ) {
+      return `${status}: secondary rate limit exceeded`;
+    }
+    if (
+      response.headers.get("x-ratelimit-remaining") === "0" ||
+      normalized.includes("rate limit")
+    ) {
+      return `${status}: rate limit exceeded`;
+    }
+  }
+  if (
+    provider === "github" &&
+    response.status === 403 &&
+    (response.headers.has("x-github-sso") ||
+      normalized.includes("single sign-on") ||
+      normalized.includes("saml"))
+  ) {
+    return `${status}: organization single sign-on authorization required`;
+  }
+  return status;
 }
 
 /** Reads a response body without buffering more than the configured limit. */
@@ -99,10 +164,9 @@ export async function providerResponse<T>(
     );
   }
   if (!response.ok) {
-    await boundedResponseText(response, 16_000);
     throw new ProviderError(
       provider,
-      `${response.status} ${response.statusText}`.trim(),
+      await providerFailureMessage(provider, response),
       response.status,
     );
   }
@@ -143,6 +207,31 @@ export async function providerFetch<T>(
   return (await providerResponse<T>(provider, url, init)).data;
 }
 
+/** Performs a provider request whose successful response has no useful body. */
+export async function providerVoid(
+  provider: ProviderName,
+  url: string,
+  init: RequestInit,
+): Promise<void> {
+  const response = await requestProvider(url, init);
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    throw new ProviderError(
+      provider,
+      "Provider redirects are disabled to prevent requests to unvalidated hosts",
+      response.status,
+    );
+  }
+  if (!response.ok) {
+    throw new ProviderError(
+      provider,
+      await providerFailureMessage(provider, response),
+      response.status,
+    );
+  }
+  await response.body?.cancel();
+}
+
 /** Performs a provider request and returns its text body within the size limit. */
 export async function providerText(
   provider: ProviderName,
@@ -160,10 +249,9 @@ export async function providerText(
     );
   }
   if (!response.ok) {
-    await boundedResponseText(response, 16_000);
     throw new ProviderError(
       provider,
-      `${response.status} ${response.statusText}`,
+      await providerFailureMessage(provider, response),
       response.status,
     );
   }

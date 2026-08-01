@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { isContextOnly, kotlinAdapter, kotlinParserInternals } from ".";
+import { isContextOnly, kotlinAdapter } from ".";
 
 /** Analyzes an in-memory Kotlin fixture with a representative source path. */
 function analyze(content: string, path = "src/main/kotlin/acme/Service.kt") {
@@ -220,11 +220,6 @@ fun real(input: String): String {
     expect(named(units, "TEMPLATE").kind).toBe("constant");
     expect(named(units, "strategy").kind).toBe("variable");
     expect(named(units, "real").source).toContain("brace }");
-    expect(
-      kotlinParserInternals
-        .tokenizeKotlin(content)
-        .some(({ value }) => value === "AlsoFake"),
-    ).toBe(false);
   });
 
   it("recognizes package/import-only preambles and reviews executable scripts", () => {

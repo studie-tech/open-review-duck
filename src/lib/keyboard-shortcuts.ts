@@ -71,6 +71,7 @@ export function formatShortcut(
   });
 }
 
-export const commandMenuShortcut: KeyboardShortcut = [{ key: "k", mod: true }];
+// Global page shortcuts intentionally avoid browser-reserved modifier chords.
+export const commandMenuShortcut: KeyboardShortcut = [{ key: "q" }];
 
 export const shortcutHelpShortcut: KeyboardShortcut = [{ key: "?" }];

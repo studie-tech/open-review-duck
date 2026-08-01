@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { createQueryClient } from "./query-client";
+import { shouldRetryQuery } from "./query-client";
 
-describe("query retry policy", () => {
-  it("does not amplify an authentication failure after transport refresh", () => {
-    const retry = createQueryClient().getDefaultOptions().queries?.retry;
-    if (typeof retry !== "function") throw new Error("retry policy missing");
+describe("shouldRetryQuery", () => {
+  it("does not retry rate limits or other expected client rejections", () => {
+    expect(shouldRetryQuery(0, { data: { code: "TOO_MANY_REQUESTS" } })).toBe(
+      false,
+    );
+    expect(shouldRetryQuery(0, { data: { code: "FORBIDDEN" } })).toBe(false);
+  });
 
-    const unauthorized = Object.assign(new Error("UNAUTHORIZED"), {
-      data: { code: "UNAUTHORIZED" },
-    });
-    expect(retry(0, unauthorized)).toBe(false);
-    expect(retry(2, new Error("temporary failure"))).toBe(true);
-    expect(retry(3, new Error("temporary failure"))).toBe(false);
+  it("retries transient failures at most three times", () => {
+    expect(shouldRetryQuery(0, new Error("network"))).toBe(true);
+    expect(
+      shouldRetryQuery(2, { data: { code: "INTERNAL_SERVER_ERROR" } }),
+    ).toBe(true);
+    expect(shouldRetryQuery(3, new Error("network"))).toBe(false);
   });
 });

@@ -4,8 +4,12 @@ import {
   providerFetch,
   providerResponse,
   providerText,
+  providerVoid,
 } from "./http";
 import type {
+  ProviderPullRequestReviewState,
+  ProviderReviewAction,
+  PullRequestListOptions,
   PullRequestProvider,
   PullRequestSummary,
   RepositoryIdentity,
@@ -32,12 +36,34 @@ interface AzurePull {
   lastMergeSourceCommit: { commitId: string };
   lastMergeTargetCommit: { commitId: string };
   repository: { webUrl: string };
-  createdBy: { displayName: string; uniqueName?: string; imageUrl?: string };
+  createdBy: {
+    id: string;
+    displayName: string;
+    uniqueName?: string;
+    imageUrl?: string;
+  };
+}
+interface AzureReviewer {
+  id: string;
+  displayName?: string;
+  uniqueName?: string;
+  vote: number;
 }
 interface AzureChange {
   item: { path: string; objectId?: string; gitObjectType?: string };
   changeType: string;
   sourceServerItem?: string;
+}
+interface AzureItem {
+  path: string;
+  gitObjectType?: "blob" | "tree";
+  isFolder?: boolean;
+}
+interface AzureHookSubscription {
+  id: string;
+  eventType: string;
+  consumerInputs?: { url?: string };
+  publisherInputs?: { repository?: string };
 }
 interface AzureThread {
   id: number;
@@ -64,6 +90,11 @@ interface AzureThreadComment {
 }
 const MAX_PROVIDER_PAGES = 100;
 const MAX_PROVIDER_ITEMS = 20_000;
+const AZURE_PULL_REQUEST_EVENTS = [
+  "git.pullrequest.created",
+  "git.pullrequest.updated",
+  "git.pullrequest.merged",
+] as const;
 
 export class AzureDevOpsProvider implements PullRequestProvider {
   readonly name = "azure_devops" as const;
@@ -72,9 +103,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   constructor(
     token: string,
     private readonly organizationUrl: string,
+    oauth = false,
   ) {
     this.headers = {
-      Authorization: `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
+      Authorization: oauth
+        ? `Bearer ${token}`
+        : `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
     };
   }
   /** Fetches the account identity associated with a provider token. */
@@ -104,10 +138,85 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       isPrivate: true,
     }));
   }
+  /** Creates the Azure service-hook subscriptions required for PR lifecycle events. */
+  async ensureRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+    secret: string;
+  }) {
+    const endpoint = `${this.organizationUrl}/_apis/hooks/subscriptions?api-version=7.1`;
+    const existing = await providerFetch<{ value: AzureHookSubscription[] }>(
+      this.name,
+      endpoint,
+      { headers: this.headers },
+    );
+    const matching = new Set(
+      existing.value
+        .filter(
+          (hook) =>
+            hook.consumerInputs?.url === input.callbackUrl &&
+            hook.publisherInputs?.repository === input.repositoryExternalId,
+        )
+        .map((hook) => hook.eventType),
+    );
+    for (const eventType of AZURE_PULL_REQUEST_EVENTS) {
+      if (matching.has(eventType)) continue;
+      await providerFetch<AzureHookSubscription>(this.name, endpoint, {
+        method: "POST",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          publisherId: "tfs",
+          eventType,
+          resourceVersion: "1.0",
+          consumerId: "webHooks",
+          consumerActionId: "httpRequest",
+          publisherInputs: { repository: input.repositoryExternalId },
+          consumerInputs: {
+            url: input.callbackUrl,
+            basicAuthUsername: "reviewduck",
+            basicAuthPassword: input.secret,
+          },
+        }),
+      });
+    }
+  }
+  /** Removes this application's Azure service-hook subscriptions. */
+  async removeRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+  }) {
+    const endpoint = `${this.organizationUrl}/_apis/hooks/subscriptions`;
+    const existing = await providerFetch<{ value: AzureHookSubscription[] }>(
+      this.name,
+      `${endpoint}?api-version=7.1`,
+      { headers: this.headers },
+    );
+    await Promise.all(
+      existing.value
+        .filter(
+          (hook) =>
+            hook.consumerInputs?.url === input.callbackUrl &&
+            hook.publisherInputs?.repository === input.repositoryExternalId,
+        )
+        .map((hook) =>
+          providerVoid(
+            this.name,
+            `${endpoint}/${encodeURIComponent(hook.id)}?api-version=7.1`,
+            { method: "DELETE", headers: this.headers },
+          ),
+        ),
+    );
+  }
   /** Lists open pull requests for a provider repository. */
-  async listOpenPullRequests(repositoryExternalId: string) {
+  async listOpenPullRequests(
+    repositoryExternalId: string,
+    options: PullRequestListOptions = {},
+  ) {
+    const reviewer = options.reviewerExternalAccountId
+      ? `&searchCriteria.reviewerId=${encodeURIComponent(options.reviewerExternalAccountId)}`
+      : "";
     const pulls = await this.getAllPages<AzurePull>(
-      `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests?searchCriteria.status=active&api-version=7.1`,
+      `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests?searchCriteria.status=active${reviewer}&api-version=7.1`,
     );
     return pulls.map((item) => this.normalize(item));
   }
@@ -119,6 +228,86 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}?api-version=7.1`,
         { headers: this.headers },
       ),
+    );
+  }
+  /** Fetches the connected Azure DevOps user's current reviewer vote. */
+  async getPullRequestReviewState(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestReviewState> {
+    const endpoint = `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullRequests/${number}`;
+    const [connection, reviewers, pull] = await Promise.all([
+      providerFetch<AzureConnectionData>(
+        this.name,
+        `${this.organizationUrl}/_apis/connectionData?api-version=7.1-preview.1`,
+        { headers: this.headers },
+      ),
+      providerFetch<{ value: AzureReviewer[] }>(
+        this.name,
+        `${endpoint}/reviewers?api-version=7.1`,
+        { headers: this.headers },
+      ),
+      providerFetch<AzurePull>(this.name, `${endpoint}?api-version=7.1`, {
+        headers: this.headers,
+      }),
+    ]);
+    const actor = connection.authenticatedUser;
+    const reviewer = reviewers.value.find((item) => item.id === actor.id);
+    const vote = reviewer?.vote ?? 0;
+    const unavailableReason =
+      pull.status !== "active"
+        ? "This pull request is no longer active."
+        : undefined;
+    return {
+      decision:
+        vote === 10 || vote === 5
+          ? "approved"
+          : vote === -10
+            ? "changes_requested"
+            : vote === -5
+              ? "waiting"
+              : "none",
+      actorName: actor.providerDisplayName ?? actor.id,
+      approvedCount: reviewers.value.filter(
+        (item) => item.vote === 10 || item.vote === 5,
+      ).length,
+      changesRequestedCount: reviewers.value.filter((item) => item.vote === -10)
+        .length,
+      canApprove: !unavailableReason && vote !== 10,
+      canRequestChanges: !unavailableReason && vote !== -10,
+      canClear: !unavailableReason && vote !== 0,
+      requestChangesRequiresBody: false,
+      unavailableReason,
+    };
+  }
+  /** Sets the connected Azure DevOps reviewer's exact live vote. */
+  async setPullRequestReviewDecision(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+    action: ProviderReviewAction;
+    body?: string;
+  }) {
+    const identity = await this.getConnectionIdentity();
+    await providerVoid(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}/reviewers/${encodeURIComponent(identity.externalAccountId)}?api-version=7.1`,
+      {
+        method: "PUT",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: identity.externalAccountId,
+          vote:
+            input.action === "approve"
+              ? 10
+              : input.action === "request_changes"
+                ? -10
+                : 0,
+        }),
+      },
     );
   }
   /** Fetches the changed source files required for static analysis. */
@@ -180,6 +369,17 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         };
       },
     );
+  }
+
+  /** Lists regular files from one exact Git commit tree. */
+  async listRepositoryFiles(repositoryExternalId: string, ref: string) {
+    const items = await this.getAllPages<AzureItem>(
+      `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/items?scopePath=%2F&recursionLevel=Full&includeContentMetadata=false&versionDescriptor.versionType=commit&versionDescriptor.version=${encodeURIComponent(ref)}&api-version=7.1`,
+    );
+    return items
+      .filter((item) => !item.isFolder && item.gitObjectType !== "tree")
+      .map((item) => item.path.replace(/^\/+/, ""))
+      .filter(Boolean);
   }
   /** Publishes an inline review comment to the code provider. */
   async publishInlineComment(input: {

@@ -89,6 +89,72 @@ describe("provider normalization", () => {
     });
   });
 
+  it("filters GitHub assignment without fetching every PR detail", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse([
+        {
+          id: 11,
+          number: 7,
+          title: "Review me",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/7",
+          user: { id: 1, login: "author", avatar_url: "" },
+          requested_reviewers: [{ id: 42, login: "reviewer" }],
+          assignees: [],
+          head: { ref: "feature", sha: "head" },
+          base: { ref: "main", sha: "base" },
+        },
+        {
+          id: 12,
+          number: 8,
+          title: "Someone else",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/8",
+          user: { id: 2, login: "other", avatar_url: "" },
+          requested_reviewers: [{ id: 99, login: "someone-else" }],
+          assignees: [],
+          head: { ref: "other", sha: "other-head" },
+          base: { ref: "main", sha: "base" },
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pulls = await new GitHubProvider("token").listOpenPullRequests("1", {
+      reviewerExternalAccountId: "42",
+    });
+
+    expect(pulls.map((pull) => pull.number)).toEqual([7]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses provider-native reviewer filters for GitLab and Azure", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ value: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new GitLabProvider("token").listOpenPullRequests("1", {
+      reviewerExternalAccountId: "42",
+    });
+    await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).listOpenPullRequests("repo", {
+      reviewerExternalAccountId: "reviewer-id",
+    });
+
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toContain(
+      "reviewer_id=42",
+    );
+    expect(requestUrl(fetchMock.mock.calls[1]?.[0])).toContain(
+      "searchCriteria.reviewerId=reviewer-id",
+    );
+  });
+
   it("normalizes merged Azure DevOps pull requests", async () => {
     mockJson({
       pullRequestId: 12,
@@ -112,6 +178,80 @@ describe("provider normalization", () => {
       targetBranch: "main",
       authorLogin: "Alex Reviewer",
     });
+  });
+
+  it("creates and removes GitLab merge-request webhooks idempotently", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(
+        jsonResponse({ id: 91, url: "https://app.test/hook" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { id: 91, url: "https://app.test/hook" },
+          { id: 92, url: "https://other.test/hook" },
+        ]),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitLabProvider("token");
+
+    await provider.ensureRepositoryWebhook({
+      repositoryExternalId: "42",
+      callbackUrl: "https://app.test/hook",
+      secret: "signed-secret",
+    });
+    await provider.removeRepositoryWebhook({
+      repositoryExternalId: "42",
+      callbackUrl: "https://app.test/hook",
+    });
+
+    const create = fetchMock.mock.calls[1];
+    expect(create?.[1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse(String(create?.[1]?.body))).toMatchObject({
+      token: "signed-secret",
+      merge_requests_events: true,
+      enable_ssl_verification: true,
+    });
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(requestUrl(fetchMock.mock.calls[3]?.[0])).toContain("/hooks/91");
+  });
+
+  it("creates the three required Azure pull-request service hooks", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ value: [] }))
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse({ id: "subscription" })),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).ensureRepositoryWebhook({
+      repositoryExternalId: "repository",
+      callbackUrl: "https://app.test/api/webhooks/azure_devops",
+      secret: "signed-secret",
+    });
+
+    const creations = fetchMock.mock.calls.slice(1);
+    expect(creations).toHaveLength(3);
+    expect(
+      creations.map((call) => JSON.parse(String(call[1]?.body)).eventType),
+    ).toEqual([
+      "git.pullrequest.created",
+      "git.pullrequest.updated",
+      "git.pullrequest.merged",
+    ]);
+    for (const call of creations) {
+      expect(JSON.parse(String(call[1]?.body)).consumerInputs).toEqual({
+        url: "https://app.test/api/webhooks/azure_devops",
+        basicAuthUsername: "reviewduck",
+        basicAuthPassword: "signed-secret",
+      });
+    }
   });
 
   it("follows GitHub Link pagination without guessing a page limit", async () => {
@@ -898,5 +1038,267 @@ describe("provider normalization", () => {
         ],
       }),
     ]);
+  });
+
+  it("synchronizes and submits GitHub user review decisions at an exact commit", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/reviews?per_page=100")) {
+          return jsonResponse([
+            { id: 1, state: "APPROVED", user: { id: 7, login: "duck" } },
+            {
+              id: 2,
+              state: "CHANGES_REQUESTED",
+              user: { id: 8, login: "goose" },
+            },
+          ]);
+        }
+        if (url.endsWith("/pulls/12")) {
+          return jsonResponse({
+            id: 12,
+            number: 12,
+            title: "Review decisions",
+            body: null,
+            state: "open",
+            html_url: "https://github.com/acme/review/pull/12",
+            user: { id: 9, login: "author", avatar_url: "" },
+            head: { ref: "feature", sha: "head-sha" },
+            base: { ref: "main", sha: "base-sha" },
+          });
+        }
+        if (url.endsWith("/user")) {
+          return jsonResponse({ id: 7, login: "duck", name: "Duck Reviewer" });
+        }
+        if (url.endsWith("/reviews") && init?.method === "POST") {
+          return jsonResponse({
+            id: 3,
+            state: "CHANGES_REQUESTED",
+            user: { id: 7, login: "duck" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    await expect(
+      provider.getPullRequestReviewState("42", 12),
+    ).resolves.toMatchObject({
+      decision: "approved",
+      actorName: "Duck Reviewer",
+      approvedCount: 1,
+      changesRequestedCount: 1,
+      canApprove: false,
+      canRequestChanges: true,
+      requestChangesRequiresBody: true,
+    });
+    await provider.setPullRequestReviewDecision({
+      repositoryExternalId: "42",
+      pullRequestNumber: 12,
+      headSha: "head-sha",
+      action: "request_changes",
+      body: "Please cover the failure path.",
+    });
+
+    const reviewRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestUrl(input).endsWith("/reviews") && init?.method === "POST",
+    );
+    expect(JSON.parse(String(reviewRequest?.[1]?.body))).toEqual({
+      commit_id: "head-sha",
+      event: "REQUEST_CHANGES",
+      body: "Please cover the failure path.",
+    });
+  });
+
+  it("keeps GitHub App installations read-only for personal decisions", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/reviews?per_page=100")) return jsonResponse([]);
+      if (url.endsWith("/pulls/12")) {
+        return jsonResponse({
+          id: 12,
+          number: 12,
+          title: "Review decisions",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/12",
+          user: { id: 9, login: "author", avatar_url: "" },
+          head: { ref: "feature", sha: "head-sha" },
+          base: { ref: "main", sha: "base-sha" },
+        });
+      }
+      if (url.endsWith("/installation")) {
+        return jsonResponse({
+          id: 17,
+          account: { id: 7, login: "acme" },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider(
+      "token",
+      "https://api.github.com",
+      true,
+    );
+
+    await expect(
+      provider.getPullRequestReviewState("42", 12),
+    ).resolves.toMatchObject({
+      decision: "none",
+      canApprove: false,
+      canRequestChanges: false,
+      actorName: "connected GitHub App",
+    });
+    await expect(
+      provider.setPullRequestReviewDecision({
+        repositoryExternalId: "42",
+        pullRequestNumber: 12,
+        headSha: "head-sha",
+        action: "approve",
+      }),
+    ).rejects.toThrow("personal review decision");
+  });
+
+  it("synchronizes GitLab approval requirements and sends the exact head SHA", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/approvals")) {
+          return jsonResponse({
+            approvals_required: 2,
+            approvals_left: 1,
+            approved_by: [
+              { user: { id: 8, name: "Goose", username: "goose" } },
+            ],
+          });
+        }
+        if (url.endsWith("/user")) {
+          return jsonResponse({ id: 7, name: "Duck", username: "duck" });
+        }
+        if (url.endsWith("/merge_requests/12")) {
+          return jsonResponse({
+            id: 12,
+            iid: 12,
+            title: "Review decisions",
+            description: null,
+            state: "opened",
+            draft: false,
+            web_url: "https://gitlab.com/acme/review/-/merge_requests/12",
+            source_branch: "feature",
+            target_branch: "main",
+            sha: "head-sha",
+            diff_refs: { base_sha: "base-sha", head_sha: "head-sha" },
+            author: { id: 9, username: "author", avatar_url: null },
+          });
+        }
+        if (url.endsWith("/approve") && init?.method === "POST") {
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitLabProvider("token");
+
+    await expect(
+      provider.getPullRequestReviewState("42", 12),
+    ).resolves.toMatchObject({
+      decision: "none",
+      actorName: "Duck",
+      approvedCount: 1,
+      requiredApprovals: 2,
+      approvalsRemaining: 1,
+      canApprove: true,
+      canRequestChanges: false,
+    });
+    await provider.setPullRequestReviewDecision({
+      repositoryExternalId: "42",
+      pullRequestNumber: 12,
+      headSha: "head-sha",
+      action: "approve",
+    });
+    const approvalRequest = fetchMock.mock.calls.find(([input]) =>
+      requestUrl(input).endsWith("/approve"),
+    );
+    expect(JSON.parse(String(approvalRequest?.[1]?.body))).toEqual({
+      sha: "head-sha",
+    });
+  });
+
+  it("normalizes and changes the connected Azure DevOps reviewer vote", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.includes("connectionData")) {
+          return jsonResponse({
+            authenticatedUser: {
+              id: "reviewer-1",
+              providerDisplayName: "Duck",
+            },
+          });
+        }
+        if (url.includes("/reviewers?")) {
+          return jsonResponse({
+            value: [
+              { id: "reviewer-1", displayName: "Duck", vote: -5 },
+              { id: "reviewer-2", displayName: "Goose", vote: 10 },
+            ],
+          });
+        }
+        if (url.includes("/reviewers/reviewer-1") && init?.method === "PUT") {
+          return new Response(null, { status: 204 });
+        }
+        if (url.includes("/pullRequests/12?")) {
+          return jsonResponse({
+            pullRequestId: 12,
+            title: "Review decisions",
+            status: "active",
+            isDraft: false,
+            sourceRefName: "refs/heads/feature",
+            targetRefName: "refs/heads/main",
+            lastMergeSourceCommit: { commitId: "head-sha" },
+            lastMergeTargetCommit: { commitId: "base-sha" },
+            repository: { webUrl: "https://dev.azure.com/acme/repo" },
+            createdBy: { id: "author-1", displayName: "Author" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    );
+
+    await expect(
+      provider.getPullRequestReviewState("repo", 12),
+    ).resolves.toMatchObject({
+      decision: "waiting",
+      actorName: "Duck",
+      approvedCount: 1,
+      canApprove: true,
+      canRequestChanges: true,
+      canClear: true,
+    });
+    await provider.setPullRequestReviewDecision({
+      repositoryExternalId: "repo",
+      pullRequestNumber: 12,
+      headSha: "head-sha",
+      action: "request_changes",
+    });
+    const voteRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestUrl(input).includes("/reviewers/reviewer-1") &&
+        init?.method === "PUT",
+    );
+    expect(JSON.parse(String(voteRequest?.[1]?.body))).toEqual({
+      id: "reviewer-1",
+      vote: -10,
+    });
   });
 });

@@ -1,8 +1,5 @@
 import { basename } from "node:path";
 import {
-  isImportOnlySource,
-  parseImportReferences,
-  parseImportStatements,
   resolveImportPath,
   resolvePythonImportedSubmodulePath,
 } from "~/lib/import-navigation";
@@ -10,14 +7,25 @@ import { reviewFoundationPriority } from "~/lib/review-priority";
 import { lineDiffOperations } from "~/lib/side-by-side-diff";
 import { languageAdapterForFile } from "./adapters";
 import { semanticSource, sha256, stableReviewKey } from "./hash";
+import {
+  isImportOnlySource,
+  parseImportReferences,
+  parseImportStatements,
+} from "./imports";
+import {
+  type SemanticSymbolOccurrence,
+  semanticSymbolOccurrences,
+} from "./parsers/tree-sitter-adapter";
+import type { TreeSitterLanguage } from "./tree-sitter";
 import type {
   AnalysisResult,
   AnalyzedUnit,
+  ReviewUnitRange,
   SourceFile,
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 25;
+export const CURRENT_ANALYSIS_VERSION = 28;
 
 type RawUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
@@ -365,51 +373,9 @@ function rawFileReviewUnits(file: SourceFile) {
   };
 }
 
-/** Creates an explicit unit for changed lines not owned by a parsed declaration. */
-function changeFragment(
-  file: SourceFile,
-  language: SupportedLanguage,
-  lines: string[],
-  startIndex: number,
-  endIndex: number,
-  side: "current" | "previous",
-): RawUnit {
-  const source = lines.slice(startIndex, endIndex + 1).join("\n");
-  const changeType = side === "previous" ? "deleted" : "modified";
-  const lineLabel =
-    startIndex === endIndex
-      ? `line ${startIndex + 1}`
-      : `lines ${startIndex + 1}–${endIndex + 1}`;
-  const identity = `<pr-change:${side}:${startIndex + 1}:${sha256(source).slice(0, 12)}>`;
-  return {
-    stableKey: stableReviewKey(file.path, "module", identity),
-    path: file.path,
-    language,
-    kind: "module",
-    name: `Changed ${lineLabel}`,
-    signature: `Changed ${lineLabel} in ${file.path}`,
-    startLine: startIndex + 1,
-    endLine: endIndex + 1,
-    source,
-    previousSource: side === "current" ? undefined : source,
-    contentHash: sha256(source),
-    semanticHash: sha256(`${changeType}:${semanticSource(source, language)}`),
-    changeType,
-    complexity: 1,
-    dependencies: [],
-  };
-}
-
-/** Converts every contiguous uncovered changed-line range into a review unit. */
-function uncoveredChangeFragments(
-  file: SourceFile,
-  language: SupportedLanguage,
-  lines: string[],
-  changed: boolean[],
-  covered: boolean[],
-  side: "current" | "previous",
-) {
-  const fragments: RawUnit[] = [];
+/** Collects contiguous uncovered changed-line ranges on one diff side. */
+function uncoveredLineRanges(changed: boolean[], covered: boolean[]) {
+  const ranges: Array<{ start: number; end: number }> = [];
   let start: number | undefined;
   for (let index = 0; index <= changed.length; index += 1) {
     if (index < changed.length && changed[index] && !covered[index]) {
@@ -417,26 +383,203 @@ function uncoveredChangeFragments(
       continue;
     }
     if (start !== undefined) {
-      fragments.push(
-        changeFragment(file, language, lines, start, index - 1, side),
-      );
+      ranges.push({ start, end: index - 1 });
       start = undefined;
     }
   }
-  return fragments;
+  return ranges;
 }
 
-/** Marks the source lines represented by review units on one diff side. */
-function markUnitRanges(units: RawUnit[], covered: boolean[]) {
-  for (const unit of units) {
+/** Returns whether a zero-based range intersects an optional hunk span. */
+function rangeIntersectsHunkSpan(
+  range: { start: number; end: number },
+  spanStart: number | undefined,
+  spanEnd: number | undefined,
+) {
+  return (
+    spanStart !== undefined &&
+    spanEnd !== undefined &&
+    range.start <= spanEnd &&
+    range.end >= spanStart
+  );
+}
+
+/** Builds a human-readable line-range label for a change fragment. */
+function changeLineLabel(startIndex: number, endIndex: number) {
+  return startIndex === endIndex
+    ? `line ${startIndex + 1}`
+    : `lines ${startIndex + 1}–${endIndex + 1}`;
+}
+
+/** Creates an explicit unit for changed lines not owned by a parsed declaration. */
+function changeFragment(
+  file: SourceFile,
+  language: SupportedLanguage,
+  options: {
+    currentLines?: readonly string[];
+    currentStart?: number;
+    currentEnd?: number;
+    previousLines?: readonly string[];
+    previousStart?: number;
+    previousEnd?: number;
+  },
+): RawUnit {
+  const currentStart = options.currentStart;
+  const currentEnd = options.currentEnd;
+  const previousStart = options.previousStart;
+  const previousEnd = options.previousEnd;
+  const hasCurrent =
+    options.currentLines !== undefined &&
+    currentStart !== undefined &&
+    currentEnd !== undefined;
+  const hasPrevious =
+    options.previousLines !== undefined &&
+    previousStart !== undefined &&
+    previousEnd !== undefined;
+  const currentSource =
+    hasCurrent && options.currentLines
+      ? options.currentLines.slice(currentStart, currentEnd + 1).join("\n")
+      : "";
+  const previousSource =
+    hasPrevious && options.previousLines
+      ? options.previousLines.slice(previousStart, previousEnd + 1).join("\n")
+      : undefined;
+  const changeType = hasCurrent
+    ? hasPrevious
+      ? ("modified" as const)
+      : ("added" as const)
+    : ("deleted" as const);
+  const labelStart = hasCurrent ? currentStart : (previousStart ?? 0);
+  const labelEnd = hasCurrent ? currentEnd : (previousEnd ?? 0);
+  const lineLabel = changeLineLabel(labelStart, labelEnd);
+  const identitySource = hasCurrent
+    ? currentSource
+    : (previousSource ?? currentSource);
+  const identity = `<pr-change:${changeType}:${labelStart + 1}:${sha256(identitySource).slice(0, 12)}>`;
+  return {
+    stableKey: stableReviewKey(file.path, "module", identity),
+    path: file.path,
+    language,
+    kind: "module",
+    name: `Changed ${lineLabel}`,
+    signature: `Changed ${lineLabel} in ${file.path}`,
+    startLine: labelStart + 1,
+    endLine: labelEnd + 1,
+    source: hasCurrent ? currentSource : (previousSource ?? ""),
+    previousSource,
+    contentHash: sha256(hasCurrent ? currentSource : (previousSource ?? "")),
+    semanticHash: sha256(
+      `${changeType}:${semanticSource(
+        hasCurrent ? currentSource : (previousSource ?? ""),
+        language,
+      )}`,
+    ),
+    changeType,
+    complexity: 1,
+    dependencies: [],
+  };
+}
+
+/**
+ * Converts uncovered changed-line ranges into review units, pairing base/head
+ * ranges that share a replace hunk so rewrites surface as modifications.
+ */
+function uncoveredChangeFragments(
+  file: SourceFile,
+  language: SupportedLanguage,
+  previousLines: readonly string[],
+  currentLines: readonly string[],
+  previousChanged: boolean[],
+  currentChanged: boolean[],
+  previousCovered: boolean[],
+  currentCovered: boolean[],
+) {
+  const previousRanges = uncoveredLineRanges(previousChanged, previousCovered);
+  const currentRanges = uncoveredLineRanges(currentChanged, currentCovered);
+  const previousUsed = new Array<boolean>(previousRanges.length).fill(false);
+  const currentUsed = new Array<boolean>(currentRanges.length).fill(false);
+  const fragments: RawUnit[] = [];
+
+  /** Marks a zero-based inclusive range as covered on one side. */
+  const cover = (covered: boolean[], start: number, end: number) => {
     for (
-      let index = Math.max(0, unit.startLine - 1);
-      index < Math.min(covered.length, unit.endLine);
+      let index = Math.max(0, start);
+      index <= Math.min(covered.length - 1, end);
       index += 1
     ) {
       covered[index] = true;
     }
+  };
+
+  for (const hunk of changedLineHunks(
+    previousLines.join("\n"),
+    currentLines.join("\n"),
+  )) {
+    const previousIndexes = previousRanges.flatMap((range, index) =>
+      !previousUsed[index] &&
+      rangeIntersectsHunkSpan(range, hunk.previousStart, hunk.previousEnd)
+        ? [index]
+        : [],
+    );
+    const currentIndexes = currentRanges.flatMap((range, index) =>
+      !currentUsed[index] &&
+      rangeIntersectsHunkSpan(range, hunk.currentStart, hunk.currentEnd)
+        ? [index]
+        : [],
+    );
+    if (previousIndexes.length === 0 || currentIndexes.length === 0) continue;
+
+    const previousStart = Math.min(
+      ...previousIndexes.map((index) => previousRanges[index]?.start ?? 0),
+    );
+    const previousEnd = Math.max(
+      ...previousIndexes.map((index) => previousRanges[index]?.end ?? 0),
+    );
+    const currentStart = Math.min(
+      ...currentIndexes.map((index) => currentRanges[index]?.start ?? 0),
+    );
+    const currentEnd = Math.max(
+      ...currentIndexes.map((index) => currentRanges[index]?.end ?? 0),
+    );
+    for (const index of previousIndexes) previousUsed[index] = true;
+    for (const index of currentIndexes) currentUsed[index] = true;
+    cover(previousCovered, previousStart, previousEnd);
+    cover(currentCovered, currentStart, currentEnd);
+    fragments.push(
+      changeFragment(file, language, {
+        previousLines,
+        previousStart,
+        previousEnd,
+        currentLines,
+        currentStart,
+        currentEnd,
+      }),
+    );
   }
+
+  for (const [index, range] of currentRanges.entries()) {
+    if (currentUsed[index] || !range) continue;
+    cover(currentCovered, range.start, range.end);
+    fragments.push(
+      changeFragment(file, language, {
+        currentLines,
+        currentStart: range.start,
+        currentEnd: range.end,
+      }),
+    );
+  }
+  for (const [index, range] of previousRanges.entries()) {
+    if (previousUsed[index] || !range) continue;
+    cover(previousCovered, range.start, range.end);
+    fragments.push(
+      changeFragment(file, language, {
+        previousLines,
+        previousStart: range.start,
+        previousEnd: range.end,
+      }),
+    );
+  }
+  return fragments;
 }
 
 /** Fails closed if a future parser regression leaves a PR line unreviewable. */
@@ -507,7 +650,9 @@ function prScopedReviewUnits(
     file.isBinary ||
     file.skipReason
   ) {
-    return currentUnits.length > 0 || file.changeType === undefined
+    return currentUnits.length > 0 ||
+      file.changeType === undefined ||
+      language !== "text"
       ? currentUnits
       : [{ ...fallbackDeclaration(file), language }];
   }
@@ -648,32 +793,378 @@ function prScopedReviewUnits(
     );
     markContextualBlankChanges(previousLines, masks.previous, previousCovered);
   }
-  const currentFragments = uncoveredChangeFragments(
-    file,
-    language,
-    currentLines,
-    masks.current,
-    currentCovered,
-    "current",
-  );
-  const previousFragments = uncoveredChangeFragments(
+  const fragments = uncoveredChangeFragments(
     file,
     language,
     previousLines,
+    currentLines,
     masks.previous,
+    masks.current,
     previousCovered,
-    "previous",
+    currentCovered,
   );
-  markUnitRanges(currentFragments, currentCovered);
-  markUnitRanges(previousFragments, previousCovered);
   assertChangedLinesCovered(file.path, "head", masks.current, currentCovered);
   assertChangedLinesCovered(file.path, "base", masks.previous, previousCovered);
-  return [
-    ...changedCurrent,
-    ...deletedUnits,
-    ...currentFragments,
-    ...previousFragments,
-  ];
+  return [...changedCurrent, ...deletedUnits, ...fragments];
+}
+
+interface UnitSymbolProfile {
+  unit: RawUnit;
+  currentRange?: { startLine: number; endLine: number };
+  previousRange?: { startLine: number; endLine: number };
+  current: Map<string, SemanticSymbolOccurrence[]>;
+  previous: Map<string, SemanticSymbolOccurrence[]>;
+  added: Set<string>;
+  removed: Set<string>;
+}
+
+const conceptSymbolStopWords = new Set([
+  "args",
+  "boolean",
+  "data",
+  "error",
+  "false",
+  "index",
+  "item",
+  "null",
+  "number",
+  "object",
+  "props",
+  "result",
+  "self",
+  "state",
+  "string",
+  "super",
+  "this",
+  "true",
+  "undefined",
+  "value",
+]);
+
+/** Returns the one-based location of an exact source slice. */
+function locatedSourceRange(
+  source: string,
+  slice: string | undefined,
+  fallback: { startLine: number; endLine: number },
+) {
+  if (!slice) return undefined;
+  const offset = source.indexOf(slice);
+  if (offset < 0) return fallback;
+  const startLine = source.slice(0, offset).split("\n").length;
+  return {
+    startLine,
+    endLine: startLine + Math.max(0, slice.split("\n").length - 1),
+  };
+}
+
+/** Indexes semantic occurrences whose source coordinates overlap one range. */
+function symbolsWithinRange(
+  occurrences: SemanticSymbolOccurrence[],
+  range?: { startLine: number; endLine: number },
+) {
+  const symbols = new Map<string, SemanticSymbolOccurrence[]>();
+  if (!range) return symbols;
+  for (const occurrence of occurrences) {
+    if (
+      occurrence.endLine < range.startLine ||
+      occurrence.startLine > range.endLine
+    ) {
+      continue;
+    }
+    symbols.set(occurrence.name, [
+      ...(symbols.get(occurrence.name) ?? []),
+      occurrence,
+    ]);
+  }
+  return symbols;
+}
+
+/** Finds symbol counts that changed inside the corresponding unit slices. */
+function changedProfileNames(
+  before: Map<string, SemanticSymbolOccurrence[]>,
+  after: Map<string, SemanticSymbolOccurrence[]>,
+  direction: "added" | "removed",
+) {
+  const names = new Set([...before.keys(), ...after.keys()]);
+  return new Set(
+    [...names].filter((name) => {
+      const previousCount = before.get(name)?.length ?? 0;
+      const currentCount = after.get(name)?.length ?? 0;
+      return direction === "removed"
+        ? previousCount > currentCount
+        : currentCount > previousCount;
+    }),
+  );
+}
+
+/** Checks whether a definition's lexical scope can contain an occurrence. */
+function scopesResolve(
+  definitions: SemanticSymbolOccurrence[],
+  occurrences: SemanticSymbolOccurrence[],
+) {
+  return definitions.some((definition) => {
+    const specificScopes = definition.scopeChain.filter(
+      (scope) => scope !== "<file>",
+    );
+    if (specificScopes.length === 0) return true;
+    return occurrences.some((occurrence) =>
+      specificScopes.some((scope) => occurrence.scopeChain.includes(scope)),
+    );
+  });
+}
+
+/** Creates one deterministic multi-range concept from related atomic units. */
+function mergeConceptUnits(file: SourceFile, members: UnitSymbolProfile[]) {
+  const currentRanges = members.flatMap(({ currentRange }) =>
+    currentRange ? [currentRange] : [],
+  );
+  const previousRanges = members.flatMap(({ previousRange }) =>
+    previousRange ? [previousRange] : [],
+  );
+  const relatedRanges = members
+    .map(
+      ({ currentRange, previousRange }): ReviewUnitRange => ({
+        startLine: currentRange?.startLine,
+        endLine: currentRange?.endLine,
+        previousStartLine: previousRange?.startLine,
+        previousEndLine: previousRange?.endLine,
+      }),
+    )
+    .sort(
+      (left, right) =>
+        (left.startLine ?? left.previousStartLine ?? Number.MAX_SAFE_INTEGER) -
+        (right.startLine ?? right.previousStartLine ?? Number.MAX_SAFE_INTEGER),
+    );
+  const currentStart = Math.min(
+    ...currentRanges.map(({ startLine }) => startLine),
+  );
+  const currentEnd = Math.max(...currentRanges.map(({ endLine }) => endLine));
+  const previousStart = Math.min(
+    ...previousRanges.map(({ startLine }) => startLine),
+  );
+  const previousEnd = Math.max(...previousRanges.map(({ endLine }) => endLine));
+  const currentSource =
+    currentRanges.length > 0
+      ? file.content
+          .split("\n")
+          .slice(currentStart - 1, currentEnd)
+          .join("\n")
+      : "";
+  const previousSource =
+    previousRanges.length > 0
+      ? (file.previousContent ?? "")
+          .split("\n")
+          .slice(previousStart - 1, previousEnd)
+          .join("\n")
+      : undefined;
+  const anchor = [...members]
+    .sort(
+      (left, right) =>
+        Number(
+          !["constant", "variable", "function", "method", "class"].includes(
+            left.unit.kind,
+          ),
+        ) -
+          Number(
+            !["constant", "variable", "function", "method", "class"].includes(
+              right.unit.kind,
+            ),
+          ) ||
+        left.unit.endLine -
+          left.unit.startLine -
+          (right.unit.endLine - right.unit.startLine) ||
+        left.unit.startLine - right.unit.startLine,
+    )
+    .at(0)?.unit;
+  if (!anchor) throw new Error("A review concept must contain an anchor");
+  const memberKeys = members
+    .map(({ unit }) => unit.stableKey)
+    .sort((left, right) => left.localeCompare(right));
+  const changeTypes = new Set(members.map(({ unit }) => unit.changeType));
+  const changeType =
+    changeTypes.size === 1
+      ? (members[0]?.unit.changeType ?? "modified")
+      : ("modified" as const);
+  const stableKey = stableReviewKey(
+    file.path,
+    anchor.kind,
+    `<concept:${sha256(memberKeys.join("\0"))}>`,
+  );
+  return {
+    ...anchor,
+    stableKey,
+    name: `${anchor.name} · ${members.length} related changes`,
+    signature: `Related changes for ${anchor.name}`,
+    startLine:
+      currentRanges.length > 0 ? currentStart : Math.max(1, previousStart),
+    endLine: currentRanges.length > 0 ? currentEnd : Math.max(1, previousEnd),
+    source: currentRanges.length > 0 ? currentSource : (previousSource ?? ""),
+    previousSource,
+    contentHash: sha256(
+      members
+        .map(({ unit }) => unit.contentHash)
+        .sort()
+        .join("\0"),
+    ),
+    semanticHash: sha256(
+      `${changeType}:${members
+        .map(({ unit }) => unit.semanticHash)
+        .sort()
+        .join("\0")}`,
+    ),
+    changeType,
+    complexity: members.reduce((total, { unit }) => total + unit.complexity, 0),
+    dependencies: [
+      ...new Set(members.flatMap(({ unit }) => unit.dependencies)),
+    ].filter((dependency) => !memberKeys.includes(dependency)),
+    relatedRanges,
+  } satisfies RawUnit;
+}
+
+/**
+ * Clusters high-confidence definition/reference changes into review concepts.
+ *
+ * The algorithm is language-neutral after Tree-sitter adapters normalize
+ * identifiers, definitions, references, and lexical scope chains.
+ */
+function clusterRelatedChangeUnits(
+  file: SourceFile,
+  language: SupportedLanguage,
+  units: RawUnit[],
+) {
+  if (
+    language === "text" ||
+    file.changeType !== "modified" ||
+    !file.previousContent ||
+    units.length < 2
+  ) {
+    return units;
+  }
+  const treeLanguage = language as TreeSitterLanguage;
+  const currentOccurrences = semanticSymbolOccurrences(
+    treeLanguage,
+    file.content,
+  );
+  const previousOccurrences = semanticSymbolOccurrences(
+    treeLanguage,
+    file.previousContent,
+  );
+  const profiles: UnitSymbolProfile[] = units.map((unit) => {
+    const currentRange =
+      unit.changeType === "deleted"
+        ? undefined
+        : { startLine: unit.startLine, endLine: unit.endLine };
+    const previousRange = locatedSourceRange(
+      file.previousContent ?? "",
+      unit.previousSource,
+      { startLine: unit.startLine, endLine: unit.endLine },
+    );
+    const current = symbolsWithinRange(currentOccurrences, currentRange);
+    const previous = symbolsWithinRange(previousOccurrences, previousRange);
+    return {
+      unit,
+      currentRange,
+      previousRange,
+      current,
+      previous,
+      added: changedProfileNames(previous, current, "added"),
+      removed: changedProfileNames(previous, current, "removed"),
+    };
+  });
+  const parents = profiles.map((_, index) => index);
+  /** Resolves one profile's path-compressed concept root. */
+  const find = (index: number): number => {
+    const parent = parents[index] ?? index;
+    if (parent === index) return index;
+    const root = find(parent);
+    parents[index] = root;
+    return root;
+  };
+  /** Joins two profiles into the same deterministic concept set. */
+  const union = (left: number, right: number) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+  const fullCounts = new Map<string, number>();
+  for (const occurrence of [...currentOccurrences, ...previousOccurrences]) {
+    fullCounts.set(occurrence.name, (fullCounts.get(occurrence.name) ?? 0) + 1);
+  }
+  for (const direction of ["removed", "added"] as const) {
+    const side = direction === "removed" ? "previous" : "current";
+    const names = new Set(
+      profiles.flatMap((profile) => [...profile[direction]]),
+    );
+    for (const name of names) {
+      if (
+        name.length < 3 ||
+        conceptSymbolStopWords.has(name.toLowerCase()) ||
+        (fullCounts.get(name) ?? 0) > 48
+      ) {
+        continue;
+      }
+      const owners = profiles
+        .flatMap((profile, index) => {
+          if (!profile[direction].has(name)) return [];
+          const definitions = (profile[side].get(name) ?? []).filter(
+            ({ role }) => role === "definition",
+          );
+          const range =
+            side === "previous" ? profile.previousRange : profile.currentRange;
+          return definitions.length > 0 && range
+            ? [
+                {
+                  index,
+                  definitions,
+                  rangeSize: range.endLine - range.startLine,
+                },
+              ]
+            : [];
+        })
+        .sort(
+          (left, right) =>
+            left.rangeSize - right.rangeSize || left.index - right.index,
+        );
+      if (
+        owners.length === 0 ||
+        (owners[1] && owners[0]?.rangeSize === owners[1].rangeSize)
+      ) {
+        continue;
+      }
+      const owner = owners[0];
+      if (!owner) continue;
+      const related = profiles.flatMap((profile, index) => {
+        if (index === owner.index || !profile[direction].has(name)) return [];
+        const occurrences = profile[side].get(name) ?? [];
+        return scopesResolve(owner.definitions, occurrences) ? [index] : [];
+      });
+      if (related.length === 0 || related.length > 24) continue;
+      for (const index of related) union(owner.index, index);
+    }
+  }
+  const grouped = new Map<number, UnitSymbolProfile[]>();
+  profiles.forEach((profile, index) => {
+    const root = find(index);
+    grouped.set(root, [...(grouped.get(root) ?? []), profile]);
+  });
+  const aliases = new Map<string, string>();
+  const merged = [...grouped.values()].map((members) => {
+    if (members.length === 1) return members[0]?.unit as RawUnit;
+    const concept = mergeConceptUnits(file, members);
+    for (const { unit } of members)
+      aliases.set(unit.stableKey, concept.stableKey);
+    return concept;
+  });
+  return merged.map((unit) => ({
+    ...unit,
+    dependencies: [
+      ...new Set(
+        unit.dependencies
+          .map((dependency) => aliases.get(dependency) ?? dependency)
+          .filter((dependency) => dependency !== unit.stableKey),
+      ),
+    ],
+  }));
 }
 
 /** Calculates dependency depth for every analyzed code unit. */
@@ -782,12 +1273,14 @@ function clusterConceptUnits(units: AnalyzedUnit[]) {
     priorityMemo.set(cluster.id, priority);
     return priority;
   }
+  /** Orders clusters by their earliest transitive review foundation. */
   const compareFoundationPriority = (
     left: (typeof clusters)[number],
     right: (typeof clusters)[number],
   ) =>
     branchPriority(left) - branchPriority(right) ||
     left.ownPriority - right.ownPriority;
+  /** Applies deterministic dependency, complexity, and source-order ranking. */
   const compareClusters = (
     left: (typeof clusters)[number],
     right: (typeof clusters)[number],
@@ -862,10 +1355,15 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     const { adapter, reviewUnits: unscopedReviewUnits } =
       rawFileReviewUnits(file);
     const changeType = file.changeType ?? "modified";
-    const reviewUnitsForPr = prScopedReviewUnits(
+    const scopedReviewUnits = prScopedReviewUnits(
       file,
       adapter?.language ?? "text",
       unscopedReviewUnits,
+    );
+    const reviewUnitsForPr = clusterRelatedChangeUnits(
+      file,
+      adapter?.language ?? "text",
+      scopedReviewUnits,
     );
     const fileContextSource =
       file.isBinary || file.skipReason
@@ -966,11 +1464,11 @@ function buildImportAliases(
   const result = new Map<string, Map<string, string[]>>();
   for (const file of files) {
     const aliases = new Map<string, string[]>();
-    const language = file.path.endsWith(".py")
-      ? "python"
-      : file.path.match(/\.[cm]?tsx?$/)
-        ? "typescript"
-        : "javascript";
+    const language = languageAdapterForFile(file)?.language ?? "text";
+    if (language === "text") {
+      result.set(file.path, aliases);
+      continue;
+    }
     for (const item of parseImportReferences(file.content, language)) {
       const targetPath = resolveImportPath(
         file.path,

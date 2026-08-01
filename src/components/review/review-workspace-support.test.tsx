@@ -1,62 +1,475 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  AiActionMenu,
+  AI_QUICK_QUESTIONS,
+  aiConversationVisibility,
+  InlineAiQuestion,
   ProviderConversation,
   ProviderConversationHistory,
+  rememberAiConversationVisibility,
+  reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
 } from "./review-workspace-support";
 
 afterEach(cleanup);
 
-describe("AiActionMenu", () => {
-  it("opens the explanation choices and runs the selected action", async () => {
-    const review = vi.fn();
-    const user = userEvent.setup();
+describe("review shortcuts", () => {
+  it("provides editor-style sidebar shortcuts", () => {
+    expect(reviewShortcuts.togglePathPanel).toEqual([{ key: "b", mod: true }]);
+    expect(reviewShortcuts.toggleInsightsPanel).toEqual([
+      { key: "g", mod: true },
+    ]);
+    expect(reviewShortcuts.search).toEqual([{ key: "f" }]);
+    expect(reviewShortcuts.nextReview).toEqual([{ key: "n", shift: true }]);
+    expect(reviewShortcuts.signOffDeletions).toEqual([
+      { key: "d", shift: true },
+    ]);
+    expect(reviewShortcuts.undoReview).toEqual([{ key: "u" }]);
+  });
+});
+
+describe("InlineAiQuestion", () => {
+  it("can restore a saved conversation without stealing keyboard focus", () => {
+    const priorControl = document.createElement("button");
+    document.body.append(priorControl);
+    priorControl.focus();
     render(
-      <AiActionMenu
-        fullWidth
-        items={[
+      <InlineAiQuestion
+        autoFocus={false}
+        canAsk
+        draft=""
+        entries={[
           {
-            label: "Explain this unit",
-            description: "Explain the active code",
-            shortcut: [{ key: "e" }],
-            onSelect: vi.fn(),
-          },
-          {
-            label: "Review the full pull request",
-            description: "Review every changed file",
-            shortcut: [{ key: "r" }],
-            onSelect: review,
+            id: "question-1",
+            question: "Why did this change?",
+            status: "completed",
+            error: null,
+            result: { summary: "It narrows the retry boundary." },
           },
         ]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
       />,
     );
 
-    const menuButton = screen.getByRole("button", {
-      name: /AI assistance/i,
-    });
-    expect(menuButton).toHaveClass("w-full");
-    await user.click(menuButton);
-    expect(
-      screen.getByRole("menu", { name: "AI review actions" }),
-    ).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("menuitem", {
-        name: /Review the full pull request/,
-      }),
+    expect(screen.getByText("It narrows the retry boundary.")).toBeVisible();
+    expect(priorControl).toHaveFocus();
+    priorControl.remove();
+  });
+
+  it("shows the focused conversation and submits with Enter", async () => {
+    const ask = vi.fn();
+    const change = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft="Why is this guard needed?"
+        entries={[
+          {
+            id: "question-1",
+            question: "What changed here?",
+            status: "completed",
+            error: null,
+            result: { summary: "The PR adds a bounded retry guard." },
+          },
+        ]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={ask}
+        onChange={change}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
     );
 
-    expect(review).toHaveBeenCalledOnce();
+    expect(screen.getByText("Ask AI about line 17")).toBeInTheDocument();
     expect(
-      screen.queryByRole("menu", { name: "AI review actions" }),
-    ).not.toBeInTheDocument();
+      screen.getByText("The PR adds a bounded retry guard."),
+    ).toBeInTheDocument();
+    const input = screen.getByRole("textbox", {
+      name: "Ask AI about line 17",
+    });
+    await user.type(input, "x{Enter}");
+    expect(ask).toHaveBeenCalledOnce();
+    expect(change).toHaveBeenCalled();
+  });
+
+  it("moves the focus with the line controls", async () => {
+    const step = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={step}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Move AI question one line down",
+      }),
+    );
+    expect(step).toHaveBeenCalledWith(1);
+  });
+
+  it("submits quick questions with modified number shortcuts", () => {
+    const ask = vi.fn();
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={ask}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole("textbox"), {
+      code: "Digit2",
+      key: "@",
+      metaKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(screen.getByRole("textbox"), {
+      code: "Digit3",
+      ctrlKey: true,
+      key: "#",
+      shiftKey: true,
+    });
+
+    expect(ask).toHaveBeenNthCalledWith(1, AI_QUICK_QUESTIONS[1].question);
+    expect(ask).toHaveBeenNthCalledWith(2, AI_QUICK_QUESTIONS[2].question);
+    expect(
+      screen.getByRole("button", { name: /Quick question 1: What does/ }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /Quick question 3: What should/ }),
+    ).toBeEnabled();
+  });
+
+  it("leaves unmodified number keys available for normal typing", () => {
+    const ask = vi.fn();
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft="Compare version "
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={ask}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole("textbox"), {
+      code: "Digit2",
+      key: "2",
+    });
+
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("replaces initial quick questions with editable PR comment proposals", async () => {
+    const publish = vi.fn().mockResolvedValue(undefined);
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[
+          {
+            id: "question-1",
+            jobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+            question: "Is this import used?",
+            status: "completed",
+            error: null,
+            result: {
+              summary: "No. The import is unused.",
+              commentProposals: [
+                {
+                  body: "Please remove this unused import.",
+                  path: "src/page.tsx",
+                  line: 7,
+                },
+              ],
+            },
+          },
+        ]}
+        line={7}
+        minimumLine={1}
+        maximumLine={20}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onPublishProposal={publish}
+        onStep={vi.fn()}
+        providerName="GitHub"
+      />,
+    );
+
+    expect(screen.queryByText("Quick questions")).not.toBeInTheDocument();
+    const proposal = screen.getByRole("textbox", {
+      name: "Edit suggested PR comment 1",
+    });
+    fireEvent.change(proposal, {
+      target: { value: "Please remove the unused route import." },
+    });
+    fireEvent.keyDown(proposal, {
+      code: "Digit1",
+      key: "!",
+      metaKey: true,
+      shiftKey: true,
+    });
+
+    await waitFor(() =>
+      expect(publish).toHaveBeenCalledWith({
+        aiCommentIndex: 0,
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        body: "Please remove the unused route import.",
+        line: 7,
+      }),
+    );
+  });
+
+  it("confirms before permanently deleting a completed conversation", async () => {
+    const deleteThread = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[
+          {
+            id: "question-1",
+            jobId: "11111111-1111-4111-8111-111111111111",
+            question: "Is this import used?",
+            status: "completed",
+            error: null,
+            result: { summary: "No. The import is unused." },
+          },
+        ]}
+        line={7}
+        minimumLine={1}
+        maximumLine={20}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onDeleteThread={deleteThread}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+        providerName="GitHub"
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete AI conversation" }),
+    );
+    expect(
+      screen.getByRole("dialog", {
+        name: "Delete this AI conversation?",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Comments already published to GitHub will remain/),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: /Delete conversation/ }),
+    );
+    await waitFor(() =>
+      expect(deleteThread).toHaveBeenCalledWith([
+        "11111111-1111-4111-8111-111111111111",
+      ]),
+    );
+  });
+
+  it("formats a partial Markdown answer and announces live progress", () => {
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[
+          {
+            id: "question-streaming",
+            question: "Is this import used?",
+            status: "streaming",
+            error: null,
+            progress: "Writing the answer…",
+            result: {
+              summary:
+                "**No.** The import is unused.\n\n- Remove it from this file.\n- Keep the route convention.",
+            },
+          },
+        ]}
+        line={7}
+        minimumLine={1}
+        maximumLine={20}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("No.").tagName).toBe("STRONG");
+    expect(screen.getByText("Remove it from this file.")).toBeInTheDocument();
+    expect(screen.getByText("Writing the answer…")).toBeInTheDocument();
+    expect(screen.getByText("AI is writing")).toHaveClass("sr-only");
+  });
+
+  it("uses the global arrow keys to move focus while the composer is open", () => {
+    const step = vi.fn();
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={step}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowUp" });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowDown" });
+
+    expect(step).toHaveBeenNthCalledWith(1, -1);
+    expect(step).toHaveBeenNthCalledWith(2, 1);
+  });
+
+  it("tracks dragging outside the handle and commits the nearest line", () => {
+    const move = vi.fn();
+    const preview = vi.fn();
+    const firstLine = document.createElement("span");
+    firstLine.id = "review-line-17";
+    firstLine.getBoundingClientRect = () =>
+      ({ top: 100, height: 20 }) as DOMRect;
+    const secondLine = document.createElement("span");
+    secondLine.id = "review-line-22";
+    secondLine.getBoundingClientRect = () =>
+      ({ top: 220, height: 20 }) as DOMRect;
+    document.body.append(firstLine, secondLine);
+
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={move}
+        onPreview={preview}
+        onStep={vi.fn()}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", {
+        name: "Drag AI question to another line",
+      }),
+      { pointerId: 7, clientY: 110 },
+    );
+    fireEvent.pointerMove(window, { pointerId: 7, clientY: 225 });
+    fireEvent.pointerUp(window, { pointerId: 7, clientY: 225 });
+
+    expect(preview).toHaveBeenCalledWith(22);
+    expect(move).toHaveBeenCalledWith(22);
+    firstLine.remove();
+    secondLine.remove();
+  });
+});
+
+describe("AI conversation visibility", () => {
+  it("remembers open lines and explicit closure independently per unit", () => {
+    localStorage.clear();
+    rememberAiConversationVisibility(
+      localStorage,
+      "pr-1",
+      "unit-1",
+      17,
+      "thread-1",
+    );
+    rememberAiConversationVisibility(localStorage, "pr-1", "unit-2", null);
+
+    expect(aiConversationVisibility(localStorage, "pr-1", "unit-1")).toEqual({
+      line: 17,
+      threadId: "thread-1",
+    });
+    expect(aiConversationVisibility(localStorage, "pr-1", "unit-2")).toBeNull();
+    expect(
+      aiConversationVisibility(localStorage, "pr-1", "unknown-unit"),
+    ).toBeUndefined();
+  });
+
+  it("ignores malformed persisted visibility", () => {
+    localStorage.setItem(
+      "reviewduck:ai-conversation-visibility:pr-invalid",
+      JSON.stringify({ "unit-1": 9 }),
+    );
+
+    expect(
+      aiConversationVisibility(localStorage, "pr-invalid", "unit-1"),
+    ).toBeUndefined();
   });
 });
 
@@ -341,6 +754,56 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenCalledWith(8);
   });
 
+  it("keeps gaps between related ranges visible but non-commentable", async () => {
+    const selectLine = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <SideBySideUnitDiff
+        previousSource={
+          "const retained = 1;\nconst removed = true;\nconst gapA = 1;\nconst gapB = 2;\nreturn removed;"
+        }
+        currentSource={
+          "const retained = 1;\nconst enabled = true;\nconst gapA = 1;\nconst gapB = 2;\nreturn enabled;"
+        }
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusRanges={[
+          { startLine: 2, endLine: 2 },
+          { startLine: 5, endLine: 5 },
+        ]}
+        currentFocusRanges={[
+          { startLine: 2, endLine: 2 },
+          { startLine: 5, endLine: 5 },
+        ]}
+        onSelectReviewLine={selectLine}
+      />,
+    );
+
+    expect(
+      screen.getAllByRole("button", { name: "Comment on current line 2" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: "Comment on current line 5" }),
+    ).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: "Comment on current line 3" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Comment on current line 4" }),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelectorAll('[data-review-scope="context"]'),
+    ).toHaveLength(4);
+
+    const currentLine = screen.getAllByRole("button", {
+      name: "Comment on current line 5",
+    })[0];
+    if (!currentLine) throw new Error("Expected a current-line action");
+    await user.click(currentLine);
+    expect(selectLine).toHaveBeenCalledWith(5);
+  });
+
   it("focuses a large unit on its changed hunk and reveals context on demand", async () => {
     const user = userEvent.setup();
     const contextRef = createRef<SideBySideUnitDiffHandle>();
@@ -373,29 +836,26 @@ describe("SideBySideUnitDiff", () => {
     });
     expect(diff).toHaveTextContent("old behavior");
     expect(diff).toHaveTextContent("new behavior");
-    expect(diff).not.toHaveTextContent("distant before 0");
+    // Unit edges stay pinned; deep unchanged interior stays collapsed.
+    expect(diff).toHaveTextContent("distant before 0");
+    expect(diff).not.toHaveTextContent("distant before 15");
+    expect(diff).toHaveTextContent("distant after 29");
+    expect(diff).not.toHaveTextContent("distant after 15");
 
-    const revealButtons = screen.getAllByRole("button", {
-      name: "Show 20 more unchanged lines",
-    });
-    const revealBefore = revealButtons[0];
-    if (!revealBefore) throw new Error("Expected collapsed leading context");
     act(() => {
       expect(contextRef.current?.revealContext(-1)).toBe(true);
       expect(contextRef.current?.revealContext(1)).toBe(true);
     });
+    // Interior collapses page; finish any remainder with the in-flow control.
+    const remaining = screen.queryAllByRole("button", {
+      name: /Show \d+ more unchanged lines/,
+    });
+    for (const button of remaining) {
+      await user.click(button);
+    }
 
-    expect(diff).toHaveTextContent("distant before 29");
-    expect(diff).not.toHaveTextContent("distant before 0");
-    expect(diff).toHaveTextContent("distant after 0");
-    expect(diff).not.toHaveTextContent("distant after 29");
-    const revealRemaining = screen.getAllByRole("button", {
-      name: "Show 7 more unchanged lines",
-    })[0];
-    if (!revealRemaining) throw new Error("Expected paged leading context");
-    await user.click(revealRemaining);
-
-    expect(diff).toHaveTextContent("distant before 0");
+    expect(diff).toHaveTextContent("distant before 15");
+    expect(diff).toHaveTextContent("distant after 15");
   });
 
   it("reveals surrounding file context in pages without making it commentable", async () => {

@@ -7,11 +7,14 @@ node_modules/
 
 # testing
 /coverage
+/playwright-report
+/test-results
 
 # database
 /prisma/db.sqlite
 /prisma/db.sqlite-journal
 db.sqlite
+/.reviewduck-dev/
 
 # next.js
 /.next/
@@ -45,3 +48,5 @@ yarn-error.log*
 
 # idea files
 .idea
+public/tree-sitter/
+/.swc

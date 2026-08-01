@@ -6,218 +6,303 @@
   </picture>
 </p>
 
-AI can produce more code, faster than ever. Someone still has to understand
-that code well enough to approve it—and that work deserves something better
-than an ever-growing wall of diffs.
-
 ReviewDuck is a human-centered pull-request review workspace for GitHub,
-GitLab, and Azure DevOps. It turns a change into logical, dependency-aware
-review units and guides you from foundational data models, constants, and
-utilities toward the orchestration and feature logic built on top of them.
-Language-aware analysis is available for JavaScript, TypeScript, Python, Java,
-C#, C++, C, PHP, Shell, Ruby, HCL, Rust, Lua, Go, Makefiles, and Kotlin. Files
-without a dedicated parser are still included as whole-file review units, while
-binary changes are clearly identified so nothing quietly disappears from the
-review.
+GitLab, and Azure DevOps. It turns a changed codebase into a dependency-aware
+review path, preserves progress across revisions only while it remains valid,
+and keeps AI in a read-only, evidence-backed supporting role.
 
-Every sign-off records the reviewed unit's semantic fingerprint. When a pull
-request changes again, ReviewDuck keeps the sign-offs that are still valid and
-brings changed units—and the callers affected by them—back for attention. You
-can keep pace with an active pull request without starting the review over or
-trusting stale understanding.
+The project is pre-release. The schema and public interfaces may change until
+the first stable release.
 
-AI is there to support your judgment, not replace it. On demand, it can explain
-specific parts of the code and surface evidence-backed findings inside a
-scoped workspace. Connect OpenAI, Anthropic, Azure OpenAI, Google AI,
-OpenRouter, Mistral, Ollama, OpenCode Zen, or a custom compatible endpoint.
+## What ReviewDuck does
 
-Try ReviewDuck free at [reviewduck.ai](https://reviewduck.ai), or run it locally
-with the quickstart below.
+- **Builds a review path, not just a diff.** Tree-sitter identifies definitions,
+  references, tests, imports, and structural relationships, then orders review
+  units from foundations toward dependent behavior.
+- **Groups related changes generically.** High-confidence definition/reference
+  relationships can combine associated edits and removals into one multi-range
+  concept without language- or framework-specific special cases.
+- **Keeps progress revision-safe.** Every sign-off is tied to semantic content.
+  A resync preserves unaffected sign-offs, reopens changed concepts and affected
+  dependents, and never treats interface-only UI updates as source changes.
+- **Maintains a real review inbox.** Repository intake can be manual, limited to
+  pull requests assigned to the connected reviewer, or set to every open pull
+  request. Enabling automation shows an impact preview and requires confirmation.
+- **Separates work from history.** The dashboard distinguishes reviews that need
+  attention, completed reviews awaiting a provider outcome, merged or closed
+  history, and items intentionally removed from the personal queue. Removal is
+  reversible, and the same revision is not immediately re-added by automation.
+- **Finishes the provider workflow in place.** ReviewDuck reads live approval
+  state and, when the connected identity is eligible, can approve, request
+  changes or reject, clear a decision, publish inline comments, and reply to
+  provider conversations without leaving the review.
+- **Supports focused and full-PR AI investigation.** The assistant can explain a
+  selected concept, answer follow-up questions, or investigate the whole pull
+  request with revision-bound search, source, Tree-sitter, and SCIP tools.
 
-## Local quickstart
+Tree-sitter parsing and browser highlighting cover the 62 grammar-backed
+languages registered in
+[`tree-sitter-languages.json`](./tree-sitter-languages.json), including SQL.
+Server grammars load lazily into a bounded cache. Browser grammars and the WASM
+runtime are bundled with the application, loaded only when requested, and kept
+outside the client JavaScript bundle. An exact-revision SCIP artifact augments
+definitions and references when one is available; stale artifacts are never
+used.
 
-Run the self-contained image, keeping both the application and its encrypted
-credentials on a named Docker volume:
+## Deployment modes
+
+ReviewDuck has two build-time deployment targets. They share review, analysis,
+workflow, and AI domain logic, but do not register one another's hosted
+dependencies or credential interfaces.
+
+| Capability | Local appliance | SaaS target |
+| --- | --- | --- |
+| Authentication | One local owner with an expiring bootstrap link and signed session | Clerk users and workspaces |
+| Database | Bundled PostgreSQL 18 | PlanetScale PostgreSQL 18 |
+| Source storage | Private content-addressed files on `/data` | Private UploadThing objects in Frankfurt |
+| Durable execution | Postgres Workflow World in the appliance | Vercel Workflows |
+| Code-provider credentials | Encrypted local PATs; custom/self-managed hosts supported | GitHub App, GitLab.com OAuth, and Microsoft Entra OAuth |
+| AI credentials | Optional Big Pickle, local endpoints, or encrypted BYOK | Service-owned Big Pickle and OpenRouter only |
+| Observability | Redacted stdout/stderr logs; no telemetry | Sentry errors, traces, releases, and redacted structured logs |
+
+## Zero-configuration local appliance
+
+The published multi-architecture image contains the standalone Next.js
+application, PostgreSQL 18, the Postgres Workflow worker, migrations, Git,
+certificate authorities, Tree-sitter grammars, browser assets, local
+authentication, and private content-addressed storage. The default experience
+requires no environment variables, online account, external database, or
+hosted ReviewDuck service.
 
 ```bash
-docker run -d \
-  --name reviewduck \
+docker run --detach \
+  --name open-review-duck \
   --restart unless-stopped \
-  -p 127.0.0.1:3666:3666 \
-  -v reviewduck-data:/data \
-  ghcr.io/studie-tech/reviewduck:latest
+  -p 127.0.0.1:3000:3000 \
+  -v open-review-duck-data:/data \
+  ghcr.io/studie-tech/open-review-duck:<version>
+
+docker logs --follow open-review-duck
 ```
 
-Open [http://localhost:3666](http://localhost:3666), connect GitHub, GitLab, or
-Azure DevOps with a personal access token, select a pull request, and start
-reviewing. Local mode has one trusted user and needs no Clerk account, external
-database, Node.js installation, or application secrets. PostgreSQL, schema
-migrations, and the AI runtime are managed inside the container. The named
-volume preserves reviews, tokens, model keys, and encryption secrets across
-container replacement.
+The first boot prints a one-time owner URL. Open it within 15 minutes; the token
+is stored only as a hash and is consumed immediately after exchange. The
+resulting local session is HTTP-only and same-site. Later starts reuse the
+persistent owner session and workspace.
 
-The port is deliberately bound to `127.0.0.1`; keep that binding because local
-mode has no login screen. ReviewDuck also rejects non-loopback Host headers to
-reduce browser DNS-rebinding exposure, but that check is not a substitute for
-the network binding. To upgrade without losing data:
+Open [http://localhost:3000](http://localhost:3000), add a provider connection,
+choose the repositories available to ReviewDuck, and select an intake policy.
+The settings UI includes provider-specific instructions for the minimum useful
+permissions:
+
+- GitHub: a fine-grained token with repository contents read access and pull
+  requests read/write access.
+- GitLab: an `api`-scoped personal, project, or group token with an identity
+  eligible to approve merge requests.
+- Azure DevOps: a PAT for one organization with Code read/write access.
+
+Tokens, optional BYOK material, local model settings, encryption keys, reviews,
+workflows, source objects, and backups remain on the named volume.
+PostgreSQL listens only on an internal Unix socket. The application does not
+contact Clerk, PlanetScale, UploadThing, Vercel, AWS KMS, or Sentry in local
+mode.
+
+Keep the documented loopback port binding. The current local appliance rejects
+non-loopback hosts and does not support LAN or reverse-proxy exposure. This is
+an intentional pre-release boundary, not a configurable deployment mode.
+
+### Local administration
+
+The appliance exposes administration commands without publishing PostgreSQL:
 
 ```bash
-docker pull ghcr.io/studie-tech/reviewduck:latest
-docker stop reviewduck
-docker rm reviewduck
-docker run -d --name reviewduck --restart unless-stopped \
-  -p 127.0.0.1:3666:3666 -v reviewduck-data:/data \
-  ghcr.io/studie-tech/reviewduck:latest
+# Health, version, disk, session, repository, and snapshot status
+docker exec open-review-duck reviewduck-local admin status
+
+# Revoke local sessions and print a fresh one-time owner link
+docker exec open-review-duck reviewduck-local admin bootstrap
+
+# Create or verify a PostgreSQL custom-format backup
+docker exec open-review-duck reviewduck-local admin backup
+docker exec open-review-duck reviewduck-local admin verify-backup
+
+# Export review records as JSON
+docker exec open-review-duck reviewduck-local admin export
 ```
 
-AI remains optional. In local mode, OpenCode Zen and its `big-pickle` model are
-preselected to minimize setup cost, but ReviewDuck does not bundle the model or
-an OpenCode credential. Big Pickle is a stealth model that OpenCode currently
-offers free only for a limited period, and code submitted during that period
-may be collected to improve the model. Review the current
-[OpenCode Zen pricing and privacy terms](https://opencode.ai/docs/zen), paste
-your own Zen key, and pass ReviewDuck's model workflow test before enabling it.
-Choose another supported provider for confidential code when those terms are
-not appropriate.
-
-## Stack
-
-- Next.js 16 App Router, React 19, native TypeScript 7, tRPC 11
-- Biome 2 for compiler-independent formatting, linting, and Drizzle safety rules
-- Tailwind CSS 4 and reusable `src/components/ui` primitives
-- Drizzle ORM 0.45 with PostgreSQL
-- Explicit local single-user mode or Clerk-authenticated multi-user mode
-- Flue 1.0 beta agent runtime for isolated AI assistance
-- An extensible language-parser registry with dedicated review-unit extraction
-  for JavaScript, TypeScript, Python, Java, C#, C++, C, PHP, Shell, Ruby, HCL,
-  Rust, Lua, Go, Makefiles, and Kotlin
-- Vitest for analysis, provider normalization, and security tests
-
-The repository uses root-level Drizzle schema and migrations, explicit feature
-routers, dedicated validators, shared UI primitives, and focused services for
-analysis, provider access, retention, security, exports, and AI execution.
-
-## Project structure
-
-```text
-.
-├── .flue/
-│   ├── agents/code-reviewer.ts  # scoped Flue review agent
-│   └── app.ts                   # standalone agent HTTP service
-├── drizzle/
-│   ├── schema.ts
-│   └── 000*_*.sql
-├── src/
-│   ├── app/                     # pages, tRPC endpoint, auth lifecycle route
-│   ├── components/
-│   │   ├── review/
-│   │   ├── settings/
-│   │   └── ui/
-│   ├── server/
-│   │   ├── ai/
-│   │   ├── analysis/
-│   │   ├── api/routers/
-│   │   ├── providers/
-│   │   └── sync/
-│   └── validators/
-└── flue.config.ts
-```
-
-## Source development setup
-
-Requirements: Node.js 24 or newer, Corepack/pnpm, and PostgreSQL. Set
-`DEPLOYMENT_MODE=local` to develop with the trusted local identity. The
-repository pins pnpm in `package.json`.
+To restore, stop the normal appliance and run the same immutable image against
+its volume in administration mode:
 
 ```bash
-cp .env.example .env
-pnpm install
-pnpm db:migrate
+docker stop open-review-duck
+docker run --rm --volumes-from open-review-duck \
+  ghcr.io/studie-tech/open-review-duck:<version> \
+  admin restore /data/backups/<backup>.dump
+docker start open-review-duck
+```
+
+On a schema-changing image upgrade, the entrypoint creates and verifies a
+pre-upgrade backup before applying committed migrations. It retains the three
+most recent automatic upgrade backups and refuses to start when the data volume
+has critically low free space.
+
+### Local AI
+
+AI is optional and no AI service is required for ordinary review work. Provider
+sync, comments, and approval actions still require access to the connected code
+provider. The built-in Big Pickle option requires internet access but no user
+API key. It remains disabled until the local owner accepts a disclosure
+explaining that selected source, prompts, tool results, and output are sent
+directly to OpenCode-hosted infrastructure in the US, may be used for model
+improvement, and may only be free for a limited period. High-confidence
+secret-bearing and excluded files are not sent through the free tier.
+
+Release of account-free Big Pickle access is gated on OpenCode permitting
+third-party use of its public mechanism. If availability, authentication, or
+terms change, it fails closed and never selects a paid model automatically.
+
+Local installations can instead configure Ollama, an OpenAI-compatible local
+endpoint, OpenRouter, OpenAI, Anthropic, or another explicitly supported BYOK
+provider. Credentials and headers are encrypted in the local volume. Private
+model hosts are allowed only in the local target and remain subject to SSRF and
+redirect checks.
+
+## SaaS target
+
+The commercial target is designed for Vercel Pro in `fra1` with Fluid Compute:
+
+- Next.js 16, React 19, TypeScript, tRPC, Drizzle, XState, and TanStack Query.
+- PlanetScale PostgreSQL 18 in AWS `eu-central-1`. Runtime queries use
+  transaction-mode PgBouncer on port 6432; migrations use the direct port 5432
+  endpoint under a migration lock.
+- Private UploadThing storage in Frankfurt. Provider source is ingested
+  server-side under workspace-scoped content identities. Authorized browsers
+  receive 60-second signed URLs and download directly from UploadThing rather
+  than proxying source through Vercel.
+- Vercel Workflows for pull-request synchronization and AI investigation, with
+  identifier-only workflow payloads.
+- Clerk authentication, workspace entitlements, and billing.
+- Workspace-scoped envelope encryption using AWS KMS through Vercel OIDC; no
+  static AWS access key is required.
+- Sentry errors, sampled traces, releases, source maps, and redacted structured
+  logs. Sentry is excluded from the local build.
+- One authenticated daily maintenance route for source retention, orphan
+  cleanup, expired rate limits, and managed-model metadata.
+
+SaaS users never paste source-provider PATs or model API keys. GitHub uses
+short-lived GitHub App installation tokens, GitLab.com uses OAuth authorization
+code flow with PKCE and rotating refresh tokens, and Azure DevOps Services uses
+Microsoft Entra delegated OAuth. Custom/self-managed provider URLs are
+local-only.
+
+Free SaaS AI is service-owned Big Pickle and is limited to repositories the
+source provider reports as public. Paid workspaces use an operator allowlist of
+tool-capable OpenRouter models. ReviewDuck creates an encrypted, provider-limited
+workspace subkey, reserves estimated cost before inference, settles actual
+usage, and requires Zero Data Retention with provider fallback and data
+collection disabled. Missing entitlement, catalog, budget, or ZDR availability
+fails closed.
+
+See [`.env.example`](./.env.example) for the complete SaaS deployment contract.
+Production startup rejects missing platform credentials, an incorrectly pooled
+PlanetScale URL, a non-HTTPS application URL, or a non-Frankfurt KMS region.
+
+## Durable AI investigation
+
+AI SDK Core drives an explicit, persisted investigation loop. Default hard
+limits are:
+
+- 64 model steps and 256 read-only tool calls.
+- Four concurrent independent tool reads.
+- 200 distinct source files and 8 MiB of decoded source slices.
+- 30 minutes, additionally bounded by workspace token and monetary budgets.
+
+The agent prefers repository maps, Tree-sitter symbols, exact-revision SCIP,
+search, and bounded source slices over repeatedly loading whole files. Every
+turn, tool request/result, evidence record, usage item, and output chunk is
+persisted before the next step. Model inference is not automatically retried,
+avoiding duplicate charges after ambiguous provider failures. Authenticated SSE
+resumes from a chunk cursor; cancellation and hard deletion remove the
+application-owned transcript, tools, chunks, and evidence.
+
+Workflow state contains IDs, hashes, counters, and statuses only. Source,
+prompts, model output, credentials, tool results, and signed URLs remain in
+private application storage.
+
+## Source development
+
+Requirements:
+
+- Node.js 24 or newer.
+- Corepack and the repository-pinned pnpm version.
+- Git.
+- Docker for the managed development database.
+
+The normal development workflow needs no `.env` file:
+
+```bash
+make install
 make start
 ```
 
-`make start` runs both the web application on `http://localhost:3666` and the
-local AI service on `http://localhost:3100`. It verifies database connectivity
-before launching either process, and both processes stop together. For local
-development, they share the configured `DATABASE_URL`. The AI service can use a
-dedicated `FLUE_DATABASE_URL` when needed.
+`make start` provisions a dedicated PostgreSQL 18 container, generates
+checkout-local secrets, applies application and Workflow migrations, prepares
+Tree-sitter assets, initializes the local owner, and starts the Turbopack dev
+server at [http://localhost:3666](http://localhost:3666). Development state is
+stored in the ignored `.reviewduck-dev` directory.
 
-Override either port when needed:
-
-```bash
-make start PORT=4000 AGENT_PORT=3101
-```
-
-### Database configuration
-
-Set `DATABASE_URL` for application queries and `MIGRATION_DATABASE_URL` for
-schema migrations. Apply committed migrations with:
+Useful commands:
 
 ```bash
-pnpm db:migrate
+make bootstrap   # revoke local sessions and print a fresh owner link
+make stop        # stop the managed database without deleting its volume
+make check       # docstrings, Biome, TypeScript, and Vitest
+make build       # optimized production build
+make migrations  # generate a Drizzle migration after schema changes
 ```
 
-Create schema changes with `pnpm db:generate`; never use `db:push` against
-production.
-
-### Provider synchronization
-
-ReviewDuck polls provider APIs while a review is open and also offers explicit
-refresh controls. This keeps local development functional
-without exposing localhost through a tunnel or requiring webhook configuration.
-
-## Verification
-
-TypeScript 7's stable `tsc` is the authoritative type checker. Next.js 16.2
-still detects the native compiler through `@typescript/native-preview`, so that
-compatibility package remains installed until Next.js recognizes the stable
-TypeScript 7 package layout directly. CI always runs `pnpm typecheck` before the
-production build.
+Override the development ports with `PORT` and `DEV_DATABASE_PORT`. To use an
+existing PostgreSQL 18 database instead of Docker:
 
 ```bash
-pnpm typecheck
-pnpm lint
-pnpm test:coverage
-pnpm format:check
-pnpm db:generate
-pnpm build:agent
-pnpm build
+make start DEV_DATABASE_MANAGED=0 \
+  DEV_DATABASE_URL=postgresql://user:password@localhost:5432/reviewduck
 ```
 
-CI may set `SKIP_ENV_VALIDATION=1` for compilation-only builds, but running
-environments must never skip validation.
+Apply committed migrations with `pnpm db:migrate` and generate schema changes
+with `pnpm db:generate`. Do not use schema push against a shared environment.
 
-## Security model
+## Verification and releases
 
-- Provider and BYOK credentials use AES-256-GCM with a server-owned encryption
-  key.
-- Provider base URLs resolve to public HTTPS hosts by default to prevent SSRF.
-  Trusted private Git servers require the explicit
-  `ALLOW_PRIVATE_PROVIDER_HOSTS=true` opt-in.
-- BYOK model base URLs receive the same protection. Local or private
-  Ollama-compatible endpoints require `ALLOW_PRIVATE_AI_HOSTS=true` on a
-  trusted private deployment.
-- Every tRPC resource query joins through workspace membership.
-- The Flue agent receives job-scoped read tools, not provider credentials or
-  unrestricted repository access.
-- Repository content is explicitly treated as untrusted prompt input.
-- Provider and BYOK traffic resolves and pins the vetted address used by the
-  real socket while preserving the original TLS hostname.
-- Source-bearing snapshots are retained for at most 30 days and five snapshots
-  per pull request by default. Both boundaries are configurable.
+```bash
+make check
 
-See [Security](./SECURITY.md), [Privacy and retention](./docs/PRIVACY.md), and
-[Third-party notices](./THIRD_PARTY_NOTICES.md) for the operational policies.
+DEPLOYMENT_MODE=local NEXT_PUBLIC_DEPLOYMENT_MODE=local \
+  SKIP_ENV_VALIDATION=1 DATABASE_URL=postgresql://build:build@localhost/build \
+  pnpm build
+
+DEPLOYMENT_MODE=saas NEXT_PUBLIC_DEPLOYMENT_MODE=saas \
+  SKIP_ENV_VALIDATION=1 DATABASE_URL=postgresql://build:build@localhost/build \
+  pnpm build
+
+docker build --platform linux/amd64 -t open-review-duck:test .
+```
+
+CI validates unit and focused PostgreSQL integration tests, committed
+migrations, both deployment builds, an offline amd64 local appliance, browser
+bootstrap and session persistence, backup archive verification, production
+dependencies, container vulnerabilities, and volume persistence. Version tags
+publish signed amd64 and arm64 images with SBOMs and build provenance; arm64 is
+built but is not yet exercised by the CI appliance journey. Consumers should
+pin immutable digests for production deployments.
+
+See [Security](./SECURITY.md), [Privacy and retention](./docs/PRIVACY.md),
+[Release policy](./RELEASES.md), [Support](./SUPPORT.md),
+[Contributing](./CONTRIBUTING.md), and
+[Third-party notices](./THIRD_PARTY_NOTICES.md).
 
 ## License
 
 ReviewDuck is licensed under the
-[GNU Affero General Public License v3.0](./LICENSE), version 3 only.
-
-Commercial licenses with alternative terms may be offered separately by the
-copyright holders. Contact the maintainers if AGPL-3.0 does not fit your
-distribution requirements.
-
-Contributions follow [CONTRIBUTING.md](./CONTRIBUTING.md). Support and release
-expectations are documented in [SUPPORT.md](./SUPPORT.md) and
-[RELEASES.md](./RELEASES.md).
+[GNU Affero General Public License v3.0](./LICENSE), version 3 only. Commercial
+licenses with alternative terms may be offered separately.

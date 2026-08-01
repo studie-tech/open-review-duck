@@ -1,5 +1,29 @@
-import { describe, expect, it } from "vitest";
-import { assertSafeRemoteUrl, isPrivateAddress } from "./remote-url";
+import { createServer } from "node:http";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  assertSafeRemoteUrl,
+  createSafeRemoteFetch,
+  isPrivateAddress,
+} from "./remote-url";
+
+let localBaseUrl = "";
+const server = createServer((request, response) => {
+  if (request.url === "/redirect") {
+    response.writeHead(302, { location: "http://169.254.169.254/" });
+    response.end();
+    return;
+  }
+  response.end("safe transport");
+});
+
+beforeAll(async () => {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No test port");
+  localBaseUrl = `http://127.0.0.1:${address.port}`;
+});
+
+afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 describe("provider URL security", () => {
   it.each([
@@ -41,6 +65,18 @@ describe("provider URL security", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([
+    "http://169.254.169.254/latest/meta-data",
+    "http://100.100.100.200/latest/meta-data",
+    "http://[::ffff:169.254.169.254]/latest/meta-data",
+    "http://[fd00:ec2::254]/latest/meta-data",
+  ])(
+    "rejects metadata targets even when private hosts are enabled",
+    async (url) => {
+      await expect(assertSafeRemoteUrl(url, true)).rejects.toThrow("metadata");
+    },
+  );
+
   it("classifies bracketed IPv6 URL literals before DNS resolution", async () => {
     await expect(
       assertSafeRemoteUrl("https://[::1]/api", false),
@@ -59,5 +95,16 @@ describe("provider URL security", () => {
     await expect(
       assertSafeRemoteUrl("https://1.1.1.1/api", false),
     ).resolves.toBeUndefined();
+  });
+
+  it("provides an explicit SDK transport without following redirects", async () => {
+    const transport = createSafeRemoteFetch(true);
+    await expect(transport(`${localBaseUrl}/model`)).resolves.toHaveProperty(
+      "status",
+      200,
+    );
+    const redirect = await transport(`${localBaseUrl}/redirect`);
+    expect(redirect.status).toBe(302);
+    expect(redirect.headers.get("location")).toBe("http://169.254.169.254/");
   });
 });

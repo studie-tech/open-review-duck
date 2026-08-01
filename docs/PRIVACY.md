@@ -1,23 +1,43 @@
 # Privacy and data retention
 
-ReviewDuck processes provider credentials, repository metadata, changed source,
-review state, comments, and optional AI prompts/results to deliver the review.
-It does not require AI; BYOK content is sent to the provider selected by the
-workspace administrator under that provider's terms.
+ReviewDuck processes repository metadata, changed source, review state,
+comments, and optional AI prompts/results to deliver a review. AI is optional.
 
-Source-bearing review snapshots are pruned after 30 days or when more than five
-snapshots exist for a pull request, whichever boundary is reached first. An
-operator can reduce both limits with `SOURCE_RETENTION_DAYS` and
-`SOURCE_RETENTION_SNAPSHOTS`. Deleting an imported repository or provider
-connection cascades through its pull requests, snapshots, units, comments,
-AI jobs, and review sessions. Authorized users can export the retained
-repository review data before deletion through the repository-data API.
+In SaaS, source-provider authorization uses a GitHub App, GitLab.com OAuth, or
+Microsoft Entra delegated OAuth. ReviewDuck does not accept hosted PATs or user
+model keys. OAuth credentials and service subkeys use per-workspace envelope
+encryption. Source and SCIP artifacts are private UploadThing objects in
+Frankfurt; object metadata contains no repository path, commit, or user.
+Authorized browsers receive a non-persisted 60-second signed URL and download
+directly from UploadThing.
 
-Operational logs must not contain tokens, model keys, custom authorization
-headers, raw provider responses, or source bodies. AI and provider failures are
-normalized before storage and display. Local Docker data remains in the named
-volume until the operator deletes it.
+Free Big Pickle is limited to provider-verified public SaaS repositories. Paid
+AI uses a service-owned OpenRouter workspace subkey and requires Zero Data
+Retention. The current Big Pickle disclosure states that processing occurs in
+the United States, access is limited-time, and submitted data may be used for
+model improvement. Consent is versioned and revocable.
 
-Operators accepting other users' data must publish the controller identity,
-subprocessors, regional storage, contact address, and legally required
+Workflow event payloads contain identifiers, hashes, counters, and statuses
+only. Source, prompts, tool output, model output, credentials, and signed URLs
+remain in application storage. Hard deletion removes turns, tool records,
+evidence, chunks, and final results.
+
+SaaS source snapshots are pruned after 30 days or when more than five snapshots
+exist for a pull request by default. Operators can reduce both limits with
+`SOURCE_RETENTION_DAYS` and `SOURCE_RETENTION_SNAPSHOTS`. Unreferenced objects
+are transactionally claimed, deleted, and reconciled daily.
+
+Sentry receives errors, sampled traces, releases, and redacted structured
+completion events with default PII disabled. Source, prompts, output,
+credentials, OAuth data, storage identifiers, signed URLs, repository paths,
+request bodies, cookies, and authorization headers are prohibited.
+
+The local appliance sends no telemetry and performs no network request during
+startup or ordinary non-AI use. All state remains in the `/data` volume.
+Optional provider or AI credentials are encrypted there. Big Pickle contacts
+OpenCode only after disclosure acceptance; locally configured providers are
+contacted only after explicit selection.
+
+Operators accepting other users' data must publish their controller identity,
+subprocessors, regional scope, contact address, and legally required
 deletion/export timelines.

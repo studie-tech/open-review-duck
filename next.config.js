@@ -3,10 +3,48 @@
  * for compilation-only CI builds.
  */
 import "./src/env.js";
+import path from "node:path";
+import { withSentryConfig } from "@sentry/nextjs";
+import { withWorkflow } from "workflow/next";
 
 /** @type {import("next").NextConfig} */
 const config = {
   allowedDevOrigins: ["127.0.0.1"],
+  experimental: {
+    cpus: 4,
+  },
+  output: "standalone",
+  outputFileTracingExcludes: {
+    "/api/*": ["**/route_client-reference-manifest.js"],
+  },
+  pageExtensions: [
+    "shared.tsx",
+    "shared.ts",
+    `${process.env.DEPLOYMENT_MODE === "local" ? "local" : "saas"}.tsx`,
+    `${process.env.DEPLOYMENT_MODE === "local" ? "local" : "saas"}.ts`,
+    "js",
+  ],
+  productionBrowserSourceMaps: false,
+  serverExternalPackages: ["web-tree-sitter"],
+  webpack(webpackConfig) {
+    webpackConfig.resolve.alias = {
+      ...webpackConfig.resolve.alias,
+      "~": path.resolve("src"),
+      "@/drizzle": path.resolve("drizzle"),
+    };
+    if (process.env.DEPLOYMENT_MODE === "local") {
+      webpackConfig.resolve.alias = {
+        ...webpackConfig.resolve.alias,
+        "@aws-sdk/client-kms$": false,
+        "@clerk/nextjs$": false,
+        "@clerk/nextjs/server$": false,
+        "@sentry/nextjs$": false,
+        "uploadthing/next$": false,
+        "uploadthing/server$": false,
+      };
+    }
+    return webpackConfig;
+  },
   async headers() {
     return [
       {
@@ -29,4 +67,19 @@ const config = {
   },
 };
 
-export default config;
+const workflowConfig = withWorkflow(config);
+
+export default process.env.DEPLOYMENT_MODE === "local"
+  ? workflowConfig
+  : withSentryConfig(workflowConfig, {
+      authToken: process.env.SENTRY_AUTH_TOKEN,
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      silent: !process.env.CI,
+      sourcemaps: { deleteSourcemapsAfterUpload: true },
+      bundleSizeOptimizations: {
+        excludeDebugStatements: true,
+        excludeTracing: false,
+      },
+      telemetry: false,
+    });

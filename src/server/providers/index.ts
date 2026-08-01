@@ -8,13 +8,23 @@ export function createProvider(
   name: ProviderName,
   token: string,
   baseUrl?: string,
+  credentialKind?: string,
 ): PullRequestProvider {
   const normalizedBaseUrl = baseUrl?.replace(/\/+$/, "");
-  if (name === "github") return new GitHubProvider(token, normalizedBaseUrl);
+  if (name === "github")
+    return new GitHubProvider(
+      token,
+      normalizedBaseUrl,
+      credentialKind === "github_app",
+    );
   if (name === "gitlab") return new GitLabProvider(token, normalizedBaseUrl);
   if (!normalizedBaseUrl)
     throw new Error("Azure DevOps connections require an organization URL");
-  return new AzureDevOpsProvider(token, normalizedBaseUrl);
+  return new AzureDevOpsProvider(
+    token,
+    normalizedBaseUrl,
+    credentialKind === "oauth",
+  );
 }
 
 export * from "./types";

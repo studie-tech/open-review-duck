@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { rustAdapter, rustParserInternals } from ".";
+import { rustAdapter } from ".";
 
 /** Analyzes an in-memory Rust fixture. */
 function analyze(content: string, path = "src/lib.rs") {
@@ -260,9 +260,6 @@ fn borrow<'a>(value: &'a str) -> &'a str { value }
     expect(named(units, "SAMPLE").kind).toBe("constant");
     expect(named(units, "BYTE").kind).toBe("constant");
     expect(named(units, "borrow").kind).toBe("function");
-    expect(rustParserInternals.maskRustSource(source)).toHaveLength(
-      source.length,
-    );
   });
 
   it("recognizes crate attributes, imports, extern crates, and module declarations as context", () => {

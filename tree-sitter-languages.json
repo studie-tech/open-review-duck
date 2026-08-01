@@ -1,0 +1,333 @@
+{
+  "languages": {
+    "javascript": {
+      "asset": "tree-sitter-javascript.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-javascript.wasm",
+      "extensions": [".js", ".jsx", ".mjs", ".cjs"]
+    },
+    "typescript": {
+      "asset": "tree-sitter-typescript.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-tsx.wasm",
+      "extensions": [".ts", ".tsx", ".mts", ".cts"]
+    },
+    "python": {
+      "asset": "tree-sitter-python.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-python.wasm",
+      "extensions": [".py", ".pyi"]
+    },
+    "java": {
+      "asset": "tree-sitter-java.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-java.wasm",
+      "extensions": [".java"]
+    },
+    "csharp": {
+      "asset": "tree-sitter-csharp.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-c_sharp.wasm",
+      "extensions": [".cs", ".csx"]
+    },
+    "cpp": {
+      "asset": "tree-sitter-cpp.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-cpp.wasm",
+      "extensions": [
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".c++",
+        ".hpp",
+        ".hh",
+        ".hxx",
+        ".h++",
+        ".ipp",
+        ".tpp",
+        ".inl"
+      ]
+    },
+    "php": {
+      "asset": "tree-sitter-php.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-php.wasm",
+      "extensions": [".php", ".phtml", ".inc"]
+    },
+    "shell": {
+      "asset": "tree-sitter-shell.wasm",
+      "source": "tree-sitter-bash/tree-sitter-bash.wasm",
+      "extensions": [".sh", ".bash", ".zsh", ".ksh"],
+      "fileNames": [".bashrc", ".zshrc", ".profile"]
+    },
+    "c": {
+      "asset": "tree-sitter-c.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-c.wasm",
+      "extensions": [".c", ".h"]
+    },
+    "ruby": {
+      "asset": "tree-sitter-ruby.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-ruby.wasm",
+      "extensions": [".rb", ".rake", ".gemspec"],
+      "fileNames": ["rakefile", "gemfile"]
+    },
+    "hcl": {
+      "asset": "tree-sitter-hcl.wasm",
+      "source": "@tree-sitter-grammars/tree-sitter-hcl/tree-sitter-hcl.wasm",
+      "extensions": [".hcl", ".tf", ".tfvars"]
+    },
+    "rust": {
+      "asset": "tree-sitter-rust.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-rust.wasm",
+      "extensions": [".rs"]
+    },
+    "lua": {
+      "asset": "tree-sitter-lua.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-lua.wasm",
+      "extensions": [".lua"]
+    },
+    "go": {
+      "asset": "tree-sitter-go.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-go.wasm",
+      "extensions": [".go"]
+    },
+    "makefile": {
+      "asset": "tree-sitter-makefile.wasm",
+      "source": "tree-sitter-make/tree-sitter-make.wasm",
+      "extensions": [".mk"],
+      "fileNames": ["makefile", "gnumakefile"]
+    },
+    "kotlin": {
+      "asset": "tree-sitter-kotlin.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-kotlin.wasm",
+      "extensions": [".kt", ".kts"]
+    },
+    "css": {
+      "asset": "tree-sitter-css.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-css.wasm",
+      "extensions": [".css"]
+    },
+    "dart": {
+      "asset": "tree-sitter-dart.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-dart.wasm",
+      "extensions": [".dart"]
+    },
+    "elisp": {
+      "asset": "tree-sitter-elisp.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-elisp.wasm",
+      "extensions": [".el"]
+    },
+    "elixir": {
+      "asset": "tree-sitter-elixir.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-elixir.wasm",
+      "extensions": [".ex", ".exs"]
+    },
+    "elm": {
+      "asset": "tree-sitter-elm.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-elm.wasm",
+      "extensions": [".elm"]
+    },
+    "embedded_template": {
+      "asset": "tree-sitter-embedded-template.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-embedded_template.wasm",
+      "extensions": [".erb", ".ejs"]
+    },
+    "html": {
+      "asset": "tree-sitter-html.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-html.wasm",
+      "extensions": [".html", ".htm"]
+    },
+    "json": {
+      "asset": "tree-sitter-json.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-json.wasm",
+      "extensions": [".json"]
+    },
+    "objc": {
+      "asset": "tree-sitter-objc.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-objc.wasm",
+      "extensions": [".m"]
+    },
+    "ocaml": {
+      "asset": "tree-sitter-ocaml.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-ocaml.wasm",
+      "extensions": [".ml", ".mli"]
+    },
+    "ql": {
+      "asset": "tree-sitter-ql.wasm",
+      "source": "vendor/tree-sitter/tree-sitter-ql.wasm",
+      "extensions": [".ql", ".qll"]
+    },
+    "rescript": {
+      "asset": "tree-sitter-rescript.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-rescript.wasm",
+      "extensions": [".res", ".resi"]
+    },
+    "scala": {
+      "asset": "tree-sitter-scala.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-scala.wasm",
+      "extensions": [".scala", ".sc"]
+    },
+    "solidity": {
+      "asset": "tree-sitter-solidity.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-solidity.wasm",
+      "extensions": [".sol"]
+    },
+    "swift": {
+      "asset": "tree-sitter-swift.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-swift.wasm",
+      "extensions": [".swift"]
+    },
+    "systemrdl": {
+      "asset": "tree-sitter-systemrdl.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-systemrdl.wasm",
+      "extensions": [".rdl"]
+    },
+    "tlaplus": {
+      "asset": "tree-sitter-tlaplus.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-tlaplus.wasm",
+      "extensions": [".tla"]
+    },
+    "toml": {
+      "asset": "tree-sitter-toml.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-toml.wasm",
+      "extensions": [".toml"]
+    },
+    "vue": {
+      "asset": "tree-sitter-vue.wasm",
+      "source": "tree-sitter-wasms/out/tree-sitter-vue.wasm",
+      "extensions": [".vue"]
+    },
+    "yaml": {
+      "asset": "tree-sitter-yaml.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-yaml.wasm",
+      "extensions": [".yaml", ".yml"]
+    },
+    "zig": {
+      "asset": "tree-sitter-zig.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-zig.wasm",
+      "extensions": [".zig"]
+    },
+    "sql": {
+      "asset": "tree-sitter-sql.wasm",
+      "source": "@lumis-sh/wasm-sql/tree-sitter-sql.wasm",
+      "extensions": [".sql"]
+    },
+    "markdown": {
+      "asset": "tree-sitter-markdown.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-markdown.wasm",
+      "extensions": [".md", ".markdown"]
+    },
+    "mdx": {
+      "asset": "tree-sitter-mdx.wasm",
+      "source": "vendor/tree-sitter/tree-sitter-mdx.wasm",
+      "extensions": [".mdx"]
+    },
+    "dockerfile": {
+      "asset": "tree-sitter-dockerfile.wasm",
+      "source": "@lumis-sh/wasm-dockerfile/tree-sitter-dockerfile.wasm",
+      "extensions": [".dockerfile"],
+      "fileNames": ["dockerfile", "containerfile"]
+    },
+    "graphql": {
+      "asset": "tree-sitter-graphql.wasm",
+      "source": "@lumis-sh/wasm-graphql/tree-sitter-graphql.wasm",
+      "extensions": [".graphql", ".gql"]
+    },
+    "prisma": {
+      "asset": "tree-sitter-prisma.wasm",
+      "source": "@lumis-sh/wasm-prisma/tree-sitter-prisma.wasm",
+      "extensions": [".prisma"]
+    },
+    "protobuf": {
+      "asset": "tree-sitter-protobuf.wasm",
+      "source": "@lumis-sh/wasm-protobuf/tree-sitter-protobuf.wasm",
+      "extensions": [".proto"]
+    },
+    "xml": {
+      "asset": "tree-sitter-xml.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-xml.wasm",
+      "extensions": [".xml", ".xsl", ".xslt", ".svg"]
+    },
+    "scss": {
+      "asset": "tree-sitter-scss.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-scss.wasm",
+      "extensions": [".scss"]
+    },
+    "svelte": {
+      "asset": "tree-sitter-svelte.wasm",
+      "source": "@lumis-sh/wasm-svelte/tree-sitter-svelte.wasm",
+      "extensions": [".svelte"]
+    },
+    "astro": {
+      "asset": "tree-sitter-astro.wasm",
+      "source": "@lumis-sh/wasm-astro/tree-sitter-astro.wasm",
+      "extensions": [".astro"]
+    },
+    "r": {
+      "asset": "tree-sitter-r.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-r.wasm",
+      "extensions": [".r"]
+    },
+    "julia": {
+      "asset": "tree-sitter-julia.wasm",
+      "source": "tree-sitter-julia/tree-sitter-julia.wasm",
+      "extensions": [".jl"]
+    },
+    "haskell": {
+      "asset": "tree-sitter-haskell.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-haskell.wasm",
+      "extensions": [".hs", ".lhs"]
+    },
+    "clojure": {
+      "asset": "tree-sitter-clojure.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-clojure.wasm",
+      "extensions": [".clj", ".cljs", ".cljc", ".edn"]
+    },
+    "erlang": {
+      "asset": "tree-sitter-erlang.wasm",
+      "source": "@lumis-sh/wasm-erlang/tree-sitter-erlang.wasm",
+      "extensions": [".erl", ".hrl"]
+    },
+    "fsharp": {
+      "asset": "tree-sitter-fsharp.wasm",
+      "source": "@plurnk/plurnk-mimetypes-grammar-fsharp/fsharp.wasm",
+      "extensions": [".fs", ".fsx", ".fsi"]
+    },
+    "powershell": {
+      "asset": "tree-sitter-powershell.wasm",
+      "source": "tree-sitter-powershell/tree-sitter-powershell.wasm",
+      "extensions": [".ps1", ".psm1", ".psd1"]
+    },
+    "fortran": {
+      "asset": "tree-sitter-fortran.wasm",
+      "source": "@lumis-sh/wasm-fortran/tree-sitter-fortran.wasm",
+      "extensions": [".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08"]
+    },
+    "perl": {
+      "asset": "tree-sitter-perl.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-perl.wasm",
+      "extensions": [".pl", ".pm", ".t"]
+    },
+    "groovy": {
+      "asset": "tree-sitter-groovy.wasm",
+      "source": "tree-sitter-groovy/tree-sitter-groovy.wasm",
+      "extensions": [".groovy", ".gradle"]
+    },
+    "nix": {
+      "asset": "tree-sitter-nix.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-nix.wasm",
+      "extensions": [".nix"]
+    },
+    "latex": {
+      "asset": "tree-sitter-latex.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-latex.wasm",
+      "extensions": [".tex", ".sty", ".cls"]
+    },
+    "systemverilog": {
+      "asset": "tree-sitter-systemverilog.wasm",
+      "source": "@lumis-sh/wasm-systemverilog/tree-sitter-systemverilog.wasm",
+      "extensions": [".sv", ".svh"]
+    },
+    "assembly": {
+      "asset": "tree-sitter-assembly.wasm",
+      "source": "@lumis-sh/wasm-asm/tree-sitter-asm.wasm",
+      "extensions": [".s", ".asm"]
+    },
+    "text": {
+      "extensions": []
+    }
+  }
+}

@@ -58,6 +58,45 @@ describe("provider HTTP safeguards", () => {
     ).rejects.not.toThrow("secret provider response");
   });
 
+  it("classifies GitHub primary rate limits from response headers", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("API rate limit exceeded for a private account", {
+        status: 403,
+        headers: { "X-RateLimit-Remaining": "0" },
+      }),
+    );
+
+    await expect(
+      providerFetch("github", "https://example.com/projects", {}),
+    ).rejects.toThrow("rate limit exceeded");
+  });
+
+  it("classifies GitHub secondary rate limits without exposing the body", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("You have exceeded a secondary rate limit", {
+        status: 403,
+        headers: { "Retry-After": "60" },
+      }),
+    );
+
+    await expect(
+      providerFetch("github", "https://example.com/projects", {}),
+    ).rejects.toThrow("secondary rate limit exceeded");
+  });
+
+  it("classifies GitHub organization SSO authorization failures", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("organization access denied", {
+        status: 403,
+        headers: { "X-GitHub-SSO": "required" },
+      }),
+    );
+
+    await expect(
+      providerFetch("github", "https://example.com/projects", {}),
+    ).rejects.toThrow("single sign-on authorization required");
+  });
+
   it("stops reading oversized streamed JSON responses", async () => {
     const oversized = new Uint8Array(5_100_000);
     fetchMock.mockResolvedValue(

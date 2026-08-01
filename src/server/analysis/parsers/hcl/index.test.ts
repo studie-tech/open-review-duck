@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { hclAdapter, hclParserInternals, isContextOnly } from ".";
+import { hclAdapter, isContextOnly } from ".";
 
 /** Analyzes an in-memory HCL fixture with a representative Terraform path. */
 function analyze(content: string, path = "infra/main.tf") {
@@ -243,9 +243,6 @@ locals {
     expect(units.some(({ name }) => name.includes("fake"))).toBe(false);
     expect(named(units, "null_resource.example").dependencies).toContain(
       named(units, "Local actual").stableKey,
-    );
-    expect(hclParserInternals.maskHclSource(content)).toHaveLength(
-      content.length,
     );
   });
 

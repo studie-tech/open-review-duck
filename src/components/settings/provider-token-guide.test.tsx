@@ -43,7 +43,7 @@ describe("ProviderTokenGuide", () => {
     );
 
     expect(screen.getByText("api")).toBeInTheDocument();
-    expect(screen.getByText("Reporter or higher")).toBeInTheDocument();
+    expect(screen.getByText("Developer or higher")).toBeInTheDocument();
     expect(screen.queryByText("Corporate setup")).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", {
@@ -61,7 +61,7 @@ describe("ProviderTokenGuide", () => {
     );
   });
 
-  it("uses the Azure organization URL and documents both supported scope combinations", () => {
+  it("uses the Azure organization URL and documents the review-vote scope", () => {
     render(
       <ProviderTokenGuide
         provider="azure_devops"
@@ -69,8 +69,9 @@ describe("ProviderTokenGuide", () => {
       />,
     );
 
+    expect(screen.getByText("Read & write")).toBeInTheDocument();
     expect(
-      screen.getByText("Code: Read + PR threads: Read & write"),
+      screen.getByText(/requires code-write access to submit approval/i),
     ).toBeInTheDocument();
     expect(screen.queryByText("Corporate setup")).not.toBeInTheDocument();
     expect(

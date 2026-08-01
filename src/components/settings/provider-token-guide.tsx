@@ -58,7 +58,8 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
       {
         name: "Pull requests",
         access: "Read and write",
-        reason: "Reads conversations and publishes inline review comments.",
+        reason:
+          "Reads review state, publishes inline comments, and submits approvals or change requests.",
       },
       {
         name: "Metadata",
@@ -84,7 +85,7 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
       },
       "Name it “ReviewDuck” and choose the shortest practical expiration date.",
       "Select the api scope. The read_repository and write_repository scopes alone do not authorize merge-request API comments.",
-      "For project or group tokens, assign at least the Reporter role so the token can read code and comment on merge requests.",
+      "For project or group tokens, assign the Developer role or higher so the token identity can approve merge requests. Approval rules can further restrict who is eligible.",
       "Create the token, copy it immediately, and paste it into ReviewDuck. GitLab does not show the value again.",
     ],
     permissions: [
@@ -92,13 +93,13 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
         name: "Scope",
         access: "api",
         reason:
-          "Reads repository and merge-request data and creates diff discussions.",
+          "Reads merge-request state, creates diff discussions, and submits or withdraws approvals.",
       },
       {
         name: "Access role",
-        access: "Reporter or higher",
+        access: "Developer or higher",
         reason:
-          "Provides code visibility and permission to comment on merge requests.",
+          "Makes the token identity eligible for standard merge-request approvals.",
       },
       {
         name: "Token reach",
@@ -122,7 +123,7 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
       },
       "Choose New Token, name it “ReviewDuck”, select the specific organization, and set a practical expiration date.",
       "Choose Custom defined scopes. The simplest compatible option is Code: Read & write.",
-      "If your organization exposes separate thread permissions, you can instead combine Code: Read with Pull request threads: Read & write.",
+      "Keep Code: Read & write enabled: Azure DevOps requires code-write access to submit approval, reject, wait, or reset votes.",
       "Create the token, copy it immediately, and paste it into ReviewDuck. Azure DevOps only shows it once.",
     ],
     permissions: [
@@ -130,13 +131,7 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
         name: "Code",
         access: "Read & write",
         reason:
-          "Reads repositories and pull requests and permits code-review comments.",
-      },
-      {
-        name: "Least-privilege alternative",
-        access: "Code: Read + PR threads: Read & write",
-        reason:
-          "Use this combination when your organization exposes the separate thread scope.",
+          "Reads repositories, publishes comments, and manages pull-request review votes.",
       },
       {
         name: "Organization",

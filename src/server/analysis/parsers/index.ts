@@ -1,4 +1,8 @@
-import type { LanguageAdapter } from "../types";
+import {
+  type LanguageAdapter,
+  type SupportedLanguage,
+  supportedLanguages,
+} from "../types";
 import { cAdapter } from "./c";
 import { cppAdapter } from "./cpp";
 import { csharpAdapter } from "./csharp";
@@ -14,9 +18,10 @@ import { pythonAdapter } from "./python";
 import { rubyAdapter } from "./ruby";
 import { rustAdapter } from "./rust";
 import { shellAdapter } from "./shell";
+import { treeSitterAdapter } from "./tree-sitter-adapter";
 import { typescriptAdapter } from "./typescript";
 
-export const languageAdapters: readonly LanguageAdapter[] = [
+const specializedAdapters = [
   typescriptAdapter,
   javascriptLanguageAdapter,
   pythonAdapter,
@@ -33,6 +38,20 @@ export const languageAdapters: readonly LanguageAdapter[] = [
   goAdapter,
   makefileAdapter,
   kotlinAdapter,
+] as const satisfies readonly LanguageAdapter[];
+
+const specializedLanguages = new Set<SupportedLanguage>(
+  specializedAdapters.map(({ language }) => language),
+);
+
+export const languageAdapters: readonly LanguageAdapter[] = [
+  ...specializedAdapters,
+  ...supportedLanguages
+    .filter(
+      (language): language is Exclude<SupportedLanguage, "text"> =>
+        language !== "text" && !specializedLanguages.has(language),
+    )
+    .map((language) => treeSitterAdapter(language)),
 ];
 
 /** Finds the registered parser for a repository path. */

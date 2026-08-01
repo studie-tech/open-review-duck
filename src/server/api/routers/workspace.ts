@@ -1,10 +1,12 @@
 import { and, eq, gte } from "drizzle-orm";
 import {
-  aiConfigurations,
+  aiPreferences,
+  localAiConfigurations,
   providerConnections,
   signOffs,
   users,
 } from "@/drizzle/schema";
+import { isLocalDeployment } from "~/server/deployment";
 import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
@@ -19,15 +21,19 @@ export const workspaceRouter = createTRPCRouter({
     const todayUtc = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
     );
-    const [connection, aiConfiguration, todaySignOff, user] = await Promise.all(
-      [
+    const [connection, aiPreference, localAiConfiguration, todaySignOff, user] =
+      await Promise.all([
         ctx.db.query.providerConnections.findFirst({
           columns: { id: true },
           where: eq(providerConnections.workspaceId, workspace.id),
         }),
-        ctx.db.query.aiConfigurations.findFirst({
+        ctx.db.query.aiPreferences.findFirst({
           columns: { id: true },
-          where: eq(aiConfigurations.workspaceId, workspace.id),
+          where: eq(aiPreferences.workspaceId, workspace.id),
+        }),
+        ctx.db.query.localAiConfigurations.findFirst({
+          columns: { id: true },
+          where: eq(localAiConfigurations.workspaceId, workspace.id),
         }),
         ctx.db.query.signOffs.findFirst({
           columns: { id: true },
@@ -40,14 +46,14 @@ export const workspaceRouter = createTRPCRouter({
           columns: { currentStreak: true },
           where: eq(users.id, ctx.auth.userId),
         }),
-      ],
-    );
+      ]);
 
     return {
       hasProviderConnection: Boolean(connection),
-      hasAiConfiguration: Boolean(aiConfiguration),
+      hasAiConfiguration: Boolean(aiPreference ?? localAiConfiguration),
       reviewedToday: Boolean(todaySignOff),
       currentStreak: user?.currentStreak ?? 0,
+      localMode: isLocalDeployment(),
     };
   }),
 });

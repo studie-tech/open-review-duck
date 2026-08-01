@@ -81,6 +81,21 @@ export const startAiJobSchema = z.discriminatedUnion("kind", [
       pullRequestId: z.string().uuid(),
       unitId: z.string().uuid(),
       kind: z.literal("explain"),
+      question: z.string().trim().min(1).max(4_000).optional(),
+      focusLine: z.number().int().positive().optional(),
+      threadId: z.string().uuid().optional(),
+    })
+    .superRefine((input, context) => {
+      if (
+        Boolean(input.question) !== Boolean(input.focusLine) ||
+        Boolean(input.question) !== Boolean(input.threadId)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Questions must identify one focused source line and conversation",
+        });
+      }
     })
     .strict(),
   z
@@ -91,20 +106,35 @@ export const startAiJobSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-export const startPendingExplanationsSchema = z
-  .object({
-    pullRequestId: z.string().uuid(),
-    unitIds: z.array(z.string().uuid()).min(1).max(2_000),
-  })
-  .strict();
-
 export const aiJobLookupSchema = z.object({
   pullRequestId: z.string().uuid(),
   unitId: z.string().uuid().optional(),
 });
 
+export const deleteAiQuestionThreadSchema = z.object({
+  pullRequestId: z.string().uuid(),
+  unitId: z.string().uuid(),
+  jobIds: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(50)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "AI conversation jobs must be unique",
+    }),
+});
+
 export const aiResultSchema = z.object({
   summary: z.string().min(1).max(20_000),
+  commentProposals: z
+    .array(
+      z.object({
+        body: z.string().min(1).max(10_000),
+        path: z.string().min(1).max(2_000),
+        line: z.number().int().positive(),
+      }),
+    )
+    .max(3)
+    .default([]),
   annotations: z
     .array(
       z.object({

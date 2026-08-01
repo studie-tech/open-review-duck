@@ -1,13 +1,21 @@
 import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    tsconfigPaths: true,
+    alias: {
+      "server-only": new URL("./src/test/server-only.ts", import.meta.url)
+        .pathname,
+    },
+  },
   test: {
     environment: "node",
+    setupFiles: ["./src/test/setup-tree-sitter.ts"],
     exclude: [
       ...configDefaults.exclude,
       "**/.claude/**",
       "**/.codex/**",
       "**/*.integration.test.ts",
+      "tests/e2e/**",
     ],
     coverage: {
       provider: "v8",

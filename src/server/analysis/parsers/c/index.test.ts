@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { cAdapter, cParserInternals } from ".";
+import { cAdapter } from ".";
 
 /** Analyzes an in-memory C fixture with the production adapter. */
 function analyze(content: string, path = "src/example.c") {
@@ -245,7 +245,6 @@ int real(void) { return quote == '}'; }
     expect(units.some(({ name }) => name === "commented_out")).toBe(false);
     expect(named(units, "ESCAPES").kind).toBe("constant");
     expect(named(units, "real").kind).toBe("function");
-    expect(cParserInternals.maskCSource(source)).toHaveLength(source.length);
   });
 
   it("recognizes include, pragma, and header-guard-only files as context", () => {

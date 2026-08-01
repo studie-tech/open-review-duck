@@ -329,6 +329,33 @@ describe("sideBySideDiff", () => {
       ),
     ).toHaveLength(2);
   });
+
+  it("never collapses paged surrounding context outside the unit window", () => {
+    const before = Array.from({ length: 10 }, (_, index) => `before ${index}`);
+    const after = Array.from({ length: 10 }, (_, index) => `after ${index}`);
+    const rows = sideBySideDiff(
+      [...before, "old", ...after].join("\n"),
+      [...before, "new", ...after].join("\n"),
+    );
+    const compact = compactSideBySideDiff(rows, 3, {
+      collapseWithin: { start: 10, end: 11 },
+      pinRangeEnds: 1,
+    });
+
+    expect(
+      compact.filter(
+        (item) =>
+          item.kind === "collapsed" &&
+          (item.rowEnd <= 10 || item.rowStart >= 11),
+      ),
+    ).toHaveLength(0);
+    expect(
+      compact.filter((item) => item.kind === "row" && item.rowIndex < 10),
+    ).toHaveLength(10);
+    expect(
+      compact.filter((item) => item.kind === "row" && item.rowIndex >= 11),
+    ).toHaveLength(10);
+  });
 });
 
 describe("sourceStartLine", () => {

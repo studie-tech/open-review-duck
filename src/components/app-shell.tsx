@@ -14,7 +14,14 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { BrandMark } from "~/components/brand-mark";
 import {
@@ -28,7 +35,10 @@ import {
 import { PageCommandCenterProvider } from "~/components/page-command-center";
 import { ThemeToggle } from "~/components/theme-toggle";
 import type { DeploymentMode } from "~/lib/deployment";
-import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
+import {
+  commandMenuShortcut,
+  type KeyboardShortcut,
+} from "~/lib/keyboard-shortcuts";
 import { sidebarGuidance } from "~/lib/sidebar-guidance";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
@@ -67,7 +77,7 @@ const navigation = [
   label: string;
   mobileLabel: string;
   icon: typeof LayoutDashboard;
-  shortcut: Array<{ key: string }>;
+  shortcut: KeyboardShortcut;
 }>;
 
 /** Checks whether a navigation item matches the current route. */
@@ -82,6 +92,7 @@ function isNavigationActive(pathname: string, href: string) {
 }
 
 type Guidance = RouterOutputs["workspace"]["guidance"];
+const INBOX_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 
 /** Renders the app shell interface. */
 export function AppShell({
@@ -95,6 +106,38 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const utils = api.useUtils();
+  const reconcileIntake = api.provider.reconcileWorkspaceIntake.useMutation({
+    onSuccess: (result) => {
+      if (result.queued === 0 && result.stateChanges === 0) return;
+      void Promise.all([
+        utils.review.activeSyncs.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.provider.listImportedRepositories.invalidate(),
+        utils.provider.listOpenPullRequests.invalidate(),
+      ]);
+    },
+  });
+  const reconcileIntakeRef = useRef(reconcileIntake);
+  reconcileIntakeRef.current = reconcileIntake;
+  useEffect(() => {
+    /** Refreshes provider state without overlapping an existing reconciliation. */
+    const reconcile = () => {
+      if (!reconcileIntakeRef.current.isPending) {
+        reconcileIntakeRef.current.mutate();
+      }
+    };
+    reconcile();
+    window.addEventListener("focus", reconcile);
+    const interval = window.setInterval(
+      reconcile,
+      INBOX_RECONCILIATION_INTERVAL_MS,
+    );
+    return () => {
+      window.removeEventListener("focus", reconcile);
+      window.clearInterval(interval);
+    };
+  }, []);
   const guidanceQuery = api.workspace.guidance.useQuery(undefined, {
     initialData: initialGuidance,
   });
@@ -260,7 +303,7 @@ export function AppShell({
               />
             </button>
             <ThemeToggle />
-            {deploymentMode === "authenticated" && <UserButton />}
+            {deploymentMode === "saas" && <UserButton />}
           </div>
         </header>
         <nav className="bg-panel grid grid-cols-4 gap-1 border-b border-line px-4 py-2 lg:hidden">

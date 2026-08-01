@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { lookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -7,9 +6,12 @@ import { BlockList, isIP } from "node:net";
 import { Readable } from "node:stream";
 
 const nonPublicAddresses = new BlockList();
-const safeFetchPolicy = new AsyncLocalStorage<boolean>();
-const nativeFetch = globalThis.fetch.bind(globalThis);
-let safeFetchHookInstalled = false;
+const linkLocalAndMetadataAddresses = new BlockList();
+
+linkLocalAndMetadataAddresses.addSubnet("169.254.0.0", 16, "ipv4");
+linkLocalAndMetadataAddresses.addAddress("100.100.100.200", "ipv4");
+linkLocalAndMetadataAddresses.addSubnet("fe80::", 10, "ipv6");
+linkLocalAndMetadataAddresses.addAddress("fd00:ec2::254", "ipv6");
 
 for (const [network, prefix] of [
   ["0.0.0.0", 8],
@@ -54,6 +56,20 @@ export function isPrivateAddress(address: string) {
   return nonPublicAddresses.check(address, version === 4 ? "ipv4" : "ipv6");
 }
 
+/** Cloud-metadata and link-local addresses remain forbidden in local mode. */
+function isLinkLocalOrMetadataAddress(address: string) {
+  const mappedIpv4 = address
+    .toLowerCase()
+    .match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedIpv4?.[1]) return isLinkLocalOrMetadataAddress(mappedIpv4[1]);
+  const version = isIP(address);
+  if (version === 0) return false;
+  return linkLocalAndMetadataAddresses.check(
+    address,
+    version === 4 ? "ipv4" : "ipv6",
+  );
+}
+
 interface SafeRemoteTarget {
   url: URL;
   address: string;
@@ -94,6 +110,9 @@ export async function resolveSafeRemoteUrl(
     ? [{ address: hostname, family: isIP(hostname) as 4 | 6 }]
     : await lookup(hostname, { all: true, verbatim: true });
   if (resolved.length === 0) throw new Error("Remote host did not resolve");
+  if (resolved.some(({ address }) => isLinkLocalOrMetadataAddress(address))) {
+    throw new Error("Cloud metadata and link-local hosts are disabled");
+  }
   if (
     !allowPrivateHosts &&
     resolved.some(({ address }) => isPrivateAddress(address))
@@ -191,15 +210,13 @@ export async function safeRemoteFetch(
   });
 }
 
-/** Installs a concurrency-safe fetch hook for SDKs that do not accept a transport. */
-function installSafeFetchHook() {
-  if (safeFetchHookInstalled) return;
-  safeFetchHookInstalled = true;
-  globalThis.fetch = async (input, init) => {
-    const allowPrivateHosts = safeFetchPolicy.getStore();
-    if (allowPrivateHosts === undefined) return nativeFetch(input, init);
+/** Creates an explicit DNS-pinned transport for SDK clients. */
+export function createSafeRemoteFetch(
+  allowPrivateHosts: boolean,
+): typeof fetch {
+  return async (input, init) => {
     const request = input instanceof Request ? input : undefined;
-    const method = init?.method ?? request?.method ?? "GET";
+    const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const body = ["GET", "HEAD"].includes(method)
       ? undefined
       : (init?.body ??
@@ -215,13 +232,4 @@ function installSafeFetchHook() {
       allowPrivateHosts,
     );
   };
-}
-
-/** Runs an SDK operation with every nested fetch DNS-pinned and validated. */
-export function withSafeRemoteFetch<T>(
-  allowPrivateHosts: boolean,
-  operation: () => Promise<T>,
-) {
-  installSafeFetchHook();
-  return safeFetchPolicy.run(allowPrivateHosts, operation);
 }

@@ -29,6 +29,16 @@ export interface PullRequestSummary {
   changedFiles: number;
 }
 
+export interface PullRequestListOptions {
+  /**
+   * Restricts results to pull requests assigned to the connected reviewer.
+   *
+   * Providers interpret assignment using their native review model: requested
+   * reviewer or assignee on GitHub, reviewer on GitLab, and reviewer on Azure.
+   */
+  reviewerExternalAccountId?: string;
+}
+
 export interface ProviderReviewComment {
   externalId: string;
   body: string;
@@ -48,6 +58,29 @@ export interface ProviderReviewThread {
   comments: ProviderReviewComment[];
 }
 
+export type ProviderReviewDecision =
+  | "approved"
+  | "changes_requested"
+  | "waiting"
+  | "none";
+
+export type ProviderReviewAction = "approve" | "request_changes" | "clear";
+
+/** Normalized, live provider review state for the connected reviewer. */
+export interface ProviderPullRequestReviewState {
+  decision: ProviderReviewDecision;
+  actorName: string;
+  approvedCount: number;
+  changesRequestedCount: number;
+  requiredApprovals?: number;
+  approvalsRemaining?: number;
+  canApprove: boolean;
+  canRequestChanges: boolean;
+  canClear: boolean;
+  requestChangesRequiresBody: boolean;
+  unavailableReason?: string;
+}
+
 export interface PullRequestProvider {
   readonly name: ProviderName;
   /** Fetches the account identity associated with the configured credential. */
@@ -57,20 +90,50 @@ export interface PullRequestProvider {
   }>;
   /** Lists every repository accessible through the provider connection. */
   listRepositories(): Promise<RepositoryIdentity[]>;
+  /** Ensures provider events for this repository reach the signed SaaS endpoint. */
+  ensureRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+    secret: string;
+  }): Promise<void>;
+  /** Removes provider events previously registered for this application. */
+  removeRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+  }): Promise<void>;
   /** Lists open pull requests for a provider repository. */
   listOpenPullRequests(
     repositoryExternalId: string,
+    options?: PullRequestListOptions,
   ): Promise<PullRequestSummary[]>;
   /** Fetches normalized metadata for one pull request. */
   getPullRequest(
     repositoryExternalId: string,
     number: number,
   ): Promise<PullRequestSummary>;
+  /** Fetches the current authenticated reviewer's live provider decision. */
+  getPullRequestReviewState(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestReviewState>;
+  /** Submits an exact-revision review decision through the provider. */
+  setPullRequestReviewDecision(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+    action: ProviderReviewAction;
+    body?: string;
+  }): Promise<void>;
   /** Fetches the changed source files required for static analysis. */
   getChangedFiles(
     repositoryExternalId: string,
     number: number,
   ): Promise<SourceFile[]>;
+  /** Lists regular files in an immutable repository revision. */
+  listRepositoryFiles(
+    repositoryExternalId: string,
+    ref: string,
+  ): Promise<string[]>;
   /** Fetches file content at a provider revision within the requested limit. */
   getFileContent(
     repositoryExternalId: string,

@@ -30,7 +30,7 @@ describe("providerConnectionErrorMessage", () => {
         new ProviderError("gitlab", "403 API rate limit exceeded", 403),
       ),
     ).toBe(
-      "GitLab rate-limited this verification. Wait a moment and try again.",
+      "GitLab's API rate limit is exhausted. Wait for GitLab to reset it before retrying; repeated retries will not help.",
     );
   });
 

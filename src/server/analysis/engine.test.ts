@@ -52,6 +52,126 @@ describe("review analysis engine", () => {
     ]);
   });
 
+  it("clusters a removed binding with changed references in its lexical scope", () => {
+    const previousContent = [
+      "export function TravelPage() {",
+      "  const [showBuildingLabels, setShowBuildingLabels] = useLocalStorage<boolean>('showBuildingLabels', false);",
+      "  const toggleBuildingLabels = () => setShowBuildingLabels(!showBuildingLabels);",
+      "  return showBuildingLabels ? <Map onClose={() => setShowBuildingLabels(false)} /> : null;",
+      "}",
+    ].join("\n");
+    const content = [
+      "export function TravelPage() {",
+      "  return <Map />;",
+      "}",
+    ].join("\n");
+
+    const units = analyzeFiles([
+      {
+        path: "app/travel/page.tsx",
+        previousContent,
+        content,
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({
+      name: expect.stringContaining("related changes"),
+      relatedRanges: expect.arrayContaining([
+        expect.objectContaining({ previousStartLine: 2 }),
+      ]),
+    });
+    expect(units[0]?.previousSource).toContain("showBuildingLabels");
+  });
+
+  it("does not cluster unrelated changes that merely share a file", () => {
+    const previousContent = [
+      "export const alpha = () => 1;",
+      "export const beta = () => 2;",
+    ].join("\n");
+    const content = [
+      "export const alpha = () => 10;",
+      "export const beta = () => 20;",
+    ].join("\n");
+
+    const units = analyzeFiles([
+      {
+        path: "independent.ts",
+        previousContent,
+        content,
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(2);
+    expect(units.every(({ relatedRanges }) => !relatedRanges)).toBe(true);
+  });
+
+  it.each([
+    {
+      language: "TypeScript",
+      path: "service.ts",
+      previousContent:
+        "export function helper() { return 1; }\nexport function run() { return helper(); }",
+      content: "export function run() { return 0; }",
+    },
+    {
+      language: "Python",
+      path: "service.py",
+      previousContent:
+        "def helper():\n    return 1\n\ndef run():\n    return helper()\n",
+      content: "def run():\n    return 0\n",
+    },
+    {
+      language: "Java",
+      path: "Service.java",
+      previousContent:
+        "class Service {\n  int helper() { return 1; }\n  int run() { return helper(); }\n}",
+      content: "class Service {\n  int run() { return 0; }\n}",
+    },
+    {
+      language: "Rust",
+      path: "service.rs",
+      previousContent: "fn helper() -> i32 { 1 }\nfn run() -> i32 { helper() }",
+      content: "fn run() -> i32 { 0 }",
+    },
+  ])(
+    "clusters definition/reference removal generically in $language",
+    ({ path, previousContent, content }) => {
+      const units = analyzeFiles([
+        { path, previousContent, content, changeType: "modified" },
+      ]).units.filter(({ kind }) => kind !== "file");
+
+      expect(units).toHaveLength(1);
+      expect(units[0]?.relatedRanges).toHaveLength(2);
+      expect(units[0]?.name).toContain("related changes");
+    },
+  );
+
+  it("does not merge shadowed symbols across separate lexical scopes", () => {
+    const previousContent = [
+      "export function first() { const shared = 1; return shared; }",
+      "export function second() { const shared = 2; return shared; }",
+    ].join("\n");
+    const content = [
+      "export function first() { return 1; }",
+      "export function second() { return 2; }",
+    ].join("\n");
+
+    const units = analyzeFiles([
+      {
+        path: "shadowed.ts",
+        previousContent,
+        content,
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(2);
+    expect(units.every(({ relatedRanges }) => !relatedRanges)).toBe(true);
+  });
+
   it("reviews independent schemas and data models before behavioral concepts", () => {
     const result = analyzeFiles([
       {
@@ -913,6 +1033,37 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     );
   });
 
+  it("pairs a rewritten import as one modified change unit", () => {
+    const previous = [
+      'import NotFoundPage from "@/app/[...not-found]/page";',
+      'import { FORUM_MIN_LEVEL } from "@/drizzle/constants";',
+      "export function Page() { return NotFoundPage({}); }",
+    ].join("\n");
+    const current = [
+      'import NotFoundPage from "@/components/layout/NotFoundPage";',
+      'import { FORUM_MIN_LEVEL } from "@/drizzle/constants";',
+      "export function Page() { return NotFoundPage({}); }",
+    ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "page.tsx",
+        content: current,
+        previousContent: previous,
+        changeType: "modified",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toMatchObject([
+      {
+        name: "Changed line 1",
+        changeType: "modified",
+        source: 'import NotFoundPage from "@/components/layout/NotFoundPage";',
+        previousSource: 'import NotFoundPage from "@/app/[...not-found]/page";',
+      },
+    ]);
+  });
+
   it("focuses an oversized router on the changed property", () => {
     const padding = Array.from(
       { length: 125 },
@@ -1094,8 +1245,8 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
   it("keeps unparsed text files in the review as complete file units", () => {
     const result = analyzeFiles([
       {
-        path: "config/settings.json",
-        content: '{\n  "enabled": true,\n  "limit": 5\n}',
+        path: "config/settings.ini",
+        content: "[review]\nenabled=true\nlimit=5",
         changeType: "added",
       },
     ]);
@@ -1104,8 +1255,8 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     expect(result.units.find(({ kind }) => kind !== "file")).toMatchObject({
       language: "text",
       kind: "module",
-      name: "settings.json",
-      source: expect.stringContaining('"enabled": true'),
+      name: "settings.ini",
+      source: expect.stringContaining("enabled=true"),
     });
   });
 

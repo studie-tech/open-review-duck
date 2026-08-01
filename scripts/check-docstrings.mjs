@@ -1,8 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { extname, join } from "node:path";
-import { parser } from "@lezer/javascript";
+import { Language, Parser } from "web-tree-sitter";
 
-const SOURCE_ROOTS = ["src", ".flue", "drizzle", "scripts"];
+const require = createRequire(import.meta.url);
+const SOURCE_ROOTS = ["src", "drizzle", "scripts"];
 const SOURCE_EXTENSIONS = new Set([
   ".js",
   ".jsx",
@@ -13,7 +15,20 @@ const SOURCE_EXTENSIONS = new Set([
   ".mts",
   ".cts",
 ]);
-const IGNORED_DIRECTORIES = new Set([".git", ".next", "node_modules"]);
+const IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".next",
+  ".well-known",
+  "node_modules",
+]);
+const CALLABLE_TYPES = new Set(["function_declaration", "method_definition"]);
+
+await Parser.init({
+  locateFile: () => require.resolve("web-tree-sitter/tree-sitter.wasm"),
+});
+const language = await Language.load(
+  require.resolve("tree-sitter-wasms/out/tree-sitter-tsx.wasm"),
+);
 
 /** Recursively returns the JavaScript and TypeScript files below a directory. */
 function collectSourceFiles(directory) {
@@ -25,40 +40,81 @@ function collectSourceFiles(directory) {
   });
 }
 
-/** Returns the declaration name when a syntax node represents a named callable. */
-function callableName(type, source) {
-  if (type === "FunctionDeclaration") {
-    return /(?:async\s+)?function\s+([\w$]+)/.exec(source)?.[1] ?? null;
+/** Returns every named syntax node in depth-first source order. */
+function namedNodes(root) {
+  const nodes = [];
+  const cursor = root.walk();
+  let complete = false;
+  while (!complete) {
+    if (cursor.currentNode.isNamed) nodes.push(cursor.currentNode);
+    if (cursor.gotoFirstChild()) continue;
+    if (cursor.gotoNextSibling()) continue;
+    while (true) {
+      if (!cursor.gotoParent()) {
+        complete = true;
+        break;
+      }
+      if (cursor.gotoNextSibling()) break;
+    }
   }
-  if (type === "MethodDeclaration") {
-    return (
-      /^(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?([\w$]+)\s*(?:<[^>]+>)?\s*\(/.exec(
-        source,
-      )?.[1] ?? null
-    );
-  }
-  if (type !== "VariableDeclaration" && type !== "PropertyDeclaration") {
-    return null;
-  }
-  return (
-    /^(?:(?:public|private|protected|static|readonly|declare)\s+)*(?:(?:const|let|var)\s+)?([\w$]+)[?!]?(?:\s*:[^=]+)?\s*=\s*(?:async\s*)?(?:(?:<[^>]+>\s*)?(?:\([^)]*\)|[\w$]+)\s*(?::\s*[^=]+)?=>|function\b)/s.exec(
-      source,
-    )?.[1] ?? null
-  );
+  cursor.delete();
+  return nodes;
 }
 
-/** Locates the start of a declaration, including export modifiers on its line. */
-function declarationAnchor(source, nodeStart) {
-  const lineStart = source.lastIndexOf("\n", nodeStart - 1) + 1;
-  const prefix = source.slice(lineStart, nodeStart);
-  return /^\s*(?:(?:export|default|declare)\s+)*$/.test(prefix)
-    ? lineStart
-    : nodeStart;
+/** Returns the name node when a syntax node declares a named callable. */
+function callableNameNode(node) {
+  if (CALLABLE_TYPES.has(node.type)) {
+    if (
+      node.type === "method_definition" &&
+      !node.parent?.type.includes("class")
+    ) {
+      return null;
+    }
+    return node.childForFieldName("name");
+  }
+  if (
+    node.type !== "variable_declarator" &&
+    node.type !== "public_field_definition"
+  ) {
+    return null;
+  }
+  const value = node.childForFieldName("value");
+  if (
+    !value ||
+    !["arrow_function", "function_expression"].includes(value.type)
+  ) {
+    return null;
+  }
+  return node.childForFieldName("name");
+}
+
+/** Locates the declaration wrapper whose leading JSDoc documents a callable. */
+function declarationAnchor(node) {
+  let declaration = node;
+  if (node.type === "variable_declarator") {
+    while (
+      declaration.parent &&
+      !["lexical_declaration", "variable_declaration"].includes(
+        declaration.type,
+      )
+    ) {
+      declaration = declaration.parent;
+    }
+  }
+  while (
+    declaration.parent &&
+    ["decorated_definition", "export_statement"].includes(
+      declaration.parent.type,
+    )
+  ) {
+    declaration = declaration.parent;
+  }
+  return declaration.startIndex;
 }
 
 /** Checks whether a declaration is immediately preceded by a JSDoc comment. */
 function hasDocstring(source, anchor) {
-  const before = source.slice(0, anchor).replace(/\s+$/, "");
+  const before = source.slice(0, anchor).trimEnd();
   if (!before.endsWith("*/")) return false;
   const commentStart = before.lastIndexOf("/*");
   return commentStart >= 0 && before.startsWith("/**", commentStart);
@@ -67,27 +123,26 @@ function hasDocstring(source, anchor) {
 /** Finds named callables in a source file that do not have adjacent JSDoc. */
 function undocumentedCallables(path) {
   const source = readFileSync(path, "utf8");
-  const tree = parser.configure({ dialect: "ts jsx" }).parse(source);
-  const missing = [];
-  const cursor = tree.cursor();
-
-  do {
-    const snippet = source.slice(
-      cursor.from,
-      Math.min(cursor.to, cursor.from + 800),
-    );
-    const name = callableName(cursor.type.name, snippet);
-    if (!name) continue;
-    const anchor = declarationAnchor(source, cursor.from);
-    if (hasDocstring(source, anchor)) continue;
-    missing.push({
-      line: source.slice(0, cursor.from).split("\n").length,
-      name,
-      path,
+  const parser = new Parser();
+  parser.setLanguage(language);
+  const tree = parser.parse(source);
+  parser.delete();
+  if (!tree) throw new Error(`Tree-sitter did not parse ${path}`);
+  try {
+    return namedNodes(tree.rootNode).flatMap((node) => {
+      const nameNode = callableNameNode(node);
+      if (!nameNode || hasDocstring(source, declarationAnchor(node))) return [];
+      return [
+        {
+          line: source.slice(0, node.startIndex).split("\n").length,
+          name: source.slice(nameNode.startIndex, nameNode.endIndex),
+          path,
+        },
+      ];
     });
-  } while (cursor.next());
-
-  return missing;
+  } finally {
+    tree.delete();
+  }
 }
 
 /** Audits every maintained source file and exits unsuccessfully on violations. */

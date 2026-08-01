@@ -65,6 +65,14 @@ export function nextPendingReviewIndex<T extends ReviewNavigationUnit>(
   );
 }
 
+/** Prefers one actionable subset, then falls back to canonical review order. */
+export function nextPendingReviewIndexPreferring<
+  T extends ReviewNavigationUnit,
+>(units: T[], preferred: (unit: T, index: number) => boolean) {
+  const preferredIndex = nextPendingReviewIndex(units, preferred);
+  return preferredIndex >= 0 ? preferredIndex : nextPendingReviewIndex(units);
+}
+
 /** Marks one unit as reviewed locally before its sign-off reaches the server. */
 export function optimisticallySignOffReviewUnit<
   T extends ReviewNavigationUnit & {
@@ -72,16 +80,41 @@ export function optimisticallySignOffReviewUnit<
     changedSinceSignOff: boolean;
   },
 >(units: T[], unitId: string) {
-  if (!units.some((unit) => unit.id === unitId)) return units;
+  return optimisticallySignOffReviewUnits(units, [unitId]);
+}
+
+/** Marks several units as reviewed in one immutable update. */
+export function optimisticallySignOffReviewUnits<
+  T extends ReviewNavigationUnit & {
+    id: string;
+    changedSinceSignOff: boolean;
+  },
+>(units: T[], unitIds: Iterable<string>) {
+  const selected = new Set(unitIds);
+  if (!units.some((unit) => selected.has(unit.id))) return units;
   return units.map(
     (unit): T =>
-      unit.id === unitId
+      selected.has(unit.id)
         ? {
             ...unit,
             status: "signed_off",
             changedSinceSignOff: false,
           }
         : unit,
+  );
+}
+
+/** Selects outstanding units that belong to files deleted in their entirety. */
+export function deletedFileSignOffUnits<
+  T extends ReviewNavigationUnit & { path: string },
+>(units: T[], fileContexts: Array<{ changeType: string; path: string }>): T[] {
+  const deletedPaths = new Set(
+    fileContexts
+      .filter(({ changeType }) => changeType === "deleted")
+      .map(({ path }) => path),
+  );
+  return units.filter(
+    (unit) => deletedPaths.has(unit.path) && isActionable(unit),
   );
 }
 

@@ -9,9 +9,10 @@ const providerLabels: Record<ProviderName, string> = {
 const permissionHelp: Record<ProviderName, string> = {
   github:
     "Confirm Contents: Read-only and Pull requests: Read and write, and approve the token for the organization if required.",
-  gitlab: "Confirm the token has the api scope and at least Reporter access.",
+  gitlab:
+    "Confirm the token has the api scope and Developer access or higher so its identity can approve merge requests.",
   azure_devops:
-    "Confirm the token has Code: Read & write, or Code: Read with Pull request threads: Read & write.",
+    "Confirm the token has Code: Read & write so it can manage code-review votes.",
 };
 
 /** Normalizes provider connection failures into actionable copy. */
@@ -26,8 +27,12 @@ export function providerConnectionErrorMessage(
       return `${label} rejected this token. Create a new token, copy the complete value, and try again.`;
     }
     if (cause.status === 403) {
-      if (cause.message.toLowerCase().includes("rate limit")) {
-        return `${label} rate-limited this verification. Wait a moment and try again.`;
+      const message = cause.message.toLowerCase();
+      if (message.includes("rate limit")) {
+        return `${label}'s API rate limit is exhausted. Wait for ${label} to reset it before retrying; repeated retries will not help.`;
+      }
+      if (message.includes("single sign-on")) {
+        return `${label} requires organization SSO authorization for this token. Authorize it with the organization and try again.`;
       }
       return `${label} accepted the token but blocked access. ${permissionHelp[provider]}`;
     }
@@ -37,7 +42,7 @@ export function providerConnectionErrorMessage(
         : `${label} could not find this API endpoint. Check the provider URL and try again.`;
     }
     if (cause.status === 429) {
-      return `${label} rate-limited this verification. Wait a moment and try again.`;
+      return `${label}'s API rate limit is exhausted. Wait for ${label} to reset it before retrying; repeated retries will not help.`;
     }
     return `${label} returned an unexpected response${cause.status ? ` (${cause.status})` : ""}. Check the token and provider URL, then try again.`;
   }

@@ -32,6 +32,12 @@ export const repositoryIdSchema = z.object({
   repositoryId: z.string().uuid(),
 });
 
+export const repositoryIntakeModeSchema = z.enum(["manual", "assigned", "all"]);
+
+export const repositoryIntakeSchema = repositoryIdSchema.extend({
+  mode: repositoryIntakeModeSchema,
+});
+
 export const repositoryRetentionSchema = repositoryIdSchema.extend({
   days: z.number().int().min(1).max(365),
   snapshots: z.number().int().min(1).max(100),

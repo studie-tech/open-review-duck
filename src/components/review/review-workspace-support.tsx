@@ -7,10 +7,12 @@ import {
   Clock3,
   ExternalLink,
   GitBranch,
+  GripVertical,
   LoaderCircle,
   MessageSquareText,
   Send,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -18,6 +20,8 @@ import {
   Fragment,
   forwardRef,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -28,10 +32,13 @@ import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
 import {
   type ImportReference,
+  type ImportStatement,
   importReferenceIsUsed,
-  parseImportStatements,
+  type PairedImportStatement,
+  pairImportStatements,
 } from "~/lib/import-navigation";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
 import type {
@@ -39,7 +46,11 @@ import type {
   ReviewHierarchyNode,
 } from "~/lib/review-navigation";
 import { compactSideBySideDiff, sideBySideDiff } from "~/lib/side-by-side-diff";
-import { highlightSource } from "~/lib/syntax-highlighting";
+import {
+  type HighlightedLine,
+  useHighlightedSource,
+} from "~/lib/syntax-highlighting";
+import { useImportStatements } from "~/lib/tree-sitter-import-navigation";
 import { cn } from "~/lib/utils";
 import {
   type SupportedLanguage,
@@ -58,7 +69,6 @@ export const INITIAL_PATH_ITEMS = 10;
 export const PATH_PAGE_SIZE = 20;
 export const CONTEXT_PAGE_LINES = 20;
 const DIFF_CONTEXT_PAGE_LINES = 20;
-const HIGHLIGHT_CACHE_SIZE = 6;
 export const reviewShortcuts = {
   nextUnit: [{ key: "j" }],
   nextUnitArrow: [{ key: "ArrowRight" }],
@@ -66,17 +76,17 @@ export const reviewShortcuts = {
   previousUnitArrow: [{ key: "ArrowLeft" }],
   scrollUp: [{ key: "ArrowUp" }],
   scrollDown: [{ key: "ArrowDown" }],
-  togglePathPanel: [{ key: "[" }],
-  toggleInsightsPanel: [{ key: "]" }],
+  togglePathPanel: [{ key: "b", mod: true }],
+  toggleInsightsPanel: [{ key: "g", mod: true }],
   nextPending: [{ key: "n" }],
-  search: [{ key: "/" }],
-  explainMenu: [{ key: "e" }],
-  explainUnit: [{ key: "e" }, { key: "e" }],
-  explainPending: [{ key: "e" }, { key: "a" }],
-  reviewPullRequest: [{ key: "e" }, { key: "r" }],
+  nextReview: [{ key: "n", shift: true }],
+  search: [{ key: "f" }],
+  askAi: [{ key: "e" }],
+  reviewPullRequest: [{ key: "a" }],
   comment: [{ key: "l" }],
   context: [{ key: "c" }],
   signOff: [{ key: "s" }],
+  signOffDeletions: [{ key: "d", shift: true }],
   undoReview: [{ key: "u" }],
   awaitResponse: [{ key: "w" }],
   refresh: [{ key: "r" }],
@@ -87,139 +97,714 @@ export const reviewShortcuts = {
   postComment: [{ key: "Enter", mod: true }],
 } satisfies Record<string, KeyboardShortcut>;
 
-export interface AiActionMenuItem {
-  description: string;
-  disabled?: boolean;
-  label: string;
-  loading?: boolean;
-  onSelect: () => void;
-  shortcut: KeyboardShortcut;
+export interface AiQuestionEntry {
+  error: string | null;
+  id: string;
+  jobId?: string;
+  progress?: string;
+  question: string | null;
+  result: {
+    summary: string;
+    commentProposals?: Array<{
+      body: string;
+      line: number;
+      path: string;
+      published?: boolean;
+    }>;
+  } | null;
+  status:
+    | "queued"
+    | "running"
+    | "waiting_for_provider"
+    | "streaming"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  threadId?: string;
 }
 
-/** Renders the compact AI action menu used by mouse and keyboard reviewers. */
-export function AiActionMenu({
-  disabled = false,
-  fullWidth = false,
-  items,
+export const AI_QUICK_QUESTIONS = [
+  {
+    code: "Digit1",
+    key: "1",
+    label: "What does this code do?",
+    question:
+      "What does this code do, and how does it contribute to the pull request?",
+  },
+  {
+    code: "Digit2",
+    key: "2",
+    label: "Why was this changed?",
+    question:
+      "Why was this code changed, and what behavior is different from before?",
+  },
+  {
+    code: "Digit3",
+    key: "3",
+    label: "What should I review closely?",
+    question:
+      "What should I pay closest attention to while reviewing this code?",
+  },
+] as const;
+
+const AI_CONVERSATION_VISIBILITY_KEY = "reviewduck:ai-conversation-visibility";
+
+export interface AiConversationVisibility {
+  line: number;
+  threadId?: string;
+}
+
+/** Reads the last explicit visibility state for a unit's AI conversation. */
+export function aiConversationVisibility(
+  storage: Pick<Storage, "getItem">,
+  pullRequestId: string,
+  unitId: string,
+) {
+  try {
+    const stored = storage.getItem(
+      `${AI_CONVERSATION_VISIBILITY_KEY}:${pullRequestId}`,
+    );
+    if (!stored) return undefined;
+    const value = JSON.parse(stored) as Record<string, unknown>;
+    if (!Object.hasOwn(value, unitId)) return undefined;
+    const visibility = value[unitId];
+    if (visibility === null) return null;
+    if (
+      typeof visibility === "object" &&
+      "line" in visibility &&
+      typeof visibility.line === "number" &&
+      Number.isInteger(visibility.line) &&
+      visibility.line > 0 &&
+      (!("threadId" in visibility) ||
+        visibility.threadId === undefined ||
+        typeof visibility.threadId === "string")
+    ) {
+      return visibility as AiConversationVisibility;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Persists whether and where a unit's AI conversation is open. */
+export function rememberAiConversationVisibility(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  pullRequestId: string,
+  unitId: string,
+  line: number | null,
+  threadId?: string,
+) {
+  try {
+    const key = `${AI_CONVERSATION_VISIBILITY_KEY}:${pullRequestId}`;
+    const stored = storage.getItem(key);
+    const value = stored
+      ? (JSON.parse(stored) as Record<
+          string,
+          AiConversationVisibility | number | null
+        >)
+      : {};
+    value[unitId] = line === null ? null : { line, threadId };
+    storage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Browser privacy settings can make local storage unavailable.
+  }
+}
+
+/** Finds the nearest rendered review line to a vertical pointer coordinate. */
+function nearestRenderedReviewLine(
+  clientY: number,
+  minimumLine: number,
+  maximumLine: number,
+) {
+  let nearest: { distance: number; line: number } | undefined;
+  const seen = new Set<number>();
+  for (const element of document.querySelectorAll<HTMLElement>(
+    '[id^="review-line-"]',
+  )) {
+    const line = Number(element.id.replace("review-line-", ""));
+    if (
+      !Number.isInteger(line) ||
+      line < minimumLine ||
+      line > maximumLine ||
+      seen.has(line)
+    ) {
+      continue;
+    }
+    seen.add(line);
+    const bounds = element.getBoundingClientRect();
+    const distance = Math.abs(clientY - (bounds.top + bounds.height / 2));
+    if (!nearest || distance < nearest.distance) nearest = { distance, line };
+  }
+  return nearest?.line;
+}
+
+/** Renders a line-anchored AI conversation that can move through review scope. */
+export function InlineAiQuestion({
+  autoFocus = true,
+  canAsk,
+  draft,
+  entries,
+  line,
+  maximumLine,
+  minimumLine,
+  onAsk,
+  onChange,
+  onClose,
+  onDeleteThread,
+  onMove,
+  onPreview,
+  onPublishProposal,
+  onStep,
+  providerName = "provider",
 }: {
-  disabled?: boolean;
-  fullWidth?: boolean;
-  items: AiActionMenuItem[];
+  autoFocus?: boolean;
+  canAsk: boolean;
+  draft: string;
+  entries: AiQuestionEntry[];
+  line: number;
+  maximumLine: number;
+  minimumLine: number;
+  onAsk: (question?: string) => void;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onDeleteThread?: (jobIds: string[]) => Promise<void>;
+  onMove: (line: number) => void;
+  onPreview: (line?: number) => void;
+  onPublishProposal?: (input: {
+    aiCommentIndex: number;
+    aiJobId: string;
+    body: string;
+    line: number;
+  }) => Promise<void>;
+  onStep: (direction: -1 | 1) => void;
+  providerName?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const previewLine = useRef(line);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const clearDragListeners = useRef<() => void>(() => undefined);
+  const [proposalDrafts, setProposalDrafts] = useState<Record<string, string>>(
+    {},
+  );
+  const [publishingProposal, setPublishingProposal] = useState<string>();
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingThread, setDeletingThread] = useState(false);
+  const threadInFlight = entries.some(({ status }) =>
+    ["queued", "running", "streaming"].includes(status),
+  );
+  const proposalSource = useMemo(
+    () =>
+      [...entries]
+        .reverse()
+        .find((entry) => (entry.result?.commentProposals?.length ?? 0) > 0),
+    [entries],
+  );
+  const proposals = useMemo(
+    () =>
+      (proposalSource?.result?.commentProposals ?? []).map(
+        (proposal, index) => ({
+          ...proposal,
+          aiCommentIndex: index,
+          aiJobId: proposalSource?.jobId,
+          key: `${proposalSource?.jobId ?? proposalSource?.id ?? "question"}:${index}`,
+        }),
+      ),
+    [proposalSource],
+  );
 
   useEffect(() => {
-    if (!open) return;
-    /** Closes the menu after clicking elsewhere or pressing Escape. */
-    function closeMenu(event: PointerEvent | KeyboardEvent) {
-      if (event instanceof KeyboardEvent) {
-        if (event.key === "Escape") setOpen(false);
+    if (autoFocus) input.current?.focus({ preventScroll: true });
+  }, [autoFocus]);
+
+  useEffect(() => {
+    setProposalDrafts((current) => {
+      const next = { ...current };
+      for (const proposal of proposals) {
+        if (!(proposal.key in next)) next[proposal.key] = proposal.body;
+      }
+      return next;
+    });
+  }, [proposals]);
+
+  /** Publishes one editable structured proposal through the provider workflow. */
+  const publishProposal = useCallback(
+    async (proposal: (typeof proposals)[number] | undefined) => {
+      if (
+        !proposal ||
+        proposal.published ||
+        !proposal.aiJobId ||
+        !onPublishProposal ||
+        publishingProposal
+      ) {
         return;
       }
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+      const body = (proposalDrafts[proposal.key] ?? proposal.body).trim();
+      if (!body) return;
+      setPublishingProposal(proposal.key);
+      try {
+        await onPublishProposal({
+          aiCommentIndex: proposal.aiCommentIndex,
+          aiJobId: proposal.aiJobId,
+          body,
+          line: proposal.line,
+        });
+      } finally {
+        setPublishingProposal(undefined);
+      }
+    },
+    [onPublishProposal, proposalDrafts, publishingProposal],
+  );
+
+  useEffect(() => {
+    /** Handles line movement and explicitly modified quick questions. */
+    function handleComposerShortcuts(event: KeyboardEvent) {
+      const quickQuestion = AI_QUICK_QUESTIONS.find(
+        ({ code }) => code === event.code,
+      );
+      if (
+        quickQuestion &&
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        !event.altKey &&
+        (entries.length > 0 || canAsk)
+      ) {
+        const target = event.target;
+        const editingElsewhere =
+          target instanceof HTMLElement &&
+          (target.matches("input, textarea, select, [contenteditable=true]") ||
+            target.isContentEditable) &&
+          !target.closest("#inline-ai-question");
+        if (editingElsewhere) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (entries.length === 0) {
+          onAsk(quickQuestion.question);
+        } else {
+          void publishProposal(proposals[Number(quickQuestion.key) - 1]);
+        }
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onStep(event.key === "ArrowUp" ? -1 : 1);
     }
-    document.addEventListener("pointerdown", closeMenu);
-    document.addEventListener("keydown", closeMenu);
-    return () => {
-      document.removeEventListener("pointerdown", closeMenu);
-      document.removeEventListener("keydown", closeMenu);
-    };
-  }, [open]);
+
+    window.addEventListener("keydown", handleComposerShortcuts, true);
+    return () =>
+      window.removeEventListener("keydown", handleComposerShortcuts, true);
+  }, [canAsk, entries.length, onAsk, onStep, proposals, publishProposal]);
+
+  useEffect(
+    () => () => {
+      clearDragListeners.current();
+    },
+    [],
+  );
+
+  /** Begins a window-tracked drag so the handle remains responsive off-target. */
+  function beginDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearDragListeners.current();
+    previewLine.current = line;
+    onPreview(line);
+    const pointerId = event.pointerId;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+
+    /** Removes global drag listeners and restores document interaction styles. */
+    function cleanupDrag() {
+      window.removeEventListener("pointermove", previewDrag, true);
+      window.removeEventListener("pointerup", finishDrag, true);
+      window.removeEventListener("pointercancel", cancelDrag, true);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      clearDragListeners.current = () => undefined;
+    }
+
+    /** Previews the closest rendered in-scope line beneath the pointer. */
+    function previewDrag(pointerEvent: PointerEvent) {
+      if (pointerEvent.pointerId !== pointerId) return;
+      pointerEvent.preventDefault();
+      const nearest = nearestRenderedReviewLine(
+        pointerEvent.clientY,
+        minimumLine,
+        maximumLine,
+      );
+      if (nearest === undefined || nearest === previewLine.current) return;
+      previewLine.current = nearest;
+      onPreview(nearest);
+    }
+
+    /** Commits the previewed line after a completed drag. */
+    function finishDrag(pointerEvent: PointerEvent) {
+      if (pointerEvent.pointerId !== pointerId) return;
+      pointerEvent.preventDefault();
+      cleanupDrag();
+      onPreview(undefined);
+      onMove(previewLine.current);
+    }
+
+    /** Cancels the gesture without changing the question's anchor. */
+    function cancelDrag(pointerEvent: PointerEvent) {
+      if (pointerEvent.pointerId !== pointerId) return;
+      cleanupDrag();
+      onPreview(undefined);
+    }
+
+    clearDragListeners.current = cleanupDrag;
+    window.addEventListener("pointermove", previewDrag, true);
+    window.addEventListener("pointerup", finishDrag, true);
+    window.addEventListener("pointercancel", cancelDrag, true);
+  }
 
   return (
-    <div
-      ref={menuRef}
-      className={cn("relative shrink-0", fullWidth && "w-full")}
+    <article
+      id="inline-ai-question"
+      className="border-violet/25 bg-panel relative mx-4 my-3 ml-[71px] overflow-hidden rounded-xl border font-sans shadow-[0_14px_40px_var(--app-shadow)]"
     >
-      <Button
-        size="sm"
-        variant="secondary"
-        className={cn(fullWidth && "w-full justify-between")}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="flex items-center gap-2">
-          <Sparkles className="size-3.5" />
-          AI assistance
+      <span className="bg-violet absolute inset-y-0 left-0 w-0.5" />
+      <header className="flex items-center gap-2 border-b border-violet/15 px-3 py-2">
+        <span className="bg-violet/10 text-violet grid size-6 place-items-center rounded-md">
+          <Sparkles className="size-3.5" aria-hidden="true" />
         </span>
-        <span className="flex items-center gap-2">
-          <ShortcutHint shortcut={reviewShortcuts.explainMenu} />
-          <ChevronDown
-            className={cn("size-3 transition-transform", open && "rotate-180")}
-          />
+        <span className="text-cloud text-[10px] font-medium">
+          Ask AI about line {line}
         </span>
-      </Button>
-      {open && (
-        <div
-          role="menu"
-          aria-label="AI review actions"
-          className="bg-panel absolute top-[calc(100%+0.5rem)] right-0 z-50 w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-line-strong p-1.5 shadow-2xl shadow-black/20"
+        <button
+          type="button"
+          aria-label="Drag AI question to another line"
+          title="Drag up or down to focus another in-scope line"
+          className="text-fog hover:bg-violet/10 hover:text-violet ml-auto flex touch-none cursor-ns-resize items-center gap-1 rounded-md px-2 py-1 text-[9px] transition"
+          onPointerDown={beginDrag}
         >
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              disabled={item.disabled}
-              onClick={() => {
-                setOpen(false);
-                item.onSelect();
-              }}
-              className="hover:bg-surface-hover focus-visible:bg-surface-hover flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition outline-none disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              <span className="text-violet mt-0.5 grid size-5 shrink-0 place-items-center">
-                {item.loading ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="size-3.5" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="text-cloud block text-xs font-medium">
-                  {item.label}
+          <span className="hidden sm:inline">Drag</span>
+          <GripVertical className="size-3.5" />
+        </button>
+        <div className="flex items-center">
+          <button
+            type="button"
+            aria-label="Move AI question one line up"
+            disabled={line <= minimumLine}
+            onClick={() => onStep(-1)}
+            className="text-fog hover:text-cloud rounded p-1 transition disabled:opacity-30"
+          >
+            <ChevronDown className="size-3 rotate-180" />
+          </button>
+          <button
+            type="button"
+            aria-label="Move AI question one line down"
+            disabled={line >= maximumLine}
+            onClick={() => onStep(1)}
+            className="text-fog hover:text-cloud rounded p-1 transition disabled:opacity-30"
+          >
+            <ChevronDown className="size-3" />
+          </button>
+        </div>
+        {entries.length > 0 && onDeleteThread && (
+          <button
+            type="button"
+            aria-label="Delete AI conversation"
+            title={
+              threadInFlight
+                ? "Wait for the current answer to finish"
+                : "Delete AI conversation"
+            }
+            disabled={threadInFlight}
+            onClick={() => setDeleteDialogOpen(true)}
+            className="text-fog hover:bg-red-500/10 hover:text-red-600 rounded p-1 transition disabled:cursor-not-allowed disabled:opacity-30 dark:hover:text-red-300"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label="Close AI question"
+          onClick={onClose}
+          className="text-fog hover:text-cloud rounded p-1 transition"
+        >
+          <X className="size-3.5" />
+        </button>
+      </header>
+      {entries.length > 0 && (
+        <div className="grid gap-4 border-b border-violet/15 px-3 py-3">
+          {entries.map((entry) => (
+            <div key={entry.id} className="grid gap-3">
+              <div className="flex justify-end">
+                <p className="bg-surface-subtle text-cloud max-w-[88%] rounded-xl rounded-br-sm px-3 py-2 text-[11px] leading-5">
+                  {entry.question}
+                </p>
+              </div>
+              <div
+                aria-live="polite"
+                className="text-mist flex min-w-0 items-start gap-2.5 text-[11px] leading-5"
+              >
+                <span className="bg-violet/10 text-violet mt-0.5 grid size-6 shrink-0 place-items-center rounded-md">
+                  <Sparkles className="size-3.5" aria-hidden="true" />
                 </span>
-                <span className="text-fog mt-0.5 block text-[10px] leading-4">
-                  {item.description}
-                </span>
-              </span>
-              <ShortcutHint shortcut={item.shortcut} className="mt-0.5" />
-            </button>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className="text-cloud text-[10px] font-medium">
+                      ReviewDuck AI
+                    </span>
+                    {entry.status !== "completed" &&
+                      entry.status !== "failed" && (
+                        <span className="text-violet flex items-center gap-1.5 text-[9px]">
+                          <LoaderCircle className="size-2.5 animate-spin" />
+                          {entry.progress ?? "Reading review context…"}
+                        </span>
+                      )}
+                  </div>
+                  {entry.result?.summary ? (
+                    <div className="relative">
+                      <ProviderCommentBody
+                        body={entry.result.summary}
+                        className="mt-0 max-w-none text-[11px] leading-5"
+                      />
+                      {entry.status === "streaming" && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="bg-violet ml-0.5 inline-block h-3.5 w-0.5 animate-pulse align-[-2px]"
+                          />
+                          <span className="sr-only">AI is writing</span>
+                        </>
+                      )}
+                    </div>
+                  ) : entry.status === "failed" ? (
+                    <div className="border-red-500/20 bg-red-500/[.045] rounded-lg border px-3 py-2 text-red-700 dark:text-red-200">
+                      <p className="font-medium">Answer interrupted</p>
+                      <p className="mt-0.5 text-[10px] opacity-85">
+                        {entry.error ??
+                          "The AI question could not be answered."}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid max-w-xl gap-1.5 py-1">
+                      <span className="bg-violet/10 h-2 w-[78%] animate-pulse rounded-full" />
+                      <span className="bg-violet/[.07] h-2 w-[58%] animate-pulse rounded-full [animation-delay:120ms]" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           ))}
         </div>
       )}
-    </div>
+      {proposals.length > 0 && (
+        <section
+          aria-label="Suggested pull request comments"
+          className="grid gap-2 border-b border-violet/15 bg-violet/[.025] px-3 py-3"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-violet text-[9px] font-semibold tracking-[.12em] uppercase">
+                Suggested PR comments
+              </p>
+              <p className="text-fog mt-0.5 text-[9px]">
+                ReviewDuck found something concrete enough to raise with the
+                author.
+              </p>
+            </div>
+            <Badge>{proposals.length}</Badge>
+          </div>
+          {proposals.map((proposal, index) => {
+            const publishing = publishingProposal === proposal.key;
+            const body = proposalDrafts[proposal.key] ?? proposal.body;
+            return (
+              <article
+                key={proposal.key}
+                className="border-violet/15 bg-surface/60 rounded-lg border p-2.5"
+              >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-cloud text-[10px] font-medium">
+                    Comment {index + 1} · line {proposal.line}
+                  </p>
+                  {index < 3 && !proposal.published && (
+                    <ShortcutHint
+                      shortcut={[
+                        {
+                          key: String(index + 1),
+                          mod: true,
+                          shift: true,
+                        },
+                      ]}
+                    />
+                  )}
+                </div>
+                <textarea
+                  aria-label={`Edit suggested PR comment ${index + 1}`}
+                  value={body}
+                  disabled={proposal.published || publishing}
+                  rows={3}
+                  onChange={(event) =>
+                    setProposalDrafts((current) => ({
+                      ...current,
+                      [proposal.key]: event.target.value,
+                    }))
+                  }
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      (event.metaKey || event.ctrlKey)
+                    ) {
+                      event.preventDefault();
+                      void publishProposal(proposal);
+                    }
+                  }}
+                  className="bg-panel text-cloud focus:border-violet/40 w-full resize-y rounded-lg border border-line px-3 py-2 text-[11px] leading-5 outline-none disabled:opacity-65"
+                />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-fog text-[9px]">
+                    Editable · posts inline to {providerName}
+                  </p>
+                  {proposal.published ? (
+                    <Badge className="border-lime/20 bg-lime/8 text-lime">
+                      Published
+                    </Badge>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={
+                        !proposal.aiJobId ||
+                        !onPublishProposal ||
+                        !body.trim() ||
+                        Boolean(publishingProposal)
+                      }
+                      onClick={() => void publishProposal(proposal)}
+                    >
+                      {publishing ? (
+                        <LoaderCircle className="size-3 animate-spin" />
+                      ) : (
+                        <Send className="size-3" />
+                      )}
+                      {publishing ? "Posting…" : `Post to ${providerName}`}
+                    </Button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </section>
+      )}
+      <form
+        className="p-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (canAsk && draft.trim()) onAsk();
+        }}
+      >
+        <textarea
+          ref={input}
+          aria-label={`Ask AI about line ${line}`}
+          value={draft}
+          rows={2}
+          placeholder="Ask a focused question about this code and its role in the pull request…"
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onClose();
+            } else if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              if (canAsk && draft.trim()) onAsk();
+            }
+          }}
+          className="bg-surface/70 text-cloud placeholder:text-fog min-h-16 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none transition focus:border-violet/40"
+        />
+        {entries.length === 0 && (
+          <div className="mt-2">
+            <p className="text-fog mb-1.5 text-[9px] font-medium">
+              Quick questions
+            </p>
+            <div className="grid gap-1.5 sm:grid-cols-3">
+              {AI_QUICK_QUESTIONS.map((quickQuestion) => (
+                <button
+                  key={quickQuestion.key}
+                  type="button"
+                  disabled={!canAsk}
+                  aria-label={`Quick question ${quickQuestion.key}: ${quickQuestion.label}`}
+                  onClick={() => onAsk(quickQuestion.question)}
+                  className="border-line bg-surface/40 text-mist hover:border-violet/30 hover:bg-violet/[.06] hover:text-cloud flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-[10px] transition disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ShortcutHint
+                    shortcut={[
+                      { key: quickQuestion.key, mod: true, shift: true },
+                    ]}
+                    className="shrink-0"
+                  />
+                  <span className="truncate">{quickQuestion.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p className="text-fog text-[9px]">
+            ↑ / ↓ move focus · The answer uses this unit and the full PR
+            context.
+          </p>
+          <Button
+            type="submit"
+            size="sm"
+            variant="secondary"
+            disabled={!canAsk || !draft.trim()}
+          >
+            <Send className="size-3" />
+            Ask
+            <ShortcutHint shortcut={[{ key: "Enter" }]} />
+          </Button>
+        </div>
+      </form>
+      {deleteDialogOpen && (
+        <ConfirmationDialog
+          title="Delete this AI conversation?"
+          description={
+            <>
+              The questions, answers, and unpublished suggestions in this
+              line-focused conversation will be permanently deleted. Comments
+              already published to {providerName} will remain.
+            </>
+          }
+          confirmLabel="Delete conversation"
+          confirmVariant="danger"
+          icon={<Trash2 className="size-5" />}
+          iconClassName="bg-red-500/10 text-red-600 dark:text-red-300"
+          pending={deletingThread}
+          pendingLabel={
+            <>
+              <LoaderCircle className="size-3 animate-spin" />
+              Deleting…
+            </>
+          }
+          onCancel={() => setDeleteDialogOpen(false)}
+          onConfirm={() => {
+            if (deletingThread || !onDeleteThread) return;
+            setDeletingThread(true);
+            void onDeleteThread(
+              entries.flatMap(({ jobId }) => (jobId ? [jobId] : [])),
+            )
+              .then(() => setDeleteDialogOpen(false))
+              .catch(() => undefined)
+              .finally(() => setDeletingThread(false));
+          }}
+        />
+      )}
+    </article>
   );
-}
-
-export type HighlightCache = Map<
-  string,
-  { source: string; lines: ReturnType<typeof highlightSource> }
->;
-
-/** Stores a highlighted unit while keeping review-workspace memory bounded. */
-export function cacheHighlightedUnit(
-  cache: HighlightCache,
-  unitId: string,
-  source: string,
-  lines: ReturnType<typeof highlightSource>,
-) {
-  cache.delete(unitId);
-  cache.set(unitId, { source, lines });
-  while (cache.size > HIGHLIGHT_CACHE_SIZE) {
-    const oldestUnitId = cache.keys().next().value;
-    if (!oldestUnitId) break;
-    cache.delete(oldestUnitId);
-  }
 }
 
 /** Renders reusable syntax-highlighted tokens for static and interactive rows. */
 function HighlightedDiffTokens({
   line,
 }: {
-  line: ReturnType<typeof highlightSource>[number] | undefined;
+  line: HighlightedLine | undefined;
 }) {
   return line?.tokens.length
     ? line.tokens.map((token, index) => (
@@ -234,11 +819,7 @@ function HighlightedDiffTokens({
 }
 
 /** Renders one syntax-highlighted line without adding a second code block. */
-function HighlightedDiffLine({
-  line,
-}: {
-  line: ReturnType<typeof highlightSource>[number] | undefined;
-}) {
+function HighlightedDiffLine({ line }: { line: HighlightedLine | undefined }) {
   return (
     <pre className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
       <HighlightedDiffTokens line={line} />
@@ -246,27 +827,54 @@ function HighlightedDiffLine({
   );
 }
 
-/** Reveals another page beyond the currently focused diff unit. */
-function DiffExternalContextButton({
+/** Reveals the next page beyond the unit edge, including any deferred edge gap. */
+function DiffEdgeRevealButton({
   direction,
-  remaining,
+  collapsedRemaining,
+  externalRemaining,
   onReveal,
 }: {
   direction: -1 | 1;
-  remaining: number;
+  collapsedRemaining: number;
+  externalRemaining: number;
   onReveal: () => void;
 }) {
-  const pageSize = Math.min(DIFF_CONTEXT_PAGE_LINES, remaining);
+  const totalRemaining = collapsedRemaining + externalRemaining;
+  if (totalRemaining <= 0) return null;
+  const pageSize = Math.min(DIFF_CONTEXT_PAGE_LINES, totalRemaining);
+  const directionLabel = direction === -1 ? "above" : "below";
+  const ariaLabel =
+    collapsedRemaining > 0 && externalRemaining > 0
+      ? `Show more lines ${directionLabel}`
+      : collapsedRemaining > 0
+        ? `Show ${pageSize} more lines ${directionLabel}`
+        : `Show ${pageSize} lines ${directionLabel}`;
   return (
     <button
       type="button"
-      aria-label={`Show ${pageSize} lines ${direction === -1 ? "above" : "below"}`}
+      aria-label={ariaLabel}
       onClick={onReveal}
-      className="text-fog hover:text-cloud flex w-full items-center justify-center gap-2 border-y border-line/70 bg-surface-subtle/55 px-3 py-2 font-sans text-[10px] transition"
+      className="text-fog hover:text-cloud flex w-full items-center justify-center gap-2 border-y border-line/50 bg-surface-subtle/40 px-3 py-1.5 font-sans text-[10px] transition"
     >
       <ChevronDown className={cn("size-3", direction === -1 && "rotate-180")} />
-      Show {pageSize} lines {direction === -1 ? "above" : "below"}
-      <span className="text-mist">({remaining} available)</span>
+      {collapsedRemaining > 0 && externalRemaining > 0 ? (
+        <>
+          Show more {directionLabel}
+          <span className="text-mist">
+            next {pageSize} of {totalRemaining}
+          </span>
+        </>
+      ) : collapsedRemaining > 0 ? (
+        <>
+          Show {pageSize} more lines {directionLabel}
+          <span className="text-mist">({collapsedRemaining} hidden)</span>
+        </>
+      ) : (
+        <>
+          Show {pageSize} lines {directionLabel}
+          <span className="text-mist">of {externalRemaining}</span>
+        </>
+      )}
     </button>
   );
 }
@@ -307,6 +915,8 @@ interface SideBySideUnitDiffProps {
   language: string;
   previousStartLine: number;
   currentStartLine: number;
+  previousFocusRanges?: Array<{ startLine: number; endLine: number }>;
+  currentFocusRanges?: Array<{ startLine: number; endLine: number }>;
   previousFocusStartLine?: number | null;
   previousFocusEndLine?: number | null;
   currentFocusStartLine?: number | null;
@@ -353,6 +963,8 @@ export const SideBySideUnitDiff = forwardRef<
     language,
     previousStartLine,
     currentStartLine,
+    previousFocusRanges,
+    currentFocusRanges,
     previousFocusStartLine,
     previousFocusEndLine,
     currentFocusStartLine,
@@ -364,37 +976,62 @@ export const SideBySideUnitDiff = forwardRef<
   },
   ref,
 ) {
-  const previousLines = useMemo(
-    () => highlightSource(previousSource, language),
-    [language, previousSource],
-  );
-  const currentLines = useMemo(
-    () => highlightSource(currentSource, language),
-    [currentSource, language],
-  );
+  const previousLines = useHighlightedSource(previousSource, language);
+  const currentLines = useHighlightedSource(currentSource, language);
   const rows = useMemo(
     () => sideBySideDiff(previousSource, currentSource),
     [currentSource, previousSource],
   );
   const focusRange = useMemo(() => {
+    const previousRanges =
+      previousFocusRanges ??
+      (previousFocusStartLine === null
+        ? []
+        : [
+            {
+              startLine: previousFocusStartLine ?? previousStartLine,
+              endLine:
+                previousFocusEndLine ??
+                previousStartLine + Math.max(0, previousLines.length - 1),
+            },
+          ]);
+    const currentRanges =
+      currentFocusRanges ??
+      (currentFocusStartLine === null
+        ? []
+        : [
+            {
+              startLine: currentFocusStartLine ?? currentStartLine,
+              endLine:
+                currentFocusEndLine ??
+                currentStartLine + Math.max(0, currentLines.length - 1),
+            },
+          ]);
     const previousStart =
-      previousFocusStartLine === null
-        ? undefined
-        : (previousFocusStartLine ?? previousStartLine);
+      previousRanges.length > 0
+        ? Math.min(...previousRanges.map(({ startLine }) => startLine))
+        : undefined;
     const previousEnd =
-      previousFocusEndLine === null || previousStart === undefined
-        ? undefined
-        : (previousFocusEndLine ??
-          previousStartLine + Math.max(0, previousLines.length - 1));
+      previousRanges.length > 0
+        ? Math.max(...previousRanges.map(({ endLine }) => endLine))
+        : undefined;
     const currentStart =
-      currentFocusStartLine === null
-        ? undefined
-        : (currentFocusStartLine ?? currentStartLine);
+      currentRanges.length > 0
+        ? Math.min(...currentRanges.map(({ startLine }) => startLine))
+        : undefined;
     const currentEnd =
-      currentFocusEndLine === null || currentStart === undefined
-        ? undefined
-        : (currentFocusEndLine ??
-          currentStartLine + Math.max(0, currentLines.length - 1));
+      currentRanges.length > 0
+        ? Math.max(...currentRanges.map(({ endLine }) => endLine))
+        : undefined;
+    /** Checks whether one diff-side line belongs to any focused range. */
+    const isFocusedLine = (
+      line: number | undefined,
+      ranges: Array<{ startLine: number; endLine: number }>,
+    ) =>
+      line !== undefined &&
+      ranges.some(
+        ({ startLine, endLine }) => line >= startLine && line <= endLine,
+      );
     const focusedIndexes = rows.flatMap((row, rowIndex) => {
       const previousLine =
         row.previousIndex === undefined
@@ -404,16 +1041,8 @@ export const SideBySideUnitDiff = forwardRef<
         row.currentIndex === undefined
           ? undefined
           : currentStartLine + row.currentIndex;
-      return (previousLine !== undefined &&
-        previousStart !== undefined &&
-        previousEnd !== undefined &&
-        previousLine >= previousStart &&
-        previousLine <= previousEnd) ||
-        (currentLine !== undefined &&
-          currentStart !== undefined &&
-          currentEnd !== undefined &&
-          currentLine >= currentStart &&
-          currentLine <= currentEnd)
+      return isFocusedLine(previousLine, previousRanges) ||
+        isFocusedLine(currentLine, currentRanges)
         ? [rowIndex]
         : [];
     });
@@ -424,13 +1053,17 @@ export const SideBySideUnitDiff = forwardRef<
       previousEnd,
       currentStart,
       currentEnd,
+      previousRanges,
+      currentRanges,
     };
   }, [
     currentFocusEndLine,
+    currentFocusRanges,
     currentFocusStartLine,
     currentLines.length,
     currentStartLine,
     previousFocusEndLine,
+    previousFocusRanges,
     previousFocusStartLine,
     previousLines.length,
     previousStartLine,
@@ -448,6 +1081,8 @@ export const SideBySideUnitDiff = forwardRef<
     [rows, visibleRowEnd, visibleRowStart],
   );
   const hasExplicitFocus =
+    previousFocusRanges !== undefined ||
+    currentFocusRanges !== undefined ||
     previousFocusStartLine !== undefined ||
     previousFocusEndLine !== undefined ||
     currentFocusStartLine !== undefined ||
@@ -456,76 +1091,85 @@ export const SideBySideUnitDiff = forwardRef<
   const explicitFocusHasDiff = focusedRows.some(
     (row) => row.kind !== "unchanged",
   );
-  const compactRows = useMemo(
-    () =>
-      compactSideBySideDiff(
-        visibleRows,
-        3,
-        hasExplicitFocus && !explicitFocusHasDiff
-          ? {
-              start: focusRange.start - visibleRowStart,
-              end: focusRange.end - visibleRowStart,
-            }
+  const compactRows = useMemo(() => {
+    const focusStart = Math.max(0, focusRange.start - visibleRowStart);
+    const focusEnd = Math.min(
+      visibleRows.length,
+      Math.max(focusStart, focusRange.end - visibleRowStart),
+    );
+    const hasFocusWindow = hasExplicitFocus && focusEnd > focusStart;
+    return compactSideBySideDiff(visibleRows, 3, {
+      // Keep undiffed focus windows fully expanded.
+      requiredRange:
+        hasFocusWindow && !explicitFocusHasDiff
+          ? { start: focusStart, end: focusEnd }
           : undefined,
-      ),
-    [
-      focusRange.end,
-      focusRange.start,
-      hasExplicitFocus,
-      explicitFocusHasDiff,
-      visibleRowStart,
-      visibleRows,
-    ],
-  );
+      // Never recollapse paged surrounding file context — that yanks scroll.
+      collapseWithin: hasFocusWindow
+        ? { start: focusStart, end: focusEnd }
+        : undefined,
+      // Keep unit edges visible so trail compact never stacks with "show below".
+      pinRangeEnds: hasFocusWindow && explicitFocusHasDiff ? 2 : 0,
+    });
+  }, [
+    explicitFocusHasDiff,
+    focusRange.end,
+    focusRange.start,
+    hasExplicitFocus,
+    visibleRowStart,
+    visibleRows,
+  ]);
   const [revealedGapLines, setRevealedGapLines] = useState<Map<string, number>>(
     () => new Map(),
   );
-  useImperativeHandle(
-    ref,
-    () => ({
-      revealContext(direction) {
-        const gap = compactRows
-          .filter((item) => item.kind === "collapsed")
-          .find((item) =>
-            direction === -1
-              ? item.rowStart === 0
-              : item.rowEnd === visibleRows.length,
-          );
-        if (gap) {
-          const key = `${visibleRowStart + gap.rowStart}-${visibleRowStart + gap.rowEnd}`;
-          if ((revealedGapLines.get(key) ?? 0) < gap.count) {
-            setRevealedGapLines((current) => {
-              const next = new Map(current);
-              next.set(
-                key,
-                Math.min(
-                  gap.count,
-                  (current.get(key) ?? 0) + DIFF_CONTEXT_PAGE_LINES,
-                ),
-              );
-              return next;
-            });
-            return true;
-          }
-        }
-        if (direction === -1 && visibleRowStart > 0) {
-          setContextBeforeRows((current) =>
-            Math.min(focusRange.start, current + DIFF_CONTEXT_PAGE_LINES),
-          );
+  const revealEdge = useCallback(
+    (direction: -1 | 1) => {
+      const collapsedGaps = compactRows.filter(
+        (
+          item,
+        ): item is Extract<
+          (typeof compactRows)[number],
+          { kind: "collapsed" }
+        > => item.kind === "collapsed",
+      );
+      // Expand the collapse nearest the edge being scrolled, so pinned unit
+      // ends still let ArrowUp/Down unfold the interior toward that edge.
+      const gap = direction === -1 ? collapsedGaps[0] : collapsedGaps.at(-1);
+      if (gap) {
+        const key = `${visibleRowStart + gap.rowStart}-${visibleRowStart + gap.rowEnd}`;
+        const revealed = revealedGapLines.get(key) ?? 0;
+        if (revealed < gap.count) {
+          setRevealedGapLines((current) => {
+            const next = new Map(current);
+            next.set(
+              key,
+              Math.min(
+                gap.count,
+                (current.get(key) ?? 0) + DIFF_CONTEXT_PAGE_LINES,
+              ),
+            );
+            return next;
+          });
           return true;
         }
-        if (direction === 1 && visibleRowEnd < rows.length) {
-          setContextAfterRows((current) =>
-            Math.min(
-              rows.length - focusRange.end,
-              current + DIFF_CONTEXT_PAGE_LINES,
-            ),
-          );
-          return true;
-        }
-        return false;
-      },
-    }),
+      }
+      if (direction === -1 && visibleRowStart > 0) {
+        setContextBeforeRows((current) =>
+          Math.min(focusRange.start, current + DIFF_CONTEXT_PAGE_LINES),
+        );
+        return true;
+      }
+      if (direction === 1 && visibleRowEnd < rows.length) {
+        setContextAfterRows((current) =>
+          Math.min(
+            rows.length - focusRange.end,
+            current + DIFF_CONTEXT_PAGE_LINES,
+          ),
+        );
+        return true;
+      }
+      return false;
+    },
     [
       compactRows,
       focusRange.end,
@@ -533,9 +1177,20 @@ export const SideBySideUnitDiff = forwardRef<
       revealedGapLines,
       rows.length,
       visibleRowEnd,
-      visibleRows.length,
       visibleRowStart,
     ],
+  );
+  // File-context paging only — unit interior uses in-flow collapse buttons.
+  const leadingCollapsedRemaining = 0;
+  const trailingCollapsedRemaining = 0;
+  useImperativeHandle(
+    ref,
+    () => ({
+      revealContext(direction) {
+        return revealEdge(direction);
+      },
+    }),
+    [revealEdge],
   );
   const displayItems = useMemo(
     () =>
@@ -554,18 +1209,10 @@ export const SideBySideUnitDiff = forwardRef<
             }));
         }
 
-        const leading = item.rowStart === 0;
-        const trailing = item.rowEnd === rows.length;
-        const revealedBefore = leading
-          ? 0
-          : trailing
-            ? revealed
-            : Math.ceil(revealed / 2);
-        const revealedAfter = leading
-          ? revealed
-          : trailing
-            ? 0
-            : Math.floor(revealed / 2);
+        // Expand from the side nearest the change neighborhood defaults
+        // kept: reveal symmetrically inside unit interior collapses.
+        const revealedBefore = Math.ceil(revealed / 2);
+        const revealedAfter = Math.floor(revealed / 2);
         const before = visibleRows
           .slice(item.rowStart, item.rowStart + revealedBefore)
           .map((row, index) => ({
@@ -583,7 +1230,7 @@ export const SideBySideUnitDiff = forwardRef<
           }));
         return [...before, item, ...after];
       }),
-    [compactRows, revealedGapLines, visibleRowStart, visibleRows, rows.length],
+    [compactRows, revealedGapLines, visibleRowStart, visibleRows],
   );
   const additionOnly =
     focusedRows.length > 0 && focusedRows.every((row) => row.kind === "added");
@@ -600,10 +1247,10 @@ export const SideBySideUnitDiff = forwardRef<
         : currentStartLine + row.currentIndex;
     if (
       currentLine !== undefined &&
-      focusRange.currentStart !== undefined &&
-      focusRange.currentEnd !== undefined &&
-      currentLine >= focusRange.currentStart &&
-      currentLine <= focusRange.currentEnd
+      focusRange.currentRanges.some(
+        ({ startLine, endLine }) =>
+          currentLine >= startLine && currentLine <= endLine,
+      )
     ) {
       return currentLine;
     }
@@ -612,13 +1259,14 @@ export const SideBySideUnitDiff = forwardRef<
         ? undefined
         : previousStartLine + row.previousIndex;
     return previousLine !== undefined &&
-      focusRange.previousStart !== undefined &&
-      focusRange.previousEnd !== undefined &&
-      previousLine >= focusRange.previousStart &&
-      previousLine <= focusRange.previousEnd
+      focusRange.previousRanges.some(
+        ({ startLine, endLine }) =>
+          previousLine >= startLine && previousLine <= endLine,
+      )
       ? previousLine
       : undefined;
   }
+  const renderedDetailLines = new Set<number>();
 
   if (additionOnly) {
     return (
@@ -629,17 +1277,16 @@ export const SideBySideUnitDiff = forwardRef<
         <div className="text-fog sticky top-0 z-10 border-b border-line bg-panel/95 px-4 py-2 font-sans text-[9px] font-semibold tracking-[.12em] uppercase backdrop-blur">
           Pull request
         </div>
-        {visibleRowStart > 0 && (
-          <DiffExternalContextButton
+        {visibleRowStart > 0 || leadingCollapsedRemaining > 0 ? (
+          <DiffEdgeRevealButton
             direction={-1}
-            remaining={visibleRowStart}
-            onReveal={() =>
-              setContextBeforeRows((current) =>
-                Math.min(focusRange.start, current + DIFF_CONTEXT_PAGE_LINES),
-              )
-            }
+            collapsedRemaining={leadingCollapsedRemaining}
+            externalRemaining={visibleRowStart}
+            onReveal={() => {
+              revealEdge(-1);
+            }}
           />
-        )}
+        ) : null}
         {displayItems.map((item) => {
           if (item.kind === "collapsed") {
             const absoluteStart = visibleRowStart + item.rowStart;
@@ -677,6 +1324,9 @@ export const SideBySideUnitDiff = forwardRef<
               ? undefined
               : currentLines[row.currentIndex];
           const reviewLine = reviewLineForRow(row);
+          const rendersLineDetails =
+            reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
+          if (rendersLineDetails) renderedDetailLines.add(reviewLine);
           const interactive = reviewLine !== undefined;
           const absoluteRowIndex = visibleRowStart + item.rowIndex;
           const isContextRow = reviewLine === undefined;
@@ -706,9 +1356,7 @@ export const SideBySideUnitDiff = forwardRef<
                     }
                   : {})}
                 id={
-                  reviewLine === undefined
-                    ? undefined
-                    : `review-line-${reviewLine}`
+                  !rendersLineDetails ? undefined : `review-line-${reviewLine}`
                 }
                 data-review-scope={isContextRow ? "context" : "unit"}
                 className={cn(
@@ -743,27 +1391,23 @@ export const SideBySideUnitDiff = forwardRef<
                   <HighlightedDiffTokens line={line} />
                 </span>
               </LineContainer>
-              {reviewLine !== undefined && renderLineDetails?.(reviewLine)}
+              {rendersLineDetails && renderLineDetails?.(reviewLine)}
               {endsScope && (
                 <ReviewScopeMarker edge="end" line={scopeEndLine} />
               )}
             </Fragment>
           );
         })}
-        {visibleRowEnd < rows.length && (
-          <DiffExternalContextButton
+        {visibleRowEnd < rows.length || trailingCollapsedRemaining > 0 ? (
+          <DiffEdgeRevealButton
             direction={1}
-            remaining={rows.length - visibleRowEnd}
-            onReveal={() =>
-              setContextAfterRows((current) =>
-                Math.min(
-                  rows.length - focusRange.end,
-                  current + DIFF_CONTEXT_PAGE_LINES,
-                ),
-              )
-            }
+            collapsedRemaining={trailingCollapsedRemaining}
+            externalRemaining={Math.max(0, rows.length - visibleRowEnd)}
+            onReveal={() => {
+              revealEdge(1);
+            }}
           />
-        )}
+        ) : null}
       </section>
     );
   }
@@ -780,17 +1424,16 @@ export const SideBySideUnitDiff = forwardRef<
       <div className="text-fog sticky top-0 z-10 border-b border-line bg-panel/95 px-4 py-2 font-sans text-[9px] font-semibold tracking-[.12em] uppercase backdrop-blur sm:hidden">
         Changes
       </div>
-      {visibleRowStart > 0 && (
-        <DiffExternalContextButton
+      {visibleRowStart > 0 || leadingCollapsedRemaining > 0 ? (
+        <DiffEdgeRevealButton
           direction={-1}
-          remaining={visibleRowStart}
-          onReveal={() =>
-            setContextBeforeRows((current) =>
-              Math.min(focusRange.start, current + DIFF_CONTEXT_PAGE_LINES),
-            )
-          }
+          collapsedRemaining={leadingCollapsedRemaining}
+          externalRemaining={visibleRowStart}
+          onReveal={() => {
+            revealEdge(-1);
+          }}
         />
-      )}
+      ) : null}
       {displayItems.map((item) => {
         if (item.kind === "collapsed") {
           const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
@@ -834,12 +1477,22 @@ export const SideBySideUnitDiff = forwardRef<
             ? undefined
             : currentLines[row.currentIndex];
         const reviewLine = reviewLineForRow(row);
+        const rendersLineDetails =
+          reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
+        if (rendersLineDetails) renderedDetailLines.add(reviewLine);
+        const currentIsReviewLine =
+          reviewLine !== undefined &&
+          currentLineNumber !== undefined &&
+          reviewLine === currentLineNumber &&
+          focusRange.currentRanges.some(
+            ({ startLine, endLine }) =>
+              currentLineNumber >= startLine && currentLineNumber <= endLine,
+          );
         const previousIsReviewLine =
           reviewLine !== undefined &&
+          previousLineNumber !== undefined &&
           reviewLine === previousLineNumber &&
-          focusRange.currentStart === undefined;
-        const currentIsReviewLine =
-          reviewLine !== undefined && reviewLine === currentLineNumber;
+          !currentIsReviewLine;
         const absoluteRowIndex = visibleRowStart + rowIndex;
         const isContextRow = reviewLine === undefined;
         const startsScope =
@@ -856,7 +1509,7 @@ export const SideBySideUnitDiff = forwardRef<
             {startsScope && (
               <ReviewScopeMarker edge="start" line={scopeStartLine} />
             )}
-            {reviewLine !== undefined && (
+            {rendersLineDetails && (
               <span
                 id={`review-line-${reviewLine}`}
                 className="block h-0"
@@ -1130,25 +1783,21 @@ export const SideBySideUnitDiff = forwardRef<
                 </>
               )}
             </div>
-            {reviewLine !== undefined && renderLineDetails?.(reviewLine)}
+            {rendersLineDetails && renderLineDetails?.(reviewLine)}
             {endsScope && <ReviewScopeMarker edge="end" line={scopeEndLine} />}
           </Fragment>
         );
       })}
-      {visibleRowEnd < rows.length && (
-        <DiffExternalContextButton
+      {visibleRowEnd < rows.length || trailingCollapsedRemaining > 0 ? (
+        <DiffEdgeRevealButton
           direction={1}
-          remaining={rows.length - visibleRowEnd}
-          onReveal={() =>
-            setContextAfterRows((current) =>
-              Math.min(
-                rows.length - focusRange.end,
-                current + DIFF_CONTEXT_PAGE_LINES,
-              ),
-            )
-          }
+          collapsedRemaining={trailingCollapsedRemaining}
+          externalRemaining={Math.max(0, rows.length - visibleRowEnd)}
+          onReveal={() => {
+            revealEdge(1);
+          }}
         />
-      )}
+      ) : null}
     </section>
   );
 });
@@ -1528,114 +2177,265 @@ export function ExplanationLoader({ unitKind }: { unitKind: string }) {
 /** Renders file imports as relevance-aware context for the active unit. */
 export function UnitImportContext({
   fileSource,
+  previousFileSource,
   unitSource,
   language,
   unitId,
   visibleStartLine,
   visibleEndLine,
+  previousVisibleStartLine,
+  previousVisibleEndLine,
   resolvingImport,
   onFollow,
 }: {
   fileSource: string;
+  previousFileSource?: string;
   unitSource: string;
   language: string;
   unitId: string;
   visibleStartLine: number;
   visibleEndLine: number;
+  previousVisibleStartLine?: number;
+  previousVisibleEndLine?: number;
   resolvingImport?: string;
   onFollow: (reference: ImportReference) => void;
 }) {
-  const statements = useMemo(
-    () =>
-      parseImportStatements(fileSource, language).filter(
-        (statement) =>
-          statement.endLine < visibleStartLine ||
-          statement.startLine > visibleEndLine,
-      ),
-    [fileSource, language, visibleEndLine, visibleStartLine],
+  const currentStatements = useImportStatements(fileSource, language);
+  const previousStatements = useImportStatements(
+    previousFileSource ?? "",
+    language,
   );
+  const pairs = useMemo(() => {
+    const previousStart = previousVisibleStartLine ?? visibleStartLine;
+    const previousEnd = previousVisibleEndLine ?? visibleEndLine;
+    return pairImportStatements(previousStatements, currentStatements).filter(
+      (pair) => {
+        if (pair.kind === "deleted") {
+          return (
+            pair.previous.endLine < previousStart ||
+            pair.previous.startLine > previousEnd
+          );
+        }
+        return (
+          pair.current.endLine < visibleStartLine ||
+          pair.current.startLine > visibleEndLine
+        );
+      },
+    );
+  }, [
+    currentStatements,
+    previousStatements,
+    previousVisibleEndLine,
+    previousVisibleStartLine,
+    visibleEndLine,
+    visibleStartLine,
+  ]);
   const usedReferences = useMemo(
     () =>
       new Set(
-        statements
+        currentStatements
           .flatMap(({ references }) => references)
           .filter((reference) => importReferenceIsUsed(reference, unitSource))
           .map((reference) => `${reference.from}:${reference.to}`),
       ),
-    [statements, unitSource],
+    [currentStatements, unitSource],
   );
-  if (statements.length === 0) return null;
+  if (pairs.length === 0) return null;
 
   return (
     <section aria-label="Imports for this unit" className="mb-3">
-      {statements.map((statement) =>
-        highlightSource(statement.source, language).map((line, lineIndex) => {
-          const lineNumber = statement.startLine + lineIndex;
-          return (
-            <div
-              key={`${statement.from}-${lineIndex}`}
-              className="group grid grid-cols-[55px_1fr] border-l-2 border-transparent bg-surface-subtle/15 px-4 hover:bg-surface-subtle"
+      {pairs.map((pair) => (
+        <ImportContextPair
+          key={importPairKey(pair)}
+          pair={pair}
+          language={language}
+          unitId={unitId}
+          usedReferences={usedReferences}
+          resolvingImport={resolvingImport}
+          onFollow={onFollow}
+        />
+      ))}
+    </section>
+  );
+}
+
+/** Stable React key for one paired import context entry. */
+function importPairKey(pair: PairedImportStatement) {
+  if (pair.kind === "deleted") {
+    return `deleted:${pair.previous.from}:${pair.previous.to}`;
+  }
+  return `${pair.kind}:${pair.current.from}:${pair.current.to}`;
+}
+
+/** Renders one import statement, including before/after lines for rewrites. */
+function ImportContextPair({
+  pair,
+  language,
+  unitId,
+  usedReferences,
+  resolvingImport,
+  onFollow,
+}: {
+  pair: PairedImportStatement;
+  language: string;
+  unitId: string;
+  usedReferences: ReadonlySet<string>;
+  resolvingImport?: string;
+  onFollow: (reference: ImportReference) => void;
+}) {
+  if (pair.kind === "deleted") {
+    return (
+      <ImportContextStatement
+        statement={pair.previous}
+        language={language}
+        unitId={unitId}
+        tone="deleted"
+        usedReferences={usedReferences}
+        interactive={false}
+        resolvingImport={resolvingImport}
+        onFollow={onFollow}
+      />
+    );
+  }
+  return (
+    <>
+      {pair.previous && pair.kind === "modified" && (
+        <ImportContextStatement
+          statement={pair.previous}
+          language={language}
+          unitId={unitId}
+          tone="deleted"
+          usedReferences={usedReferences}
+          interactive={false}
+          resolvingImport={resolvingImport}
+          onFollow={onFollow}
+        />
+      )}
+      <ImportContextStatement
+        statement={pair.current}
+        language={language}
+        unitId={unitId}
+        tone={pair.kind === "unchanged" ? "context" : "added"}
+        usedReferences={usedReferences}
+        interactive
+        resolvingImport={resolvingImport}
+        onFollow={onFollow}
+      />
+    </>
+  );
+}
+
+/** Renders a single import statement line block with optional change styling. */
+function ImportContextStatement({
+  statement,
+  language,
+  unitId,
+  tone,
+  usedReferences,
+  interactive,
+  resolvingImport,
+  onFollow,
+}: {
+  statement: ImportStatement;
+  language: string;
+  unitId: string;
+  tone: "context" | "added" | "deleted";
+  usedReferences: ReadonlySet<string>;
+  interactive: boolean;
+  resolvingImport?: string;
+  onFollow: (reference: ImportReference) => void;
+}) {
+  const highlightedLines = useHighlightedSource(statement.source, language);
+  return (
+    <>
+      {highlightedLines.map((line, lineIndex) => {
+        const lineNumber = statement.startLine + lineIndex;
+        return (
+          <div
+            key={`${statement.from}-${tone}-${lineIndex}`}
+            className={cn(
+              "group grid grid-cols-[55px_1fr] border-l-2 px-4",
+              tone === "added" &&
+                "border-l-addition/45 bg-addition/[.075] hover:bg-addition/[.105]",
+              tone === "deleted" &&
+                "border-l-red-400/45 bg-red-400/[.07] hover:bg-red-400/[.1]",
+              tone === "context" &&
+                "border-transparent bg-surface-subtle/15 hover:bg-surface-subtle",
+            )}
+          >
+            <span
+              className={cn(
+                "flex items-center justify-end pr-3 text-right opacity-55 select-none group-hover:opacity-80",
+                tone === "added" && "text-addition opacity-80",
+                tone === "deleted" &&
+                  "text-red-700 opacity-80 dark:text-red-200",
+                tone === "context" && "text-fog",
+              )}
             >
-              <span className="text-fog flex items-center justify-end pr-3 text-right opacity-55 select-none group-hover:opacity-80">
-                {lineNumber}
-              </span>
-              <pre className="syntax-code overflow-visible text-cloud/80">
-                {line.tokens.length
-                  ? line.tokens.map((token, tokenIndex) => {
-                      const reference = statement.references.find(
-                        (candidate) =>
-                          candidate.from - statement.from >= token.from &&
-                          candidate.to - statement.from <= token.to,
-                      );
-                      if (!reference) {
-                        return (
-                          <span
-                            key={`${tokenIndex}-${token.text.length}`}
-                            className={cn(
-                              token.className,
-                              "opacity-55 transition-opacity group-hover:opacity-80",
-                            )}
-                          >
-                            {token.text}
-                          </span>
-                        );
-                      }
-                      const referenceKey = `${reference.from}:${reference.to}`;
-                      const resolutionKey = `${unitId}:${referenceKey}`;
-                      const used = usedReferences.has(referenceKey);
+              {lineNumber}
+            </span>
+            <pre
+              className={cn(
+                "syntax-code overflow-visible text-cloud/80",
+                tone === "deleted" && "line-through opacity-80",
+              )}
+            >
+              {line.tokens.length
+                ? line.tokens.map((token, tokenIndex) => {
+                    const reference = statement.references.find(
+                      (candidate) =>
+                        candidate.from - statement.from >= token.from &&
+                        candidate.to - statement.from <= token.to,
+                    );
+                    if (!interactive || !reference) {
                       return (
-                        <button
-                          type="button"
+                        <span
                           key={`${tokenIndex}-${token.text.length}`}
-                          aria-label={`Open ${reference.local} from ${reference.specifier}`}
-                          title={
-                            used
-                              ? `Used by this unit · open ${reference.specifier}`
-                              : `Not used by this unit · open ${reference.specifier}`
-                          }
-                          disabled={resolvingImport === resolutionKey}
-                          onClick={() => onFollow(reference)}
                           className={cn(
-                            "decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
                             token.className,
-                            used
-                              ? "text-cyan opacity-100"
-                              : "opacity-55 hover:opacity-80",
-                            resolvingImport === resolutionKey &&
-                              "animate-pulse cursor-wait",
+                            tone === "context" &&
+                              "opacity-55 transition-opacity group-hover:opacity-80",
                           )}
                         >
                           {token.text}
-                        </button>
+                        </span>
                       );
-                    })
-                  : " "}
-              </pre>
-            </div>
-          );
-        }),
-      )}
-    </section>
+                    }
+                    const referenceKey = `${reference.from}:${reference.to}`;
+                    const resolutionKey = `${unitId}:${referenceKey}`;
+                    const used = usedReferences.has(referenceKey);
+                    return (
+                      <button
+                        type="button"
+                        key={`${tokenIndex}-${token.text.length}`}
+                        aria-label={`Open ${reference.local} from ${reference.specifier}`}
+                        title={
+                          used
+                            ? `Used by this unit · open ${reference.specifier}`
+                            : `Not used by this unit · open ${reference.specifier}`
+                        }
+                        disabled={resolvingImport === resolutionKey}
+                        onClick={() => onFollow(reference)}
+                        className={cn(
+                          "decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
+                          token.className,
+                          used
+                            ? "text-cyan opacity-100"
+                            : "opacity-55 hover:opacity-80",
+                          resolvingImport === resolutionKey &&
+                            "animate-pulse cursor-wait",
+                        )}
+                      >
+                        {token.text}
+                      </button>
+                    );
+                  })
+                : " "}
+            </pre>
+          </div>
+        );
+      })}
+    </>
   );
 }
 

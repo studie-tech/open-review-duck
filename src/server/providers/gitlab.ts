@@ -4,8 +4,12 @@ import {
   providerFetch,
   providerResponse,
   providerText,
+  providerVoid,
 } from "./http";
 import type {
+  ProviderPullRequestReviewState,
+  ProviderReviewAction,
+  PullRequestListOptions,
   PullRequestProvider,
   PullRequestSummary,
   RepositoryIdentity,
@@ -36,8 +40,15 @@ interface GitLabMergeRequest {
   target_branch: string;
   sha: string;
   diff_refs: { base_sha: string; head_sha: string };
-  author: { username: string; avatar_url: string | null };
+  author: { id: number; username: string; avatar_url: string | null };
   changes_count?: string;
+}
+interface GitLabApprovals {
+  approvals_required: number;
+  approvals_left: number;
+  approved_by: Array<{
+    user: { id: number; name: string; username: string };
+  }>;
 }
 interface GitLabChange {
   old_path: string;
@@ -45,6 +56,14 @@ interface GitLabChange {
   deleted_file: boolean;
   new_file?: boolean;
   renamed_file?: boolean;
+}
+interface GitLabTreeEntry {
+  path: string;
+  type: "blob" | "tree";
+}
+interface GitLabProjectHook {
+  id: number;
+  url: string;
 }
 interface GitLabDiscussion {
   id: string;
@@ -76,7 +95,7 @@ export class GitLabProvider implements PullRequestProvider {
     token: string,
     private readonly apiUrl = "https://gitlab.com/api/v4",
   ) {
-    this.headers = { "PRIVATE-TOKEN": token };
+    this.headers = { Authorization: `Bearer ${token}` };
   }
   /** Fetches the account identity associated with a provider token. */
   async getConnectionIdentity() {
@@ -104,10 +123,63 @@ export class GitLabProvider implements PullRequestProvider {
       isPrivate: project.visibility !== "public",
     }));
   }
+  /** Creates one idempotent merge-request hook for an imported project. */
+  async ensureRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+    secret: string;
+  }) {
+    const project = encodeURIComponent(input.repositoryExternalId);
+    const hooks = await this.getAllPages<GitLabProjectHook>(
+      `${this.apiUrl}/projects/${project}/hooks?per_page=100`,
+    );
+    if (hooks.some((hook) => hook.url === input.callbackUrl)) return;
+    await providerFetch<GitLabProjectHook>(
+      this.name,
+      `${this.apiUrl}/projects/${project}/hooks`,
+      {
+        method: "POST",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: input.callbackUrl,
+          token: input.secret,
+          merge_requests_events: true,
+          enable_ssl_verification: true,
+        }),
+      },
+    );
+  }
+  /** Removes every matching application hook from a GitLab project. */
+  async removeRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+  }) {
+    const project = encodeURIComponent(input.repositoryExternalId);
+    const hooks = await this.getAllPages<GitLabProjectHook>(
+      `${this.apiUrl}/projects/${project}/hooks?per_page=100`,
+    );
+    await Promise.all(
+      hooks
+        .filter((hook) => hook.url === input.callbackUrl)
+        .map((hook) =>
+          providerVoid(
+            this.name,
+            `${this.apiUrl}/projects/${project}/hooks/${hook.id}`,
+            { method: "DELETE", headers: this.headers },
+          ),
+        ),
+    );
+  }
   /** Lists open pull requests for a provider repository. */
-  async listOpenPullRequests(repositoryExternalId: string) {
+  async listOpenPullRequests(
+    repositoryExternalId: string,
+    options: PullRequestListOptions = {},
+  ) {
+    const reviewer = options.reviewerExternalAccountId
+      ? `&reviewer_id=${encodeURIComponent(options.reviewerExternalAccountId)}`
+      : "";
     const items = await this.getAllPages<GitLabMergeRequest>(
-      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests?state=opened&per_page=100`,
+      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests?state=opened&per_page=100${reviewer}`,
     );
     return items.map((item) => this.normalize(item));
   }
@@ -120,6 +192,76 @@ export class GitLabProvider implements PullRequestProvider {
         { headers: this.headers },
       ),
     );
+  }
+  /** Fetches GitLab's live approval rule and authenticated-user state. */
+  async getPullRequestReviewState(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestReviewState> {
+    const project = encodeURIComponent(repositoryExternalId);
+    const [approvals, user, mergeRequest] = await Promise.all([
+      providerFetch<GitLabApprovals>(
+        this.name,
+        `${this.apiUrl}/projects/${project}/merge_requests/${number}/approvals`,
+        { headers: this.headers },
+      ),
+      providerFetch<GitLabUser>(this.name, `${this.apiUrl}/user`, {
+        headers: this.headers,
+      }),
+      providerFetch<GitLabMergeRequest>(
+        this.name,
+        `${this.apiUrl}/projects/${project}/merge_requests/${number}`,
+        { headers: this.headers },
+      ),
+    ]);
+    const approved = approvals.approved_by.some(
+      ({ user: reviewer }) => reviewer.id === user.id,
+    );
+    const unavailableReason =
+      mergeRequest.state !== "opened"
+        ? "This merge request is no longer open for review."
+        : undefined;
+    return {
+      decision: approved ? "approved" : "none",
+      actorName: user.name || user.username,
+      approvedCount: approvals.approved_by.length,
+      changesRequestedCount: 0,
+      requiredApprovals: approvals.approvals_required,
+      approvalsRemaining: approvals.approvals_left,
+      canApprove: !approved && !unavailableReason,
+      canRequestChanges: false,
+      canClear: approved && !unavailableReason,
+      requestChangesRequiresBody: false,
+      unavailableReason,
+    };
+  }
+  /** Approves or withdraws approval for the exact GitLab merge-request head. */
+  async setPullRequestReviewDecision(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+    action: ProviderReviewAction;
+    body?: string;
+  }) {
+    if (input.action === "request_changes") {
+      throw new Error("GitLab does not expose a request-changes decision");
+    }
+    const endpoint = `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}`;
+    if (input.action === "clear") {
+      await providerVoid(this.name, `${endpoint}/unapprove`, {
+        method: "POST",
+        headers: this.headers,
+      });
+      return;
+    }
+    await providerVoid(this.name, `${endpoint}/approve`, {
+      method: "POST",
+      headers: {
+        ...this.headers,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ sha: input.headSha }),
+    });
   }
   /** Fetches the changed source files required for static analysis. */
   async getChangedFiles(repositoryExternalId: string, number: number) {
@@ -166,6 +308,16 @@ export class GitLabProvider implements PullRequestProvider {
               : ("modified" as const),
       };
     });
+  }
+
+  /** Lists regular files from one exact Git commit tree. */
+  async listRepositoryFiles(repositoryExternalId: string, ref: string) {
+    const entries = await this.getAllPages<GitLabTreeEntry>(
+      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/repository/tree?recursive=true&ref=${encodeURIComponent(ref)}&per_page=100`,
+    );
+    return entries
+      .filter((entry) => entry.type === "blob")
+      .map((entry) => entry.path);
   }
   /** Publishes an inline review comment to the code provider. */
   async publishInlineComment(input: {

@@ -30,6 +30,11 @@ export const reviewWorkspaceSchema = z.object({
   pullRequestId: z.string().uuid(),
 });
 
+export const providerReviewDecisionSchema = reviewWorkspaceSchema.extend({
+  action: z.enum(["approve", "request_changes", "clear"]),
+  body: z.string().trim().max(10_000).optional(),
+});
+
 export const reviewUnitSchema = z.object({
   unitId: z.string().uuid(),
 });
@@ -56,20 +61,26 @@ export const publishReviewCommentSchema = z
     body: z.string().trim().min(1).max(10_000).optional(),
     aiJobId: z.string().uuid().optional(),
     aiFindingIndex: z.number().int().nonnegative().optional(),
+    aiCommentIndex: z.number().int().nonnegative().optional(),
   })
   .superRefine((value, context) => {
-    const isAiFinding =
-      value.aiJobId !== undefined || value.aiFindingIndex !== undefined;
+    const hasAiIndex =
+      value.aiFindingIndex !== undefined || value.aiCommentIndex !== undefined;
+    const isAiComment = value.aiJobId !== undefined || hasAiIndex;
     if (
-      isAiFinding &&
-      (value.aiJobId === undefined || value.aiFindingIndex === undefined)
+      isAiComment &&
+      (value.aiJobId === undefined ||
+        !hasAiIndex ||
+        (value.aiFindingIndex !== undefined &&
+          value.aiCommentIndex !== undefined))
     ) {
       context.addIssue({
         code: "custom",
-        message: "AI job and finding index must be provided together",
+        message:
+          "AI job and exactly one finding or comment index must be provided together",
       });
     }
-    if (!isAiFinding && !value.body) {
+    if (!isAiComment && !value.body) {
       context.addIssue({
         code: "custom",
         path: ["body"],

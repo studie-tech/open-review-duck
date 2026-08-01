@@ -1,0 +1,11 @@
+{
+  "name": "@reviewduck/workflow-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@workflow/world-postgres": "4.3.2",
+    "drizzle-orm": "0.45.2",
+    "pg": "8.22.0"
+  }
+}

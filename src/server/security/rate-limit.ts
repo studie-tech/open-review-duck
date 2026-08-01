@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { lt, sql } from "drizzle-orm";
 import { rateLimits } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
@@ -22,7 +23,6 @@ export async function enforceRateLimit(
 ) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + windowMilliseconds);
-  await db.delete(rateLimits).where(lt(rateLimits.expiresAt, now));
   const [entry] = await db
     .insert(rateLimits)
     .values({ key, count: 1, expiresAt })
@@ -35,6 +35,9 @@ export async function enforceRateLimit(
     })
     .returning();
   if (entry && entry.count > limit) {
-    throw new Error("Too many requests. Wait a moment and try again.");
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "Too many requests. Wait a moment and try again.",
+    });
   }
 }

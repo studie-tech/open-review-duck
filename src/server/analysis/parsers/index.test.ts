@@ -1,34 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { supportedLanguages } from "../types";
 import {
   languageAdapterForFile,
   languageAdapterForPath,
   languageAdapters,
 } from ".";
 
-const expectedParserLanguages = [
-  "typescript",
-  "javascript",
-  "python",
-  "java",
-  "csharp",
-  "cpp",
-  "php",
-  "shell",
-  "c",
-  "hcl",
-  "rust",
-  "ruby",
-  "lua",
-  "go",
-  "makefile",
-  "kotlin",
-] as const;
-
 describe("language parser registry", () => {
   it("registers every parser exactly once", () => {
     const languages = languageAdapters.map(({ language }) => language);
 
-    expect(languages).toEqual(expectedParserLanguages);
+    expect(new Set(languages)).toEqual(
+      new Set(supportedLanguages.filter((language) => language !== "text")),
+    );
     expect(new Set(languages).size).toBe(languages.length);
   });
 
@@ -49,6 +33,13 @@ describe("language parser registry", () => {
     ["service.go", "go"],
     ["Makefile", "makefile"],
     ["Service.kt", "kotlin"],
+    ["migration.sql", "sql"],
+    ["schema.graphql", "graphql"],
+    ["component.svelte", "svelte"],
+    ["component.astro", "astro"],
+    ["Dockerfile", "dockerfile"],
+    ["readme.mdx", "mdx"],
+    ["module.sv", "systemverilog"],
   ])("maps %s to %s", (path, language) => {
     expect(languageAdapterForPath(path)?.language).toBe(language);
   });
@@ -68,7 +59,7 @@ describe("language parser registry", () => {
     ).toBe("ruby");
   });
 
-  it("leaves unknown text formats to the full-file fallback", () => {
-    expect(languageAdapterForPath("config/settings.json")).toBeUndefined();
+  it("leaves genuinely unknown text formats to the full-file fallback", () => {
+    expect(languageAdapterForPath("notes.unknown")).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { cppAdapter, cppParserInternals } from ".";
+import { cppAdapter } from ".";
 
 /** Analyzes an in-memory C++ fixture with the production adapter. */
 function analyze(content: string, path = "src/example.cpp") {
@@ -238,8 +238,5 @@ int real() { return MULTI(1); }
     expect(units.some(({ name }) => name === "Hidden")).toBe(false);
     expect(named(units, "MULTI").kind).toBe("function");
     expect(named(units, "real").kind).toBe("function");
-    expect(cppParserInternals.maskCppSource(source)).toHaveLength(
-      source.length,
-    );
   });
 });

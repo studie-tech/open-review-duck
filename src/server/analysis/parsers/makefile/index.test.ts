@@ -5,7 +5,6 @@ import {
   makefileAdapter,
   makefileExtensions,
   makefileFileNames,
-  makefileParserInternals,
 } from ".";
 
 /** Analyzes an in-memory Makefile fixture. */
@@ -332,37 +331,5 @@ sinclude generated/dependencies.mk
     expect(makefileFileNames).toEqual(
       expect.arrayContaining(["makefile", "gnumakefile"]),
     );
-  });
-
-  it("exposes focused internals for structural regression coverage", () => {
-    expect(
-      makefileParserInternals.parseRule("value := host:1234"),
-    ).toBeUndefined();
-    expect(makefileParserInternals.parseRule("a b &: source")).toMatchObject({
-      targets: ["a", "b"],
-      separator: "&:",
-    });
-    expect(makefileParserInternals.parseRule("a b &:: source")).toMatchObject({
-      targets: ["a", "b"],
-      separator: "&::",
-    });
-    expect(
-      makefileParserInternals.parseVariable("%.o: CFLAGS += -fPIC"),
-    ).toMatchObject({
-      name: "CFLAGS",
-      operator: "+=",
-      scopeTargets: ["%.o"],
-    });
-    expect(
-      makefileParserInternals.variableReferences("$(call render,$(DATA))"),
-    ).toEqual(expect.arrayContaining(["render", "DATA"]));
-    expect(
-      makefileParserInternals.recursiveMakeTargets(
-        "\t$(MAKE) -s build MODE=ci",
-      ),
-    ).toEqual(["build"]);
-    expect(
-      makefileParserInternals.stripMakeComment("A := x\\#y # comment"),
-    ).toBe("A := x\\#y ");
   });
 });

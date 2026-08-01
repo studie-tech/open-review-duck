@@ -1,7 +1,3 @@
-import { supportedExtensions } from "../../types";
-import { javascriptAdapter } from "../ecmascript";
+import { treeSitterAdapter } from "../tree-sitter-adapter";
 
-export const javascriptLanguageAdapter = javascriptAdapter(
-  "javascript",
-  supportedExtensions.javascript,
-);
+export const javascriptLanguageAdapter = treeSitterAdapter("javascript");

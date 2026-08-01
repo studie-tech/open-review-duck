@@ -3,6 +3,7 @@ export interface SidebarGuidanceState {
   hasAiConfiguration: boolean;
   reviewedToday: boolean;
   currentStreak: number;
+  localMode: boolean;
 }
 
 export interface SidebarGuidanceCard {
@@ -34,8 +35,9 @@ export function sidebarGuidance(
       kind: "ai",
       eyebrow: "Get started · 2 of 2",
       title: "Configure AI assistance",
-      description:
-        "Choose managed AI or connect your own model for explanations.",
+      description: state.localMode
+        ? "Enable optional Big Pickle or connect a local model."
+        : "Choose a managed subscriber model for explanations.",
       action: "Set up AI",
       href: "/settings/ai",
     };

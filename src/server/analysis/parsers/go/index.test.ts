@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceFile } from "../../types";
-import { goAdapter, goParserInternals } from ".";
+import { goAdapter } from ".";
 
 /** Analyzes an in-memory Go fixture with the production adapter. */
 function analyze(content: string, path = "queue/queue.go") {
@@ -265,7 +265,6 @@ func Real() rune { return Closing }
     expect(named(units, "Table").kind).toBe("variable");
     expect(named(units, "Table").source).toContain('{Name: "{"}');
     expect(named(units, "Real").kind).toBe("function");
-    expect(goParserInternals.maskGoSource(source)).toHaveLength(source.length);
   });
 
   it("recognizes package and import-only files as context", () => {

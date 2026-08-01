@@ -1,10 +1,43 @@
 import { describe, expect, it } from "vitest";
 import {
   importTargetSchema,
+  providerReviewDecisionSchema,
   publishReviewCommentSchema,
   replyToReviewThreadSchema,
   signOffBatchSchema,
 } from "./review";
+
+describe("provider review decision validation", () => {
+  it("accepts bounded provider decisions and trims an optional reason", () => {
+    expect(
+      providerReviewDecisionSchema.parse({
+        pullRequestId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        action: "request_changes",
+        body: "  Cover the retry path.  ",
+      }),
+    ).toEqual({
+      pullRequestId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+      action: "request_changes",
+      body: "Cover the retry path.",
+    });
+  });
+
+  it("rejects unknown actions and oversized reasons", () => {
+    expect(
+      providerReviewDecisionSchema.safeParse({
+        pullRequestId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        action: "merge",
+      }).success,
+    ).toBe(false);
+    expect(
+      providerReviewDecisionSchema.safeParse({
+        pullRequestId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        action: "request_changes",
+        body: "x".repeat(10_001),
+      }).success,
+    ).toBe(false);
+  });
+});
 
 /** Creates one valid sign-off input for batch-boundary tests. */
 const signOff = (unitId: string) => ({
@@ -87,7 +120,28 @@ describe("review comment validation", () => {
     ).toBe(true);
   });
 
+  it("accepts an edited comment proposed by a focused AI conversation", () => {
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        body: "Could this keep the authorization guard?",
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        aiCommentIndex: 0,
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects incomplete AI references and empty human feedback", () => {
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        aiFindingIndex: 0,
+        aiCommentIndex: 0,
+      }).success,
+    ).toBe(false);
     expect(
       publishReviewCommentSchema.safeParse({
         unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -123,8 +177,8 @@ describe("import target validation", () => {
     expect(
       importTargetSchema.safeParse({
         pullRequestId: "399ea3a7-2860-4eb9-9243-28627e87898d",
-        sourcePath: "main.swift",
-        sourceLanguage: "swift",
+        sourcePath: "main.bf",
+        sourceLanguage: "brainfuck",
         specifier: "./review",
         imported: "Review",
         kind: "named",

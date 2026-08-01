@@ -1,8 +1,11 @@
 "use client";
 
+import { useMachine } from "@xstate/react";
 import {
   ArrowLeft,
   Check,
+  CheckCheck,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
@@ -20,6 +23,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  ShieldCheck,
   Sparkles,
   Undo2,
   X,
@@ -52,17 +56,24 @@ import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
 import { aiErrorPresentation } from "~/lib/ai-errors";
 import {
+  type AiQuestionStreamUpdate,
+  consumeAiQuestionStream,
+} from "~/lib/ai-question-stream";
+import { lockDocumentScroll } from "~/lib/document-scroll-lock";
+import {
   findImportedDeclarationLine,
   findImportTargetUnit,
   type ImportReference,
-  parseImportReferences,
 } from "~/lib/import-navigation";
 import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
+import { hydratePrivateReviewSources } from "~/lib/private-source-client";
 import {
   buildReviewHierarchy,
   createReviewNavigationHistory,
+  deletedFileSignOffUnits,
   nextPendingReviewIndex,
-  optimisticallySignOffReviewUnit,
+  nextPendingReviewIndexPreferring,
+  optimisticallySignOffReviewUnits,
   pushReviewNavigationHistory,
   restoreReviewUnitAfterFailedSignOff,
   reviewNavigationHistoryTarget,
@@ -71,6 +82,14 @@ import {
 } from "~/lib/review-navigation";
 import { reviewFoundationPriority } from "~/lib/review-priority";
 import {
+  acknowledgedReviewRevision,
+  acknowledgeReviewRevision,
+  type ReviewRevision,
+  shortRevision,
+} from "~/lib/review-revision";
+import {
+  afterLayoutSettle,
+  scrollTopAfterContextReveal,
   shouldRevealLeadingContext,
   verticalRangesOverlap,
 } from "~/lib/review-scroll";
@@ -84,17 +103,72 @@ import {
   reviewFooterSaveState,
   signOffQueueReducer,
 } from "~/lib/sign-off-queue";
-import { highlightSource } from "~/lib/syntax-highlighting";
+import {
+  preloadSyntaxLanguage,
+  useHighlightedSource,
+} from "~/lib/syntax-highlighting";
 import { formatTokenCount } from "~/lib/token-usage";
+import { useImportReferences } from "~/lib/tree-sitter-import-navigation";
 import { useSettledValue } from "~/lib/use-settled-value";
 import { cn } from "~/lib/utils";
 import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
+import { ProviderCommentBody } from "./provider-comment-body";
+import { ProviderReviewDecision } from "./provider-review-decision";
+import { findNextReview, ReviewCompletion } from "./review-completion";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
 type ImportTarget = RouterOutputs["review"]["importTarget"];
 type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
+
+/** Extracts the stored disjoint ranges for one side of a review concept. */
+function relatedReviewRanges(
+  unit: ReviewUnit | undefined,
+  side: "current" | "previous",
+) {
+  if (!unit?.relatedRanges) return undefined;
+  return unit.relatedRanges.flatMap((range) => {
+    const startLine =
+      side === "current" ? range.startLine : range.previousStartLine;
+    const endLine = side === "current" ? range.endLine : range.previousEndLine;
+    return startLine !== undefined && endLine !== undefined
+      ? [{ startLine, endLine }]
+      : [];
+  });
+}
+
+/** Tests a line against disjoint ranges or a unit's contiguous bounds. */
+function lineWithinReviewRanges(
+  line: number,
+  ranges: Array<{ startLine: number; endLine: number }> | undefined,
+  fallbackStart: number,
+  fallbackEnd: number,
+) {
+  return ranges
+    ? ranges.some(
+        ({ startLine, endLine }) => line >= startLine && line <= endLine,
+      )
+    : line >= fallbackStart && line <= fallbackEnd;
+}
+
+/** Clamps a requested line to the closest line in a disjoint review scope. */
+function closestReviewLine(
+  line: number,
+  ranges: Array<{ startLine: number; endLine: number }> | undefined,
+  fallbackStart: number,
+  fallbackEnd: number,
+) {
+  const candidates = ranges ?? [
+    { startLine: fallbackStart, endLine: fallbackEnd },
+  ];
+  return candidates.reduce((closest, range) => {
+    const candidate = Math.min(range.endLine, Math.max(range.startLine, line));
+    return Math.abs(candidate - line) < Math.abs(closest - line)
+      ? candidate
+      : closest;
+  }, candidates[0]?.startLine ?? fallbackStart);
+}
 
 interface SignOffRollback {
   contextAfter: number;
@@ -112,20 +186,39 @@ interface QueuedSignOff {
   rollback: SignOffRollback;
 }
 
+interface LiveAiQuestion {
+  error: string | null;
+  focusLine: number;
+  id: string;
+  jobId?: string;
+  progress?: string;
+  question: string;
+  result: {
+    summary: string;
+    commentProposals?: Array<{
+      body: string;
+      line: number;
+      path: string;
+    }>;
+  } | null;
+  status: "queued" | "running" | "streaming" | "completed" | "failed";
+  threadId: string;
+}
+
+import { reviewSessionMachine } from "./review-session-machine";
 import {
-  AiActionMenu,
-  type AiActionMenuItem,
+  aiConversationVisibility,
   CONTEXT_PAGE_LINES,
-  cacheHighlightedUnit,
   ExplanationLoader,
-  type HighlightCache,
   INITIAL_PATH_ITEMS,
+  InlineAiQuestion,
   PATH_PAGE_SIZE,
   ProviderConversation,
   providerLabel,
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewScopeMarker,
+  rememberAiConversationVisibility,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
@@ -140,7 +233,45 @@ export function ReviewWorkspace({
   initialData: WorkspaceData;
 }) {
   const router = useRouter();
+  const [reviewSession, sendReviewSession] = useMachine(reviewSessionMachine);
+  useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
+  const [fileContexts, setFileContexts] = useState(initialData.fileContexts);
+  useEffect(() => {
+    if (initialData.sourceDelivery !== "direct" || !initialData.snapshot)
+      return;
+    const snapshotId = initialData.snapshot.id;
+    let active = true;
+    const cache = new Map<string, Promise<Uint8Array>>();
+    void Promise.all([
+      hydratePrivateReviewSources(initialData.units, snapshotId, cache),
+      hydratePrivateReviewSources(initialData.fileContexts, snapshotId, cache),
+    ]).then(([hydratedUnits, hydratedContexts]) => {
+      if (!active) return;
+      setUnits(hydratedUnits.units);
+      setFileContexts(hydratedContexts.units);
+      const failures = [
+        ...hydratedUnits.failures,
+        ...hydratedContexts.failures,
+      ];
+      if (failures.length > 0) {
+        const affectedFiles = new Set(failures.map(({ path }) => path)).size;
+        toast.error(
+          `${affectedFiles} private source ${affectedFiles === 1 ? "file" : "files"} could not be loaded`,
+          { description: "The rest of the review remains available." },
+        );
+      }
+    });
+    return () => {
+      active = false;
+      cache.clear();
+    };
+  }, [
+    initialData.fileContexts,
+    initialData.snapshot,
+    initialData.sourceDelivery,
+    initialData.units,
+  ]);
   const firstPending = Math.max(
     0,
     units.findIndex(
@@ -173,7 +304,18 @@ export function ReviewWorkspace({
     useState<CommandCenterMode>();
   const [hierarchyOpen, setHierarchyOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [aiReviewDialogOpen, setAiReviewDialogOpen] = useState(false);
+  const [aiQuestionLine, setAiQuestionLine] = useState<number>();
+  const [aiQuestionThreadId, setAiQuestionThreadId] = useState<string>();
+  const [focusAiQuestionComposer, setFocusAiQuestionComposer] = useState(false);
+  const [aiQuestionPreviewLine, setAiQuestionPreviewLine] = useState<number>();
+  const [aiQuestionDraft, setAiQuestionDraft] = useState("");
+  const [liveAiQuestions, setLiveAiQuestions] = useState<LiveAiQuestion[]>([]);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [activeSyncId, setActiveSyncId] = useState<string>();
+  const [revisionNotice, setRevisionNotice] = useState<{
+    previous?: ReviewRevision;
+  }>();
   const [importPreview, setImportPreview] = useState<ImportPreview>();
   const [resolvingImport, setResolvingImport] = useState<string>();
   const [importReturn, setImportReturn] = useState<{
@@ -184,6 +326,16 @@ export function ReviewWorkspace({
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const pathSearchRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
+  const contextRevealGeneration = useRef(0);
+  const aiQuestionMoveAnchor = useRef<
+    | {
+        cardTop: number;
+        scrollTop: number;
+      }
+    | undefined
+  >(undefined);
+  const aiQuestionStreams = useRef(new Map<string, AbortController>());
+  const dismissedAiQuestionUnits = useRef(new Set<string>());
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
@@ -195,10 +347,21 @@ export function ReviewWorkspace({
   );
   const queuedSignOffs = useRef<QueuedSignOff[]>([]);
   const signOffDrainRunning = useRef(false);
-  const highlightedUnitCache = useRef<HighlightCache>(new Map());
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
+  const deletedFilePaths = useMemo(
+    () =>
+      new Set(
+        fileContexts
+          .filter(({ changeType }) => changeType === "deleted")
+          .map(({ path }) => path),
+      ),
+    [fileContexts],
+  );
+  const activeFileIsDeleted = activeUnit
+    ? deletedFilePaths.has(activeUnit.path)
+    : false;
   const settledActiveUnitId = useSettledValue(activeUnitId, 200);
   const previousActiveUnitId = useRef(activeUnitId);
   const activeUnitFoundation = activeUnit
@@ -220,6 +383,20 @@ export function ReviewWorkspace({
       behavior: "auto",
     });
   }, [activeUnit?.id]);
+  useLayoutEffect(() => {
+    if (aiQuestionLine === undefined) {
+      aiQuestionMoveAnchor.current = undefined;
+      return;
+    }
+    const anchor = aiQuestionMoveAnchor.current;
+    if (!anchor) return;
+    aiQuestionMoveAnchor.current = undefined;
+    const pane = codeScrollRef.current;
+    const card = document.getElementById("inline-ai-question");
+    if (!pane || !card) return;
+    const nextCardTop = card.getBoundingClientRect().top;
+    pane.scrollTop = anchor.scrollTop + nextCardTop - anchor.cardTop;
+  }, [aiQuestionLine]);
   useEffect(() => {
     const previousUnitId = previousActiveUnitId.current;
     previousActiveUnitId.current = activeUnitId;
@@ -266,40 +443,18 @@ export function ReviewWorkspace({
     () => reviewPathSections(units, activeIndex),
     [activeIndex, units],
   );
-  const pendingExplanationUnitIds = useMemo(
-    () =>
-      units
-        .filter(
-          (unit) =>
-            unit.status !== "signed_off" &&
-            unit.status !== "waiting" &&
-            unit.kind !== "binary",
-        )
-        .map(({ id }) => id),
-    [units],
-  );
   const nextUnitToPreload = pathSearch.trim()
     ? (pathSections.upcoming.find(({ unit }) =>
         reviewPathSearchMatches(unit, pathSearch),
       )?.unit ?? pathSections.upcoming[0]?.unit)
     : pathSections.upcoming[0]?.unit;
   useEffect(() => {
-    if (
-      !nextUnitToPreload ||
-      nextUnitToPreload.kind === "binary" ||
-      highlightedUnitCache.current.get(nextUnitToPreload.id)?.source ===
-        nextUnitToPreload.source
-    ) {
+    if (!nextUnitToPreload || nextUnitToPreload.kind === "binary") {
       return;
     }
     /** Prepares the next unit's highlighted source outside the input event. */
     const preload = () => {
-      cacheHighlightedUnit(
-        highlightedUnitCache.current,
-        nextUnitToPreload.id,
-        nextUnitToPreload.source,
-        highlightSource(nextUnitToPreload.source, nextUnitToPreload.language),
-      );
+      void preloadSyntaxLanguage(nextUnitToPreload.language);
     };
     if (typeof window.requestIdleCallback === "function") {
       const idleId = window.requestIdleCallback(preload, { timeout: 400 });
@@ -331,11 +486,85 @@ export function ReviewWorkspace({
   const waitingCount = units.filter((unit) => unit.status === "waiting").length;
   const remainingCount = units.length - signedCount;
   const reviewComplete = signedCount === units.length;
+  const [completionOpen, setCompletionOpen] = useState(reviewComplete);
+  const previousReviewComplete = useRef(reviewComplete);
+  const completedFileCount = useMemo(
+    () => new Set(units.map(({ path }) => path)).size,
+    [units],
+  );
+  const reviewQueue = api.review.dashboard.useQuery(undefined, {
+    enabled: reviewComplete,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  });
+  const providerReviewState = api.review.providerReviewState.useQuery(
+    { pullRequestId: initialData.pullRequest.id },
+    {
+      enabled: reviewComplete,
+      retry: false,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      staleTime: 0,
+    },
+  );
+  const setProviderReviewDecision =
+    api.review.setProviderReviewDecision.useMutation({
+      onSuccess: (state) => {
+        utils.review.providerReviewState.setData(
+          { pullRequestId: initialData.pullRequest.id },
+          state,
+        );
+        void Promise.all([
+          utils.review.providerReviewState.invalidate({
+            pullRequestId: initialData.pullRequest.id,
+          }),
+          utils.review.dashboard.invalidate(),
+        ]);
+        toast.success(
+          state.decision === "approved"
+            ? "Approval recorded"
+            : state.decision === "changes_requested"
+              ? state.provider === "azure_devops"
+                ? "Rejection recorded"
+                : "Changes requested"
+              : "Provider decision cleared",
+          {
+            description: `${providerLabel(state.provider)} is now synchronized with this review.`,
+          },
+        );
+      },
+      onError: (error) =>
+        toast.error("Provider review decision was not updated", {
+          description: error.message,
+        }),
+    });
+  const nextReview = useMemo(
+    () => findNextReview(reviewQueue.data, initialData.pullRequest.id),
+    [initialData.pullRequest.id, reviewQueue.data],
+  );
+  useEffect(() => {
+    sendReviewSession({
+      type: reviewComplete ? "REVIEW_COMPLETED" : "REVIEW_REOPENED",
+    });
+  }, [reviewComplete, sendReviewSession]);
+  useEffect(() => {
+    if (reviewComplete && !previousReviewComplete.current) {
+      setCompletionOpen(true);
+    } else if (!reviewComplete) {
+      setCompletionOpen(false);
+    }
+    previousReviewComplete.current = reviewComplete;
+  }, [reviewComplete]);
+  const revisionReReviewCount = initialData.units.filter(
+    ({ changedSinceSignOff }) => changedSinceSignOff,
+  ).length;
+  const revisionPreservedCount = initialData.units.filter(
+    ({ status }) => status === "signed_off",
+  ).length;
   const hasNextActionableUnit = nextPendingReviewIndex(units) >= 0;
   const previewHasFileContext = importPreview
-    ? initialData.fileContexts.some(
-        (context) => context.path === importPreview.path,
-      )
+    ? fileContexts.some((context) => context.path === importPreview.path)
     : false;
   const previewModuleIndex = importPreview
     ? previewHasFileContext
@@ -345,9 +574,7 @@ export function ReviewWorkspace({
         )
     : -1;
   const activeModule = activeUnit
-    ? (initialData.fileContexts.find(
-        (context) => context.path === activeUnit.path,
-      ) ??
+    ? (fileContexts.find((context) => context.path === activeUnit.path) ??
       units.find(
         (unit) => unit.path === activeUnit.path && unit.kind === "module",
       ))
@@ -355,7 +582,9 @@ export function ReviewWorkspace({
   const diffAvailable = Boolean(
     activeUnit &&
       activeUnit.kind !== "binary" &&
-      (activeUnit.previousSource || activeUnit.changeType === "added"),
+      (activeUnit.previousSource ||
+        activeUnit.changeType === "added" ||
+        Boolean(activeModule?.previousSource)),
   );
   const sideBySideVisible = showDiff && diffAvailable;
   const previousUnitStartLine =
@@ -369,6 +598,38 @@ export function ReviewWorkspace({
   const previousUnitEndLine = activeUnit?.previousSource
     ? previousUnitStartLine + activeUnit.previousSource.split("\n").length - 1
     : previousUnitStartLine;
+  const currentRelatedRanges = useMemo(
+    () => relatedReviewRanges(activeUnit, "current"),
+    [activeUnit],
+  );
+  const previousRelatedRanges = useMemo(
+    () => relatedReviewRanges(activeUnit, "previous"),
+    [activeUnit],
+  );
+  const firstCurrentReviewLine =
+    currentRelatedRanges?.at(0)?.startLine ?? activeUnit?.startLine ?? 1;
+  const primaryReviewRanges =
+    activeUnit?.changeType === "deleted"
+      ? previousRelatedRanges
+      : currentRelatedRanges;
+  const primaryReviewStart =
+    primaryReviewRanges?.at(0)?.startLine ??
+    (activeUnit?.changeType === "deleted"
+      ? previousUnitStartLine
+      : firstCurrentReviewLine);
+  const primaryReviewEnd =
+    primaryReviewRanges?.at(-1)?.endLine ??
+    (activeUnit?.changeType === "deleted"
+      ? previousUnitEndLine
+      : (activeUnit?.endLine ?? 1));
+  /** Checks whether a line is reviewable on the unit's provider side. */
+  const isPrimaryReviewLine = (line: number) =>
+    lineWithinReviewRanges(
+      line,
+      primaryReviewRanges,
+      primaryReviewStart,
+      primaryReviewEnd,
+    );
   const diffPreviousSource =
     activeModule?.previousSource ?? activeUnit?.previousSource ?? "";
   const diffCurrentSource =
@@ -445,34 +706,43 @@ export function ReviewWorkspace({
     visibleEndLine,
     visibleStartLine,
   ]);
-  const lines = useMemo(() => {
-    if (!activeUnit) return [];
-    const cached = highlightedUnitCache.current.get(activeUnit.id);
-    if (cached?.source === displayedSource) return cached.lines;
-    const highlighted = highlightSource(displayedSource, activeUnit.language);
-    if (displayedSource === activeUnit.source) {
-      cacheHighlightedUnit(
-        highlightedUnitCache.current,
-        activeUnit.id,
-        displayedSource,
-        highlighted,
-      );
-    }
-    return highlighted;
-  }, [activeUnit, displayedSource]);
-  const importReferences = useMemo(
-    () =>
-      activeUnit
-        ? parseImportReferences(displayedSource, activeUnit.language)
-        : [],
-    [activeUnit, displayedSource],
+  const lines = useHighlightedSource(
+    displayedSource,
+    activeUnit?.language ?? "text",
   );
-  const importPreviewLines = useMemo(
-    () =>
-      importPreview
-        ? highlightSource(importPreview.source, importPreview.language)
-        : [],
-    [importPreview],
+  const previousRewriteSource =
+    activeUnit?.changeType === "modified" &&
+    activeUnit.previousSource &&
+    activeUnit.kind !== "binary"
+      ? activeUnit.previousSource
+      : "";
+  const highlightedPreviousRewrite = useHighlightedSource(
+    previousRewriteSource,
+    activeUnit?.language ?? "text",
+  );
+  const previousRewriteLines = useMemo(() => {
+    if (!activeUnit || !previousRewriteSource) return [];
+    for (
+      let line = activeUnit.startLine;
+      line <= activeUnit.endLine;
+      line += 1
+    ) {
+      if (!changedCurrentLines.has(line)) return [];
+    }
+    return highlightedPreviousRewrite;
+  }, [
+    activeUnit,
+    changedCurrentLines,
+    highlightedPreviousRewrite,
+    previousRewriteSource,
+  ]);
+  const importReferences = useImportReferences(
+    displayedSource,
+    activeUnit?.language ?? "text",
+  );
+  const importPreviewLines = useHighlightedSource(
+    importPreview?.source ?? "",
+    importPreview?.language ?? "text",
   );
   /** Opens a review unit and optionally records it in visited-unit history. */
   function selectUnit(index: number, recordHistory = true) {
@@ -638,30 +908,104 @@ export function ReviewWorkspace({
     beginSession({
       pullRequestId: initialData.pullRequest.id,
     });
-    // A review workspace starts one resumable session per mounted snapshot.
+    // A review workspace starts one resumable session per snapshot.
   }, [beginSession, initialData.pullRequest.id]);
+  useEffect(() => {
+    const snapshot = initialData.snapshot;
+    if (!snapshot) return;
+    const current = {
+      headSha: snapshot.headSha,
+      snapshotId: snapshot.id,
+      version: snapshot.version,
+    };
+    const acknowledged = acknowledgedReviewRevision(
+      window.localStorage,
+      initialData.pullRequest.id,
+    );
+    if (acknowledged?.snapshotId === current.snapshotId) {
+      setRevisionNotice(undefined);
+      return;
+    }
+    if (acknowledged) {
+      setRevisionNotice({ previous: acknowledged });
+      return;
+    }
+    if (revisionReReviewCount > 0) {
+      const previous = initialData.previousSnapshot;
+      setRevisionNotice({
+        previous: previous
+          ? {
+              headSha: previous.headSha,
+              snapshotId: previous.id,
+              version: previous.version,
+            }
+          : undefined,
+      });
+      return;
+    }
+    acknowledgeReviewRevision(
+      window.localStorage,
+      initialData.pullRequest.id,
+      current,
+    );
+  }, [
+    initialData.previousSnapshot,
+    initialData.pullRequest.id,
+    initialData.snapshot,
+    revisionReReviewCount,
+  ]);
   const signOff = api.review.signOff.useMutation();
   const signOffBatch = api.review.signOffBatch.useMutation();
 
-  /** Applies one sign-off immediately while retaining enough state to undo it. */
-  function optimisticallyQueueSignOff(input: SignOffInput) {
-    const unitIndex = units.findIndex((unit) => unit.id === input.unitId);
-    const unit = units[unitIndex];
-    if (!unit) return;
-    const rollback: SignOffRollback = {
-      unit,
-      unitIndex,
-      pathSearch,
-      searchLimit,
-      showDiff,
-      contextBefore,
-      contextAfter,
-      scrollTop: codeScrollRef.current?.scrollTop ?? 0,
-    };
-    const updated = optimisticallySignOffReviewUnit(units, input.unitId);
-    const nextIndex = nextReviewIndexAfterAction(updated);
-    dispatchSignOffQueue({ type: "enqueue", unitId: input.unitId });
-    queuedSignOffs.current.push({ input, rollback });
+  /** Applies several sign-offs immediately while retaining rollback state. */
+  function optimisticallyQueueSignOffs(
+    inputs: SignOffInput[],
+    preferredNextUnit?: (unit: ReviewUnit, index: number) => boolean,
+  ) {
+    const inputByUnitId = new Map(inputs.map((input) => [input.unitId, input]));
+    const alreadyQueued = new Set(
+      queuedSignOffs.current.map(({ input }) => input.unitId),
+    );
+    const scrollTop = codeScrollRef.current?.scrollTop ?? 0;
+    const queued = units.flatMap((unit, unitIndex): QueuedSignOff[] => {
+      const input = inputByUnitId.get(unit.id);
+      if (
+        !input ||
+        alreadyQueued.has(unit.id) ||
+        unit.status === "signed_off" ||
+        unit.status === "waiting"
+      ) {
+        return [];
+      }
+      return [
+        {
+          input,
+          rollback: {
+            unit,
+            unitIndex,
+            pathSearch,
+            searchLimit,
+            showDiff,
+            contextBefore,
+            contextAfter,
+            scrollTop,
+          },
+        },
+      ];
+    });
+    if (queued.length === 0) return;
+    const updated = optimisticallySignOffReviewUnits(
+      units,
+      queued.map(({ input }) => input.unitId),
+    );
+    const nextIndex = nextReviewIndexAfterAction(updated, preferredNextUnit);
+    for (const entry of queued) {
+      dispatchSignOffQueue({
+        type: "enqueue",
+        unitId: entry.input.unitId,
+      });
+    }
+    queuedSignOffs.current.push(...queued);
     setUnits(updated);
     if (nextIndex >= 0) {
       setActiveIndex(nextIndex);
@@ -679,6 +1023,11 @@ export function ReviewWorkspace({
     codeScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
     setStartedAt(Date.now());
     void drainSignOffQueue();
+  }
+
+  /** Applies one optimistic sign-off through the shared queue. */
+  function optimisticallyQueueSignOff(input: SignOffInput) {
+    optimisticallyQueueSignOffs([input]);
   }
 
   /** Restores failed optimistic saves and returns focus to the first failure. */
@@ -785,7 +1134,13 @@ export function ReviewWorkspace({
             });
             restoreFailedSignOffs(failures);
           }
-          if (saved > 0) void utils.workspace.guidance.invalidate();
+          if (saved > 0) {
+            void Promise.all([
+              utils.workspace.guidance.invalidate(),
+              utils.review.dashboard.invalidate(),
+              utils.review.gamification.invalidate(),
+            ]);
+          }
         } catch (error) {
           const failure =
             error instanceof Error
@@ -827,7 +1182,11 @@ export function ReviewWorkspace({
   const undoSignOff = api.review.unreview.useMutation({
     onSuccess: ({ unreviewed }) => {
       if (!activeUnit || !unreviewed) return;
-      void utils.workspace.guidance.invalidate();
+      void Promise.all([
+        utils.workspace.guidance.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+      ]);
       setUnits((current) =>
         current.map((unit) =>
           unit.id === activeUnit.id
@@ -847,16 +1206,24 @@ export function ReviewWorkspace({
     onError: (error) => toast.error(error.message),
   });
   /** Finds the next filtered match, then resumes the global review path. */
-  function nextReviewIndexAfterAction(nextUnits: ReviewUnit[]) {
+  function nextReviewIndexAfterAction(
+    nextUnits: ReviewUnit[],
+    preferred?: (unit: ReviewUnit, index: number) => boolean,
+  ) {
     if (pathSearch.trim()) {
-      const filteredIndex = nextPendingReviewIndex(nextUnits, (unit) =>
-        reviewPathSearchMatches(unit, pathSearch),
+      const filteredIndex = nextPendingReviewIndex(
+        nextUnits,
+        (unit, index) =>
+          reviewPathSearchMatches(unit, pathSearch) &&
+          (preferred?.(unit, index) ?? true),
       );
       if (filteredIndex >= 0) return filteredIndex;
       setPathSearch("");
       setSearchLimit(INITIAL_PATH_ITEMS);
     }
-    return nextPendingReviewIndex(nextUnits);
+    return preferred
+      ? nextPendingReviewIndexPreferring(nextUnits, preferred)
+      : nextPendingReviewIndex(nextUnits);
   }
 
   /** Completes the current action within the active filter or global path. */
@@ -881,12 +1248,113 @@ export function ReviewWorkspace({
     },
   );
   const explanationError = aiErrorPresentation(aiStatus.data?.error);
+  const aiQuestions = api.ai.questions.useQuery(
+    {
+      pullRequestId: initialData.pullRequest.id,
+      unitId: settledActiveUnitId ?? "",
+    },
+    {
+      enabled: Boolean(settledActiveUnitId),
+      refetchInterval: (query) =>
+        query.state.data?.some(({ status }) =>
+          ["queued", "running"].includes(status),
+        )
+          ? 2_000
+          : false,
+    },
+  );
+  useEffect(() => {
+    const terminalJobIds = new Set(
+      aiQuestions.data
+        ?.filter(({ status }) => ["completed", "failed"].includes(status))
+        .map(({ id }) => id) ?? [],
+    );
+    if (terminalJobIds.size === 0) return;
+    setLiveAiQuestions((questions) =>
+      questions.filter(({ jobId }) => !jobId || !terminalJobIds.has(jobId)),
+    );
+  }, [aiQuestions.data]);
+  useEffect(() => {
+    if (
+      !activeUnit ||
+      !activeUnitId ||
+      activeUnitId !== settledActiveUnitId ||
+      aiQuestionLine !== undefined ||
+      dismissedAiQuestionUnits.current.has(activeUnitId)
+    ) {
+      return;
+    }
+    const latestSavedQuestion = aiQuestions.data?.at(-1);
+    const remembered = aiConversationVisibility(
+      window.localStorage,
+      initialData.pullRequest.id,
+      activeUnitId,
+    );
+    if (remembered === null) return;
+    const focusLine = remembered
+      ? remembered.line
+      : latestSavedQuestion?.focusLine;
+    const threadId =
+      remembered?.threadId ?? latestSavedQuestion?.conversationId;
+    if (
+      focusLine === null ||
+      focusLine === undefined ||
+      (!lineWithinReviewRanges(
+        focusLine,
+        currentRelatedRanges,
+        activeUnit.startLine,
+        activeUnit.endLine,
+      ) &&
+        !lineWithinReviewRanges(
+          focusLine,
+          previousRelatedRanges,
+          previousUnitStartLine,
+          previousUnitEndLine,
+        ))
+    ) {
+      return;
+    }
+    setFocusAiQuestionComposer(false);
+    setAiQuestionLine(focusLine);
+    setAiQuestionThreadId(threadId);
+    rememberAiConversationVisibility(
+      window.localStorage,
+      initialData.pullRequest.id,
+      activeUnitId,
+      focusLine,
+      threadId,
+    );
+  }, [
+    activeUnit,
+    activeUnitId,
+    aiQuestionLine,
+    aiQuestions.data,
+    initialData.pullRequest.id,
+    previousUnitEndLine,
+    previousUnitStartLine,
+    currentRelatedRanges,
+    previousRelatedRanges,
+    settledActiveUnitId,
+  ]);
+  useEffect(
+    () => () => {
+      for (const stream of aiQuestionStreams.current.values()) stream.abort();
+      aiQuestionStreams.current.clear();
+    },
+    [],
+  );
   const startExplanation = api.ai.start.useMutation({
     onSuccess: () => {
       toast.success("Explanation started");
       void aiStatus.refetch();
     },
     onError: showAiStartError,
+  });
+  const startAiQuestion = api.ai.start.useMutation({
+    onSuccess: () => void aiUsage.refetch(),
+  });
+  const deleteAiQuestionThread = api.ai.deleteQuestionThread.useMutation({
+    onError: (error) => toast.error(error.message),
   });
   const aiConfiguration = api.ai.configuration.useQuery();
   const pullRequestReview = api.ai.reviewStatus.useQuery(
@@ -901,6 +1369,15 @@ export function ReviewWorkspace({
   const explanationRunning =
     startExplanation.isPending ||
     ["queued", "running"].includes(aiStatus.data?.status ?? "");
+  const aiQuestionRunning =
+    startAiQuestion.isPending ||
+    liveAiQuestions.some(({ status }) =>
+      ["queued", "running", "streaming"].includes(status),
+    ) ||
+    (aiQuestions.data?.some(({ status }) =>
+      ["queued", "running"].includes(status),
+    ) ??
+      false);
   const explanationAnnotations =
     aiStatus.data?.status === "completed" && aiStatus.data.result
       ? [...(aiStatus.data.result.annotations ?? [])]
@@ -929,21 +1406,81 @@ export function ReviewWorkspace({
       refetchInterval: waitingCount > 0 ? 45_000 : false,
     },
   );
-  const [manualSyncPending, setManualSyncPending] = useState(false);
+  const manualSyncPending = reviewSession.matches("synchronizing");
   const pollLatestPullRequest = api.review.poll.useMutation({
     onSuccess: (result) => {
-      if (!result.changed) return;
-      setUpdateAvailable(true);
-      toast.info("New pull request changes synced", {
+      setActiveSyncId(result.syncId);
+      void utils.review.activeSyncs.invalidate();
+      toast.info("Pull request synchronization queued", {
         description:
-          "Load the updated review path when you are ready. Your current draft stays in place.",
+          "ReviewDuck will preserve your current review while it runs.",
       });
     },
   });
+  const syncStatus = api.review.syncStatus.useQuery(
+    { syncId: activeSyncId ?? "00000000-0000-4000-8000-000000000000" },
+    {
+      enabled: Boolean(activeSyncId),
+      refetchInterval: (query) =>
+        ["queued", "running"].includes(query.state.data?.status ?? "")
+          ? 1_500
+          : false,
+    },
+  );
+  useEffect(() => {
+    const status = syncStatus.data?.status;
+    if (status === "completed") {
+      setActiveSyncId(undefined);
+      setUpdateAvailable(true);
+      void Promise.all([
+        utils.review.activeSyncs.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+        utils.review.providerReviewState.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+      ]);
+      sendReviewSession({ type: "SYNC_FINISHED" });
+      toast.info("New pull request revision is ready", {
+        description:
+          "Load the updated review path when you are ready. Your current draft stays in place.",
+      });
+    } else if (status === "failed" || status === "cancelled") {
+      setActiveSyncId(undefined);
+      void utils.review.activeSyncs.invalidate();
+      sendReviewSession({ type: "SYNC_FINISHED" });
+      toast.error(
+        status === "cancelled"
+          ? "Pull request synchronization was cancelled"
+          : "Pull request synchronization failed",
+        { description: syncStatus.data?.error ?? "Try again in a moment." },
+      );
+    }
+  }, [
+    sendReviewSession,
+    syncStatus.data,
+    utils.review.activeSyncs.invalidate,
+    utils.review.dashboard.invalidate,
+    utils.review.gamification.invalidate,
+    utils.review.providerReviewState.invalidate,
+    initialData.pullRequest.id,
+  ]);
   const externalSyncPending =
-    manualSyncPending || pollLatestPullRequest.isPending;
+    manualSyncPending ||
+    pollLatestPullRequest.isPending ||
+    ["queued", "running"].includes(syncStatus.data?.status ?? "");
   const resetReview = api.review.reset.useMutation({
-    onSuccess: () => window.location.reload(),
+    onSuccess: (result) => {
+      setActiveSyncId(result.syncId);
+      setResetDialogOpen(false);
+      void Promise.all([
+        utils.review.activeSyncs.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+      ]);
+      router.refresh();
+      toast.info("Review reset; synchronization queued");
+    },
     onError: (error) => {
       toast.error("Review could not be reset", {
         description: error.message,
@@ -951,79 +1488,61 @@ export function ReviewWorkspace({
     },
   });
 
-  /** Polls the provider for both pull-request changes and conversations. */
+  /** Queues durable source synchronization and refreshes provider conversations. */
   async function syncExternalData() {
     if (manualSyncPending) return;
-    setManualSyncPending(true);
+    sendReviewSession({ type: "SYNC_STARTED" });
     try {
-      const [pullRequestResult, conversationResult] = await Promise.allSettled([
-        pollLatestPullRequest.mutateAsync({
-          pullRequestId: initialData.pullRequest.id,
-        }),
-        providerConversations.refetch(),
-      ]);
-
-      if (pullRequestResult.status === "rejected") {
-        toast.error(
-          `Could not sync ${providerLabel(initialData.pullRequest.provider)} code`,
-          {
-            description:
-              pullRequestResult.reason instanceof Error
-                ? pullRequestResult.reason.message
-                : "Try again in a moment.",
-          },
-        );
-        return;
-      }
-
-      const conversationError =
-        conversationResult.status === "rejected"
-          ? conversationResult.reason
-          : conversationResult.value.error;
+      await pollLatestPullRequest.mutateAsync({
+        pullRequestId: initialData.pullRequest.id,
+      });
+      const conversationResult = await providerConversations.refetch();
+      const conversationError = conversationResult.error;
       if (conversationError) {
         toast.warning(
-          `${providerLabel(initialData.pullRequest.provider)} code synced`,
+          `${providerLabel(initialData.pullRequest.provider)} sync queued`,
           {
             description:
-              "Review conversations could not be loaded. The code is current; retry conversations from the warning above the code.",
+              "Review conversations could not be loaded; retry them from the warning above the code.",
           },
         );
-        return;
       }
-
-      if (!pullRequestResult.value.changed) {
-        toast.success(
-          `${providerLabel(initialData.pullRequest.provider)} is up to date`,
-          { description: "Latest code and conversations are synced." },
-        );
-      }
-    } finally {
-      setManualSyncPending(false);
+    } catch (cause) {
+      sendReviewSession({ type: "SYNC_FINISHED" });
+      toast.error(
+        `Could not queue ${providerLabel(initialData.pullRequest.provider)} synchronization`,
+        {
+          description:
+            cause instanceof Error ? cause.message : "Try again in a moment.",
+        },
+      );
     }
+  }
+
+  /** Persists the exact PR revision currently visible in the workspace. */
+  function rememberLoadedRevision() {
+    const snapshot = initialData.snapshot;
+    if (!snapshot) return;
+    acknowledgeReviewRevision(window.localStorage, initialData.pullRequest.id, {
+      headSha: snapshot.headSha,
+      snapshotId: snapshot.id,
+      version: snapshot.version,
+    });
   }
 
   /** Replaces the current review workspace with the newly synced revision. */
   function loadAvailableChanges() {
+    rememberLoadedRevision();
+    setUpdateAvailable(false);
     router.refresh();
   }
 
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (
-        document.visibilityState === "visible" &&
-        !pollLatestPullRequest.isPending
-      ) {
-        pollLatestPullRequest.mutate({
-          pullRequestId: initialData.pullRequest.id,
-        });
-      }
-    }, 60_000);
-    return () => window.clearInterval(interval);
-  }, [
-    initialData.pullRequest.id,
-    pollLatestPullRequest.isPending,
-    pollLatestPullRequest.mutate,
-  ]);
+  /** Acknowledges the explanation for the currently loaded PR revision. */
+  function acknowledgeLoadedRevision() {
+    rememberLoadedRevision();
+    setRevisionNotice(undefined);
+  }
+
   const activeProviderThreads =
     providerConversations.data?.threads.filter(
       (thread) => thread.unitId === activeUnit?.id,
@@ -1139,6 +1658,65 @@ export function ReviewWorkspace({
       discussion.data?.findings.filter(
         (finding) => finding.line === lineNumber,
       ) ?? [];
+    const allLineQuestions = [
+      ...(aiQuestions.data
+        ?.filter(
+          (question) =>
+            question.focusLine === lineNumber &&
+            !liveAiQuestions.some(({ jobId }) => jobId === question.id),
+        )
+        .map((question) => ({
+          error: question.error,
+          id: question.id,
+          jobId: question.id,
+          question: question.question,
+          result: question.result
+            ? {
+                summary: question.result.summary,
+                commentProposals: question.result.commentProposals?.map(
+                  (proposal, index) => ({
+                    ...proposal,
+                    published:
+                      discussion.data?.comments.some(
+                        (comment) =>
+                          comment.aiJobId === question.id &&
+                          comment.aiFindingIndex === index &&
+                          comment.status === "published",
+                      ) ?? false,
+                  }),
+                ),
+              }
+            : null,
+          status: question.status,
+          threadId: question.conversationId,
+        })) ?? []),
+      ...liveAiQuestions
+        .filter((question) => question.focusLine === lineNumber)
+        .map((question) => ({
+          error: question.error,
+          id: question.id,
+          jobId: question.jobId,
+          progress: question.progress,
+          question: question.question,
+          result: question.result,
+          status: question.status,
+          threadId: question.threadId,
+        })),
+    ];
+    const lineQuestionGroups = new Map<string, typeof allLineQuestions>();
+    for (const question of allLineQuestions) {
+      const threadId = question.threadId;
+      const group = lineQuestionGroups.get(threadId) ?? [];
+      group.push(question);
+      lineQuestionGroups.set(threadId, group);
+    }
+    const activeThreadId =
+      aiQuestionThreadId && lineQuestionGroups.has(aiQuestionThreadId)
+        ? aiQuestionThreadId
+        : ([...lineQuestionGroups.keys()].at(-1) ?? aiQuestionThreadId);
+    const lineQuestions = activeThreadId
+      ? (lineQuestionGroups.get(activeThreadId) ?? [])
+      : [];
     const lineThreads = activeProviderThreads.filter(
       (thread) => thread.line === lineNumber,
     );
@@ -1193,6 +1771,114 @@ export function ReviewWorkspace({
             </article>
           );
         })}
+        {aiQuestionLine === lineNumber && (
+          <InlineAiQuestion
+            autoFocus={focusAiQuestionComposer}
+            canAsk={canAskAi}
+            draft={aiQuestionDraft}
+            entries={lineQuestions}
+            line={lineNumber}
+            minimumLine={Math.min(activeUnit.startLine, previousUnitStartLine)}
+            maximumLine={Math.max(activeUnit.endLine, previousUnitEndLine)}
+            onAsk={askAiQuestion}
+            onChange={setAiQuestionDraft}
+            onClose={() => {
+              if (activeUnitId) {
+                dismissedAiQuestionUnits.current.add(activeUnitId);
+                rememberAiConversationVisibility(
+                  window.localStorage,
+                  initialData.pullRequest.id,
+                  activeUnitId,
+                  null,
+                );
+              }
+              setAiQuestionLine(undefined);
+              setAiQuestionThreadId(undefined);
+              setFocusAiQuestionComposer(false);
+              setAiQuestionPreviewLine(undefined);
+              setAiQuestionDraft("");
+            }}
+            onDeleteThread={async (jobIds) => {
+              if (jobIds.length === 0) return;
+              await deleteAiQuestionThread.mutateAsync({
+                pullRequestId: initialData.pullRequest.id,
+                unitId: activeUnit.id,
+                jobIds,
+              });
+              await aiQuestions.refetch();
+              dismissedAiQuestionUnits.current.add(activeUnit.id);
+              rememberAiConversationVisibility(
+                window.localStorage,
+                initialData.pullRequest.id,
+                activeUnit.id,
+                null,
+              );
+              setAiQuestionLine(undefined);
+              setAiQuestionThreadId(undefined);
+              setFocusAiQuestionComposer(false);
+              setAiQuestionPreviewLine(undefined);
+              setAiQuestionDraft("");
+              toast.success("AI conversation deleted", {
+                description:
+                  "Previously published pull-request comments were preserved.",
+              });
+            }}
+            onMove={moveAiQuestion}
+            onPreview={setAiQuestionPreviewLine}
+            onPublishProposal={async (proposal) => {
+              await publishComment.mutateAsync({
+                unitId: activeUnit.id,
+                ...proposal,
+              });
+              dismissedAiQuestionUnits.current.add(activeUnit.id);
+              rememberAiConversationVisibility(
+                window.localStorage,
+                initialData.pullRequest.id,
+                activeUnit.id,
+                null,
+              );
+              setAiQuestionLine(undefined);
+              setAiQuestionThreadId(undefined);
+              setFocusAiQuestionComposer(false);
+            }}
+            onStep={stepAiQuestion}
+            providerName={providerLabel(initialData.pullRequest.provider)}
+          />
+        )}
+        {[...lineQuestionGroups.entries()].map(
+          ([threadId, questions], groupIndex) =>
+            !(aiQuestionLine === lineNumber && activeThreadId === threadId) && (
+              <button
+                key={threadId}
+                type="button"
+                aria-label={
+                  lineQuestionGroups.size === 1
+                    ? `Reopen AI conversation on line ${lineNumber}`
+                    : `Reopen AI conversation ${groupIndex + 1} on line ${lineNumber}`
+                }
+                onClick={() => {
+                  dismissedAiQuestionUnits.current.delete(activeUnit.id);
+                  rememberAiConversationVisibility(
+                    window.localStorage,
+                    initialData.pullRequest.id,
+                    activeUnit.id,
+                    lineNumber,
+                    threadId,
+                  );
+                  setFocusAiQuestionComposer(false);
+                  setAiQuestionThreadId(threadId);
+                  setAiQuestionLine(lineNumber);
+                }}
+                className="border-violet/15 bg-violet/[.035] text-violet hover:border-violet/30 hover:bg-violet/[.07] mx-4 my-1 ml-[71px] flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-sans text-[9px] transition"
+              >
+                <Sparkles className="size-3" />
+                AI conversation
+                <span className="border-violet/15 bg-panel rounded px-1.5 py-0.5 font-mono text-[8px]">
+                  {questions.length}
+                </span>
+              </button>
+            ),
+        )}
         {lineFindings.map((finding) => {
           const published =
             discussion.data?.comments.some(
@@ -1383,31 +2069,16 @@ export function ReviewWorkspace({
     },
     onError: showAiStartError,
   });
-  const startPendingExplanations = api.ai.startPendingExplanations.useMutation({
-    onSuccess: ({ created, alreadyRunning }) => {
-      const total = created + alreadyRunning;
-      toast.success(
-        created > 0
-          ? `${created} ${created === 1 ? "explanation" : "explanations"} queued`
-          : "Explanations are already running",
-        {
-          description:
-            alreadyRunning > 0
-              ? `${total} pending ${total === 1 ? "unit is" : "units are"} being processed.`
-              : "Each explanation will be ready when you reach that review unit.",
-        },
-      );
-      void aiStatus.refetch();
-    },
-    onError: showAiStartError,
-  });
   const reviewRunning =
     startPullRequestReview.isPending ||
     ["queued", "running"].includes(pullRequestReview.data?.status ?? "");
   const aiUsage = api.ai.usage.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
-      refetchInterval: explanationRunning || reviewRunning ? 2_000 : false,
+      refetchInterval:
+        explanationRunning || aiQuestionRunning || reviewRunning
+          ? 2_000
+          : false,
     },
   );
   const pullReviewRequested = useRef(false);
@@ -1435,10 +2106,15 @@ export function ReviewWorkspace({
     startPullRequestReview,
   ]);
   useEffect(() => {
-    if (!activeUnit) return;
+    if (!activeUnitId) return;
     setSelectedLine(undefined);
     setFeedback("");
-  }, [activeUnit]);
+    setAiQuestionLine(undefined);
+    setAiQuestionThreadId(undefined);
+    setFocusAiQuestionComposer(false);
+    setAiQuestionPreviewLine(undefined);
+    setAiQuestionDraft("");
+  }, [activeUnitId]);
   useEffect(() => {
     if (selectedLine !== undefined) commentInputRef.current?.focus();
   }, [selectedLine]);
@@ -1500,6 +2176,14 @@ export function ReviewWorkspace({
   const activeSignOffPending = activeUnit
     ? signOffQueue.ids.has(activeUnit.id)
     : false;
+  const deletedUnitsToSignOff = useMemo(
+    () => deletedFileSignOffUnits(units, fileContexts),
+    [fileContexts, units],
+  );
+  const canSignOffDeletedFiles =
+    activeFileIsDeleted &&
+    deletedUnitsToSignOff.length > 0 &&
+    !resetReview.isPending;
   const pendingSignOffCount = signOffQueue.ids.size;
   const signOffQueueProgress = `${signOffQueue.completed}/${signOffQueue.total}`;
   const footerSaveState = reviewFooterSaveState({
@@ -1507,9 +2191,34 @@ export function ReviewWorkspace({
     pendingSaveCount: pendingSignOffCount,
     reviewComplete,
   });
+  const completionVisible =
+    reviewComplete && completionOpen && footerSaveState === "idle";
+  const openDashboard = useCallback(() => router.push("/dashboard"), [router]);
+  const openNextReview = useCallback(() => {
+    if (nextReview) router.push(`/review/${nextReview.id}`);
+  }, [nextReview, router]);
+  useEffect(() => {
+    if (!completionVisible) return;
+
+    /** Dismisses the completion state while preserving the completed review. */
+    function dismissCompletion(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setCompletionOpen(false);
+    }
+
+    document.addEventListener("keydown", dismissCompletion);
+    return () => document.removeEventListener("keydown", dismissCompletion);
+  }, [completionVisible]);
   const canUseAi =
     aiConfiguration.data?.mode !== "off" &&
     !explanationRunning &&
+    !!activeUnit &&
+    settledActiveUnitId === activeUnit.id &&
+    activeUnit.kind !== "binary";
+  const canAskAi =
+    aiConfiguration.data?.mode !== "off" &&
+    !aiQuestionRunning &&
     !!activeUnit &&
     settledActiveUnitId === activeUnit.id &&
     activeUnit.kind !== "binary";
@@ -1596,23 +2305,287 @@ export function ReviewWorkspace({
     });
   }
 
-  /** Queues focused explanations for every currently pending review unit. */
-  function explainPendingUnits() {
+  /** Opens an inline question at the visible in-scope line nearest the reader. */
+  function openAiQuestion() {
+    if (!activeUnit || activeUnit.kind === "binary") return;
+    dismissedAiQuestionUnits.current.delete(activeUnit.id);
+    const pane = codeScrollRef.current;
+    const center = pane
+      ? pane.getBoundingClientRect().top + pane.clientHeight / 2
+      : window.innerHeight / 2;
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>('[id^="review-line-"]'),
+    )
+      .map((element) => ({
+        element,
+        line: Number(element.id.replace("review-line-", "")),
+      }))
+      .filter(
+        ({ line }) => Number.isInteger(line) && isPrimaryReviewLine(line),
+      );
+    const nearest = candidates.sort((left, right) => {
+      const leftBounds = left.element.getBoundingClientRect();
+      const rightBounds = right.element.getBoundingClientRect();
+      return (
+        Math.abs(center - (leftBounds.top + leftBounds.height / 2)) -
+        Math.abs(center - (rightBounds.top + rightBounds.height / 2))
+      );
+    })[0]?.line;
+    const firstChangedLine = [...changedCurrentLines]
+      .filter(isPrimaryReviewLine)
+      .sort((left, right) => left - right)[0];
+    setSelectedLine(undefined);
+    setKeyboardLine(undefined);
+    setFocusAiQuestionComposer(true);
+    const nextLine = nearest ?? firstChangedLine ?? primaryReviewStart;
+    const latestLiveThread = liveAiQuestions
+      .filter(({ focusLine }) => focusLine === nextLine)
+      .at(-1)?.threadId;
+    const latestPersistedThread = aiQuestions.data
+      ?.filter(({ focusLine }) => focusLine === nextLine)
+      .at(-1)?.conversationId;
+    const threadId =
+      latestLiveThread ?? latestPersistedThread ?? crypto.randomUUID();
+    setAiQuestionLine(nextLine);
+    setAiQuestionThreadId(threadId);
+    rememberAiConversationVisibility(
+      window.localStorage,
+      initialData.pullRequest.id,
+      activeUnit.id,
+      nextLine,
+      threadId,
+    );
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() =>
+        document
+          .getElementById("inline-ai-question")
+          ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+      ),
+    );
+  }
+
+  /** Moves the inline AI question while keeping it inside review scope. */
+  function moveAiQuestion(line: number) {
+    if (!activeUnit) return;
+    const nextLine = closestReviewLine(
+      line,
+      primaryReviewRanges,
+      primaryReviewStart,
+      primaryReviewEnd,
+    );
+    if (nextLine === aiQuestionLine) return;
+    const pane = codeScrollRef.current;
+    const card = document.getElementById("inline-ai-question");
+    if (pane && card) {
+      aiQuestionMoveAnchor.current = {
+        cardTop: card.getBoundingClientRect().top,
+        scrollTop: pane.scrollTop,
+      };
+    }
+    setAiQuestionLine(nextLine);
+    rememberAiConversationVisibility(
+      window.localStorage,
+      initialData.pullRequest.id,
+      activeUnit.id,
+      nextLine,
+      aiQuestionThreadId,
+    );
+  }
+
+  /** Moves the AI question to the next rendered in-scope review line. */
+  function stepAiQuestion(direction: -1 | 1) {
+    if (!activeUnit || aiQuestionLine === undefined) return;
+    const renderedLines = Array.from(
+      document.querySelectorAll<HTMLElement>('[id^="review-line-"]'),
+    )
+      .map((element) => Number(element.id.replace("review-line-", "")))
+      .filter(
+        (line, index, lines) =>
+          Number.isInteger(line) &&
+          isPrimaryReviewLine(line) &&
+          lines.indexOf(line) === index,
+      )
+      .sort((left, right) => left - right);
+    const nextLine =
+      direction === 1
+        ? renderedLines.find((line) => line > aiQuestionLine)
+        : [...renderedLines].reverse().find((line) => line < aiQuestionLine);
+    if (nextLine !== undefined) moveAiQuestion(nextLine);
+  }
+
+  /** Applies one durable agent-stream update to an optimistic chat entry. */
+  function updateLiveAiQuestion(id: string, update: AiQuestionStreamUpdate) {
+    setLiveAiQuestions((questions) =>
+      questions.map((question) =>
+        question.id === id
+          ? {
+              ...question,
+              error: update.error ?? null,
+              progress: update.progress,
+              result: update.text
+                ? {
+                    summary: update.text,
+                    commentProposals: update.commentProposals,
+                  }
+                : question.result,
+              status: update.status === "working" ? "running" : update.status,
+            }
+          : question,
+      ),
+    );
+  }
+
+  /** Follows the persisted durable conversation stream for a focused AI question. */
+  async function streamAiQuestion(jobId: string, optimisticId: string) {
+    aiQuestionStreams.current.get(optimisticId)?.abort();
+    const controller = new AbortController();
+    aiQuestionStreams.current.set(optimisticId, controller);
+    let cursor = -1;
+    let reconnects = 0;
+    try {
+      while (!controller.signal.aborted) {
+        try {
+          const query = cursor >= 0 ? `?cursor=${cursor}` : "";
+          const response = await fetch(`/api/ai/jobs/${jobId}/stream${query}`, {
+            headers: { Accept: "text/event-stream" },
+            signal: controller.signal,
+          });
+          const lastUpdate = await consumeAiQuestionStream(
+            response,
+            (update) => {
+              if (update.cursor !== undefined) cursor = update.cursor;
+              updateLiveAiQuestion(optimisticId, update);
+            },
+          );
+          if (
+            lastUpdate?.status === "completed" ||
+            lastUpdate?.status === "failed"
+          ) {
+            return;
+          }
+          throw new Error("AI answer stream ended before completion");
+        } catch {
+          if (controller.signal.aborted) return;
+          reconnects += 1;
+          if (reconnects > 5) break;
+          setLiveAiQuestions((questions) =>
+            questions.map((question) =>
+              question.id === optimisticId &&
+              !["completed", "failed"].includes(question.status)
+                ? {
+                    ...question,
+                    progress: "Live updates disconnected; reconnecting…",
+                    status: "running",
+                  }
+                : question,
+            ),
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(4_000, 250 * 2 ** reconnects)),
+          );
+        }
+      }
+      if (!controller.signal.aborted) {
+        setLiveAiQuestions((questions) =>
+          questions.map((question) =>
+            question.id === optimisticId &&
+            !["completed", "failed"].includes(question.status)
+              ? {
+                  ...question,
+                  progress: "Live updates unavailable; still working…",
+                  status: "running",
+                }
+              : question,
+          ),
+        );
+      }
+    } finally {
+      if (aiQuestionStreams.current.get(optimisticId) === controller) {
+        aiQuestionStreams.current.delete(optimisticId);
+      }
+      void aiQuestions.refetch();
+      void aiUsage.refetch();
+    }
+  }
+
+  /** Sends the current line-focused question to the isolated AI reviewer. */
+  function askAiQuestion(quickQuestion?: string) {
     if (
-      pendingExplanationUnitIds.length === 0 ||
-      startPendingExplanations.isPending
+      !activeUnit ||
+      aiQuestionLine === undefined ||
+      !(quickQuestion ?? aiQuestionDraft).trim() ||
+      !canAskAi
     ) {
       return;
     }
-    startPendingExplanations.mutate({
-      pullRequestId: initialData.pullRequest.id,
-      unitIds: pendingExplanationUnitIds,
-    });
+    const question = (quickQuestion ?? aiQuestionDraft).trim();
+    const focusLine = aiQuestionLine;
+    const threadId = aiQuestionThreadId ?? crypto.randomUUID();
+    if (!aiQuestionThreadId) setAiQuestionThreadId(threadId);
+    const optimisticId = `pending-${crypto.randomUUID()}`;
+    setLiveAiQuestions((questions) => [
+      ...questions,
+      {
+        error: null,
+        focusLine,
+        id: optimisticId,
+        progress: "Sending question…",
+        question,
+        result: null,
+        status: "queued",
+        threadId,
+      },
+    ]);
+    setAiQuestionDraft("");
+    startAiQuestion.mutate(
+      {
+        pullRequestId: initialData.pullRequest.id,
+        unitId: activeUnit.id,
+        kind: "explain",
+        question,
+        focusLine,
+        threadId,
+      },
+      {
+        onSuccess: (job) => {
+          setLiveAiQuestions((questions) =>
+            questions.map((entry) =>
+              entry.id === optimisticId
+                ? {
+                    ...entry,
+                    jobId: job.id,
+                    progress: "Waiting for the AI reviewer…",
+                    status: job.status === "running" ? "running" : "queued",
+                  }
+                : entry,
+            ),
+          );
+          void streamAiQuestion(job.id, optimisticId);
+          void aiQuestions.refetch();
+        },
+        onError: (error) => {
+          setLiveAiQuestions((questions) =>
+            questions.map((entry) =>
+              entry.id === optimisticId
+                ? {
+                    ...entry,
+                    error: error.message,
+                    progress: "Question was not sent",
+                    status: "failed",
+                  }
+                : entry,
+            ),
+          );
+          showAiStartError(error);
+        },
+      },
+    );
   }
 
   /** Starts a complete evidence-based review of the pull request. */
   function reviewPullRequestWithAi() {
     if (reviewRunning) return;
+    setAiReviewDialogOpen(false);
     startPullRequestReview.mutate({
       pullRequestId: initialData.pullRequest.id,
       kind: "review",
@@ -1631,6 +2604,20 @@ export function ReviewWorkspace({
       sessionId,
       durationSeconds: Math.round((Date.now() - startedAt) / 1000),
     });
+  }
+
+  /** Signs off every outstanding unit from files removed by this pull request. */
+  function signOffDeletedFiles() {
+    if (!canSignOffDeletedFiles) return;
+    const activeDuration = Math.round((Date.now() - startedAt) / 1000);
+    optimisticallyQueueSignOffs(
+      deletedUnitsToSignOff.map((unit) => ({
+        unitId: unit.id,
+        sessionId,
+        durationSeconds: unit.id === activeUnit?.id ? activeDuration : 0,
+      })),
+      (unit) => unit.changeType !== "deleted",
+    );
   }
 
   /** Returns the active signed-off unit to the pending review queue. */
@@ -1660,11 +2647,9 @@ export function ReviewWorkspace({
   function beginKeyboardComment() {
     if (!activeUnit) return;
     const firstChangedLine = [...changedCurrentLines]
-      .filter(
-        (line) => line >= activeUnit.startLine && line <= activeUnit.endLine,
-      )
+      .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];
-    setKeyboardLine(selectedLine ?? firstChangedLine ?? activeUnit.startLine);
+    setKeyboardLine(selectedLine ?? firstChangedLine ?? primaryReviewStart);
     setSelectedLine(undefined);
     setFeedback("");
   }
@@ -1699,14 +2684,20 @@ export function ReviewWorkspace({
       const previousScrollTop = pane.scrollTop;
       const previousScrollHeight = pane.scrollHeight;
       if (diffContextRef.current?.revealContext(direction)) {
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            const addedHeight = pane.scrollHeight - previousScrollHeight;
-            pane.scrollTop =
-              direction === -1
-                ? Math.max(0, previousScrollTop + addedHeight - 72)
-                : previousScrollTop + 72;
-          }),
+        const generation = ++contextRevealGeneration.current;
+        afterLayoutSettle(
+          () => pane.scrollHeight,
+          previousScrollHeight,
+          () => {
+            if (generation !== contextRevealGeneration.current) return;
+            pane.scrollTop = scrollTopAfterContextReveal({
+              direction,
+              previousScrollTop,
+              previousScrollHeight,
+              nextScrollHeight: pane.scrollHeight,
+              viewportHeight: pane.clientHeight,
+            });
+          },
         );
         return;
       }
@@ -1722,8 +2713,25 @@ export function ReviewWorkspace({
         availableBefore,
       })
     ) {
+      const previousScrollTop = pane.scrollTop;
+      const previousScrollHeight = pane.scrollHeight;
+      const generation = ++contextRevealGeneration.current;
       setContextBefore((current) =>
         Math.min(current + CONTEXT_PAGE_LINES, availableBefore),
+      );
+      afterLayoutSettle(
+        () => pane.scrollHeight,
+        previousScrollHeight,
+        () => {
+          if (generation !== contextRevealGeneration.current) return;
+          pane.scrollTop = scrollTopAfterContextReveal({
+            direction: -1,
+            previousScrollTop,
+            previousScrollHeight,
+            nextScrollHeight: pane.scrollHeight,
+            viewportHeight: pane.clientHeight,
+          });
+        },
       );
       return;
     }
@@ -1735,13 +2743,24 @@ export function ReviewWorkspace({
       contextAfter < availableAfter
     ) {
       const previousScrollTop = pane.scrollTop;
+      const previousScrollHeight = pane.scrollHeight;
+      const generation = ++contextRevealGeneration.current;
       setContextAfter((current) =>
         Math.min(current + CONTEXT_PAGE_LINES, availableAfter),
       );
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          pane.scrollTop = previousScrollTop + 72;
-        }),
+      afterLayoutSettle(
+        () => pane.scrollHeight,
+        previousScrollHeight,
+        () => {
+          if (generation !== contextRevealGeneration.current) return;
+          pane.scrollTop = scrollTopAfterContextReveal({
+            direction: 1,
+            previousScrollTop,
+            previousScrollHeight,
+            nextScrollHeight: pane.scrollHeight,
+            viewportHeight: pane.clientHeight,
+          });
+        },
       );
       return;
     }
@@ -1751,44 +2770,48 @@ export function ReviewWorkspace({
     });
   }
 
-  const aiActionItems: AiActionMenuItem[] = [
-    {
-      label:
-        aiStatus.data?.status === "completed"
-          ? "Refresh this unit"
-          : "Explain this unit",
-      description: activeUnit
-        ? `Explain ${activeUnit.name} with inline notes`
-        : "No review unit is selected",
-      shortcut: [{ key: "e" }],
-      disabled: !canUseAi,
-      loading: explanationRunning,
-      onSelect: explainActiveUnit,
-    },
-    {
-      label: `Explain pending units (${pendingExplanationUnitIds.length})`,
-      description:
-        pendingExplanationUnitIds.length > 0
-          ? "Queue a focused explanation for every unsigned review unit"
-          : "Every explainable unit is already reviewed or waiting",
-      shortcut: [{ key: "a" }],
-      disabled:
-        pendingExplanationUnitIds.length === 0 ||
-        startPendingExplanations.isPending ||
-        aiConfiguration.data?.mode === "off",
-      loading: startPendingExplanations.isPending,
-      onSelect: explainPendingUnits,
-    },
-    {
-      label: "Review the full pull request",
-      description:
-        "Inspect every changed file and surface actionable findings inline",
-      shortcut: [{ key: "r" }],
-      disabled: reviewRunning || aiConfiguration.data?.mode === "off",
-      loading: reviewRunning,
-      onSelect: reviewPullRequestWithAi,
-    },
-  ];
+  /** Renders direct AI controls without hiding their distinct scopes in a menu. */
+  function renderAiActionButtons() {
+    const aiDisabled = aiConfiguration.data?.mode === "off";
+    return (
+      <div className="grid w-full grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          className="min-w-0 px-2.5"
+          disabled={aiDisabled || !activeUnit || activeUnit.kind === "binary"}
+          onClick={openAiQuestion}
+        >
+          <MessageSquareText className="size-3.5 shrink-0" />
+          <span className="truncate">Ask</span>
+          <ShortcutHint
+            shortcut={reviewShortcuts.askAi}
+            className="ml-auto hidden sm:inline-flex"
+          />
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className="min-w-0 px-2.5"
+          disabled={aiDisabled || reviewRunning}
+          onClick={() => setAiReviewDialogOpen(true)}
+        >
+          {reviewRunning ? (
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
+          ) : (
+            <Sparkles className="size-3.5 shrink-0" />
+          )}
+          <span className="truncate">
+            {reviewRunning ? "Reviewing…" : "Review"}
+          </span>
+          <ShortcutHint
+            shortcut={reviewShortcuts.reviewPullRequest}
+            className="ml-auto hidden sm:inline-flex"
+          />
+        </Button>
+      </div>
+    );
+  }
 
   const reviewCommands: CommandCenterItem[] = [
     {
@@ -1811,21 +2834,33 @@ export function ReviewWorkspace({
     },
     {
       id: "scroll-code-down",
-      label: "Scroll code down",
-      description: "Move down through the code view",
+      label:
+        aiQuestionLine === undefined
+          ? "Scroll code down"
+          : "Move AI question down",
+      description:
+        aiQuestionLine === undefined
+          ? "Move down through the code view"
+          : "Focus the next visible in-scope line",
       group: "Review navigation",
       icon: <ChevronDown className="size-4" />,
       shortcut: reviewShortcuts.scrollDown,
-      onSelect: () => scrollCode(1),
+      onSelect: () =>
+        aiQuestionLine === undefined ? scrollCode(1) : stepAiQuestion(1),
     },
     {
       id: "scroll-code-up",
-      label: "Scroll code up",
-      description: "Move up through the code view",
+      label:
+        aiQuestionLine === undefined ? "Scroll code up" : "Move AI question up",
+      description:
+        aiQuestionLine === undefined
+          ? "Move up through the code view"
+          : "Focus the previous visible in-scope line",
       group: "Review navigation",
       icon: <ChevronDown className="size-4 rotate-180" />,
       shortcut: reviewShortcuts.scrollUp,
-      onSelect: () => scrollCode(-1),
+      onSelect: () =>
+        aiQuestionLine === undefined ? scrollCode(-1) : stepAiQuestion(-1),
     },
     {
       id: "next-unit",
@@ -1883,33 +2918,20 @@ export function ReviewWorkspace({
       onSelect: focusReviewSearch,
     },
     {
-      id: "explain-unit",
-      label: "Explain this unit",
+      id: "ask-ai-inline",
+      label: "Ask AI about this code",
       description:
         aiConfiguration.data?.mode === "off"
           ? "Enable AI assistance in settings first"
-          : "Ask AI for a focused explanation",
+          : "Open a line-anchored question beside the nearest in-scope code",
       group: "Review actions",
-      icon: <Sparkles className="size-4" />,
-      shortcut: reviewShortcuts.explainUnit,
-      disabled: !canUseAi,
-      onSelect: explainActiveUnit,
-    },
-    {
-      id: "explain-pending-units",
-      label: `Explain pending units (${pendingExplanationUnitIds.length})`,
-      description:
-        aiConfiguration.data?.mode === "off"
-          ? "Enable AI assistance in settings first"
-          : "Queue one focused explanation for every unsigned unit",
-      group: "Review actions",
-      icon: <Sparkles className="size-4" />,
-      shortcut: reviewShortcuts.explainPending,
+      icon: <MessageSquareText className="size-4" />,
+      shortcut: reviewShortcuts.askAi,
       disabled:
-        pendingExplanationUnitIds.length === 0 ||
-        startPendingExplanations.isPending ||
-        aiConfiguration.data?.mode === "off",
-      onSelect: explainPendingUnits,
+        aiConfiguration.data?.mode === "off" ||
+        !activeUnit ||
+        activeUnit.kind === "binary",
+      onSelect: openAiQuestion,
     },
     {
       id: "review-pull-request-with-ai",
@@ -1922,7 +2944,7 @@ export function ReviewWorkspace({
       icon: <Sparkles className="size-4" />,
       shortcut: reviewShortcuts.reviewPullRequest,
       disabled: reviewRunning || aiConfiguration.data?.mode === "off",
-      onSelect: reviewPullRequestWithAi,
+      onSelect: () => setAiReviewDialogOpen(true),
     },
     {
       id: "comment-on-line",
@@ -1962,6 +2984,19 @@ export function ReviewWorkspace({
       shortcut: reviewShortcuts.signOff,
       disabled: !canUsePrimaryAction,
       onSelect: runPrimaryAction,
+    },
+    {
+      id: "sign-off-deleted-files",
+      label: "Sign off deletes",
+      description:
+        deletedUnitsToSignOff.length === 1
+          ? "Sign off the remaining unit from files deleted in this pull request"
+          : `Sign off ${deletedUnitsToSignOff.length} remaining units from files deleted in this pull request`,
+      group: "Review actions",
+      icon: <CheckCheck className="size-4" />,
+      shortcut: reviewShortcuts.signOffDeletions,
+      disabled: !canSignOffDeletedFiles,
+      onSelect: signOffDeletedFiles,
     },
     {
       id: "unreview-unit",
@@ -2024,12 +3059,24 @@ export function ReviewWorkspace({
       onSelect: () => setResetDialogOpen(true),
     },
     {
+      id: "next-pull-request",
+      label: "Review the next pull request",
+      description: nextReview
+        ? `Continue with ${nextReview.repositoryOwner}/${nextReview.repositoryName} #${nextReview.number}`
+        : "No other prepared pull request is waiting for review",
+      group: "Navigate",
+      icon: <ChevronRight className="size-4" />,
+      shortcut: reviewShortcuts.nextReview,
+      disabled: !reviewComplete || !nextReview,
+      onSelect: openNextReview,
+    },
+    {
       id: "return-dashboard",
       label: "Return to pull requests",
       group: "Navigate",
       icon: <ArrowLeft className="size-4" />,
       shortcut: reviewShortcuts.dashboard,
-      onSelect: () => router.push("/dashboard"),
+      onSelect: openDashboard,
     },
     {
       id: "configure-ai",
@@ -2062,7 +3109,8 @@ export function ReviewWorkspace({
       keyboardLine !== undefined ||
       importPreview !== undefined ||
       hierarchyOpen ||
-      resetDialogOpen,
+      resetDialogOpen ||
+      aiReviewDialogOpen,
   });
 
   useEffect(() => {
@@ -2119,7 +3167,7 @@ export function ReviewWorkspace({
   }
 
   return (
-    <div className="bg-ink flex h-dvh min-h-0 flex-col overflow-hidden">
+    <div className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-hidden">
       <header className="flex h-16 items-center gap-4 border-b border-line px-4 sm:px-6">
         <Link
           href="/dashboard"
@@ -2270,6 +3318,41 @@ export function ReviewWorkspace({
         </div>
       )}
 
+      {revisionNotice && (
+        <div
+          role="status"
+          className="border-cyan/20 bg-cyan/[.045] flex shrink-0 items-start gap-3 border-b px-4 py-3 sm:items-center sm:px-6"
+        >
+          <RefreshCw className="text-cyan mt-0.5 size-4 shrink-0 sm:mt-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-cloud text-xs font-medium">
+              New pull-request revision loaded
+            </p>
+            <p className="text-mist mt-0.5 text-[10px] leading-4">
+              {revisionNotice.previous &&
+              revisionNotice.previous.headSha !== initialData.snapshot.headSha
+                ? `${providerLabel(initialData.pullRequest.provider)} moved from ${shortRevision(revisionNotice.previous.headSha)} to ${shortRevision(initialData.snapshot.headSha)}. `
+                : `Review analysis was recomputed for ${shortRevision(initialData.snapshot.headSha)}. `}
+              {revisionReReviewCount > 0
+                ? `${revisionReReviewCount} previously reviewed ${revisionReReviewCount === 1 ? "unit changed" : "units changed"} and ${revisionReReviewCount === 1 ? "needs" : "need"} another look. `
+                : "No reviewed units were reopened. "}
+              {revisionPreservedCount > 0 &&
+                `${revisionPreservedCount} unaffected ${revisionPreservedCount === 1 ? "sign-off was" : "sign-offs were"} preserved. `}
+              Only a new source or analysis revision can change review state;
+              interface updates cannot.
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="shrink-0"
+            onClick={acknowledgeLoadedRevision}
+          >
+            Got it
+          </Button>
+        </div>
+      )}
+
       <div
         className={cn(
           "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
@@ -2319,22 +3402,7 @@ export function ReviewWorkspace({
               <span className="text-fog text-[10px] font-semibold tracking-[.16em] uppercase">
                 Review path
               </span>
-              <span className="flex items-center gap-2">
-                <Badge>{units.length} units</Badge>
-                <button
-                  type="button"
-                  aria-label="Hide review path"
-                  title="Hide review path ([)"
-                  onClick={hidePathPanel}
-                  className="text-fog hover:bg-surface-subtle hover:text-cloud flex h-7 items-center gap-1.5 rounded-lg px-1.5 transition"
-                >
-                  <PanelLeftClose className="size-3.5" />
-                  <ShortcutHint
-                    shortcut={reviewShortcuts.togglePathPanel}
-                    className="hidden sm:inline-flex"
-                  />
-                </button>
-              </span>
+              <Badge>{units.length} units</Badge>
             </div>
             <div className="mt-3 flex items-center gap-2 text-[9px]">
               <span className="text-cloud">{remainingCount} remaining</span>
@@ -2644,16 +3712,64 @@ export function ReviewWorkspace({
               </section>
             )}
           </div>
+          <div className="shrink-0 border-t border-line p-3">
+            <button
+              type="button"
+              aria-label="Hide review path"
+              title="Hide review path"
+              onClick={hidePathPanel}
+              className="text-mist hover:bg-surface-subtle hover:text-cloud flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[10px] transition"
+            >
+              <PanelLeftClose className="size-3.5" />
+              <span>Hide review path</span>
+              <ShortcutHint
+                shortcut={reviewShortcuts.togglePathPanel}
+                className="ml-auto"
+              />
+            </button>
+          </div>
         </aside>
 
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
+          {completionVisible && (
+            <ReviewCompletion
+              completedFiles={completedFileCount}
+              completedUnits={signedCount}
+              dashboardShortcut={reviewShortcuts.dashboard}
+              dismissShortcut={[{ key: "Escape" }]}
+              nextReview={nextReview}
+              nextReviewShortcut={reviewShortcuts.nextReview}
+              providerReview={
+                <ProviderReviewDecision
+                  state={providerReviewState.data}
+                  error={providerReviewState.error?.message}
+                  loading={providerReviewState.isFetching}
+                  mutationPending={setProviderReviewDecision.isPending}
+                  repositoryUrl={initialData.pullRequest.repositoryWebUrl}
+                  pullRequestUrl={initialData.pullRequest.webUrl}
+                  onRefresh={() => void providerReviewState.refetch()}
+                  onDecision={(action, body) =>
+                    setProviderReviewDecision.mutate({
+                      pullRequestId: initialData.pullRequest.id,
+                      action,
+                      body,
+                    })
+                  }
+                />
+              }
+              queueLoading={reviewQueue.isLoading}
+              onDashboard={openDashboard}
+              onDismiss={() => setCompletionOpen(false)}
+              onNextReview={openNextReview}
+            />
+          )}
           <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-b border-line px-3 py-3 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4 lg:px-7">
             <button
               type="button"
               aria-label="Show review path"
               aria-controls="review-path-panel"
               aria-expanded={pathPanelOpen}
-              title="Show review path ([)"
+              title="Show review path"
               onClick={showPathPanel}
               className={cn(
                 "text-mist hover:text-cyan h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-cyan/25 hover:bg-cyan/[.05]",
@@ -2668,9 +3784,12 @@ export function ReviewWorkspace({
               />
             </button>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate font-mono text-sm font-medium">
-                  {activeUnit.name}
+              <div className="flex min-w-0 items-center gap-2">
+                <h1
+                  className="truncate font-mono text-sm font-medium"
+                  title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                >
+                  {activeUnit.path}
                 </h1>
                 {activeUnit.status === "waiting" && (
                   <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
@@ -2695,9 +3814,12 @@ export function ReviewWorkspace({
                   </Badge>
                 )}
               </div>
-              <p className="text-fog mt-1 truncate text-[10px]">
-                {activeUnit.path} · lines {activeUnit.startLine}–
-                {activeUnit.endLine}
+              <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
+                <span className="text-mist font-mono">{activeUnit.name}</span>
+                <span aria-hidden="true">·</span>
+                <span className="shrink-0">
+                  Lines {activeUnit.startLine}–{activeUnit.endLine}
+                </span>
               </p>
             </div>
             <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
@@ -2729,7 +3851,7 @@ export function ReviewWorkspace({
                     setContextBefore(0);
                     setContextAfter(0);
                   }}
-                  className="text-mist hover:text-cloud rounded-lg border border-line px-2.5 py-1.5 text-[10px] transition"
+                  className="text-mist hover:text-cloud h-8 rounded-lg border border-line px-2.5 text-[10px] transition"
                 >
                   {sideBySideVisible ? "Current" : "Diff"}
                 </button>
@@ -2739,7 +3861,7 @@ export function ReviewWorkspace({
                 aria-label="Show AI assistance"
                 aria-controls="code-explanation-panel"
                 aria-expanded={insightsPanelOpen}
-                title="Show AI assistance (])"
+                title="Show AI assistance"
                 onClick={showInsightsPanel}
                 className={cn(
                   "text-mist hover:text-violet h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-violet/25 hover:bg-violet/[.05]",
@@ -2753,7 +3875,7 @@ export function ReviewWorkspace({
                   className="hidden lg:inline-flex"
                 />
               </button>
-              <Badge className="hidden capitalize sm:inline-flex">
+              <Badge className="hidden h-8 py-0 capitalize sm:inline-flex">
                 {activeUnit.kind}
               </Badge>
             </div>
@@ -2802,7 +3924,8 @@ export function ReviewWorkspace({
           )}
           <div
             ref={codeScrollRef}
-            className="min-h-0 flex-1 overflow-auto bg-code py-5 font-mono text-[11px] leading-5"
+            data-code-scroll-pane
+            className="min-h-0 flex-1 overflow-auto bg-code py-5 font-mono text-[11px] leading-5 [overflow-anchor:none]"
           >
             {keyboardLine !== undefined && (
               <div
@@ -2849,6 +3972,12 @@ export function ReviewWorkspace({
                   language={activeUnit.language}
                   previousStartLine={1}
                   currentStartLine={1}
+                  previousFocusRanges={
+                    activeUnit.relatedRanges ? previousRelatedRanges : undefined
+                  }
+                  currentFocusRanges={
+                    activeUnit.relatedRanges ? currentRelatedRanges : undefined
+                  }
                   previousFocusStartLine={
                     activeUnit.changeType === "added"
                       ? null
@@ -2870,7 +3999,7 @@ export function ReviewWorkspace({
                       : activeUnit.endLine
                   }
                   selectedLine={selectedLine}
-                  keyboardLine={keyboardLine}
+                  keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
                   onSelectReviewLine={openInlineComment}
                   renderLineDetails={renderReviewLineDetails}
                 />
@@ -2880,11 +4009,14 @@ export function ReviewWorkspace({
               <UnitImportContext
                 key={activeUnit.id}
                 fileSource={activeModule.source}
+                previousFileSource={activeModule.previousSource ?? undefined}
                 unitSource={activeUnit.source}
                 language={activeUnit.language}
                 unitId={activeUnit.id}
                 visibleStartLine={visibleStartLine}
                 visibleEndLine={visibleEndLine}
+                previousVisibleStartLine={previousUnitStartLine}
+                previousVisibleEndLine={previousUnitEndLine}
                 resolvingImport={resolvingImport}
                 onFollow={(reference) => void followImport(reference)}
               />
@@ -2937,9 +4069,7 @@ export function ReviewWorkspace({
               activeUnit.kind !== "binary" &&
               lines.map((line, index) => {
                 const lineNumber = visibleStartLine + index;
-                const isUnitLine =
-                  lineNumber >= activeUnit.startLine &&
-                  lineNumber <= activeUnit.endLine;
+                const isUnitLine = isPrimaryReviewLine(lineNumber);
                 const isChangedLine =
                   isUnitLine && changedCurrentLines.has(lineNumber);
                 const isContextLine = !isUnitLine;
@@ -2959,6 +4089,33 @@ export function ReviewWorkspace({
                           line={activeUnit.startLine}
                         />
                       )}
+                    {lineNumber === activeUnit.startLine &&
+                      previousRewriteLines.map((line, previousIndex) => {
+                        const previousLineNumber =
+                          previousUnitStartLine + previousIndex;
+                        return (
+                          <div
+                            key={`${activeUnit.id}-previous-${previousIndex}`}
+                            className="group grid grid-cols-[55px_1fr] border-l-2 border-l-red-400/45 bg-red-400/[.07] px-4 hover:bg-red-400/[.1]"
+                          >
+                            <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
+                              {previousLineNumber}
+                            </span>
+                            <pre className="syntax-code overflow-visible text-cloud/80 line-through opacity-80">
+                              {line.tokens.length
+                                ? line.tokens.map((token, tokenIndex) => (
+                                    <span
+                                      key={`${tokenIndex}-${token.text.length}`}
+                                      className={token.className || undefined}
+                                    >
+                                      {token.text}
+                                    </span>
+                                  ))
+                                : " "}
+                            </pre>
+                          </div>
+                        );
+                      })}
                     <div
                       ref={
                         lineNumber === activeUnit.startLine
@@ -2980,6 +4137,8 @@ export function ReviewWorkspace({
                         selectedLine === lineNumber && "bg-violet/[.055]",
                         keyboardLine === lineNumber &&
                           "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                        aiQuestionPreviewLine === lineNumber &&
+                          "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
                       )}
                     >
                       {isUnitLine && activeUnit.kind !== "binary" ? (
@@ -3103,42 +4262,50 @@ export function ReviewWorkspace({
                   <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
                 </span>
               </summary>
-              <p className="text-mist border-t border-violet/10 px-4 py-3 whitespace-pre-line text-xs leading-5">
-                {aiStatus.data.result.summary}
-              </p>
+              <ProviderCommentBody
+                body={aiStatus.data.result.summary}
+                className="mt-0 max-w-none border-t border-violet/10 px-4 py-3 text-xs leading-5"
+              />
             </details>
           )}
           <div className="border-violet/15 bg-violet/[.025] flex items-center justify-end border-t px-3 py-3 sm:px-4 xl:hidden">
-            <AiActionMenu
-              items={aiActionItems}
-              disabled={aiConfiguration.data?.mode === "off"}
-            />
+            {renderAiActionButtons()}
           </div>
           <div className="bg-panel/45 flex items-center justify-end gap-2 border-t border-line px-3 py-3 sm:gap-3 sm:px-7 sm:py-4">
             <div className="text-fog mr-auto hidden min-w-0 items-center gap-4 text-[9px] sm:flex">
-              <span className="hidden items-center gap-3 xl:flex">
-                <span className="flex items-center gap-1.5 whitespace-nowrap">
-                  <ShortcutAlternatives
-                    shortcut={reviewShortcuts.scrollUp}
-                    alternateShortcut={reviewShortcuts.scrollDown}
-                  />
-                  Scroll
+              {reviewComplete ? (
+                <span
+                  role="status"
+                  className="text-lime flex items-center gap-2 whitespace-nowrap"
+                >
+                  <CheckCheck className="size-3.5" />
+                  All {signedCount} units reviewed
                 </span>
-                <span className="flex items-center gap-1.5 whitespace-nowrap">
-                  <ShortcutAlternatives
-                    shortcut={reviewShortcuts.previousUnit}
-                    alternateShortcut={reviewShortcuts.previousUnitArrow}
-                  />
-                  Previous
+              ) : (
+                <span className="hidden items-center gap-3 xl:flex">
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
+                    <ShortcutAlternatives
+                      shortcut={reviewShortcuts.scrollUp}
+                      alternateShortcut={reviewShortcuts.scrollDown}
+                    />
+                    {aiQuestionLine === undefined ? "Scroll" : "Move question"}
+                  </span>
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
+                    <ShortcutAlternatives
+                      shortcut={reviewShortcuts.previousUnit}
+                      alternateShortcut={reviewShortcuts.previousUnitArrow}
+                    />
+                    Previous
+                  </span>
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
+                    <ShortcutAlternatives
+                      shortcut={reviewShortcuts.nextUnit}
+                      alternateShortcut={reviewShortcuts.nextUnitArrow}
+                    />
+                    Next
+                  </span>
                 </span>
-                <span className="flex items-center gap-1.5 whitespace-nowrap">
-                  <ShortcutAlternatives
-                    shortcut={reviewShortcuts.nextUnit}
-                    alternateShortcut={reviewShortcuts.nextUnitArrow}
-                  />
-                  Next
-                </span>
-              </span>
+              )}
             </div>
             {footerSaveState === "background" && (
               <span
@@ -3190,15 +4357,68 @@ export function ReviewWorkspace({
                     )}
                   </Button>
                 )}
-                <Button asChild className="h-10 px-3 sm:h-11 sm:px-5">
-                  <Link href="/dashboard">
-                    <Check className="size-4" />
-                    Review complete
-                  </Link>
+                <Button
+                  variant="secondary"
+                  className="h-10 px-3 sm:h-11 sm:px-4"
+                  onClick={() => setCompletionOpen(true)}
+                >
+                  {providerReviewState.data?.decision === "approved" ? (
+                    <CheckCircle2 className="size-4 text-lime" />
+                  ) : providerReviewState.isFetching ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="size-4" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {providerReviewState.data?.decision === "approved"
+                      ? "Approved"
+                      : "Provider approval"}
+                  </span>
                 </Button>
+                {nextReview ? (
+                  <Button
+                    className="h-10 px-3 sm:h-11 sm:px-5"
+                    onClick={openNextReview}
+                  >
+                    Next review
+                    <ChevronRight className="size-4" />
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.nextReview}
+                      className="hidden sm:inline-flex"
+                    />
+                  </Button>
+                ) : (
+                  <Button
+                    className="h-10 px-3 sm:h-11 sm:px-5"
+                    onClick={openDashboard}
+                  >
+                    <ArrowLeft className="size-4" />
+                    Dashboard
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.dashboard}
+                      className="hidden sm:inline-flex"
+                    />
+                  </Button>
+                )}
               </div>
             ) : (
               <div className="flex min-w-0 items-center justify-end gap-2">
+                {canSignOffDeletedFiles && footerSaveState !== "active" && (
+                  <Button
+                    variant="secondary"
+                    className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
+                    title={`Sign off ${deletedUnitsToSignOff.length} remaining ${deletedUnitsToSignOff.length === 1 ? "unit" : "units"} from files deleted in this pull request`}
+                    onClick={signOffDeletedFiles}
+                  >
+                    <CheckCheck className="size-4" />
+                    <span className="hidden sm:inline">Sign off deletes</span>
+                    <span className="sm:hidden">Deletes</span>
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.signOffDeletions}
+                      className="hidden sm:inline-flex"
+                    />
+                  </Button>
+                )}
                 {activeUnit.status === "signed_off" &&
                   footerSaveState !== "active" && (
                     <Button
@@ -3306,7 +4526,7 @@ export function ReviewWorkspace({
           id="code-explanation-panel"
           aria-label="AI assistance"
           className={cn(
-            "bg-panel min-h-0 flex-col overflow-y-auto border-l border-line",
+            "bg-panel min-h-0 flex-col overflow-hidden border-l border-line",
             insightsPanelOpen
               ? "fixed top-16 right-0 bottom-0 z-40 flex w-[min(360px,calc(100vw-3rem))] shadow-2xl"
               : "hidden",
@@ -3315,29 +4535,10 @@ export function ReviewWorkspace({
               : "xl:static xl:flex xl:w-auto xl:bg-panel/30 xl:shadow-none",
           )}
         >
-          <div className="border-violet/15 bg-panel sticky top-0 z-10 flex items-center gap-2 border-b px-4 py-4">
-            <span className="flex min-w-0 flex-1 items-center gap-2">
-              <AiActionMenu
-                items={aiActionItems}
-                fullWidth
-                disabled={aiConfiguration.data?.mode === "off"}
-              />
-              <button
-                type="button"
-                aria-label="Hide AI assistance"
-                title="Hide AI assistance (])"
-                onClick={hideInsightsPanel}
-                className="text-fog hover:bg-surface-subtle hover:text-cloud flex h-8 items-center gap-1.5 rounded-lg px-1.5 transition"
-              >
-                <PanelRightClose className="size-3.5" />
-                <ShortcutHint
-                  shortcut={reviewShortcuts.toggleInsightsPanel}
-                  className="hidden sm:inline-flex"
-                />
-              </button>
-            </span>
+          <div className="border-violet/15 bg-panel z-10 flex shrink-0 items-center border-b px-4 py-4">
+            {renderAiActionButtons()}
           </div>
-          <div className="p-4">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <div className="rounded-xl border border-line bg-surface/55 p-3">
               <div className="flex items-center gap-2">
                 <Badge className="capitalize">{activeUnit.kind}</Badge>
@@ -3365,9 +4566,10 @@ export function ReviewWorkspace({
                 <p className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
                   Overall explanation
                 </p>
-                <p className="text-cloud mt-2 whitespace-pre-line text-xs leading-5">
-                  {aiStatus.data.result.summary}
-                </p>
+                <ProviderCommentBody
+                  body={aiStatus.data.result.summary}
+                  className="mt-2 max-w-none text-xs leading-5"
+                />
                 {explanationAnnotations.length > 0 && (
                   <div className="mt-4 border-t border-violet/15 pt-3">
                     <div className="flex items-center justify-between gap-3">
@@ -3409,8 +4611,8 @@ export function ReviewWorkspace({
             ) : (
               <div className="mt-4 rounded-xl border border-dashed border-line p-4">
                 <p className="text-mist text-xs leading-5">
-                  Get a focused explanation of this {activeUnit.kind}—its
-                  purpose, inputs, outputs, side effects, and invariants.
+                  Press E or choose Ask to start a focused question beside the
+                  code you are reviewing.
                 </p>
               </div>
             )}
@@ -3496,6 +4698,22 @@ export function ReviewWorkspace({
               </p>
             </div>
           </div>
+          <div className="shrink-0 border-t border-line p-3">
+            <button
+              type="button"
+              aria-label="Hide AI assistance"
+              title="Hide AI assistance"
+              onClick={hideInsightsPanel}
+              className="text-mist hover:bg-surface-subtle hover:text-cloud flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[10px] transition"
+            >
+              <PanelRightClose className="size-3.5" />
+              <span>Hide AI assistance</span>
+              <ShortcutHint
+                shortcut={reviewShortcuts.toggleInsightsPanel}
+                className="ml-auto"
+              />
+            </button>
+          </div>
         </aside>
 
         <CommandCenter
@@ -3539,6 +4757,31 @@ export function ReviewWorkspace({
                 pullRequestId: initialData.pullRequest.id,
               })
             }
+          />
+        )}
+
+        {aiReviewDialogOpen && (
+          <ConfirmationDialog
+            title="Review this pull request with AI?"
+            description={
+              <>
+                The review agent will inspect all changed files and add
+                evidence-backed findings beside the relevant code. This uses
+                your configured model and contributes to this PR&apos;s token
+                usage.
+              </>
+            }
+            confirmLabel="Start AI review"
+            pendingLabel={
+              <>
+                <LoaderCircle className="size-4 animate-spin" />
+                Starting…
+              </>
+            }
+            pending={startPullRequestReview.isPending}
+            icon={<Sparkles className="text-violet size-4" />}
+            onCancel={() => setAiReviewDialogOpen(false)}
+            onConfirm={reviewPullRequestWithAi}
           />
         )}
 

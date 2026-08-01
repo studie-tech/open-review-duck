@@ -377,16 +377,50 @@ export function sideBySideDiff(previousSource: string, currentSource: string) {
 export function compactSideBySideDiff(
   rows: readonly SideBySideDiffRow[],
   contextLines = 3,
-  requiredRange?: { start: number; end: number },
+  options?:
+    | { start: number; end: number }
+    | {
+        requiredRange?: { start: number; end: number };
+        /**
+         * Only allow collapse inside this half-open range. Rows outside are
+         * always shown — used so paged file context never recollapses.
+         */
+        collapseWithin?: { start: number; end: number };
+        /** Keep this many rows pinned at each end of collapseWithin. */
+        pinRangeEnds?: number;
+      },
 ): CompactSideBySideDiffItem[] {
+  const normalized =
+    options && "collapseWithin" in options
+      ? options
+      : options && "requiredRange" in options
+        ? options
+        : options && "start" in options && "end" in options
+          ? { requiredRange: options }
+          : {};
+  const requiredRange = normalized.requiredRange;
+  const collapseWithin = normalized.collapseWithin;
+  const pinRangeEnds = normalized.pinRangeEnds ?? 0;
+
   const changedIndexes = rows.flatMap((row, index) =>
     row.kind === "unchanged" ? [] : [index],
   );
-  if (changedIndexes.length === 0) {
+  if (changedIndexes.length === 0 && !requiredRange && !collapseWithin) {
     return rows.map((row, rowIndex) => ({ kind: "row", row, rowIndex }));
   }
 
   const visible = new Uint8Array(rows.length);
+  if (collapseWithin) {
+    const from = Math.max(0, collapseWithin.start);
+    const to = Math.min(rows.length, collapseWithin.end);
+    // Paged surrounding context is always fully visible.
+    visible.fill(1, 0, from);
+    visible.fill(1, to, rows.length);
+    if (pinRangeEnds > 0 && to > from) {
+      visible.fill(1, from, Math.min(to, from + pinRangeEnds));
+      visible.fill(1, Math.max(from, to - pinRangeEnds), to);
+    }
+  }
   if (requiredRange) {
     visible.fill(
       1,
@@ -395,9 +429,34 @@ export function compactSideBySideDiff(
     );
   }
   for (const changedIndex of changedIndexes) {
-    const start = Math.max(0, changedIndex - contextLines);
-    const end = Math.min(rows.length, changedIndex + contextLines + 1);
+    if (
+      collapseWithin &&
+      (changedIndex < collapseWithin.start ||
+        changedIndex >= collapseWithin.end)
+    ) {
+      continue;
+    }
+    const start = Math.max(
+      collapseWithin?.start ?? 0,
+      changedIndex - contextLines,
+    );
+    const end = Math.min(
+      collapseWithin?.end ?? rows.length,
+      changedIndex + contextLines + 1,
+    );
     visible.fill(1, start, end);
+  }
+  if (changedIndexes.length === 0 && !requiredRange) {
+    // No hunks: keep the full compactable span rather than hiding everything.
+    if (collapseWithin) {
+      visible.fill(
+        1,
+        Math.max(0, collapseWithin.start),
+        Math.min(rows.length, collapseWithin.end),
+      );
+    } else {
+      visible.fill(1);
+    }
   }
 
   const items: CompactSideBySideDiffItem[] = [];

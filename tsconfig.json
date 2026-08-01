@@ -31,15 +31,13 @@
       "@/drizzle/*": ["./drizzle/*"]
     }
   },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    "**/*.cjs",
-    "**/*.js",
-    ".flue/**/*.ts",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
-  ],
-  "exclude": ["node_modules", "generated", "coverage"]
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "**/*.cjs", "**/*.js"],
+  "exclude": [
+    "node_modules",
+    "generated",
+    "coverage",
+    "dist",
+    ".next",
+    "public/tree-sitter"
+  ]
 }

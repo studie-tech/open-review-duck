@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useId, useRef } from "react";
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
@@ -14,6 +14,7 @@ export function ConfirmationDialog({
   description,
   icon,
   iconClassName,
+  confirmDisabled = false,
   pending = false,
   pendingLabel,
   title,
@@ -25,39 +26,61 @@ export function ConfirmationDialog({
   description: ReactNode;
   icon?: ReactNode;
   iconClassName?: string;
+  confirmDisabled?: boolean;
   pending?: boolean;
   pendingLabel?: ReactNode;
   title: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const titleId = `confirmation-${title
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/(^-|-$)/g, "")}-title`;
+  const dialog = useRef<HTMLDialogElement>(null);
+  const generatedId = useId();
+  const titleId = `${generatedId}-title`;
   const descriptionId = `${titleId}-description`;
 
+  useEffect(() => {
+    const element = dialog.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    if (element && !element.open) {
+      if (typeof element.showModal === "function") element.showModal();
+      else element.setAttribute("open", "");
+    }
+
+    return () => {
+      if (element?.open && typeof element.close === "function") element.close();
+      previousFocus?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    /** Dismisses the modal independently of which element currently has focus. */
+    function dismissOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || pending) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onCancel();
+    }
+
+    document.addEventListener("keydown", dismissOnEscape, true);
+    return () => document.removeEventListener("keydown", dismissOnEscape, true);
+  }, [onCancel, pending]);
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/65 p-4 backdrop-blur-sm">
-      <button
-        type="button"
-        aria-label="Cancel confirmation"
-        disabled={pending}
-        className="absolute inset-0 cursor-default"
-        onClick={onCancel}
-      />
+    <dialog
+      ref={dialog}
+      aria-labelledby={titleId}
+      aria-describedby={descriptionId}
+      className="w-full max-w-md bg-transparent p-4 backdrop:bg-black/65 backdrop:backdrop-blur-sm"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!pending) onCancel();
+      }}
+    >
       <form
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descriptionId}
-        className="bg-panel relative w-full max-w-md rounded-2xl border border-line-strong p-5 shadow-2xl shadow-black/30 sm:p-6"
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && !pending) onCancel();
-        }}
+        className="bg-panel relative w-full rounded-2xl border border-line-strong p-5 shadow-2xl shadow-black/30 sm:p-6"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!pending) onConfirm();
+          if (!pending && !confirmDisabled) onConfirm();
         }}
       >
         {icon && (
@@ -95,7 +118,7 @@ export function ConfirmationDialog({
             type="submit"
             variant={confirmVariant}
             autoFocus
-            disabled={pending}
+            disabled={pending || confirmDisabled}
           >
             {pending ? (
               pendingLabel
@@ -108,6 +131,6 @@ export function ConfirmationDialog({
           </Button>
         </div>
       </form>
-    </div>
+    </dialog>
   );
 }

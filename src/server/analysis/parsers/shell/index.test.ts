@@ -5,7 +5,6 @@ import {
   shellAdapter,
   shellExtensions,
   shellFileNames,
-  shellParserInternals,
 } from ".";
 
 /** Analyzes an in-memory shell fixture. */
@@ -118,9 +117,6 @@ after() {
     expect(named(units, "after").dependencies).toContain(
       named(units, "render").stableKey,
     );
-    expect(
-      shellParserInternals.maskShellSource(`cat <<EOF\n}\nEOF\n`),
-    ).toHaveLength(`cat <<EOF\n}\nEOF\n`.length);
   });
 
   it("splits Bats tests and lifecycle hooks while retaining helper dependencies", () => {

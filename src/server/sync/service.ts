@@ -8,18 +8,25 @@ import {
   reviewUnits,
   reviewWaits,
   signOffs,
+  snapshotFiles,
 } from "@/drizzle/schema";
-import { env } from "~/env";
 import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
   reconcileSignOffs,
 } from "~/server/analysis/engine";
+import { languageAdapterForFile } from "~/server/analysis/parsers";
+import {
+  type TreeSitterLanguage,
+  withPreparedTreeSitterLanguages,
+} from "~/server/analysis/tree-sitter";
 import { type AnalyzedUnit, applySourceBudget } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
-import { createProvider } from "~/server/providers";
+import { observeOperation } from "~/server/observability/sentry";
+import { providerForConnection } from "~/server/providers/credentials";
 import { canCarryReviewWait } from "~/server/review/waiting";
-import { decryptSecret } from "~/server/security/encryption";
+import { hydrateReviewUnits } from "~/server/storage/review-units";
+import { persistSourceBlob } from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "./retention";
 import { assertCompleteChangedFileSet } from "./revision";
 
@@ -28,6 +35,48 @@ type Database = typeof database;
 const UNIT_INSERT_BATCH_SIZE = 100;
 const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
+
+/** Converts an inclusive line range to UTF-8 byte offsets. */
+function sourceRange(source: string, startLine: number, endLine: number) {
+  const lines = source.match(/[^\n]*(?:\n|$)/g) ?? [];
+  const before = lines.slice(0, Math.max(0, startLine - 1)).join("");
+  const selected = lines.slice(Math.max(0, startLine - 1), endLine).join("");
+  const startByte = Buffer.byteLength(before);
+  return { startByte, endByte: startByte + Buffer.byteLength(selected) };
+}
+
+/** Locates an analyzed previous-source slice inside its immutable object. */
+function previousSourceRange(source: string, previousSource?: string) {
+  if (!previousSource) return {};
+  const characterOffset = source.indexOf(previousSource);
+  if (characterOffset < 0) return {};
+  const startByte = Buffer.byteLength(source.slice(0, characterOffset));
+  return {
+    previousStartByte: startByte,
+    previousEndByte: startByte + Buffer.byteLength(previousSource),
+  };
+}
+
+/** Maps values with bounded ingestion concurrency and stable result order. */
+async function mapWithLimit<T, R>(
+  values: T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+) {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (cursor < values.length) {
+        const index = cursor;
+        cursor += 1;
+        const value = values[index];
+        if (value !== undefined) results[index] = await operation(value);
+      }
+    }),
+  );
+  return results;
+}
 
 /** Synchronizes provider data and review state for one pull request. */
 export async function syncPullRequest(
@@ -39,29 +88,30 @@ export async function syncPullRequest(
     where: eq(repositories.id, repositoryId),
   });
   if (!repository) throw new Error("Repository not found");
-  const connection = await db.query.providerConnections.findFirst({
-    where: eq(providerConnections.id, repository.connectionId),
-  });
-  if (!connection) throw new Error("Provider connection not found");
-
-  const provider = createProvider(
-    connection.provider,
-    decryptSecret(connection.encryptedAccessToken, env.ENCRYPTION_KEY),
-    connection.baseUrl ?? undefined,
-  );
   const observedPullRequest = await db.query.pullRequests.findFirst({
     where: and(
       eq(pullRequests.repositoryId, repositoryId),
       eq(pullRequests.number, number),
     ),
   });
-  const [remote, files] = await Promise.all([
-    provider.getPullRequest(repository.externalId, number),
-    provider.getChangedFiles(repository.externalId, number),
-  ]);
-  const confirmedRemote = await provider.getPullRequest(
-    repository.externalId,
-    number,
+  const connection = await db.query.providerConnections.findFirst({
+    where: eq(providerConnections.id, repository.connectionId),
+  });
+  if (!connection) throw new Error("Provider connection not found");
+  const provider = await providerForConnection(db, connection);
+  const [remote, files] = await observeOperation(
+    "provider.fetch-pull-request",
+    "provider",
+    () =>
+      Promise.all([
+        provider.getPullRequest(repository.externalId, number),
+        provider.getChangedFiles(repository.externalId, number),
+      ]),
+  );
+  const confirmedRemote = await observeOperation(
+    "provider.confirm-revision",
+    "provider",
+    () => provider.getPullRequest(repository.externalId, number),
   );
   if (
     confirmedRemote.headSha !== remote.headSha ||
@@ -72,8 +122,52 @@ export async function syncPullRequest(
     );
   }
   assertCompleteChangedFileSet(confirmedRemote, files.length);
-  const analysis = analyzeFiles(applySourceBudget(files, 20_000_000));
+  const budgetedFiles = applySourceBudget(files, 20_000_000);
+  const analysis = await observeOperation(
+    "tree-sitter.analyze-pull-request",
+    "analysis",
+    () =>
+      withPreparedTreeSitterLanguages(
+        budgetedFiles
+          .map((file) => languageAdapterForFile(file)?.language)
+          .filter((language): language is TreeSitterLanguage =>
+            Boolean(language && language !== "text"),
+          ),
+        () => analyzeFiles(budgetedFiles),
+      ),
+  );
+  const storedFiles = await mapWithLimit(files, 4, async (file) => {
+    const [currentBlob, previousBlob] = await Promise.all([
+      file.changeType === "deleted"
+        ? undefined
+        : persistSourceBlob(db, {
+            workspaceId: repository.workspaceId,
+            bytes: Buffer.from(file.content),
+          }),
+      file.previousContent === undefined
+        ? undefined
+        : persistSourceBlob(db, {
+            workspaceId: repository.workspaceId,
+            bytes: Buffer.from(file.previousContent),
+          }),
+    ]);
+    return { file, currentBlob, previousBlob };
+  });
   const changedFileCount = Math.max(confirmedRemote.changedFiles, files.length);
+  const preexistingSnapshot = observedPullRequest
+    ? await db.query.reviewSnapshots.findFirst({
+        where: eq(reviewSnapshots.pullRequestId, observedPullRequest.id),
+        orderBy: [desc(reviewSnapshots.version)],
+      })
+    : undefined;
+  const preexistingUnits = preexistingSnapshot
+    ? await hydrateReviewUnits(
+        db,
+        await db.query.reviewUnits.findMany({
+          where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
+        }),
+      )
+    : [];
 
   const result = await db.transaction(async (tx) => {
     await tx.execute(
@@ -163,11 +257,12 @@ export async function syncPullRequest(
       };
     }
 
-    const previousUnits = currentSnapshot
-      ? await tx.query.reviewUnits.findMany({
-          where: eq(reviewUnits.snapshotId, currentSnapshot.id),
-        })
-      : [];
+    if (currentSnapshot?.id !== preexistingSnapshot?.id) {
+      throw new Error(
+        "A newer synchronization completed while review state was loading",
+      );
+    }
+    const previousUnits = preexistingUnits;
     const previousDependencyRows = previousUnits.length
       ? await tx
           .select()
@@ -203,6 +298,7 @@ export async function syncPullRequest(
         endLine: unit.endLine,
         source: unit.source,
         previousSource: unit.previousSource ?? undefined,
+        relatedRanges: unit.relatedRanges ?? undefined,
         contentHash: unit.contentHash,
         semanticHash: unit.semanticHash,
         changeType: unit.changeType,
@@ -264,13 +360,59 @@ export async function syncPullRequest(
       .returning();
     if (!snapshot) throw new Error("Could not create review snapshot");
 
+    const snapshotFileRows = await tx
+      .insert(snapshotFiles)
+      .values(
+        storedFiles.map(({ file, currentBlob, previousBlob }) => {
+          const representative = analysis.units.find(
+            (unit) => unit.path === file.path,
+          );
+          return {
+            snapshotId: snapshot.id,
+            path: file.path,
+            previousPath: file.previousPath,
+            language: representative?.language ?? "text",
+            changeType: file.changeType ?? "modified",
+            currentBlobId: currentBlob?.id,
+            previousBlobId: previousBlob?.id,
+            additions: Math.max(
+              0,
+              file.content.split("\n").length -
+                (file.previousContent?.split("\n").length ?? 0),
+            ),
+            deletions: Math.max(
+              0,
+              (file.previousContent?.split("\n").length ?? 0) -
+                file.content.split("\n").length,
+            ),
+            isBinary: file.isBinary ?? false,
+          };
+        }),
+      )
+      .returning();
+    const snapshotFileByPath = new Map(
+      snapshotFileRows.map((file) => [file.path, file]),
+    );
+    const storedFileByPath = new Map(
+      storedFiles.map((file) => [file.file.path, file]),
+    );
+
     const unitValues = analysis.units.map((unit) => {
       const prior = priorByKey.get(unit.stableKey);
       const unchanged =
         prior?.semanticHash === unit.semanticHash &&
         !reviewImpact.get(unit.stableKey);
+      const snapshotFile = snapshotFileByPath.get(unit.path);
+      const storedFile = storedFileByPath.get(unit.path);
+      if (!snapshotFile || !storedFile) {
+        throw new Error(`Source object is missing for ${unit.path}`);
+      }
       return {
         snapshotId: snapshot.id,
+        snapshotFileId: snapshotFile.id,
+        currentBlobId:
+          storedFile.currentBlob?.id ?? storedFile.previousBlob?.id,
+        previousBlobId: storedFile.previousBlob?.id,
         stableKey: unit.stableKey,
         path: unit.path,
         language: unit.language,
@@ -279,8 +421,18 @@ export async function syncPullRequest(
         signature: unit.signature,
         startLine: unit.startLine,
         endLine: unit.endLine,
-        source: unit.source,
-        previousSource: unit.previousSource ?? null,
+        ...sourceRange(
+          storedFile.file.changeType === "deleted"
+            ? (storedFile.file.previousContent ?? "")
+            : storedFile.file.content,
+          unit.startLine,
+          unit.endLine,
+        ),
+        ...previousSourceRange(
+          storedFile.file.previousContent ?? "",
+          unit.previousSource,
+        ),
+        relatedRanges: unit.relatedRanges,
         contentHash: unit.contentHash,
         semanticHash: unit.semanticHash,
         changeType: unit.changeType,

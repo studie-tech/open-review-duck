@@ -8,7 +8,7 @@ import {
 import { localContentSecurityPolicy } from "~/lib/content-security-policy";
 import { hostnameFromHostHeader, isLoopbackHostname } from "~/lib/deployment";
 
-const authenticatedMiddleware =
+const saasMiddleware =
   process.env.DEPLOYMENT_MODE === "local"
     ? undefined
     : clerkMiddleware({
@@ -22,13 +22,13 @@ const authenticatedMiddleware =
         },
       });
 
-/** Applies Clerk in authenticated mode and confines local mode to loopback. */
+/** Applies Clerk in SaaS mode and confines local mode to loopback. */
 export function proxy(request: NextRequest, event: NextFetchEvent) {
   if (process.env.DEPLOYMENT_MODE !== "local") {
-    if (!authenticatedMiddleware) {
+    if (!saasMiddleware) {
       throw new Error("Authentication middleware was not initialized");
     }
-    return authenticatedMiddleware(request, event);
+    return saasMiddleware(request, event);
   }
   const requestHostname = hostnameFromHostHeader(request.headers.get("host"));
   if (!isLoopbackHostname(requestHostname)) {
@@ -51,7 +51,7 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
 
 export const config = {
   matcher: [
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/((?!\\.well-known/workflow|_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     "/(api|trpc)(.*)",
   ],
 };

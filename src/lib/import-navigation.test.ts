@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  isImportOnlySource,
+  parseImportReferences,
+  parseImportStatements,
+} from "~/server/analysis/imports";
+import {
   findImportedDeclarationLine,
   findImportTargetUnit,
   importPathCandidates,
   importReferenceIsUsed,
-  isImportOnlySource,
-  parseImportReferences,
-  parseImportStatements,
+  pairImportStatements,
   resolveImportPath,
   resolvePythonImportedSubmodulePath,
 } from "./import-navigation";
@@ -114,13 +117,52 @@ describe("parseImportReferences", () => {
     });
   });
 
+  it("pairs rewritten import paths as modifications instead of bare additions", () => {
+    const previous = parseImportStatements(
+      [
+        'import NotFoundPage from "@/app/[...not-found]/page";',
+        'import { api } from "@/app/trpc/client";',
+      ].join("\n"),
+      "typescript",
+    );
+    const current = parseImportStatements(
+      [
+        'import NotFoundPage from "@/components/layout/NotFoundPage";',
+        'import { api } from "@/app/trpc/client";',
+        'import { helper } from "./helper";',
+      ].join("\n"),
+      "typescript",
+    );
+
+    expect(pairImportStatements(previous, current)).toMatchObject([
+      {
+        kind: "modified",
+        previous: {
+          source: 'import NotFoundPage from "@/app/[...not-found]/page";',
+        },
+        current: {
+          source:
+            'import NotFoundPage from "@/components/layout/NotFoundPage";',
+        },
+      },
+      {
+        kind: "unchanged",
+        current: { source: 'import { api } from "@/app/trpc/client";' },
+      },
+      {
+        kind: "added",
+        current: { source: 'import { helper } from "./helper";' },
+      },
+    ]);
+  });
+
   it("keeps imports visible as context across additional languages", () => {
     const fixtures = [
       ["java", "package com.acme;\nimport java.util.List;"],
       ["csharp", "global using System.Text;"],
       ["c", "#include <stddef.h>"],
       ["cpp", "#include <vector>\nimport widgets.core;"],
-      ["php", 'require_once "support.php";'],
+      ["php", '<?php require_once "support.php";'],
       ["shell", 'source "./shared.sh"'],
       ["ruby", 'require_relative "support"'],
       ["rust", "use crate::model::{User, Team};"],

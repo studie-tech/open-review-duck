@@ -1,41 +1,21 @@
-export type SupportedLanguage =
-  | "javascript"
-  | "typescript"
-  | "python"
-  | "java"
-  | "csharp"
-  | "cpp"
-  | "php"
-  | "shell"
-  | "c"
-  | "ruby"
-  | "hcl"
-  | "rust"
-  | "lua"
-  | "go"
-  | "makefile"
-  | "kotlin"
-  | "text";
+import languageManifest from "../../../tree-sitter-languages.json";
 
-export const supportedLanguages = [
-  "javascript",
-  "typescript",
-  "python",
-  "java",
-  "csharp",
-  "cpp",
-  "php",
-  "shell",
-  "c",
-  "ruby",
-  "hcl",
-  "rust",
-  "lua",
-  "go",
-  "makefile",
-  "kotlin",
-  "text",
-] as const satisfies readonly SupportedLanguage[];
+export type SupportedLanguage = keyof typeof languageManifest.languages;
+
+interface LanguageDefinition {
+  asset?: string;
+  source?: string;
+  extensions: readonly string[];
+  fileNames?: readonly string[];
+}
+
+export const languageDefinitions = languageManifest.languages as Record<
+  SupportedLanguage,
+  LanguageDefinition
+>;
+export const supportedLanguages = Object.keys(
+  languageDefinitions,
+) as SupportedLanguage[];
 export type UnitKind =
   | "constant"
   | "variable"
@@ -50,43 +30,33 @@ export type UnitKind =
   | "file";
 export type SourceChangeType = "added" | "modified" | "deleted" | "renamed";
 
-export const supportedExtensions = {
-  typescript: [".ts", ".tsx", ".mts", ".cts"],
-  javascript: [".js", ".jsx", ".mjs", ".cjs"],
-  python: [".py"],
-  java: [".java"],
-  csharp: [".cs", ".csx"],
-  cpp: [
-    ".cpp",
-    ".cc",
-    ".cxx",
-    ".c++",
-    ".hpp",
-    ".hh",
-    ".hxx",
-    ".h++",
-    ".ipp",
-    ".tpp",
-    ".inl",
-  ],
-  php: [".php", ".phtml", ".inc"],
-  shell: [".sh", ".bash", ".zsh", ".ksh"],
-  c: [".c", ".h"],
-  ruby: [".rb", ".rake", ".gemspec"],
-  hcl: [".hcl", ".tf", ".tfvars"],
-  rust: [".rs"],
-  lua: [".lua"],
-  go: [".go"],
-  makefile: [".mk"],
-  kotlin: [".kt", ".kts"],
-  text: [],
-} as const satisfies Record<SupportedLanguage, readonly string[]>;
+export interface ReviewUnitRange {
+  startLine?: number;
+  endLine?: number;
+  previousStartLine?: number;
+  previousEndLine?: number;
+}
 
-export const supportedFileNames = {
-  shell: [".bashrc", ".zshrc", ".profile"],
-  ruby: ["rakefile", "gemfile"],
-  makefile: ["makefile", "gnumakefile"],
-} as const satisfies Partial<Record<SupportedLanguage, readonly string[]>>;
+export const supportedExtensions = Object.fromEntries(
+  supportedLanguages.map((language) => [
+    language,
+    languageDefinitions[language].extensions,
+  ]),
+) as Record<SupportedLanguage, readonly string[]>;
+
+export const supportedFileNames = Object.fromEntries(
+  supportedLanguages.flatMap((language) => {
+    const fileNames = languageDefinitions[language].fileNames;
+    return fileNames ? [[language, fileNames] as const] : [];
+  }),
+) as Partial<Record<SupportedLanguage, readonly string[]>>;
+
+export const grammarAssets = Object.fromEntries(
+  supportedLanguages.flatMap((language) => {
+    const asset = languageDefinitions[language].asset;
+    return asset ? [[language, asset] as const] : [];
+  }),
+) as Record<Exclude<SupportedLanguage, "text">, string>;
 
 /** Checks whether a repository path uses a supported source extension. */
 export function isSupportedSourcePath(path: string) {
@@ -125,6 +95,7 @@ export function applySourceBudget(files: SourceFile[], maximumBytes: number) {
 
 export interface SourceFile {
   path: string;
+  previousPath?: string;
   content: string;
   previousContent?: string;
   skipReason?: "too_large";
@@ -207,6 +178,7 @@ export interface AnalyzedUnit {
   changeType: SourceChangeType;
   complexity: number;
   dependencies: string[];
+  relatedRanges?: ReviewUnitRange[];
   depth: number;
   reviewOrder: number;
 }

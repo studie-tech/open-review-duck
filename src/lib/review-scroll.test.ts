@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  afterLayoutSettle,
+  scrollTopAfterContextReveal,
   shouldRevealLeadingContext,
   verticalRangesOverlap,
 } from "./review-scroll";
@@ -72,5 +74,66 @@ describe("shouldRevealLeadingContext", () => {
         availableBefore: 21,
       }),
     ).toBe(false);
+  });
+});
+
+describe("scrollTopAfterContextReveal", () => {
+  it("keeps appended content below the fold and peeks downward", () => {
+    expect(
+      scrollTopAfterContextReveal({
+        direction: 1,
+        previousScrollTop: 400,
+        previousScrollHeight: 800,
+        nextScrollHeight: 1200,
+        viewportHeight: 400,
+        step: 72,
+      }),
+    ).toBe(540);
+  });
+
+  it("preserves prepended content and peeks upward", () => {
+    expect(
+      scrollTopAfterContextReveal({
+        direction: -1,
+        previousScrollTop: 100,
+        previousScrollHeight: 800,
+        nextScrollHeight: 1200,
+        viewportHeight: 400,
+        step: 72,
+      }),
+    ).toBe(360);
+  });
+
+  it("does not overscroll when only a few lines were revealed", () => {
+    expect(
+      scrollTopAfterContextReveal({
+        direction: 1,
+        previousScrollTop: 400,
+        previousScrollHeight: 800,
+        nextScrollHeight: 840,
+        viewportHeight: 400,
+        step: 72,
+      }),
+    ).toBe(440);
+  });
+});
+
+describe("afterLayoutSettle", () => {
+  it("waits until the measured value changes", () => {
+    const queue: FrameRequestCallback[] = [];
+    const original = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      queue.push(callback);
+      return queue.length;
+    }) as typeof requestAnimationFrame;
+    let value = 10;
+    const onSettle = vi.fn();
+    afterLayoutSettle(() => value, 10, onSettle);
+    expect(onSettle).not.toHaveBeenCalled();
+    expect(queue).toHaveLength(1);
+    value = 20;
+    queue.shift()?.(0);
+    expect(onSettle).toHaveBeenCalledOnce();
+    globalThis.requestAnimationFrame = original;
   });
 });

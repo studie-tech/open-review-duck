@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   aiResultSchema,
+  deleteAiQuestionThreadSchema,
   saveAiConfigurationSchema,
   startAiJobSchema,
-  startPendingExplanationsSchema,
   testAiConfigurationSchema,
 } from "./ai";
 
@@ -104,17 +104,59 @@ describe("AI job validation", () => {
     ).toBe(false);
   });
 
-  it("accepts a bounded set of units for pending explanations", () => {
+  it("requires one explicit set of conversation jobs when deleting a thread", () => {
     expect(
-      startPendingExplanationsSchema.safeParse({
-        pullRequestId,
-        unitIds: [unitId],
+      deleteAiQuestionThreadSchema.safeParse({
+        pullRequestId: "22d3501f-d92d-405f-86a5-520d144ab61d",
+        unitId: "40351216-d997-4104-b7b8-37edaf04cff3",
+        jobIds: ["33333333-3333-4333-8333-333333333333"],
       }).success,
     ).toBe(true);
     expect(
-      startPendingExplanationsSchema.safeParse({
+      deleteAiQuestionThreadSchema.safeParse({
+        pullRequestId: "22d3501f-d92d-405f-86a5-520d144ab61d",
+        unitId: "40351216-d997-4104-b7b8-37edaf04cff3",
+        jobIds: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires an inline question, focus line, and thread together", () => {
+    const threadId = "33333333-3333-4333-8333-333333333333";
+    expect(
+      startAiJobSchema.safeParse({
         pullRequestId,
-        unitIds: [],
+        unitId,
+        kind: "explain",
+        question: "Why is this branch necessary?",
+        focusLine: 42,
+        threadId,
+      }).success,
+    ).toBe(true);
+    expect(
+      startAiJobSchema.safeParse({
+        pullRequestId,
+        unitId,
+        kind: "explain",
+        question: "Why is this branch necessary?",
+      }).success,
+    ).toBe(false);
+    expect(
+      startAiJobSchema.safeParse({
+        pullRequestId,
+        unitId,
+        kind: "explain",
+        focusLine: 42,
+        threadId,
+      }).success,
+    ).toBe(false);
+    expect(
+      startAiJobSchema.safeParse({
+        pullRequestId,
+        unitId,
+        kind: "explain",
+        question: "Why is this branch necessary?",
+        focusLine: 42,
       }).success,
     ).toBe(false);
   });
@@ -139,10 +181,28 @@ describe("AI result validation", () => {
     ).toHaveLength(1);
   });
 
-  it("defaults annotations for legacy stored results", () => {
-    expect(
-      aiResultSchema.parse({ summary: "Existing result", findings: [] })
-        .annotations,
-    ).toEqual([]);
+  it("accepts bounded focused-question comment proposals", () => {
+    const result = aiResultSchema.parse({
+      summary: "The new branch can bypass authorization.",
+      commentProposals: [
+        {
+          body: "Could this retain the authorization check?",
+          path: "src/auth.ts",
+          line: 42,
+        },
+      ],
+      findings: [],
+    });
+
+    expect(result.commentProposals).toHaveLength(1);
+  });
+
+  it("defaults omitted structured-result collections", () => {
+    const result = aiResultSchema.parse({
+      summary: "Existing result",
+      findings: [],
+    });
+    expect(result.annotations).toEqual([]);
+    expect(result.commentProposals).toEqual([]);
   });
 });

@@ -65,10 +65,16 @@ export function providerSyncErrorMessage(
       return `${label} rejected the connected token. Reconnect the provider with a valid token.`;
     }
     if (cause.status === 403) {
-      if (cause.message.toLowerCase().includes("rate limit")) {
+      const message = cause.message.toLowerCase();
+      if (message.includes("rate limit")) {
         return `${label} rate-limited this sync. Wait a moment and try again.`;
       }
-      return `${label} blocked access to this pull request. Check the token's repository and pull-request permissions.`;
+      if (message.includes("single sign-on")) {
+        return `${label} requires organization SSO authorization for this token. Authorize the token with the repository's organization, then sync again.`;
+      }
+      return provider === "github"
+        ? "GitHub blocked access to this pull request. Confirm the token includes this repository with Contents: Read-only and Pull requests: Read and write."
+        : `${label} blocked access to this pull request. Check the token's repository and pull-request permissions.`;
     }
     if (cause.status === 404) {
       return `${label} could not find this pull request or one of its changed files. Check that the connected token can access the repository.`;

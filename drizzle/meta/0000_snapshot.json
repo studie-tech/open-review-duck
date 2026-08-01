@@ -1,11 +1,11 @@
 {
-  "id": "0797995f-7e57-480c-9310-5f110e2a8f11",
+  "id": "d3d623d8-f9ba-463c-ac9a-623cf82d968e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.open_review_duck_ai_configuration": {
-      "name": "open_review_duck_ai_configuration",
+    "public.open_review_duck_ai_job_chunk": {
+      "name": "open_review_duck_ai_job_chunk",
       "schema": "",
       "columns": {
         "id": {
@@ -15,76 +15,29 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "workspaceId": {
-          "name": "workspaceId",
+        "jobId": {
+          "name": "jobId",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "provider": {
-          "name": "provider",
-          "type": "varchar(48)",
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "model": {
-          "name": "model",
-          "type": "varchar(160)",
+        "kind": {
+          "name": "kind",
+          "type": "varchar(24)",
           "primaryKey": false,
           "notNull": true
         },
-        "apiProtocol": {
-          "name": "apiProtocol",
-          "type": "varchar(48)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'openai-responses'"
-        },
-        "encryptedApiKey": {
-          "name": "encryptedApiKey",
+        "encryptedContent": {
+          "name": "encryptedContent",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
-        },
-        "encryptedHeaders": {
-          "name": "encryptedHeaders",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "baseUrl": {
-          "name": "baseUrl",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "contextWindow": {
-          "name": "contextWindow",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 128000
-        },
-        "maxTokens": {
-          "name": "maxTokens",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 8000
-        },
-        "storeResponses": {
-          "name": "storeResponses",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "useManagedModels": {
-          "name": "useManagedModels",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
+          "notNull": true
         },
         "createdAt": {
           "name": "createdAt",
@@ -92,23 +45,38 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "ai_job_chunk_sequence_idx": {
+          "name": "ai_job_chunk_sequence_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
-        "open_review_duck_ai_configuration_workspaceId_open_review_duck_workspace_id_fk": {
-          "name": "open_review_duck_ai_configuration_workspaceId_open_review_duck_workspace_id_fk",
-          "tableFrom": "open_review_duck_ai_configuration",
-          "tableTo": "open_review_duck_workspace",
+        "open_review_duck_ai_job_chunk_jobId_open_review_duck_ai_job_id_fk": {
+          "name": "open_review_duck_ai_job_chunk_jobId_open_review_duck_ai_job_id_fk",
+          "tableFrom": "open_review_duck_ai_job_chunk",
+          "tableTo": "open_review_duck_ai_job",
           "columnsFrom": [
-            "workspaceId"
+            "jobId"
           ],
           "columnsTo": [
             "id"
@@ -118,61 +86,75 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "open_review_duck_ai_configuration_workspaceId_unique": {
-          "name": "open_review_duck_ai_configuration_workspaceId_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "workspaceId"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.open_review_duck_ai_dispatch": {
-      "name": "open_review_duck_ai_dispatch",
+    "public.open_review_duck_ai_job_evidence": {
+      "name": "open_review_duck_ai_job_evidence",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
         "jobId": {
           "name": "jobId",
           "type": "uuid",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
-        "status": {
-          "name": "status",
-          "type": "varchar(24)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'queued'"
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "availableAt": {
-          "name": "availableAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "leaseExpiresAt": {
-          "name": "leaseExpiresAt",
-          "type": "timestamp with time zone",
+        "snapshotFileId": {
+          "name": "snapshotFileId",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
-        "lastError": {
-          "name": "lastError",
+        "sourceBlobId": {
+          "name": "sourceBlobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "path": {
+          "name": "path",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
+        },
+        "digest": {
+          "name": "digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startByte": {
+          "name": "startByte",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endByte": {
+          "name": "endByte",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startLine": {
+          "name": "startLine",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endLine": {
+          "name": "endLine",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
         },
         "createdAt": {
           "name": "createdAt",
@@ -180,27 +162,53 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
         }
       },
       "indexes": {
-        "ai_dispatch_ready_idx": {
-          "name": "ai_dispatch_ready_idx",
+        "ai_job_evidence_range_idx": {
+          "name": "ai_job_evidence_range_idx",
           "columns": [
             {
-              "expression": "status",
+              "expression": "jobId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
-              "expression": "availableAt",
+              "expression": "sourceBlobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "startByte",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "endByte",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ai_job_evidence_path_idx": {
+          "name": "ai_job_evidence_path_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "path",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -213,9 +221,275 @@
         }
       },
       "foreignKeys": {
-        "open_review_duck_ai_dispatch_jobId_open_review_duck_ai_job_id_fk": {
-          "name": "open_review_duck_ai_dispatch_jobId_open_review_duck_ai_job_id_fk",
-          "tableFrom": "open_review_duck_ai_dispatch",
+        "open_review_duck_ai_job_evidence_jobId_open_review_duck_ai_job_id_fk": {
+          "name": "open_review_duck_ai_job_evidence_jobId_open_review_duck_ai_job_id_fk",
+          "tableFrom": "open_review_duck_ai_job_evidence",
+          "tableTo": "open_review_duck_ai_job",
+          "columnsFrom": [
+            "jobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_ai_job_evidence_snapshotFileId_open_review_duck_snapshot_file_id_fk": {
+          "name": "open_review_duck_ai_job_evidence_snapshotFileId_open_review_duck_snapshot_file_id_fk",
+          "tableFrom": "open_review_duck_ai_job_evidence",
+          "tableTo": "open_review_duck_snapshot_file",
+          "columnsFrom": [
+            "snapshotFileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_ai_job_evidence_sourceBlobId_open_review_duck_source_blob_id_fk": {
+          "name": "open_review_duck_ai_job_evidence_sourceBlobId_open_review_duck_source_blob_id_fk",
+          "tableFrom": "open_review_duck_ai_job_evidence",
+          "tableTo": "open_review_duck_source_blob",
+          "columnsFrom": [
+            "sourceBlobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_ai_job_tool_call": {
+      "name": "open_review_duck_ai_job_tool_call",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "jobId": {
+          "name": "jobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "turnSequence": {
+          "name": "turnSequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "toolCallId": {
+          "name": "toolCallId",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "toolName": {
+          "name": "toolName",
+          "type": "varchar(80)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedInput": {
+          "name": "encryptedInput",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedOutput": {
+          "name": "encryptedOutput",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'running'"
+        },
+        "durationMs": {
+          "name": "durationMs",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completedAt": {
+          "name": "completedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ai_job_tool_call_id_idx": {
+          "name": "ai_job_tool_call_id_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "toolCallId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ai_job_tool_turn_idx": {
+          "name": "ai_job_tool_turn_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "turnSequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_ai_job_tool_call_jobId_open_review_duck_ai_job_id_fk": {
+          "name": "open_review_duck_ai_job_tool_call_jobId_open_review_duck_ai_job_id_fk",
+          "tableFrom": "open_review_duck_ai_job_tool_call",
+          "tableTo": "open_review_duck_ai_job",
+          "columnsFrom": [
+            "jobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_ai_job_turn": {
+      "name": "open_review_duck_ai_job_turn",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "jobId": {
+          "name": "jobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedContent": {
+          "name": "encryptedContent",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "inputTokens": {
+          "name": "inputTokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "outputTokens": {
+          "name": "outputTokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ai_job_turn_sequence_idx": {
+          "name": "ai_job_turn_sequence_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_ai_job_turn_jobId_open_review_duck_ai_job_id_fk": {
+          "name": "open_review_duck_ai_job_turn_jobId_open_review_duck_ai_job_id_fk",
+          "tableFrom": "open_review_duck_ai_job_turn",
           "tableTo": "open_review_duck_ai_job",
           "columnsFrom": [
             "jobId"
@@ -281,6 +555,24 @@
           "primaryKey": false,
           "notNull": true
         },
+        "question": {
+          "name": "question",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "focusLine": {
+          "name": "focusLine",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "threadId": {
+          "name": "threadId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "agentVersion": {
           "name": "agentVersion",
           "type": "integer",
@@ -295,6 +587,38 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'queued'"
+        },
+        "workflowRunId": {
+          "name": "workflowRunId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "progress": {
+          "name": "progress",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "completionReason": {
+          "name": "completionReason",
+          "type": "ai_completion_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model": {
+          "name": "model",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
         },
         "result": {
           "name": "result",
@@ -357,6 +681,20 @@
           "notNull": true,
           "default": 0
         },
+        "reservedMicroUsd": {
+          "name": "reservedMicroUsd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "actualMicroUsd": {
+          "name": "actualMicroUsd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -364,8 +702,20 @@
           "notNull": true,
           "default": "now()"
         },
+        "startedAt": {
+          "name": "startedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "completedAt": {
           "name": "completedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelledAt": {
+          "name": "cancelledAt",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -483,10 +833,124 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
+        },
+        "open_review_duck_ai_job_workflowRunId_open_review_duck_workflow_run_id_fk": {
+          "name": "open_review_duck_ai_job_workflowRunId_open_review_duck_workflow_run_id_fk",
+          "tableFrom": "open_review_duck_ai_job",
+          "tableTo": "open_review_duck_workflow_run",
+          "columnsFrom": [
+            "workflowRunId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ai_job_question_context_check": {
+          "name": "ai_job_question_context_check",
+          "value": "(\n        (\"open_review_duck_ai_job\".\"question\" is null and \"open_review_duck_ai_job\".\"focusLine\" is null and \"open_review_duck_ai_job\".\"threadId\" is null)\n        or\n        (\"open_review_duck_ai_job\".\"question\" is not null and \"open_review_duck_ai_job\".\"focusLine\" is not null and \"open_review_duck_ai_job\".\"threadId\" is not null)\n      )"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_ai_preference": {
+      "name": "open_review_duck_ai_preference",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "selectedModel": {
+          "name": "selectedModel",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'big-pickle'"
+        },
+        "mode": {
+          "name": "mode",
+          "type": "ai_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'on_demand'"
+        },
+        "reviewPullRequests": {
+          "name": "reviewPullRequests",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "freeProviderDisclosureVersion": {
+          "name": "freeProviderDisclosureVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "freeProviderDisclosureAcceptedAt": {
+          "name": "freeProviderDisclosureAcceptedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "open_review_duck_ai_preference_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_ai_preference_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_ai_preference",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_ai_preference_workspaceId_unique": {
+          "name": "open_review_duck_ai_preference_workspaceId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "workspaceId"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -593,6 +1057,956 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.open_review_duck_ai_usage_ledger": {
+      "name": "open_review_duck_ai_usage_ledger",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "jobId": {
+          "name": "jobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "month": {
+          "name": "month",
+          "type": "varchar(7)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "microUsd": {
+          "name": "microUsd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "inputTokens": {
+          "name": "inputTokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "outputTokens": {
+          "name": "outputTokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "providerReference": {
+          "name": "providerReference",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ai_usage_ledger_job_kind_idx": {
+          "name": "ai_usage_ledger_job_kind_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ai_usage_ledger_workspace_month_idx": {
+          "name": "ai_usage_ledger_workspace_month_idx",
+          "columns": [
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "month",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_ai_usage_ledger_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_ai_usage_ledger_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_ai_usage_ledger",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_ai_usage_ledger_jobId_open_review_duck_ai_job_id_fk": {
+          "name": "open_review_duck_ai_usage_ledger_jobId_open_review_duck_ai_job_id_fk",
+          "tableFrom": "open_review_duck_ai_usage_ledger",
+          "tableTo": "open_review_duck_ai_job",
+          "columnsFrom": [
+            "jobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_credential_audit_event": {
+      "name": "open_review_duck_credential_audit_event",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actorId": {
+          "name": "actorId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "credentialId": {
+          "name": "credentialId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "action": {
+          "name": "action",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "credential_audit_workspace_idx": {
+          "name": "credential_audit_workspace_idx",
+          "columns": [
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_credential_audit_event_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_credential_audit_event_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_credential_audit_event",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_credential_audit_event_actorId_open_review_duck_user_id_fk": {
+          "name": "open_review_duck_credential_audit_event_actorId_open_review_duck_user_id_fk",
+          "tableFrom": "open_review_duck_credential_audit_event",
+          "tableTo": "open_review_duck_user",
+          "columnsFrom": [
+            "actorId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_local_ai_configuration": {
+      "name": "open_review_duck_local_ai_configuration",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedConfiguration": {
+          "name": "encryptedConfiguration",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "open_review_duck_local_ai_configuration_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_local_ai_configuration_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_local_ai_configuration",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_local_ai_configuration_workspaceId_unique": {
+          "name": "open_review_duck_local_ai_configuration_workspaceId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "workspaceId"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_local_bootstrap_token": {
+      "name": "open_review_duck_local_bootstrap_token",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tokenHash": {
+          "name": "tokenHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_local_bootstrap_token_tokenHash_unique": {
+          "name": "open_review_duck_local_bootstrap_token_tokenHash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tokenHash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_local_credential": {
+      "name": "open_review_duck_local_credential",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedPayload": {
+          "name": "encryptedPayload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fingerprint": {
+          "name": "fingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "local_credential_fingerprint_idx": {
+          "name": "local_credential_fingerprint_idx",
+          "columns": [
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "fingerprint",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_local_credential_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_local_credential_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_local_credential",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_local_session": {
+      "name": "open_review_duck_local_session",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tokenHash": {
+          "name": "tokenHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastUsedAt": {
+          "name": "lastUsedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "local_session_user_idx": {
+          "name": "local_session_user_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_local_session_userId_open_review_duck_user_id_fk": {
+          "name": "open_review_duck_local_session_userId_open_review_duck_user_id_fk",
+          "tableFrom": "open_review_duck_local_session",
+          "tableTo": "open_review_duck_user",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_local_session_tokenHash_unique": {
+          "name": "open_review_duck_local_session_tokenHash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tokenHash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_managed_ai_credential": {
+      "name": "open_review_duck_managed_ai_credential",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "providerKeyId": {
+          "name": "providerKeyId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedCredential": {
+          "name": "encryptedCredential",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "monthlyLimitMicroUsd": {
+          "name": "monthlyLimitMicroUsd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_ai_credential_workspace_provider_idx": {
+          "name": "managed_ai_credential_workspace_provider_idx",
+          "columns": [
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_managed_ai_credential_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_managed_ai_credential_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_managed_ai_credential",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_managed_ai_model": {
+      "name": "open_review_duck_managed_ai_model",
+      "schema": "",
+      "columns": {
+        "modelId": {
+          "name": "modelId",
+          "type": "varchar(255)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contextLength": {
+          "name": "contextLength",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "promptNanoUsdPerToken": {
+          "name": "promptNanoUsdPerToken",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "completionNanoUsdPerToken": {
+          "name": "completionNanoUsdPerToken",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "supportsTools": {
+          "name": "supportsTools",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synchronizedAt": {
+          "name": "synchronizedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_oauth_credential": {
+      "name": "open_review_duck_oauth_credential",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "connectionId": {
+          "name": "connectionId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedAccessToken": {
+          "name": "encryptedAccessToken",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedRefreshToken": {
+          "name": "encryptedRefreshToken",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refreshVersion": {
+          "name": "refreshVersion",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "oauth_expiry_idx": {
+          "name": "oauth_expiry_idx",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_oauth_credential_connectionId_open_review_duck_provider_connection_id_fk": {
+          "name": "open_review_duck_oauth_credential_connectionId_open_review_duck_provider_connection_id_fk",
+          "tableFrom": "open_review_duck_oauth_credential",
+          "tableTo": "open_review_duck_provider_connection",
+          "columnsFrom": [
+            "connectionId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_oauth_credential_connectionId_unique": {
+          "name": "open_review_duck_oauth_credential_connectionId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "connectionId"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_oauth_state": {
+      "name": "open_review_duck_oauth_state",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "provider",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stateHash": {
+          "name": "stateHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedVerifier": {
+          "name": "encryptedVerifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "redirectPath": {
+          "name": "redirectPath",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "open_review_duck_oauth_state_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_oauth_state_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_oauth_state",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_oauth_state_stateHash_unique": {
+          "name": "open_review_duck_oauth_state_stateHash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "stateHash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.open_review_duck_provider_connection": {
       "name": "open_review_duck_provider_connection",
       "schema": "",
@@ -623,11 +2037,18 @@
           "primaryKey": false,
           "notNull": true
         },
+        "credentialKind": {
+          "name": "credentialKind",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'local_pat'"
+        },
         "credentialFingerprint": {
           "name": "credentialFingerprint",
           "type": "varchar(64)",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "displayName": {
           "name": "displayName",
@@ -635,27 +2056,21 @@
           "primaryKey": false,
           "notNull": true
         },
-        "encryptedAccessToken": {
-          "name": "encryptedAccessToken",
+        "installationId": {
+          "name": "installationId",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
-        "encryptedRefreshToken": {
-          "name": "encryptedRefreshToken",
-          "type": "text",
+        "localCredentialId": {
+          "name": "localCredentialId",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
         "baseUrl": {
           "name": "baseUrl",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -715,6 +2130,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_provider_connection_localCredentialId_open_review_duck_local_credential_id_fk": {
+          "name": "open_review_duck_provider_connection_localCredentialId_open_review_duck_local_credential_id_fk",
+          "tableFrom": "open_review_duck_provider_connection",
+          "tableTo": "open_review_duck_local_credential",
+          "columnsFrom": [
+            "localCredentialId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -966,6 +2394,12 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "connectionId": {
           "name": "connectionId",
           "type": "uuid",
@@ -1009,6 +2443,50 @@
           "notNull": true,
           "default": true
         },
+        "reviewIntakeMode": {
+          "name": "reviewIntakeMode",
+          "type": "repository_intake_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'manual'"
+        },
+        "intakeLastAttemptAt": {
+          "name": "intakeLastAttemptAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intakeLastReconciledAt": {
+          "name": "intakeLastReconciledAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intakeLastError": {
+          "name": "intakeLastError",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intakeOwnerId": {
+          "name": "intakeOwnerId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pullRequestStateLastCheckedAt": {
+          "name": "pullRequestStateLastCheckedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pullRequestStateLastError": {
+          "name": "pullRequestStateLastError",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "sourceRetentionDays": {
           "name": "sourceRetentionDays",
           "type": "integer",
@@ -1043,6 +2521,12 @@
           "name": "repository_external_idx",
           "columns": [
             {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "connectionId",
               "isExpression": false,
               "asc": true,
@@ -1062,6 +2546,19 @@
         }
       },
       "foreignKeys": {
+        "open_review_duck_repository_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_repository_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_repository",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
         "open_review_duck_repository_connectionId_open_review_duck_provider_connection_id_fk": {
           "name": "open_review_duck_repository_connectionId_open_review_duck_provider_connection_id_fk",
           "tableFrom": "open_review_duck_repository",
@@ -1073,6 +2570,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_repository_intakeOwnerId_open_review_duck_user_id_fk": {
+          "name": "open_review_duck_repository_intakeOwnerId_open_review_duck_user_id_fk",
+          "tableFrom": "open_review_duck_repository",
+          "tableTo": "open_review_duck_user",
+          "columnsFrom": [
+            "intakeOwnerId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -1263,6 +2773,136 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_review_queue_item": {
+      "name": "open_review_duck_review_queue_item",
+      "schema": "",
+      "columns": {
+        "pullRequestId": {
+          "name": "pullRequestId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "review_queue_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "source": {
+          "name": "source",
+          "type": "review_queue_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'manual'"
+        },
+        "removedAt": {
+          "name": "removedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "removedHeadSha": {
+          "name": "removedHeadSha",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "review_queue_user_state_idx": {
+          "name": "review_queue_user_state_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updatedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_review_queue_item_pullRequestId_open_review_duck_pull_request_id_fk": {
+          "name": "open_review_duck_review_queue_item_pullRequestId_open_review_duck_pull_request_id_fk",
+          "tableFrom": "open_review_duck_review_queue_item",
+          "tableTo": "open_review_duck_pull_request",
+          "columnsFrom": [
+            "pullRequestId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_review_queue_item_userId_open_review_duck_user_id_fk": {
+          "name": "open_review_duck_review_queue_item_userId_open_review_duck_user_id_fk",
+          "tableFrom": "open_review_duck_review_queue_item",
+          "tableTo": "open_review_duck_user",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "open_review_duck_review_queue_item_pullRequestId_userId_pk": {
+          "name": "open_review_duck_review_queue_item_pullRequestId_userId_pk",
+          "columns": [
+            "pullRequestId",
+            "userId"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -1578,6 +3218,24 @@
           "primaryKey": false,
           "notNull": true
         },
+        "snapshotFileId": {
+          "name": "snapshotFileId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "currentBlobId": {
+          "name": "currentBlobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previousBlobId": {
+          "name": "previousBlobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "stableKey": {
           "name": "stableKey",
           "type": "text",
@@ -1627,15 +3285,35 @@
           "primaryKey": false,
           "notNull": true
         },
-        "source": {
-          "name": "source",
-          "type": "text",
+        "startByte": {
+          "name": "startByte",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": 0
         },
-        "previousSource": {
-          "name": "previousSource",
-          "type": "text",
+        "endByte": {
+          "name": "endByte",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "previousStartByte": {
+          "name": "previousStartByte",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previousEndByte": {
+          "name": "previousEndByte",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relatedRanges": {
+          "name": "relatedRanges",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -1750,6 +3428,45 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_review_unit_snapshotFileId_open_review_duck_snapshot_file_id_fk": {
+          "name": "open_review_duck_review_unit_snapshotFileId_open_review_duck_snapshot_file_id_fk",
+          "tableFrom": "open_review_duck_review_unit",
+          "tableTo": "open_review_duck_snapshot_file",
+          "columnsFrom": [
+            "snapshotFileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_review_unit_currentBlobId_open_review_duck_source_blob_id_fk": {
+          "name": "open_review_duck_review_unit_currentBlobId_open_review_duck_source_blob_id_fk",
+          "tableFrom": "open_review_duck_review_unit",
+          "tableTo": "open_review_duck_source_blob",
+          "columnsFrom": [
+            "currentBlobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_review_unit_previousBlobId_open_review_duck_source_blob_id_fk": {
+          "name": "open_review_duck_review_unit_previousBlobId_open_review_duck_source_blob_id_fk",
+          "tableFrom": "open_review_duck_review_unit",
+          "tableTo": "open_review_duck_source_blob",
+          "columnsFrom": [
+            "previousBlobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },
@@ -1882,6 +3599,238 @@
           "tableTo": "open_review_duck_user",
           "columnsFrom": [
             "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_semantic_artifact": {
+      "name": "open_review_duck_semantic_artifact",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "repositoryId": {
+          "name": "repositoryId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "commitSha": {
+          "name": "commitSha",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "digest": {
+          "name": "digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sourceBlobId": {
+          "name": "sourceBlobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "semantic_artifact_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'uploading'"
+        },
+        "byteLength": {
+          "name": "byteLength",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "validatedAt": {
+          "name": "validatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "semantic_artifact_revision_idx": {
+          "name": "semantic_artifact_revision_idx",
+          "columns": [
+            {
+              "expression": "repositoryId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "commitSha",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_semantic_artifact_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_semantic_artifact_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_semantic_artifact",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_semantic_artifact_repositoryId_open_review_duck_repository_id_fk": {
+          "name": "open_review_duck_semantic_artifact_repositoryId_open_review_duck_repository_id_fk",
+          "tableFrom": "open_review_duck_semantic_artifact",
+          "tableTo": "open_review_duck_repository",
+          "columnsFrom": [
+            "repositoryId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_semantic_artifact_sourceBlobId_open_review_duck_source_blob_id_fk": {
+          "name": "open_review_duck_semantic_artifact_sourceBlobId_open_review_duck_source_blob_id_fk",
+          "tableFrom": "open_review_duck_semantic_artifact",
+          "tableTo": "open_review_duck_source_blob",
+          "columnsFrom": [
+            "sourceBlobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_semantic_upload_credential": {
+      "name": "open_review_duck_semantic_upload_credential",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "repositoryId": {
+          "name": "repositoryId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tokenHash": {
+          "name": "tokenHash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "lastUsedAt": {
+          "name": "lastUsedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "semantic_upload_repository_idx": {
+          "name": "semantic_upload_repository_idx",
+          "columns": [
+            {
+              "expression": "repositoryId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_semantic_upload_credential_repositoryId_open_review_duck_repository_id_fk": {
+          "name": "open_review_duck_semantic_upload_credential_repositoryId_open_review_duck_repository_id_fk",
+          "tableFrom": "open_review_duck_semantic_upload_credential",
+          "tableTo": "open_review_duck_repository",
+          "columnsFrom": [
+            "repositoryId"
           ],
           "columnsTo": [
             "id"
@@ -2030,6 +3979,578 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.open_review_duck_snapshot_file": {
+      "name": "open_review_duck_snapshot_file",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "snapshotId": {
+          "name": "snapshotId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previousPath": {
+          "name": "previousPath",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "language": {
+          "name": "language",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "changeType": {
+          "name": "changeType",
+          "type": "source_change_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currentBlobId": {
+          "name": "currentBlobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previousBlobId": {
+          "name": "previousBlobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "additions": {
+          "name": "additions",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "deletions": {
+          "name": "deletions",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "isBinary": {
+          "name": "isBinary",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "snapshot_file_path_idx": {
+          "name": "snapshot_file_path_idx",
+          "columns": [
+            {
+              "expression": "snapshotId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "path",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "snapshot_file_current_blob_idx": {
+          "name": "snapshot_file_current_blob_idx",
+          "columns": [
+            {
+              "expression": "currentBlobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "snapshot_file_previous_blob_idx": {
+          "name": "snapshot_file_previous_blob_idx",
+          "columns": [
+            {
+              "expression": "previousBlobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_snapshot_file_snapshotId_open_review_duck_review_snapshot_id_fk": {
+          "name": "open_review_duck_snapshot_file_snapshotId_open_review_duck_review_snapshot_id_fk",
+          "tableFrom": "open_review_duck_snapshot_file",
+          "tableTo": "open_review_duck_review_snapshot",
+          "columnsFrom": [
+            "snapshotId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_snapshot_file_currentBlobId_open_review_duck_source_blob_id_fk": {
+          "name": "open_review_duck_snapshot_file_currentBlobId_open_review_duck_source_blob_id_fk",
+          "tableFrom": "open_review_duck_snapshot_file",
+          "tableTo": "open_review_duck_source_blob",
+          "columnsFrom": [
+            "currentBlobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_snapshot_file_previousBlobId_open_review_duck_source_blob_id_fk": {
+          "name": "open_review_duck_snapshot_file_previousBlobId_open_review_duck_source_blob_id_fk",
+          "tableFrom": "open_review_duck_snapshot_file",
+          "tableTo": "open_review_duck_source_blob",
+          "columnsFrom": [
+            "previousBlobId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_source_blob": {
+      "name": "open_review_duck_source_blob",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "digest": {
+          "name": "digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage": {
+          "name": "storage",
+          "type": "source_storage",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "source_blob_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'uploading'"
+        },
+        "objectKey": {
+          "name": "objectKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "customId": {
+          "name": "customId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "byteLength": {
+          "name": "byteLength",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mediaType": {
+          "name": "mediaType",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'application/octet-stream'"
+        },
+        "encoding": {
+          "name": "encoding",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'utf-8'"
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "source_blob_digest_idx": {
+          "name": "source_blob_digest_idx",
+          "columns": [
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "digest",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "source_blob_state_idx": {
+          "name": "source_blob_state_idx",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updatedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_source_blob_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_source_blob_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_source_blob",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_sync_queue_request": {
+      "name": "open_review_duck_sync_queue_request",
+      "schema": "",
+      "columns": {
+        "syncRunId": {
+          "name": "syncRunId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "review_queue_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "explicit": {
+          "name": "explicit",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "open_review_duck_sync_queue_request_syncRunId_open_review_duck_sync_run_id_fk": {
+          "name": "open_review_duck_sync_queue_request_syncRunId_open_review_duck_sync_run_id_fk",
+          "tableFrom": "open_review_duck_sync_queue_request",
+          "tableTo": "open_review_duck_sync_run",
+          "columnsFrom": [
+            "syncRunId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_sync_queue_request_userId_open_review_duck_user_id_fk": {
+          "name": "open_review_duck_sync_queue_request_userId_open_review_duck_user_id_fk",
+          "tableFrom": "open_review_duck_sync_queue_request",
+          "tableTo": "open_review_duck_user",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "open_review_duck_sync_queue_request_syncRunId_userId_pk": {
+          "name": "open_review_duck_sync_queue_request_syncRunId_userId_pk",
+          "columns": [
+            "syncRunId",
+            "userId"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_sync_run": {
+      "name": "open_review_duck_sync_run",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "repositoryId": {
+          "name": "repositoryId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pullRequestNumber": {
+          "name": "pullRequestNumber",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workflowRunId": {
+          "name": "workflowRunId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "workflow_run_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'queued'"
+        },
+        "progress": {
+          "name": "progress",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "startedAt": {
+          "name": "startedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completedAt": {
+          "name": "completedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "sync_run_repository_idx": {
+          "name": "sync_run_repository_idx",
+          "columns": [
+            {
+              "expression": "repositoryId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "pullRequestNumber",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_sync_run_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_sync_run_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_sync_run",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_sync_run_repositoryId_open_review_duck_repository_id_fk": {
+          "name": "open_review_duck_sync_run_repositoryId_open_review_duck_repository_id_fk",
+          "tableFrom": "open_review_duck_sync_run",
+          "tableTo": "open_review_duck_repository",
+          "columnsFrom": [
+            "repositoryId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_sync_run_workflowRunId_open_review_duck_workflow_run_id_fk": {
+          "name": "open_review_duck_sync_run_workflowRunId_open_review_duck_workflow_run_id_fk",
+          "tableFrom": "open_review_duck_sync_run",
+          "tableTo": "open_review_duck_workflow_run",
+          "columnsFrom": [
+            "workflowRunId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.open_review_duck_user": {
       "name": "open_review_duck_user",
       "schema": "",
@@ -2102,6 +4623,312 @@
       },
       "indexes": {},
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_webhook_delivery": {
+      "name": "open_review_duck_webhook_delivery",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "provider": {
+          "name": "provider",
+          "type": "provider",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "deliveryId": {
+          "name": "deliveryId",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event": {
+          "name": "event",
+          "type": "varchar(120)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receivedAt": {
+          "name": "receivedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "processedAt": {
+          "name": "processedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'received'"
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "webhook_delivery_provider_idx": {
+          "name": "webhook_delivery_provider_idx",
+          "columns": [
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "deliveryId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "webhook_delivery_expiry_idx": {
+          "name": "webhook_delivery_expiry_idx",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_workflow_run": {
+      "name": "open_review_duck_workflow_run",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "providerRunId": {
+          "name": "providerRunId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "workflow_run_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'queued'"
+        },
+        "targetId": {
+          "name": "targetId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deploymentId": {
+          "name": "deploymentId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "startedAt": {
+          "name": "startedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completedAt": {
+          "name": "completedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "workflow_run_target_idx": {
+          "name": "workflow_run_target_idx",
+          "columns": [
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "targetId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_review_duck_workflow_run_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_workflow_run_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_workflow_run",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "open_review_duck_workflow_run_providerRunId_unique": {
+          "name": "open_review_duck_workflow_run_providerRunId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "providerRunId"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.open_review_duck_workspace_data_key": {
+      "name": "open_review_duck_workspace_data_key",
+      "schema": "",
+      "columns": {
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "keyVersion": {
+          "name": "keyVersion",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "encryptedKey": {
+          "name": "encryptedKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kmsKeyId": {
+          "name": "kmsKeyId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "rotatedAt": {
+          "name": "rotatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "open_review_duck_workspace_data_key_workspaceId_open_review_duck_workspace_id_fk": {
+          "name": "open_review_duck_workspace_data_key_workspaceId_open_review_duck_workspace_id_fk",
+          "tableFrom": "open_review_duck_workspace_data_key",
+          "tableTo": "open_review_duck_workspace",
+          "columnsFrom": [
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -2302,6 +5129,18 @@
     }
   },
   "enums": {
+    "public.ai_completion_reason": {
+      "name": "ai_completion_reason",
+      "schema": "public",
+      "values": [
+        "answered",
+        "investigation_limit",
+        "quota_limit",
+        "cost_limit",
+        "cancelled",
+        "provider_failure"
+      ]
+    },
     "public.ai_job_kind": {
       "name": "ai_job_kind",
       "schema": "public",
@@ -2316,8 +5155,11 @@
       "values": [
         "queued",
         "running",
+        "waiting_for_provider",
+        "streaming",
         "completed",
-        "failed"
+        "failed",
+        "cancelled"
       ]
     },
     "public.ai_mode": {
@@ -2348,6 +5190,15 @@
         "draft"
       ]
     },
+    "public.repository_intake_mode": {
+      "name": "repository_intake_mode",
+      "schema": "public",
+      "values": [
+        "manual",
+        "assigned",
+        "all"
+      ]
+    },
     "public.review_comment_source": {
       "name": "review_comment_source",
       "schema": "public",
@@ -2365,6 +5216,44 @@
         "failed"
       ]
     },
+    "public.review_queue_source": {
+      "name": "review_queue_source",
+      "schema": "public",
+      "values": [
+        "manual",
+        "assigned",
+        "all"
+      ]
+    },
+    "public.review_queue_state": {
+      "name": "review_queue_state",
+      "schema": "public",
+      "values": [
+        "active",
+        "removed"
+      ]
+    },
+    "public.semantic_artifact_status": {
+      "name": "semantic_artifact_status",
+      "schema": "public",
+      "values": [
+        "uploading",
+        "validating",
+        "ready",
+        "rejected",
+        "deleting"
+      ]
+    },
+    "public.source_blob_state": {
+      "name": "source_blob_state",
+      "schema": "public",
+      "values": [
+        "uploading",
+        "ready",
+        "failed",
+        "deleting"
+      ]
+    },
     "public.source_change_type": {
       "name": "source_change_type",
       "schema": "public",
@@ -2373,6 +5262,14 @@
         "modified",
         "deleted",
         "renamed"
+      ]
+    },
+    "public.source_storage": {
+      "name": "source_storage",
+      "schema": "public",
+      "values": [
+        "uploadthing",
+        "local"
       ]
     },
     "public.symbol_kind": {
@@ -2390,6 +5287,17 @@
         "test_hook",
         "binary",
         "file"
+      ]
+    },
+    "public.workflow_run_status": {
+      "name": "workflow_run_status",
+      "schema": "public",
+      "values": [
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancelled"
       ]
     }
   },

@@ -6,6 +6,9 @@ import {
   providerText,
 } from "./http";
 import type {
+  ProviderPullRequestReviewState,
+  ProviderReviewAction,
+  PullRequestListOptions,
   PullRequestProvider,
   PullRequestSummary,
   RepositoryIdentity,
@@ -25,6 +28,13 @@ interface GitHubUser {
   login: string;
   name: string | null;
 }
+interface GitHubInstallation {
+  id: number;
+  account: { id: number; login?: string; name?: string };
+}
+interface GitHubInstallationRepositories {
+  repositories: GitHubRepository[];
+}
 interface GitHubPull {
   id: number;
   number: number;
@@ -37,15 +47,32 @@ interface GitHubPull {
   additions?: number;
   deletions?: number;
   changed_files?: number;
-  user: { login: string; avatar_url: string };
+  user: { id: number; login: string; avatar_url: string };
+  requested_reviewers?: Array<{ id: number; login: string }>;
+  assignees?: Array<{ id: number; login: string }>;
   head: { ref: string; sha: string };
   base: { ref: string; sha: string };
+}
+interface GitHubReview {
+  id: number;
+  state:
+    | "APPROVED"
+    | "CHANGES_REQUESTED"
+    | "COMMENTED"
+    | "DISMISSED"
+    | "PENDING";
+  submitted_at?: string;
+  user: { id: number; login: string };
 }
 interface GitHubFile {
   filename: string;
   status: string;
   previous_filename?: string;
   sha?: string;
+}
+interface GitHubTree {
+  truncated: boolean;
+  tree: Array<{ path: string; type: "blob" | "tree" | "commit" }>;
 }
 interface GitHubReviewComment {
   id: number;
@@ -93,6 +120,7 @@ export class GitHubProvider implements PullRequestProvider {
   constructor(
     token: string,
     private readonly apiUrl = "https://api.github.com",
+    private readonly installation = false,
   ) {
     this.headers = {
       Accept: "application/vnd.github+json",
@@ -103,6 +131,20 @@ export class GitHubProvider implements PullRequestProvider {
 
   /** Fetches the account identity associated with a provider token. */
   async getConnectionIdentity() {
+    if (this.installation) {
+      const installation = await providerFetch<GitHubInstallation>(
+        this.name,
+        `${this.apiUrl}/installation`,
+        { headers: this.headers },
+      );
+      return {
+        externalAccountId: String(installation.account.id),
+        displayName:
+          installation.account.name ??
+          installation.account.login ??
+          `GitHub installation ${installation.id}`,
+      };
+    }
     const user = await providerFetch<GitHubUser>(
       this.name,
       `${this.apiUrl}/user`,
@@ -116,9 +158,17 @@ export class GitHubProvider implements PullRequestProvider {
 
   /** Lists every repository accessible through the provider connection. */
   async listRepositories(): Promise<RepositoryIdentity[]> {
-    const repos = await this.getAllPages<GitHubRepository>(
-      `${this.apiUrl}/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&direction=desc&per_page=100`,
-    );
+    const repos = this.installation
+      ? (
+          await providerFetch<GitHubInstallationRepositories>(
+            this.name,
+            `${this.apiUrl}/installation/repositories?per_page=100`,
+            { headers: this.headers },
+          )
+        ).repositories
+      : await this.getAllPages<GitHubRepository>(
+          `${this.apiUrl}/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&direction=desc&per_page=100`,
+        );
     return repos.map((repo) => ({
       externalId: String(repo.id),
       owner: repo.full_name.split("/", 1)[0] ?? repo.name,
@@ -128,15 +178,42 @@ export class GitHubProvider implements PullRequestProvider {
       isPrivate: repo.private,
     }));
   }
+  /**
+   * Confirms the GitHub App webhook model.
+   *
+   * GitHub App webhooks are configured once on the App and automatically cover
+   * repositories selected by each installation; creating repository hooks would
+   * require broader repository administration permission.
+   */
+  async ensureRepositoryWebhook(): Promise<void> {
+    if (!this.installation) return;
+  }
+  /** GitHub App installation removal automatically stops repository delivery. */
+  async removeRepositoryWebhook(): Promise<void> {
+    if (!this.installation) return;
+  }
 
   /** Lists open pull requests for a provider repository. */
-  async listOpenPullRequests(repositoryExternalId: string) {
+  async listOpenPullRequests(
+    repositoryExternalId: string,
+    options: PullRequestListOptions = {},
+  ) {
     const pulls = await this.getAllPages<GitHubPull>(
       `${this.apiUrl}/repositories/${repositoryExternalId}/pulls?state=open&per_page=100`,
     );
-    return mapWithConcurrency(pulls, 8, (pull) =>
-      this.getPullRequest(repositoryExternalId, pull.number),
-    );
+    const reviewerId = options.reviewerExternalAccountId;
+    return pulls
+      .filter(
+        (pull) =>
+          !reviewerId ||
+          pull.requested_reviewers?.some(
+            (reviewer) => String(reviewer.id) === reviewerId,
+          ) ||
+          pull.assignees?.some(
+            (assignee) => String(assignee.id) === reviewerId,
+          ),
+      )
+      .map((pull) => this.normalizePullRequest(pull));
   }
 
   /** Fetches normalized metadata for one pull request. */
@@ -149,6 +226,11 @@ export class GitHubProvider implements PullRequestProvider {
       `${this.apiUrl}/repositories/${repositoryExternalId}/pulls/${number}`,
       { headers: this.headers },
     );
+    return this.normalizePullRequest(pull);
+  }
+
+  /** Normalizes both list and detail responses without an N+1 detail fetch. */
+  private normalizePullRequest(pull: GitHubPull): PullRequestSummary {
     return {
       externalId: String(pull.id),
       number: pull.number,
@@ -166,6 +248,105 @@ export class GitHubProvider implements PullRequestProvider {
       deletions: pull.deletions ?? 0,
       changedFiles: pull.changed_files ?? 0,
     };
+  }
+
+  /** Fetches the latest effective review decision for each GitHub reviewer. */
+  async getPullRequestReviewState(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestReviewState> {
+    const [reviews, pull, identity] = await Promise.all([
+      this.getAllPages<GitHubReview>(
+        `${this.apiUrl}/repositories/${repositoryExternalId}/pulls/${number}/reviews?per_page=100`,
+      ),
+      providerFetch<GitHubPull>(
+        this.name,
+        `${this.apiUrl}/repositories/${repositoryExternalId}/pulls/${number}`,
+        { headers: this.headers },
+      ),
+      this.getConnectionIdentity(),
+    ]);
+    const latestByUser = new Map<number, GitHubReview["state"]>();
+    for (const review of reviews) {
+      if (review.state === "APPROVED" || review.state === "CHANGES_REQUESTED") {
+        latestByUser.set(review.user.id, review.state);
+      } else if (review.state === "DISMISSED") {
+        latestByUser.delete(review.user.id);
+      }
+    }
+    const actorId = Number(identity.externalAccountId);
+    const actorDecision = this.installation
+      ? undefined
+      : latestByUser.get(actorId);
+    const selfReview = pull.user.id === actorId;
+    const unavailableReason = this.installation
+      ? "GitHub App installations can synchronize approval state, but a personal approval must be submitted with your GitHub user identity."
+      : selfReview
+        ? "GitHub does not allow pull-request authors to approve their own changes."
+        : pull.state !== "open"
+          ? "This pull request is no longer open for review."
+          : undefined;
+    return {
+      decision:
+        actorDecision === "APPROVED"
+          ? "approved"
+          : actorDecision === "CHANGES_REQUESTED"
+            ? "changes_requested"
+            : "none",
+      actorName: this.installation
+        ? "connected GitHub App"
+        : identity.displayName,
+      approvedCount: [...latestByUser.values()].filter(
+        (state) => state === "APPROVED",
+      ).length,
+      changesRequestedCount: [...latestByUser.values()].filter(
+        (state) => state === "CHANGES_REQUESTED",
+      ).length,
+      canApprove: !unavailableReason && actorDecision !== "APPROVED",
+      canRequestChanges:
+        !unavailableReason && actorDecision !== "CHANGES_REQUESTED",
+      canClear: false,
+      requestChangesRequiresBody: true,
+      unavailableReason,
+    };
+  }
+
+  /** Submits a GitHub approval or request-changes review at one exact commit. */
+  async setPullRequestReviewDecision(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+    action: ProviderReviewAction;
+    body?: string;
+  }) {
+    if (this.installation) {
+      throw new Error(
+        "GitHub App installations cannot submit a personal review decision",
+      );
+    }
+    if (input.action === "clear") {
+      throw new Error("GitHub does not support withdrawing a submitted review");
+    }
+    const body = input.body?.trim();
+    if (input.action === "request_changes" && !body) {
+      throw new Error("GitHub requires a reason when requesting changes");
+    }
+    await providerFetch<GitHubReview>(
+      this.name,
+      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/${input.pullRequestNumber}/reviews`,
+      {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          commit_id: input.headSha,
+          event: input.action === "approve" ? "APPROVE" : "REQUEST_CHANGES",
+          ...(body ? { body } : {}),
+        }),
+      },
+    );
   }
 
   /** Fetches the changed source files required for static analysis. */
@@ -213,6 +394,25 @@ export class GitHubProvider implements PullRequestProvider {
         changeType: this.changeType(file.status),
       };
     });
+  }
+
+  /** Lists regular files from one exact Git commit tree. */
+  async listRepositoryFiles(repositoryExternalId: string, ref: string) {
+    const tree = await providerFetch<GitHubTree>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+      { headers: this.headers },
+    );
+    if (tree.truncated) {
+      throw new Error("GitHub repository tree exceeded its API limit");
+    }
+    const paths = tree.tree
+      .filter((entry) => entry.type === "blob")
+      .map((entry) => entry.path);
+    if (paths.length > MAX_PROVIDER_ITEMS) {
+      throw new Error("GitHub repository tree exceeded its item limit");
+    }
+    return paths;
   }
 
   /** Publishes an inline review comment to the code provider. */

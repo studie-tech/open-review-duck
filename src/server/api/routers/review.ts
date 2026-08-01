@@ -1,42 +1,35 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   aiJobs,
   providerConnections,
   pullRequests,
   repositories,
   reviewComments,
+  reviewQueueItems,
   reviewSessions,
   reviewSnapshots,
   reviewUnitDependencies,
   reviewUnits,
   reviewWaits,
   signOffs,
+  syncRuns,
   users,
+  workflowRuns,
   workspaceMembers,
-  workspaces,
 } from "@/drizzle/schema";
-import { env } from "~/env";
 import {
   findImportedDeclarationLine,
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
-import {
-  CURRENT_AI_AGENT_VERSION,
-  createAiJob,
-  scheduleAiJob,
-} from "~/server/ai/service";
-import {
-  analyzeFiles,
-  CURRENT_ANALYSIS_VERSION,
-} from "~/server/analysis/engine";
+import { CURRENT_AI_AGENT_VERSION } from "~/server/ai/service";
+import { analyzeFiles } from "~/server/analysis/engine";
 import type { db as database } from "~/server/db";
-import { createProvider } from "~/server/providers";
-import {
-  ProviderError,
-  type PullRequestSummary,
-} from "~/server/providers/types";
+import { isLocalDeployment } from "~/server/deployment";
+import { providerForConnection } from "~/server/providers/credentials";
+import { ProviderError } from "~/server/providers/types";
 import {
   claimFailedCommentForPublication,
   findEquivalentUserComment,
@@ -46,25 +39,25 @@ import {
 } from "~/server/review/comments";
 import { reviewCompletionCounts } from "~/server/review/completion";
 import {
+  removePullRequestFromQueue,
+  restorePullRequestToQueue,
+} from "~/server/review/queue";
+import {
   assignProviderThreadsToUnits,
   hasNewProviderActivity,
   providerActivityForUnit,
 } from "~/server/review/waiting";
-import { decryptSecret } from "~/server/security/encryption";
 import { enforceRateLimit } from "~/server/security/rate-limit";
+import { hydrateReviewUnits } from "~/server/storage/review-units";
+import { providerSyncErrorMessage } from "~/server/sync/error";
 import {
-  providerSyncErrorMessage,
-  REVIEW_PREPARATION_ERROR_MESSAGE,
-  reviewSyncFailureDetails,
-} from "~/server/sync/error";
-import {
-  pullRequestRevisionChanged,
-  reviewAnalysisNeedsRefresh,
-} from "~/server/sync/revision";
-import { syncPullRequest } from "~/server/sync/service";
+  cancelWorkflowRun,
+  startPullRequestSync,
+} from "~/server/workflows/service";
 import {
   awaitResponseSchema,
   importTargetSchema,
+  providerReviewDecisionSchema,
   publishReviewCommentSchema,
   replyToReviewThreadSchema,
   reviewUnitSchema,
@@ -81,6 +74,38 @@ import { createTRPCRouter, protectedProcedure } from "../trpc";
 const accessiblePullRequest = (userId: string, pullRequestId: string) =>
   and(eq(pullRequests.id, pullRequestId), eq(workspaceMembers.userId, userId));
 
+/** Resolves a source provider only after loading its authorized connection. */
+async function providerForScope(db: typeof database, connectionId: string) {
+  const connection = await db.query.providerConnections.findFirst({
+    where: eq(providerConnections.id, connectionId),
+  });
+  if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+  return providerForConnection(db, connection);
+}
+
+/** Checks one provider-side line against a unit's disjoint review ranges. */
+function reviewUnitContainsLine(
+  unit: Pick<
+    typeof reviewUnits.$inferSelect,
+    "changeType" | "endLine" | "relatedRanges" | "startLine"
+  >,
+  line: number,
+) {
+  const ranges =
+    unit.relatedRanges?.flatMap((range) => {
+      const start =
+        unit.changeType === "deleted"
+          ? range.previousStartLine
+          : range.startLine;
+      const end =
+        unit.changeType === "deleted" ? range.previousEndLine : range.endLine;
+      return start !== undefined && end !== undefined ? [{ start, end }] : [];
+    }) ?? [];
+  return ranges.length > 0
+    ? ranges.some(({ start, end }) => line >= start && line <= end)
+    : line >= unit.startLine && line <= unit.endLine;
+}
+
 /** Resolves and authorizes the provider context for one review unit. */
 async function providerScopeForUnit(
   db: typeof database,
@@ -93,6 +118,7 @@ async function providerScopeForUnit(
       path: reviewUnits.path,
       startLine: reviewUnits.startLine,
       endLine: reviewUnits.endLine,
+      relatedRanges: reviewUnits.relatedRanges,
       changeType: reviewUnits.changeType,
       snapshotId: reviewUnits.snapshotId,
       snapshotHeadSha: reviewSnapshots.headSha,
@@ -103,8 +129,7 @@ async function providerScopeForUnit(
       baseSha: pullRequests.baseSha,
       repositoryExternalId: repositories.externalId,
       provider: providerConnections.provider,
-      encryptedAccessToken: providerConnections.encryptedAccessToken,
-      baseUrl: providerConnections.baseUrl,
+      connectionId: providerConnections.id,
     })
     .from(reviewUnits)
     .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
@@ -116,7 +141,7 @@ async function providerScopeForUnit(
     )
     .innerJoin(
       workspaceMembers,
-      eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
     )
     .where(and(eq(reviewUnits.id, unitId), eq(workspaceMembers.userId, userId)))
     .limit(1);
@@ -133,29 +158,65 @@ async function providerScopeForUnit(
   return scope;
 }
 
-/** Fetches pull-request source and builds its dependency-ordered review path. */
-async function prepareReview(
+/** Resolves the authorized provider and latest snapshot for one pull request. */
+async function providerScopeForPullRequest(
   db: typeof database,
-  repositoryId: string,
-  number: number,
+  userId: string,
+  pullRequestId: string,
 ) {
-  try {
-    return await syncPullRequest(db, repositoryId, number);
-  } catch (cause) {
-    if (cause instanceof ProviderError) {
-      throw new TRPCError({
-        code: "BAD_GATEWAY",
-        message: providerSyncErrorMessage(cause.provider, cause),
-        cause,
-      });
-    }
-    console.error("Review preparation failed", reviewSyncFailureDetails(cause));
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: REVIEW_PREPARATION_ERROR_MESSAGE,
-      cause,
-    });
-  }
+  const [scope] = await db
+    .select({
+      pullRequestId: pullRequests.id,
+      pullRequestNumber: pullRequests.number,
+      pullRequestState: pullRequests.state,
+      headSha: pullRequests.headSha,
+      baseSha: pullRequests.baseSha,
+      repositoryExternalId: repositories.externalId,
+      provider: providerConnections.provider,
+      connectionId: providerConnections.id,
+    })
+    .from(pullRequests)
+    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+    .innerJoin(
+      providerConnections,
+      eq(repositories.connectionId, providerConnections.id),
+    )
+    .innerJoin(
+      workspaceMembers,
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
+    )
+    .where(accessiblePullRequest(userId, pullRequestId))
+    .limit(1);
+  if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
+  const snapshot = await db.query.reviewSnapshots.findFirst({
+    where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
+    orderBy: [desc(reviewSnapshots.version)],
+  });
+  return { ...scope, snapshot };
+}
+
+/** Converts a live provider failure into a safe user-facing review message. */
+function providerDecisionError(
+  provider: "github" | "gitlab" | "azure_devops",
+  cause: unknown,
+) {
+  if (cause instanceof TRPCError) return cause;
+  const label =
+    provider === "azure_devops"
+      ? "Azure DevOps"
+      : provider === "gitlab"
+        ? "GitLab"
+        : "GitHub";
+  const permissionDenied =
+    cause instanceof ProviderError &&
+    (cause.status === 401 || cause.status === 403);
+  return new TRPCError({
+    code: permissionDenied ? "FORBIDDEN" : "BAD_GATEWAY",
+    message: permissionDenied
+      ? `${label} did not allow this review decision. Reconnect it with code-review write permission and confirm that you are an eligible reviewer.`
+      : `${label} review state could not be synchronized`,
+    cause,
+  });
 }
 
 type ReviewTransaction = Parameters<
@@ -193,12 +254,8 @@ async function persistSignOff(
     .innerJoin(pullRequests, eq(reviewSnapshots.pullRequestId, pullRequests.id))
     .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
     .innerJoin(
-      providerConnections,
-      eq(repositories.connectionId, providerConnections.id),
-    )
-    .innerJoin(
       workspaceMembers,
-      eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
     )
     .where(
       and(
@@ -356,14 +413,25 @@ export const reviewRouter = createTRPCRouter({
         authorLogin: pullRequests.authorLogin,
         authorAvatarUrl: pullRequests.authorAvatarUrl,
         state: pullRequests.state,
+        webUrl: pullRequests.webUrl,
         updatedAt: pullRequests.updatedAt,
         additions: pullRequests.additions,
         deletions: pullRequests.deletions,
         repositoryOwner: repositories.owner,
         repositoryName: repositories.name,
         provider: providerConnections.provider,
+        queueState: reviewQueueItems.state,
+        queueSource: reviewQueueItems.source,
+        removedAt: reviewQueueItems.removedAt,
       })
       .from(pullRequests)
+      .innerJoin(
+        reviewQueueItems,
+        and(
+          eq(reviewQueueItems.pullRequestId, pullRequests.id),
+          eq(reviewQueueItems.userId, ctx.auth.userId),
+        ),
+      )
       .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
       .innerJoin(
         providerConnections,
@@ -371,14 +439,9 @@ export const reviewRouter = createTRPCRouter({
       )
       .innerJoin(
         workspaceMembers,
-        eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+        eq(repositories.workspaceId, workspaceMembers.workspaceId),
       )
-      .where(
-        and(
-          eq(workspaceMembers.userId, ctx.auth.userId),
-          inArray(pullRequests.state, ["open", "draft"]),
-        ),
-      )
+      .where(eq(workspaceMembers.userId, ctx.auth.userId))
       .orderBy(desc(pullRequests.updatedAt));
     if (rows.length === 0) return [];
     const snapshots = await ctx.db
@@ -465,6 +528,60 @@ export const reviewRouter = createTRPCRouter({
     });
   }),
 
+  removeFromQueue: protectedProcedure
+    .input(z.object({ pullRequestId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [accessible] = await ctx.db
+        .select({ id: pullRequests.id })
+        .from(pullRequests)
+        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+        .innerJoin(
+          workspaceMembers,
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
+        )
+        .where(
+          and(
+            eq(pullRequests.id, input.pullRequestId),
+            eq(workspaceMembers.userId, ctx.auth.userId),
+          ),
+        )
+        .limit(1);
+      if (!accessible) throw new TRPCError({ code: "NOT_FOUND" });
+      const removed = await removePullRequestFromQueue(ctx.db, {
+        pullRequestId: input.pullRequestId,
+        userId: ctx.auth.userId,
+      });
+      if (!removed) throw new TRPCError({ code: "NOT_FOUND" });
+      return removed;
+    }),
+
+  restoreToQueue: protectedProcedure
+    .input(z.object({ pullRequestId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [accessible] = await ctx.db
+        .select({ id: pullRequests.id })
+        .from(pullRequests)
+        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+        .innerJoin(
+          workspaceMembers,
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
+        )
+        .where(
+          and(
+            eq(pullRequests.id, input.pullRequestId),
+            eq(workspaceMembers.userId, ctx.auth.userId),
+          ),
+        )
+        .limit(1);
+      if (!accessible) throw new TRPCError({ code: "NOT_FOUND" });
+      const restored = await restorePullRequestToQueue(ctx.db, {
+        pullRequestId: input.pullRequestId,
+        userId: ctx.auth.userId,
+      });
+      if (!restored) throw new TRPCError({ code: "NOT_FOUND" });
+      return restored;
+    }),
+
   workspace: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
@@ -483,6 +600,7 @@ export const reviewRouter = createTRPCRouter({
           repositoryId: repositories.id,
           repositoryOwner: repositories.owner,
           repositoryName: repositories.name,
+          repositoryWebUrl: repositories.webUrl,
           provider: providerConnections.provider,
         })
         .from(pullRequests)
@@ -493,21 +611,39 @@ export const reviewRouter = createTRPCRouter({
         )
         .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
         .limit(1);
       if (!pullRequest) throw new TRPCError({ code: "NOT_FOUND" });
-      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        where: eq(reviewSnapshots.pullRequestId, pullRequest.id),
-        orderBy: [desc(reviewSnapshots.version)],
-      });
+      const [snapshot, previousSnapshot] =
+        await ctx.db.query.reviewSnapshots.findMany({
+          where: eq(reviewSnapshots.pullRequestId, pullRequest.id),
+          orderBy: [desc(reviewSnapshots.version)],
+          limit: 2,
+        });
       if (!snapshot)
-        return { pullRequest, snapshot: null, units: [], fileContexts: [] };
-      const allUnits = await ctx.db.query.reviewUnits.findMany({
+        return {
+          pullRequest,
+          snapshot: null,
+          previousSnapshot: null,
+          units: [],
+          fileContexts: [],
+          sourceDelivery: isLocalDeployment()
+            ? ("inline" as const)
+            : ("direct" as const),
+        };
+      const storedUnits = await ctx.db.query.reviewUnits.findMany({
         where: eq(reviewUnits.snapshotId, snapshot.id),
         orderBy: [reviewUnits.reviewOrder],
       });
+      const allUnits = isLocalDeployment()
+        ? await hydrateReviewUnits(ctx.db, storedUnits)
+        : storedUnits.map((unit) => ({
+            ...unit,
+            source: "",
+            previousSource: null,
+          }));
       const units = allUnits.filter(({ kind }) => kind !== "file");
       const fileContexts = allUnits.filter(({ kind }) => kind === "file");
       const dependencyRows = units.length
@@ -594,6 +730,16 @@ export const reviewRouter = createTRPCRouter({
       return {
         pullRequest,
         snapshot,
+        sourceDelivery: isLocalDeployment()
+          ? ("inline" as const)
+          : ("direct" as const),
+        previousSnapshot: previousSnapshot
+          ? {
+              id: previousSnapshot.id,
+              headSha: previousSnapshot.headSha,
+              version: previousSnapshot.version,
+            }
+          : null,
         fileContexts,
         units: units.map((unit) => {
           const wait = waitByUnitId.get(unit.id);
@@ -617,6 +763,207 @@ export const reviewRouter = createTRPCRouter({
       };
     }),
 
+  providerReviewState: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .query(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `provider-review-state:${ctx.auth.userId}`,
+        60,
+        60_000,
+      );
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `provider-review-state-resource:${ctx.auth.userId}:${input.pullRequestId}`,
+        30,
+        60_000,
+      );
+      try {
+        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const [state, remotePullRequest] = await Promise.all([
+          provider.getPullRequestReviewState(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+          provider.getPullRequest(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+        ]);
+        const revisionCurrent =
+          remotePullRequest.headSha === scope.headSha &&
+          remotePullRequest.baseSha === scope.baseSha &&
+          scope.snapshot?.headSha === scope.headSha &&
+          scope.snapshot?.baseSha === scope.baseSha;
+        return {
+          ...state,
+          provider: scope.provider,
+          revisionCurrent,
+          syncedAt: new Date(),
+          canApprove: revisionCurrent && state.canApprove,
+          canRequestChanges: revisionCurrent && state.canRequestChanges,
+          canClear: revisionCurrent && state.canClear,
+          unavailableReason: revisionCurrent
+            ? state.unavailableReason
+            : "The provider has a newer revision. Synchronize this pull request before changing its review decision.",
+        };
+      } catch (cause) {
+        throw providerDecisionError(scope.provider, cause);
+      }
+    }),
+
+  setProviderReviewDecision: protectedProcedure
+    .input(providerReviewDecisionSchema)
+    .mutation(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `provider-review-decision:${ctx.auth.userId}`,
+        20,
+        10 * 60_000,
+      );
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      if (
+        !scope.snapshot ||
+        scope.snapshot.headSha !== scope.headSha ||
+        scope.snapshot.baseSha !== scope.baseSha
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Synchronize the pull request before changing its review decision",
+        });
+      }
+      const completion = await reviewCompletionCounts(
+        ctx.db,
+        scope.snapshot.id,
+        ctx.auth.userId,
+      );
+      if (completion.total === 0 || completion.signed < completion.total) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Complete every review unit before changing the provider review decision",
+        });
+      }
+      if (
+        scope.pullRequestState !== "open" &&
+        scope.pullRequestState !== "draft"
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This pull request is no longer open for review",
+        });
+      }
+      try {
+        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const [remotePullRequest, currentState] = await Promise.all([
+          provider.getPullRequest(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+          provider.getPullRequestReviewState(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+        ]);
+        if (
+          remotePullRequest.headSha !== scope.headSha ||
+          remotePullRequest.baseSha !== scope.baseSha
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The provider has a newer revision. Synchronize it before changing the review decision.",
+          });
+        }
+        const body = input.body?.trim();
+        const allowed =
+          input.action === "approve"
+            ? currentState.canApprove
+            : input.action === "request_changes"
+              ? currentState.canRequestChanges
+              : currentState.canClear;
+        const alreadyApplied =
+          (input.action === "approve" &&
+            currentState.decision === "approved") ||
+          (input.action === "request_changes" &&
+            currentState.decision === "changes_requested") ||
+          (input.action === "clear" && currentState.decision === "none");
+        if (alreadyApplied) {
+          return {
+            ...currentState,
+            provider: scope.provider,
+            revisionCurrent: true,
+            syncedAt: new Date(),
+            unavailableReason: currentState.unavailableReason,
+          };
+        }
+        if (!allowed) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              currentState.unavailableReason ??
+              "The connected provider account cannot submit that review decision",
+          });
+        }
+        if (
+          input.action === "request_changes" &&
+          currentState.requestChangesRequiresBody &&
+          !body
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Add a reason before requesting changes",
+          });
+        }
+        await provider.setPullRequestReviewDecision({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          headSha: scope.headSha,
+          action: input.action,
+          body,
+        });
+        const [updatedState, updatedPullRequest] = await Promise.all([
+          provider.getPullRequestReviewState(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+          provider.getPullRequest(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+        ]);
+        if (
+          updatedPullRequest.headSha !== scope.headSha ||
+          updatedPullRequest.baseSha !== scope.baseSha
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The pull request changed while the review decision was being submitted. Synchronize it now.",
+          });
+        }
+        return {
+          ...updatedState,
+          provider: scope.provider,
+          revisionCurrent: true,
+          syncedAt: new Date(),
+          unavailableReason: updatedState.unavailableReason,
+        };
+      } catch (cause) {
+        throw providerDecisionError(scope.provider, cause);
+      }
+    }),
+
   poll: protectedProcedure
     .input(reviewWorkspaceSchema)
     .mutation(async ({ ctx, input }) => {
@@ -629,23 +976,14 @@ export const reviewRouter = createTRPCRouter({
       const [current] = await ctx.db
         .select({
           repositoryId: repositories.id,
-          repositoryExternalId: repositories.externalId,
+          workspaceId: repositories.workspaceId,
           number: pullRequests.number,
-          headSha: pullRequests.headSha,
-          baseSha: pullRequests.baseSha,
-          provider: providerConnections.provider,
-          encryptedAccessToken: providerConnections.encryptedAccessToken,
-          baseUrl: providerConnections.baseUrl,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
         .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
         .limit(1);
@@ -657,63 +995,14 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
 
-      let remote: PullRequestSummary;
-      try {
-        remote = await createProvider(
-          current.provider,
-          decryptSecret(current.encryptedAccessToken, env.ENCRYPTION_KEY),
-          current.baseUrl ?? undefined,
-        ).getPullRequest(current.repositoryExternalId, current.number);
-      } catch (cause) {
-        console.error(
-          "Pull request polling failed",
-          reviewSyncFailureDetails(cause),
-        );
-        throw new TRPCError({
-          code: "BAD_GATEWAY",
-          message: providerSyncErrorMessage(current.provider, cause),
-          cause,
-        });
-      }
-      const latestSnapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        columns: { analysisVersion: true },
-        where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
-        orderBy: [desc(reviewSnapshots.version)],
-      });
-      if (
-        pullRequestRevisionChanged(current, remote) ||
-        reviewAnalysisNeedsRefresh(
-          latestSnapshot?.analysisVersion,
-          CURRENT_ANALYSIS_VERSION,
-        )
-      ) {
-        const result = await prepareReview(
-          ctx.db,
-          current.repositoryId,
-          current.number,
-        );
-        return { changed: result.snapshotCreated, syncedAt: new Date() };
-      }
-
-      const syncedAt = new Date();
-      await ctx.db
-        .update(pullRequests)
-        .set({
-          title: remote.title,
-          description: remote.description,
-          authorLogin: remote.authorLogin,
-          authorAvatarUrl: remote.authorAvatarUrl,
-          sourceBranch: remote.sourceBranch,
-          targetBranch: remote.targetBranch,
-          state: remote.state,
-          webUrl: remote.webUrl,
-          additions: remote.additions,
-          deletions: remote.deletions,
-          changedFiles: remote.changedFiles,
-          lastSyncedAt: syncedAt,
-        })
-        .where(eq(pullRequests.id, input.pullRequestId));
-      return { changed: false, syncedAt };
+      return {
+        changed: true,
+        ...(await startPullRequestSync(ctx.db, {
+          workspaceId: current.workspaceId,
+          repositoryId: current.repositoryId,
+          pullRequestNumber: current.number,
+        })),
+      };
     }),
 
   reset: protectedProcedure
@@ -728,27 +1017,19 @@ export const reviewRouter = createTRPCRouter({
       const [current] = await ctx.db
         .select({
           repositoryId: repositories.id,
+          workspaceId: repositories.workspaceId,
           number: pullRequests.number,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
         .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
         .limit(1);
       if (!current) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const synced = await prepareReview(
-        ctx.db,
-        current.repositoryId,
-        current.number,
-      );
       const invalidated = await ctx.db.transaction(async (tx) => {
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${input.pullRequestId}:${ctx.auth.userId}`}))`,
@@ -798,7 +1079,11 @@ export const reviewRouter = createTRPCRouter({
 
       return {
         invalidated,
-        snapshotCreated: synced.snapshotCreated,
+        ...(await startPullRequestSync(ctx.db, {
+          workspaceId: current.workspaceId,
+          repositoryId: current.repositoryId,
+          pullRequestNumber: current.number,
+        })),
       };
     }),
 
@@ -817,8 +1102,7 @@ export const reviewRouter = createTRPCRouter({
           pullRequestNumber: pullRequests.number,
           repositoryExternalId: repositories.externalId,
           provider: providerConnections.provider,
-          encryptedAccessToken: providerConnections.encryptedAccessToken,
-          baseUrl: providerConnections.baseUrl,
+          connectionId: providerConnections.id,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -828,7 +1112,7 @@ export const reviewRouter = createTRPCRouter({
         )
         .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
         .limit(1);
@@ -865,11 +1149,13 @@ export const reviewRouter = createTRPCRouter({
       const units = allUnits.filter(({ kind }) => kind !== "file");
       const paths = new Set(units.map(({ path }) => path));
       try {
-        const provider = createProvider(
-          scope.provider,
-          decryptSecret(scope.encryptedAccessToken, env.ENCRYPTION_KEY),
-          scope.baseUrl ?? undefined,
-        );
+        if (!scope.connectionId) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Provider connection not found",
+          });
+        }
+        const provider = await providerForScope(ctx.db, scope.connectionId);
         const threads = await provider.listInlineCommentThreads(
           scope.repositoryExternalId,
           scope.pullRequestNumber,
@@ -998,8 +1284,7 @@ export const reviewRouter = createTRPCRouter({
           baseSha: pullRequests.baseSha,
           repositoryExternalId: repositories.externalId,
           provider: providerConnections.provider,
-          encryptedAccessToken: providerConnections.encryptedAccessToken,
-          baseUrl: providerConnections.baseUrl,
+          connectionId: providerConnections.id,
         })
         .from(reviewUnits)
         .innerJoin(
@@ -1011,13 +1296,13 @@ export const reviewRouter = createTRPCRouter({
           eq(reviewSnapshots.pullRequestId, pullRequests.id),
         )
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .innerJoin(
+        .leftJoin(
           providerConnections,
           eq(repositories.connectionId, providerConnections.id),
         )
         .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(
           and(
@@ -1043,11 +1328,13 @@ export const reviewRouter = createTRPCRouter({
         });
       }
 
-      const provider = createProvider(
-        scope.provider,
-        decryptSecret(scope.encryptedAccessToken, env.ENCRYPTION_KEY),
-        scope.baseUrl ?? undefined,
-      );
+      if (!scope.connectionId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Local comments do not have provider response threads",
+        });
+      }
+      const provider = await providerForScope(ctx.db, scope.connectionId);
       let threads: Awaited<
         ReturnType<typeof provider.listInlineCommentThreads>
       >;
@@ -1165,8 +1452,7 @@ export const reviewRouter = createTRPCRouter({
           pullRequestId: pullRequests.id,
           repositoryExternalId: repositories.externalId,
           provider: providerConnections.provider,
-          encryptedAccessToken: providerConnections.encryptedAccessToken,
-          baseUrl: providerConnections.baseUrl,
+          connectionId: providerConnections.id,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -1176,7 +1462,7 @@ export const reviewRouter = createTRPCRouter({
         )
         .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
         .limit(1);
@@ -1200,13 +1486,16 @@ export const reviewRouter = createTRPCRouter({
         };
       }
 
-      const storedUnits = await ctx.db.query.reviewUnits.findMany({
-        where: and(
-          eq(reviewUnits.snapshotId, snapshot.id),
-          inArray(reviewUnits.path, candidates),
-        ),
-        orderBy: [reviewUnits.reviewOrder],
-      });
+      const storedUnits = await hydrateReviewUnits(
+        ctx.db,
+        await ctx.db.query.reviewUnits.findMany({
+          where: and(
+            eq(reviewUnits.snapshotId, snapshot.id),
+            inArray(reviewUnits.path, candidates),
+          ),
+          orderBy: [reviewUnits.reviewOrder],
+        }),
+      );
       const storedTarget = findImportTargetUnit(
         input.sourcePath,
         input.sourceLanguage,
@@ -1241,11 +1530,7 @@ export const reviewRouter = createTRPCRouter({
         }
       }
 
-      const provider = createProvider(
-        scope.provider,
-        decryptSecret(scope.encryptedAccessToken, env.ENCRYPTION_KEY),
-        scope.baseUrl ?? undefined,
-      );
+      const provider = await providerForScope(ctx.db, scope.connectionId);
       for (const path of candidates) {
         let content: string | undefined;
         try {
@@ -1336,12 +1621,8 @@ export const reviewRouter = createTRPCRouter({
         )
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
         .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(
           and(
@@ -1384,8 +1665,7 @@ export const reviewRouter = createTRPCRouter({
             .filter(
               (candidate) =>
                 finding.line !== undefined &&
-                finding.line >= candidate.startLine &&
-                finding.line <= candidate.endLine,
+                reviewUnitContainsLine(candidate, finding.line),
             )
             .sort((left, right) => {
               const spanDifference =
@@ -1414,7 +1694,7 @@ export const reviewRouter = createTRPCRouter({
         ctx.auth.userId,
         input.unitId,
       );
-      if (input.line < scope.startLine || input.line > scope.endLine) {
+      if (!reviewUnitContainsLine(scope, input.line)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "The selected line is outside this review unit",
@@ -1423,7 +1703,8 @@ export const reviewRouter = createTRPCRouter({
 
       let body = input.body;
       let source: "user" | "ai" = "user";
-      if (input.aiJobId !== undefined && input.aiFindingIndex !== undefined) {
+      const aiResultIndex = input.aiFindingIndex ?? input.aiCommentIndex;
+      if (input.aiJobId !== undefined && aiResultIndex !== undefined) {
         source = "ai";
         const job = await ctx.db.query.aiJobs.findFirst({
           where: and(
@@ -1431,22 +1712,41 @@ export const reviewRouter = createTRPCRouter({
             eq(aiJobs.userId, ctx.auth.userId),
             eq(aiJobs.pullRequestId, scope.pullRequestId),
             eq(aiJobs.snapshotId, scope.snapshotId),
-            eq(aiJobs.kind, "review"),
             eq(aiJobs.status, "completed"),
           ),
         });
-        const finding = job?.result?.findings[input.aiFindingIndex];
-        if (
-          !finding ||
-          finding.path !== scope.path ||
-          finding.line !== input.line
-        ) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "This AI finding no longer matches the selected code",
-          });
+        if (input.aiFindingIndex !== undefined) {
+          const finding = job?.result?.findings[input.aiFindingIndex];
+          if (
+            job?.kind !== "review" ||
+            !finding ||
+            finding.path !== scope.path ||
+            finding.line !== input.line
+          ) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "This AI finding no longer matches the selected code",
+            });
+          }
+          body = `**${finding.title}**\n\n${finding.body}`;
+        } else {
+          const proposal =
+            job?.result?.commentProposals?.[input.aiCommentIndex ?? -1];
+          if (
+            job?.kind !== "explain" ||
+            !job.question ||
+            !proposal ||
+            proposal.path !== scope.path ||
+            proposal.line !== input.line
+          ) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "This AI comment proposal no longer matches the selected code",
+            });
+          }
+          body = input.body ?? proposal.body;
         }
-        body = `**${finding.title}**\n\n${finding.body}`;
       }
       if (!body) {
         throw new TRPCError({
@@ -1478,7 +1778,7 @@ export const reviewRouter = createTRPCRouter({
             unitId: scope.unitId,
             userId: ctx.auth.userId,
             aiJobId: input.aiJobId,
-            aiFindingIndex: input.aiFindingIndex,
+            aiFindingIndex: aiResultIndex,
             source,
             body,
             line: input.line,
@@ -1493,7 +1793,7 @@ export const reviewRouter = createTRPCRouter({
             ? await ctx.db.query.reviewComments.findFirst({
                 where: and(
                   eq(reviewComments.aiJobId, input.aiJobId),
-                  eq(reviewComments.aiFindingIndex, input.aiFindingIndex ?? -1),
+                  eq(reviewComments.aiFindingIndex, aiResultIndex ?? -1),
                 ),
               })
             : undefined;
@@ -1511,11 +1811,7 @@ export const reviewRouter = createTRPCRouter({
       }
 
       try {
-        const provider = createProvider(
-          scope.provider,
-          decryptSecret(scope.encryptedAccessToken, env.ENCRYPTION_KEY),
-          scope.baseUrl ?? undefined,
-        );
+        const provider = await providerForScope(ctx.db, scope.connectionId);
         const existingThread = retryingPublication
           ? publishedThreadForComment(
               await provider.listInlineCommentThreads(
@@ -1585,11 +1881,7 @@ export const reviewRouter = createTRPCRouter({
         30,
         60_000,
       );
-      const provider = createProvider(
-        scope.provider,
-        decryptSecret(scope.encryptedAccessToken, env.ENCRYPTION_KEY),
-        scope.baseUrl ?? undefined,
-      );
+      const provider = await providerForScope(ctx.db, scope.connectionId);
       try {
         const thread = (
           await provider.listInlineCommentThreads(
@@ -1600,8 +1892,7 @@ export const reviewRouter = createTRPCRouter({
           (candidate) =>
             candidate.externalId === input.threadExternalId &&
             candidate.path === scope.path &&
-            candidate.line >= scope.startLine &&
-            candidate.line <= scope.endLine,
+            reviewUnitContainsLine(scope, candidate.line),
         );
         const parentCommentExternalId = thread?.comments[0]?.externalId;
         if (!thread || !parentCommentExternalId) {
@@ -1640,12 +1931,8 @@ export const reviewRouter = createTRPCRouter({
         )
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
         .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(
           and(
@@ -1691,15 +1978,14 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       const [access] = await ctx.db
-        .select({ id: repositories.id })
+        .select({
+          id: repositories.id,
+          workspaceId: repositories.workspaceId,
+        })
         .from(repositories)
         .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
           workspaceMembers,
-          eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
         )
         .where(
           and(
@@ -1715,52 +2001,89 @@ export const reviewRouter = createTRPCRouter({
         20,
         60_000,
       );
-      const result = await prepareReview(
-        ctx.db,
-        input.repositoryId,
-        input.number,
-      );
-      const [workspace] = await ctx.db
-        .select({
-          aiMode: workspaces.aiMode,
-          aiReviewEnabled: workspaces.aiReviewEnabled,
-        })
-        .from(repositories)
+      return startPullRequestSync(ctx.db, {
+        workspaceId: access.workspaceId,
+        repositoryId: access.id,
+        pullRequestNumber: input.number,
+        queue: {
+          userId: ctx.auth.userId,
+          source: "manual",
+          explicit: true,
+        },
+      });
+    }),
+
+  syncStatus: protectedProcedure
+    .input(z.object({ syncId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [sync] = await ctx.db
+        .select({ sync: syncRuns, providerRunId: workflowRuns.providerRunId })
+        .from(syncRuns)
         .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
+          workspaceMembers,
+          eq(syncRuns.workspaceId, workspaceMembers.workspaceId),
         )
-        .innerJoin(
-          workspaces,
-          eq(providerConnections.workspaceId, workspaces.id),
+        .leftJoin(workflowRuns, eq(syncRuns.workflowRunId, workflowRuns.id))
+        .where(
+          and(
+            eq(syncRuns.id, input.syncId),
+            eq(workspaceMembers.userId, ctx.auth.userId),
+          ),
         )
-        .where(eq(repositories.id, input.repositoryId))
         .limit(1);
-      if (
-        result.snapshotCreated &&
-        workspace?.aiReviewEnabled &&
-        workspace.aiMode !== "off"
-      ) {
-        try {
-          const job = await createAiJob(ctx.db, {
-            pullRequestId: result.pullRequest.id,
-            kind: "review",
-            userId: ctx.auth.userId,
-            hasManagedAi: ctx.auth.has({ feature: "managed_ai" }),
-          });
-          scheduleAiJob(ctx.db, job.id);
-          return { ...result, automaticAiJobId: job.id };
-        } catch (cause) {
-          return {
-            ...result,
-            automaticAiError:
-              cause instanceof Error
-                ? cause.message
-                : "Automatic AI review could not start",
-          };
-        }
-      }
-      return result;
+      if (!sync) throw new TRPCError({ code: "NOT_FOUND" });
+      return { ...sync.sync, providerRunId: sync.providerRunId };
+    }),
+
+  activeSyncs: protectedProcedure.query(async ({ ctx }) =>
+    ctx.db
+      .select({
+        id: syncRuns.id,
+        repositoryId: syncRuns.repositoryId,
+        pullRequestNumber: syncRuns.pullRequestNumber,
+        status: syncRuns.status,
+        progress: syncRuns.progress,
+        createdAt: syncRuns.createdAt,
+      })
+      .from(syncRuns)
+      .innerJoin(
+        workspaceMembers,
+        eq(syncRuns.workspaceId, workspaceMembers.workspaceId),
+      )
+      .where(
+        and(
+          eq(workspaceMembers.userId, ctx.auth.userId),
+          inArray(syncRuns.status, ["queued", "running"]),
+        ),
+      )
+      .orderBy(desc(syncRuns.createdAt)),
+  ),
+
+  cancelSync: protectedProcedure
+    .input(z.object({ syncId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [sync] = await ctx.db
+        .select({ runId: workflowRuns.providerRunId })
+        .from(syncRuns)
+        .innerJoin(
+          workspaceMembers,
+          eq(syncRuns.workspaceId, workspaceMembers.workspaceId),
+        )
+        .innerJoin(workflowRuns, eq(syncRuns.workflowRunId, workflowRuns.id))
+        .where(
+          and(
+            eq(syncRuns.id, input.syncId),
+            eq(workspaceMembers.userId, ctx.auth.userId),
+          ),
+        )
+        .limit(1);
+      if (!sync) throw new TRPCError({ code: "NOT_FOUND" });
+      await cancelWorkflowRun(ctx.db, sync.runId);
+      await ctx.db
+        .update(syncRuns)
+        .set({ status: "cancelled", completedAt: new Date() })
+        .where(eq(syncRuns.id, input.syncId));
+      return { status: "cancelled" as const };
     }),
 
   signOff: protectedProcedure
@@ -1859,12 +2182,8 @@ export const reviewRouter = createTRPCRouter({
             eq(pullRequests.repositoryId, repositories.id),
           )
           .innerJoin(
-            providerConnections,
-            eq(repositories.connectionId, providerConnections.id),
-          )
-          .innerJoin(
             workspaceMembers,
-            eq(providerConnections.workspaceId, workspaceMembers.workspaceId),
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
           )
           .where(
             and(

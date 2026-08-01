@@ -1,6 +1,15 @@
 "use client";
 
-import { ArrowUpRight, GitPullRequest } from "lucide-react";
+import {
+  ArchiveX,
+  ArrowUpRight,
+  CheckCheck,
+  ExternalLink,
+  GitMerge,
+  GitPullRequest,
+  Loader2,
+  RotateCcw,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
@@ -12,6 +21,7 @@ import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 
 type PullRequests = RouterOutputs["review"]["dashboard"];
+export type PullRequestListKind = "active" | "reviewed" | "closed" | "removed";
 
 const providerLabel = {
   github: "GitHub",
@@ -29,34 +39,59 @@ function positionShortcut(position: number) {
   ];
 }
 
-/** Renders the pull request list interface. */
+/** Returns queue-section-specific progress copy for one pull request. */
+function progressLabel(
+  pullRequest: PullRequests[number],
+  kind: PullRequestListKind,
+) {
+  if (kind === "reviewed") return "Review complete";
+  if (kind === "removed") return "Removed from your queue";
+  if (kind === "closed") {
+    return pullRequest.state === "merged" ? "Merged" : "Closed";
+  }
+  return pullRequest.totalUnits === 0
+    ? "No supported units"
+    : `${pullRequest.signedUnits}/${pullRequest.totalUnits} reviewed`;
+}
+
+/** Renders one section of the review inbox with reversible queue actions. */
 export function PullRequestList({
   pullRequests,
+  kind,
+  pendingPullRequestId,
+  onRemove,
+  onRestore,
 }: {
   pullRequests: PullRequests;
+  kind: PullRequestListKind;
+  pendingPullRequestId?: string;
+  onRemove?: (pullRequest: PullRequests[number]) => void;
+  onRestore?: (pullRequest: PullRequests[number]) => void;
 }) {
   const router = useRouter();
   const commands = useMemo<CommandCenterItem[]>(
     () =>
-      pullRequests.map((pullRequest, index) => ({
-        id: `open-pull-request-${pullRequest.id}`,
-        label: `Open pull request ${index + 1}: ${pullRequest.title}`,
-        description: `${pullRequest.repositoryOwner}/${pullRequest.repositoryName} #${pullRequest.number}`,
-        group: "Pull requests",
-        keywords: [
-          pullRequest.repositoryOwner,
-          pullRequest.repositoryName,
-          String(pullRequest.number),
-        ],
-        shortcut: positionShortcut(index + 1),
-        searchOnly: true,
-        onSelect: () => router.push(`/review/${pullRequest.id}`),
-      })),
-    [pullRequests, router],
+      kind === "active"
+        ? pullRequests.map((pullRequest, index) => ({
+            id: `open-pull-request-${pullRequest.id}`,
+            label: `Open pull request ${index + 1}: ${pullRequest.title}`,
+            description: `${pullRequest.repositoryOwner}/${pullRequest.repositoryName} #${pullRequest.number}`,
+            group: "Pull requests",
+            keywords: [
+              pullRequest.repositoryOwner,
+              pullRequest.repositoryName,
+              String(pullRequest.number),
+            ],
+            shortcut: positionShortcut(index + 1),
+            searchOnly: true,
+            onSelect: () => router.push(`/review/${pullRequest.id}`),
+          }))
+        : [],
+    [kind, pullRequests, router],
   );
   const pendingShortcut = usePageCommandCenter(commands);
   const isChoosingPullRequest =
-    pendingShortcut?.prefix[0]?.key.toLowerCase() === "g";
+    kind === "active" && pendingShortcut?.prefix[0]?.key.toLowerCase() === "g";
   const typedPosition = isChoosingPullRequest
     ? pendingShortcut.prefix
         .slice(1)
@@ -70,77 +105,130 @@ export function PullRequestList({
         const position = String(index + 1);
         const matchesTypedPosition =
           !typedPosition || position.startsWith(typedPosition);
+        const pending = pendingPullRequestId === pullRequest.id;
+        const progress = pullRequest.totalUnits
+          ? Math.round((pullRequest.signedUnits / pullRequest.totalUnits) * 100)
+          : 0;
 
         return (
-          <Link
+          <article
             key={pullRequest.id}
-            href={`/review/${pullRequest.id}`}
             className={cn(
-              "group bg-surface/70 hover:bg-surface-hover flex flex-col gap-4 border-b border-line p-5 transition last:border-0 sm:flex-row sm:items-center",
+              "group bg-surface/70 hover:bg-surface-hover flex border-b border-line transition last:border-0",
               isChoosingPullRequest && !matchesTypedPosition && "opacity-45",
             )}
           >
-            <span
-              className={cn(
-                "text-mist bg-surface-subtle grid size-10 shrink-0 place-items-center rounded-xl border border-transparent transition",
-                isChoosingPullRequest &&
-                  matchesTypedPosition &&
-                  "border-coral/40 bg-coral/10 text-coral",
-              )}
+            <Link
+              href={`/review/${pullRequest.id}`}
+              className="flex min-w-0 flex-1 flex-col gap-4 p-5 sm:flex-row sm:items-center"
             >
-              {isChoosingPullRequest ? (
-                <kbd className="font-mono text-xs font-semibold">
-                  {position}
-                </kbd>
+              <span
+                className={cn(
+                  "text-mist bg-surface-subtle grid size-10 shrink-0 place-items-center rounded-xl border border-transparent transition",
+                  isChoosingPullRequest &&
+                    matchesTypedPosition &&
+                    "border-coral/40 bg-coral/10 text-coral",
+                  kind === "reviewed" && "bg-lime/10 text-lime",
+                  kind === "closed" && "bg-cyan/10 text-cyan",
+                )}
+              >
+                {isChoosingPullRequest ? (
+                  <kbd className="font-mono text-xs font-semibold">
+                    {position}
+                  </kbd>
+                ) : kind === "reviewed" ? (
+                  <CheckCheck className="size-4" />
+                ) : kind === "closed" ? (
+                  <GitMerge className="size-4" />
+                ) : (
+                  <GitPullRequest className="size-4" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <Badge>{providerLabel[pullRequest.provider]}</Badge>
+                  <span className="text-fog text-xs">
+                    {pullRequest.repositoryOwner}/{pullRequest.repositoryName} #
+                    {pullRequest.number}
+                  </span>
+                </span>
+                <span className="mt-2 block truncate text-sm font-medium">
+                  {pullRequest.title}
+                </span>
+                <span className="text-fog mt-1 block text-xs">
+                  by {pullRequest.authorLogin} ·{" "}
+                  <span className="text-lime">+{pullRequest.additions}</span>{" "}
+                  <span className="text-red-700 dark:text-red-300">
+                    −{pullRequest.deletions}
+                  </span>
+                </span>
+              </span>
+              <span className="w-full sm:w-40">
+                <span className="text-mist flex items-center justify-between text-[10px]">
+                  <span>{progressLabel(pullRequest, kind)}</span>
+                  <ArrowUpRight className="size-3.5 transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                </span>
+                {(kind === "active" || kind === "reviewed") && (
+                  <span className="bg-surface-subtle mt-2 block h-1.5 overflow-hidden rounded-full">
+                    <span
+                      className={cn(
+                        "block h-full rounded-full",
+                        kind === "reviewed" ? "bg-lime" : "bg-cyan",
+                      )}
+                      style={{
+                        width: `${kind === "reviewed" ? 100 : progress}%`,
+                      }}
+                    />
+                  </span>
+                )}
+              </span>
+            </Link>
+
+            <div className="flex shrink-0 items-center border-l border-line px-2 sm:px-3">
+              {kind === "removed" ? (
+                <button
+                  type="button"
+                  aria-label={`Restore ${pullRequest.title} to my queue`}
+                  title="Restore to my queue"
+                  disabled={pending}
+                  onClick={() => onRestore?.(pullRequest)}
+                  className="text-mist hover:text-cloud hover:bg-surface-subtle grid size-9 place-items-center rounded-lg transition disabled:opacity-50"
+                >
+                  {pending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="size-4" />
+                  )}
+                </button>
+              ) : kind === "closed" ? (
+                <a
+                  href={pullRequest.webUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`Open ${pullRequest.title} on ${providerLabel[pullRequest.provider]}`}
+                  title={`Open on ${providerLabel[pullRequest.provider]}`}
+                  className="text-mist hover:text-cloud hover:bg-surface-subtle grid size-9 place-items-center rounded-lg transition"
+                >
+                  <ExternalLink className="size-4" />
+                </a>
               ) : (
-                <GitPullRequest className="size-4" />
+                <button
+                  type="button"
+                  aria-label={`Remove ${pullRequest.title} from my queue`}
+                  title="Remove from my queue"
+                  disabled={pending}
+                  onClick={() => onRemove?.(pullRequest)}
+                  className="text-mist hover:text-coral hover:bg-coral/[.06] grid size-9 place-items-center rounded-lg transition disabled:opacity-50"
+                >
+                  {pending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <ArchiveX className="size-4" />
+                  )}
+                </button>
               )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge>{providerLabel[pullRequest.provider]}</Badge>
-                <span className="text-fog text-xs">
-                  {pullRequest.repositoryOwner}/{pullRequest.repositoryName} #
-                  {pullRequest.number}
-                </span>
-              </div>
-              <p className="mt-2 truncate text-sm font-medium">
-                {pullRequest.title}
-              </p>
-              <p className="text-fog mt-1 text-xs">
-                by {pullRequest.authorLogin} ·{" "}
-                <span className="text-lime">+{pullRequest.additions}</span>{" "}
-                <span className="text-red-700 dark:text-red-300">
-                  −{pullRequest.deletions}
-                </span>
-              </p>
             </div>
-            <div className="w-full sm:w-40">
-              <div className="text-mist flex items-center justify-between text-[10px]">
-                <span>
-                  {pullRequest.totalUnits === 0
-                    ? "No supported units"
-                    : `${pullRequest.signedUnits}/${pullRequest.totalUnits} reviewed`}
-                </span>
-                <ArrowUpRight className="size-3.5 transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </div>
-              <div className="bg-surface-subtle mt-2 h-1.5 overflow-hidden rounded-full">
-                <div
-                  className="bg-lime h-full rounded-full"
-                  style={{
-                    width: `${
-                      pullRequest.totalUnits
-                        ? Math.round(
-                            (pullRequest.signedUnits / pullRequest.totalUnits) *
-                              100,
-                          )
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-            </div>
-          </Link>
+          </article>
         );
       })}
     </div>
