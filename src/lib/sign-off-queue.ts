@@ -15,7 +15,7 @@ export type SignOffQueueAction =
   | { type: "settle"; unitId: string }
   | { type: "synchronize"; unitIds: string[] };
 
-export const SIGN_OFF_BATCH_SIZE = 20;
+const SIGN_OFF_BATCH_SIZE = 20;
 
 /** Selects one immediate save or a bounded batch from queued sign-offs. */
 export function nextSignOffBatchSize(pendingCount: number) {

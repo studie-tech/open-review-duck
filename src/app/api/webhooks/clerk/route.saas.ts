@@ -2,6 +2,10 @@ import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { users } from "@/drizzle/schema";
 import { env } from "~/env";
+import {
+  billingPayerForManagedCredentialRevocation,
+  revokeOpenRouterWorkspaceKeysForBillingPayer,
+} from "~/server/ai/openrouter-keys";
 import { db } from "~/server/db";
 
 /** Verifies and applies Clerk account lifecycle events to local user state. */
@@ -58,6 +62,14 @@ export async function POST(request: NextRequest) {
         imageUrl: null,
       })
       .where(eq(users.id, event.data.id));
+  }
+  const terminalBillingPayer =
+    billingPayerForManagedCredentialRevocation(event);
+  if (terminalBillingPayer) {
+    await revokeOpenRouterWorkspaceKeysForBillingPayer(
+      db,
+      terminalBillingPayer,
+    );
   }
   return NextResponse.json({ received: true });
 }

@@ -20,35 +20,11 @@ export interface AiPromptPullRequest {
   targetBranch: string;
 }
 
-export const REVIEWDUCK_AGENT_DESCRIPTION =
-  "Explains review units and reviews pull requests using evidence from a scoped virtual repository workspace.";
-
 export const REVIEWDUCK_AGENT_RUN_PROMPT =
   "Inspect the authorized review context using the provided tools. Complete the requested explanation or review, submit the structured result exactly once, and do not modify repository files.";
 
 export const REVIEWDUCK_AGENT_QUESTION_PROMPT =
   "Inspect the authorized review context using the provided tools, then submit the structured focused answer exactly once. Do not modify repository files.";
-
-export const REVIEWDUCK_TOOL_DESCRIPTIONS = {
-  listFiles:
-    "List the changed source files available in this authorized pull request review.",
-  readFile:
-    "Read one changed source file by its exact path. Use only paths returned by list_review_files.",
-  submitResult:
-    "Persist the final structured result. Call this exactly once after completing the evidence-based explanation or review.",
-} as const;
-
-export const AI_CONNECTION_TEST_SYSTEM_PROMPT =
-  "You are testing the complete ReviewDuck agent model path. Follow the diagnostic workflow exactly and use the provided tools.";
-
-export const AI_CONNECTION_TEST_USER_PROMPT =
-  "Inspect the diagnostic code with read_reviewduck_diagnostic, determine its returned number, submit that number with submit_reviewduck_diagnostic, then reply with OK.";
-
-export const AI_CONNECTION_TEST_TOOL_DESCRIPTIONS = {
-  read: "Read a small diagnostic code unit that must be analyzed before submitting the result.",
-  submit:
-    "Submit the number returned by the diagnostic code after analyzing it.",
-} as const;
 
 /** Encodes untrusted text before embedding it inside prompt XML delimiters. */
 function escapePromptXml(value: string) {

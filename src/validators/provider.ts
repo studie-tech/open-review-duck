@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const providerNameSchema = z.enum(["github", "gitlab", "azure_devops"]);
+const providerNameSchema = z.enum(["github", "gitlab", "azure_devops"]);
 
 export const connectProviderSchema = z
   .object({
@@ -32,7 +32,7 @@ export const repositoryIdSchema = z.object({
   repositoryId: z.string().uuid(),
 });
 
-export const repositoryIntakeModeSchema = z.enum(["manual", "assigned", "all"]);
+const repositoryIntakeModeSchema = z.enum(["manual", "assigned", "all"]);
 
 export const repositoryIntakeSchema = repositoryIdSchema.extend({
   mode: repositoryIntakeModeSchema,

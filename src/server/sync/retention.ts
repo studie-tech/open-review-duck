@@ -37,7 +37,7 @@ export function expiredSnapshotIds(
 }
 
 /** Prunes one pull request using its repository's age and count boundaries. */
-export async function prunePullRequestSnapshots(
+async function prunePullRequestSnapshots(
   tx: Transaction,
   input: {
     pullRequestId: string;

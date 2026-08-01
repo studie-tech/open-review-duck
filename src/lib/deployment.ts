@@ -1,7 +1,6 @@
 export type DeploymentMode = "local" | "saas";
 
 export const LOCAL_USER_ID = "reviewduck-local-user";
-export const LOCAL_WORKSPACE_SLUG = "local";
 export const LOCAL_SESSION_COOKIE = "reviewduck_local_session";
 
 /** Returns whether a hostname is confined to the current machine. */

@@ -57,7 +57,7 @@ function decode(bytes: Uint8Array, start: number, end: number) {
 }
 
 /** Hydrates one review unit without retaining its signed URL. */
-export async function hydratePrivateReviewSource<Unit extends SourceRange>(
+async function hydratePrivateReviewSource<Unit extends SourceRange>(
   unit: Unit,
   snapshotId: string,
   cache: Map<string, Promise<Uint8Array>>,

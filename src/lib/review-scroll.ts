@@ -12,7 +12,7 @@ export interface LeadingContextState {
   availableBefore: number;
 }
 
-export const DEFAULT_CONTEXT_SCROLL_STEP = 72;
+const DEFAULT_CONTEXT_SCROLL_STEP = 72;
 
 /** Reports whether an inner vertical range intersects its viewport. */
 export function verticalRangesOverlap(

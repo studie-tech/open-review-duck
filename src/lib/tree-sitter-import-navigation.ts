@@ -4,7 +4,7 @@ import { withClientSyntaxTree } from "./syntax-highlighting";
 import { importStatementsFromTree } from "./tree-sitter-imports";
 
 /** Parses client-side import statements with the selected Tree-sitter grammar. */
-export async function parseTreeSitterImportStatements(
+async function parseTreeSitterImportStatements(
   source: string,
   language: string,
 ) {
@@ -15,7 +15,7 @@ export async function parseTreeSitterImportStatements(
 }
 
 /** Flattens client-side import statements into navigable symbol references. */
-export async function parseTreeSitterImportReferences(
+async function parseTreeSitterImportReferences(
   source: string,
   language: string,
 ) {

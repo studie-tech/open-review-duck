@@ -77,7 +77,7 @@ interface SafeRemoteTarget {
 }
 
 /** Resolves and validates a remote target immediately before it is contacted. */
-export async function resolveSafeRemoteUrl(
+async function resolveSafeRemoteUrl(
   value: string,
   allowPrivateHosts: boolean,
   allowQuery = true,

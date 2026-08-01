@@ -81,7 +81,7 @@ if (process.env.NODE_ENV === "test") {
 }
 
 /** Parses source with the production grammar registered for its language. */
-export function parseSource(language: TreeSitterLanguage, source: string) {
+function parseSource(language: TreeSitterLanguage, source: string) {
   const grammar = languages.get(language);
   if (!grammar) {
     throw new Error(

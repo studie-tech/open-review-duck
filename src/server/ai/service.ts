@@ -1,18 +1,7 @@
 import "server-only";
 
 import { isDeepStrictEqual } from "node:util";
-import {
-  and,
-  eq,
-  gte,
-  isNotNull,
-  isNull,
-  lt,
-  ne,
-  or,
-  sql,
-  sum,
-} from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, ne, or, sql, sum } from "drizzle-orm";
 import {
   aiJobs,
   aiPreferences,
@@ -47,18 +36,8 @@ export type TokenUsage = {
 export const CURRENT_AI_AGENT_VERSION = 11;
 const AI_PROMPT_AND_TOOL_OVERHEAD_TOKENS = 1_500;
 
-/** Returns the canonical API root for an explicitly supported local provider. */
-export function defaultAiBaseUrl(provider: string) {
-  if (provider === "anthropic") return "https://api.anthropic.com/v1";
-  if (provider === "openai") return "https://api.openai.com/v1";
-  if (provider === "openrouter") return "https://openrouter.ai/api/v1";
-  if (provider === "opencode") return env.OPENCODE_PUBLIC_BASE_URL;
-  if (provider === "ollama") return "http://host.docker.internal:11434/v1";
-  return undefined;
-}
-
 /** Estimates a conservative token reservation for one investigation. */
-export function estimateAiReservation(
+function estimateAiReservation(
   units: Array<{
     source: string;
     previousSource: string | null;
@@ -519,36 +498,4 @@ export async function acceptAiJobResult(
 export async function scheduleAiJob(db: Database, jobId: string) {
   const { startAiJob } = await import("~/server/workflows/service");
   return startAiJob(db, jobId);
-}
-
-/** Loads the non-secret job configuration used by status and diagnostics. */
-export async function getAiJobConfiguration(db: Database, jobId: string) {
-  const job = await db.query.aiJobs.findFirst({ where: eq(aiJobs.id, jobId) });
-  if (!job) return null;
-  const previousQuestionJobs =
-    job.question && job.unitId && job.threadId
-      ? await db.query.aiJobs.findMany({
-          columns: { question: true, result: true },
-          where: and(
-            eq(aiJobs.snapshotId, job.snapshotId),
-            eq(aiJobs.unitId, job.unitId),
-            eq(aiJobs.userId, job.userId),
-            eq(aiJobs.kind, "explain"),
-            eq(aiJobs.status, "completed"),
-            eq(aiJobs.threadId, job.threadId),
-            isNotNull(aiJobs.question),
-            ne(aiJobs.question, ""),
-            isNotNull(aiJobs.result),
-            lt(aiJobs.createdAt, job.createdAt),
-          ),
-          orderBy: (table, { desc }) => [desc(table.createdAt)],
-          limit: 8,
-        })
-      : [];
-  return {
-    jobId: job.id,
-    model: job.model,
-    provider: job.provider,
-    previousQuestions: previousQuestionJobs.reverse(),
-  };
 }

@@ -1,13 +1,13 @@
 import { z } from "zod";
 
-export const aiProviderSchema = z
+const aiProviderSchema = z
   .string()
   .trim()
   .min(1)
   .max(48)
   .regex(/^[a-z0-9][a-z0-9_-]*$/);
 
-export const aiProtocolSchema = z.enum([
+const aiProtocolSchema = z.enum([
   "openai-responses",
   "openai-completions",
   "azure-openai-responses",
@@ -19,7 +19,7 @@ export const aiProtocolSchema = z.enum([
 export type AiProtocol = z.infer<typeof aiProtocolSchema>;
 
 const headerValueSchema = z.string().min(1).max(2_000);
-export const aiHeadersSchema = z
+const aiHeadersSchema = z
   .record(
     z
       .string()

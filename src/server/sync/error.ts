@@ -1,9 +1,6 @@
 import type { ProviderName } from "~/server/providers/types";
 import { ProviderError } from "~/server/providers/types";
 
-export const REVIEW_PREPARATION_ERROR_MESSAGE =
-  "ReviewDuck could not prepare this review. Please try again.";
-
 const providerLabels: Record<ProviderName, string> = {
   github: "GitHub",
   gitlab: "GitLab",

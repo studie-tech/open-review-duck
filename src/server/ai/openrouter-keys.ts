@@ -2,12 +2,56 @@ import "server-only";
 
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { managedAiCredentials } from "@/drizzle/schema";
+import { managedAiCredentials, workspaces } from "@/drizzle/schema";
 import { env } from "~/env";
 import type { db as database } from "~/server/db";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 
 type Database = typeof database;
+
+interface BillingPayerIdentity {
+  organization_id?: string;
+  user_id?: string;
+}
+
+interface BillingLifecycleEvent {
+  data: unknown;
+  type: string;
+}
+
+const terminalSubscriptionStatuses = new Set(["abandoned", "ended", "expired"]);
+
+/** Selects billing identities whose managed credentials are no longer usable. */
+export function billingPayerForManagedCredentialRevocation(
+  event: BillingLifecycleEvent,
+) {
+  if (typeof event.data !== "object" || event.data === null) return undefined;
+  const data = event.data as Record<string, unknown>;
+  if (typeof data.payer !== "object" || data.payer === null) return undefined;
+  const payerRecord = data.payer as Record<string, unknown>;
+  const payer: BillingPayerIdentity = {};
+  if (typeof payerRecord.organization_id === "string") {
+    payer.organization_id = payerRecord.organization_id;
+  }
+  if (typeof payerRecord.user_id === "string") {
+    payer.user_id = payerRecord.user_id;
+  }
+  if (!payer.organization_id && !payer.user_id) return undefined;
+  if (
+    event.type === "subscriptionItem.abandoned" ||
+    event.type === "subscriptionItem.ended"
+  ) {
+    return payer;
+  }
+  if (
+    event.type === "subscription.updated" &&
+    typeof data.status === "string" &&
+    terminalSubscriptionStatuses.has(data.status)
+  ) {
+    return payer;
+  }
+  return undefined;
+}
 
 const createKeyResponse = z.object({
   data: z.object({ hash: z.string().min(1) }),
@@ -137,4 +181,30 @@ export async function revokeOpenRouterWorkspaceKey(
   await db
     .delete(managedAiCredentials)
     .where(eq(managedAiCredentials.id, credential.id));
+}
+
+/** Revokes managed OpenRouter keys owned by one terminal Clerk billing payer. */
+export async function revokeOpenRouterWorkspaceKeysForBillingPayer(
+  db: Database,
+  payer: BillingPayerIdentity,
+) {
+  const workspaceIds = new Set<string>();
+  if (payer.user_id) {
+    const owned = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.ownerId, payer.user_id));
+    for (const workspace of owned) workspaceIds.add(workspace.id);
+  }
+  if (payer.organization_id) {
+    const organizations = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.clerkOrganizationId, payer.organization_id));
+    for (const workspace of organizations) workspaceIds.add(workspace.id);
+  }
+  for (const workspaceId of workspaceIds) {
+    await revokeOpenRouterWorkspaceKey(db, workspaceId);
+  }
+  return workspaceIds.size;
 }

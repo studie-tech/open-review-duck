@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const aiQuestionStreamUpdateSchema = z.object({
+const aiQuestionStreamUpdateSchema = z.object({
   commentProposals: z
     .array(
       z.object({

@@ -8,10 +8,7 @@ const environmentSecretSchema =
     : z.string().min(32);
 
 export const env = createEnv({
-  /**
-   * Specify your server-side environment variables schema here. This way you can ensure the app
-   * isn't built with invalid env vars.
-   */
+  /** Server-only configuration validated before application initialization. */
   server: {
     DEPLOYMENT_MODE: z.enum(["local", "saas"]).default("saas"),
     DATABASE_URL: z.string().url(),
@@ -110,11 +107,7 @@ export const env = createEnv({
       .default("development"),
   },
 
-  /**
-   * Specify your client-side environment variables schema here. This way you can ensure the app
-   * isn't built with invalid env vars. To expose them to the client, prefix them with
-   * `NEXT_PUBLIC_`.
-   */
+  /** Public build-time configuration safe to expose to browser bundles. */
   client: {
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1).optional(),
     NEXT_PUBLIC_DEPLOYMENT_MODE: z.enum(["local", "saas"]).optional(),
@@ -122,10 +115,7 @@ export const env = createEnv({
     NEXT_PUBLIC_SENTRY_ENVIRONMENT: z.string().min(1).optional(),
   },
 
-  /**
-   * You can't destruct `process.env` as a regular object in the Next.js edge runtimes (e.g.
-   * middlewares) or client-side so we need to destruct manually.
-   */
+  /** Explicit environment mapping compatible with Node, Edge, and browser builds. */
   runtimeEnv: {
     DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE,
     DATABASE_URL: process.env.DATABASE_URL,
@@ -186,14 +176,8 @@ export const env = createEnv({
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
     NEXT_PUBLIC_SENTRY_ENVIRONMENT: process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT,
   },
-  /**
-   * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially
-   * useful for compilation-only CI builds.
-   */
+  /** Compilation-only CI may bypass runtime secret validation. */
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,
-  /**
-   * Makes it so that empty strings are treated as undefined. `SOME_VAR: z.string()` and
-   * `SOME_VAR=''` will throw an error.
-   */
+  /** Optional variables treat empty deployment fields as absent. */
   emptyStringAsUndefined: true,
 });

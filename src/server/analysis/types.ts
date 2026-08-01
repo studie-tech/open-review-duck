@@ -9,7 +9,7 @@ interface LanguageDefinition {
   fileNames?: readonly string[];
 }
 
-export const languageDefinitions = languageManifest.languages as Record<
+const languageDefinitions = languageManifest.languages as Record<
   SupportedLanguage,
   LanguageDefinition
 >;

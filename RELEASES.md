@@ -8,5 +8,5 @@ Consumers should pin a digest for production use and verify the signature.
 Security fixes are backported to the latest supported major release when
 practical. Breaking configuration, schema, or API changes require a major
 release and migration notes. Every release must pass unit tests, PostgreSQL
-integration tests, production dependency audit, container scan, agent build,
-and application build.
+integration tests, migration-drift checks, both deployment builds, the local
+appliance journey, production dependency audit, and container scan.
