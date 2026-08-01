@@ -182,18 +182,6 @@ make start DEV_DATABASE_MANAGED=0 \
 Run `pnpm db:migrate` to apply committed migrations and `pnpm db:generate` to
 create a migration. Do not use schema push against a shared database.
 
-## Host the SaaS build
-
-The hosted target is designed for Vercel with PlanetScale PostgreSQL,
-UploadThing private storage, Clerk, Vercel Workflows, AWS KMS, and Sentry. It
-uses GitHub App installations, GitLab OAuth, and Microsoft Entra OAuth, so SaaS
-users never paste provider tokens into ReviewDuck.
-
-The required variables and short explanations are in
-[`.env.example`](./.env.example). Production configuration fails closed when a
-required credential, paid-model allowlist, spending limit, or privacy control
-is missing.
-
 ## Releases and support
 
 Releases follow semantic versioning. Tagged builds publish signed amd64 and
