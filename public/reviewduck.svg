@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title description">
+  <title id="title">ReviewDuck</title>
+  <desc id="description">A duck between overlapping cyan and coral code review panes.</desc>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --pane-back: #31bfea;
+      --pane-front: #df6545;
+      --duck: #fffaf0;
+      --ink: #2c241f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --pane-back: #2d7182;
+        --pane-front: #f47759;
+        --duck: #f0eee8;
+        --ink: #0b0f0d;
+      }
+    }
+    :root:has(#light:target) {
+      --pane-back: #31bfea;
+      --pane-front: #df6545;
+      --duck: #fffaf0;
+      --ink: #2c241f;
+    }
+    :root:has(#dark:target) {
+      --pane-back: #2d7182;
+      --pane-front: #f47759;
+      --duck: #f0eee8;
+      --ink: #0b0f0d;
+    }
+  </style>
+  <g id="light"/>
+  <g id="dark"/>
+  <rect x="6" y="30" width="72" height="66" rx="13" fill="var(--pane-back)"/>
+  <rect x="44" y="18" width="70" height="66" rx="13" fill="var(--pane-front)"/>
+  <path d="M18 49h20M18 59h13M18 69h18" fill="none" stroke="var(--ink)" stroke-linecap="round" stroke-width="5"/>
+  <path d="M91 40h12M94 50h9M92 60h11" fill="none" stroke="var(--ink)" stroke-linecap="round" stroke-width="5"/>
+  <path d="M70 42c0-10-8-18-18-18s-18 8-18 18c0 6 3 11 7 14-10 4-17 12-17 22 0 13 11 22 27 22h13c14 0 24-9 24-21 0-10-7-18-17-22 8-1 16-5 22-11-7-3-15-5-23-4Z" fill="var(--duck)"/>
+  <circle cx="56" cy="38" r="3.5" fill="var(--ink)"/>
+</svg>

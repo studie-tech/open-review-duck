@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["fra1"],
+  "functions": {
+    "src/app/api/ai/**/*.ts": {
+      "maxDuration": 800,
+      "memory": 2048
+    },
+    "src/app/api/webhooks/**/*.ts": {
+      "maxDuration": 60,
+      "memory": 2048
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/maintenance",
+      "schedule": "17 2 * * *"
+    }
+  ]
+}

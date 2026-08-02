@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/open_review_duck
+      MIGRATION_DATABASE_URL: postgresql://user:password@localhost:5432/open_review_duck
+      DEPLOYMENT_MODE: local
+      NEXT_PUBLIC_DEPLOYMENT_MODE: local
+      ENCRYPTION_KEY: ci-only-encryption-key-with-at-least-32-characters
+      STORAGE_ID_KEY: ci-only-storage-key-with-at-least-32-characters
+      WORKFLOW_TARGET_WORLD: "@workflow/world-postgres"
+      WORKFLOW_POSTGRES_URL: postgresql://user:password@localhost:5432/open_review_duck
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: open_review_duck
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U user -d open_review_duck"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit:prod
+      - run: pnpm check
+      - run: pnpm db:migrate
+      - run: node scripts/setup-workflow.mjs
+      - run: pnpm test:integration:coverage
+      - run: pnpm db:generate
+      - name: Verify committed baseline is current
+        run: git diff --exit-code -- drizzle
+      - name: Build local target
+        env:
+          SKIP_ENV_VALIDATION: "1"
+        run: pnpm build
+      - name: Build SaaS target
+        env:
+          DEPLOYMENT_MODE: saas
+          NEXT_PUBLIC_DEPLOYMENT_MODE: saas
+          SKIP_ENV_VALIDATION: "1"
+        run: pnpm build
+
+  local-container:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682
+        with:
+          max-cache-size-mb: "10240"
+      - name: Build the local appliance
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850
+        with:
+          context: .
+          load: true
+          tags: open-review-duck:ci
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+      - name: Scan the local appliance
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: open-review-duck:ci
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Start with no configuration and no network
+        run: >-
+          docker run --detach --name reviewduck-ci --network none
+          --volume reviewduck-ci-data:/data
+          open-review-duck:ci
+      - name: Verify offline startup, bootstrap, persistence, and boundaries
+        run: |
+          for attempt in $(seq 1 90); do
+            if docker exec reviewduck-ci curl --fail --silent \
+              http://127.0.0.1:3000/api/health >/dev/null; then break; fi
+            if [ "$attempt" -eq 90 ]; then docker logs reviewduck-ci; exit 1; fi
+            sleep 2
+          done
+          docker logs reviewduck-ci | grep -q "one-time owner link"
+          test "$(docker exec reviewduck-ci curl --silent --output /dev/null \
+            --write-out '%{http_code}' --header 'Host: reviewduck.example' \
+            http://127.0.0.1:3000/dashboard)" = "403"
+          docker restart reviewduck-ci
+          for attempt in $(seq 1 60); do
+            docker exec reviewduck-ci curl --fail --silent \
+              http://127.0.0.1:3000/api/health >/dev/null && break
+            sleep 2
+          done
+      - name: Run the local appliance browser journey
+        env:
+          LOCAL_E2E_BASE_URL: http://127.0.0.1:3941
+          LOCAL_E2E_CONTAINER: reviewduck-local-playwright
+        run: |
+          docker stop --timeout 35 reviewduck-ci
+          docker rm reviewduck-ci
+          docker run --detach --name reviewduck-local-playwright \
+            --publish 127.0.0.1:3941:3000 \
+            --volume reviewduck-ci-data:/data \
+            open-review-duck:ci
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:3941/api/health >/dev/null \
+              && break
+            if [ "$attempt" -eq 60 ]; then
+              docker logs reviewduck-local-playwright
+              exit 1
+            fi
+            sleep 2
+          done
+          pnpm test:e2e:local
+          docker exec reviewduck-local-playwright reviewduck-local admin backup
+          docker exec reviewduck-local-playwright reviewduck-local admin verify-backup
+          docker exec reviewduck-local-playwright reviewduck-local admin export
+
+  publish-container:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, local-container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
+      - id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
+        with:
+          images: ghcr.io/studie-tech/open-review-duck
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: REVIEWDUCK_VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - run: cosign sign --yes ghcr.io/studie-tech/open-review-duck@${{ steps.build.outputs.digest }}

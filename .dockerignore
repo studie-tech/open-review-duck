@@ -1,0 +1,13 @@
+.env
+.claude
+.codex
+.git
+.github
+.next
+.pnpm-store
+coverage
+dist
+node_modules
+npm-debug.log*
+pnpm-debug.log*
+tsconfig.tsbuildinfo

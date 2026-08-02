@@ -1,0 +1,210 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-editorial: Georgia, "Times New Roman", serif;
+  --color-ink: var(--app-canvas);
+  --color-panel: var(--app-panel);
+  --color-surface: var(--app-surface);
+  --color-surface-subtle: var(--app-surface-subtle);
+  --color-surface-hover: var(--app-surface-hover);
+  --color-code: var(--app-code);
+  --color-cloud: var(--app-text);
+  --color-mist: var(--app-text-muted);
+  --color-fog: var(--app-text-subtle);
+  --color-line: var(--app-border);
+  --color-line-strong: var(--app-border-strong);
+  --color-lime: var(--app-accent);
+  --color-accent-hover: var(--app-accent-hover);
+  --color-accent-foreground: var(--app-accent-foreground);
+  --color-cyan: var(--app-cyan);
+  --color-violet: var(--app-ai);
+  --color-addition: var(--app-addition);
+}
+
+:root {
+  color-scheme: light;
+  --app-canvas: #f3e4ca;
+  --app-panel: #fffaf0;
+  --app-surface: #fffdf8;
+  --app-surface-subtle: #f5ecdd;
+  --app-surface-hover: #eedfc9;
+  --app-code: #fbf7ef;
+  --app-text: #2c241f;
+  --app-text-muted: #6f655b;
+  --app-text-subtle: #94877a;
+  --app-border: #d8cab7;
+  --app-border-strong: #b8a792;
+  --app-accent: #df6545;
+  --app-accent-hover: #c85339;
+  --app-accent-foreground: #fffaf5;
+  --app-cyan: #14758a;
+  --app-ai: #53648f;
+  --app-addition: #26733f;
+  --app-shadow: rgba(76, 54, 39, 0.16);
+  --app-selection: rgba(223, 101, 69, 0.22);
+  --brand-pane-back: #31bfea;
+  --brand-pane-front: #df6545;
+  --brand-duck: #fffaf0;
+  --brand-ink: #2c241f;
+  --syntax-atom: #9a5a19;
+  --syntax-comment: #81776e;
+  --syntax-definition: #126c80;
+  --syntax-invalid: #b42318;
+  --syntax-keyword: #963f5d;
+  --syntax-meta: #8b5c18;
+  --syntax-operator: #a04b40;
+  --syntax-property: #72517f;
+  --syntax-string: #39704a;
+  --syntax-string-special: #8e4c83;
+  --syntax-type: #694c9b;
+  --syntax-variable: #355f80;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --app-canvas: #0b0f0d;
+  --app-panel: #111614;
+  --app-surface: #171d1a;
+  --app-surface-subtle: #1c231f;
+  --app-surface-hover: #252e29;
+  --app-code: #0d1210;
+  --app-text: #f0eee8;
+  --app-text-muted: #aab4ae;
+  --app-text-subtle: #78847d;
+  --app-border: #303a34;
+  --app-border-strong: #46524b;
+  --app-accent: #f47759;
+  --app-accent-hover: #ff876b;
+  --app-accent-foreground: #17100d;
+  --app-cyan: #58b8ce;
+  --app-ai: #8fa9d8;
+  --app-addition: #56d17a;
+  --app-shadow: rgba(0, 0, 0, 0.55);
+  --app-selection: rgba(244, 119, 89, 0.24);
+  --brand-pane-back: #2d7182;
+  --brand-pane-front: #f47759;
+  --brand-duck: #f0eee8;
+  --brand-ink: #0b0f0d;
+  --syntax-atom: #e9b56d;
+  --syntax-comment: #7f8d85;
+  --syntax-definition: #70c4d8;
+  --syntax-invalid: #ff8a80;
+  --syntax-keyword: #f58ca7;
+  --syntax-meta: #e7c27e;
+  --syntax-operator: #f09b7e;
+  --syntax-property: #9dc6e5;
+  --syntax-string: #8fcf9e;
+  --syntax-string-special: #d8a0db;
+  --syntax-type: #c3a6ef;
+  --syntax-variable: #c8d6df;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  background: var(--app-canvas);
+  scroll-behavior: smooth;
+}
+body {
+  background: var(--app-canvas);
+  color: var(--app-text);
+  min-width: 320px;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+::selection {
+  background: var(--app-selection);
+  color: var(--app-text);
+}
+.syntax-code .tok-keyword {
+  color: var(--syntax-keyword);
+  font-weight: 550;
+}
+.syntax-code :is(.tok-atom, .tok-bool, .tok-number) {
+  color: var(--syntax-atom);
+}
+.syntax-code :is(.tok-string, .tok-url) {
+  color: var(--syntax-string);
+}
+.syntax-code :is(.tok-string2, .tok-regexp) {
+  color: var(--syntax-string-special);
+}
+.syntax-code .tok-variableName {
+  color: var(--syntax-variable);
+}
+.syntax-code :is(.tok-variableName, .tok-propertyName).tok-definition {
+  color: var(--syntax-definition);
+}
+.syntax-code :is(.tok-typeName, .tok-className, .tok-namespace) {
+  color: var(--syntax-type);
+}
+.syntax-code :is(.tok-propertyName, .tok-labelName) {
+  color: var(--syntax-property);
+}
+.syntax-code .tok-operator {
+  color: var(--syntax-operator);
+}
+.syntax-code .tok-comment {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+.syntax-code :is(.tok-meta, .tok-macroName) {
+  color: var(--syntax-meta);
+}
+.syntax-code .tok-invalid {
+  color: var(--syntax-invalid);
+  text-decoration: wavy underline;
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--syntax-invalid) 65%,
+    transparent
+  );
+}
+.studio-glow {
+  background:
+    radial-gradient(
+      circle at 88% 8%,
+      color-mix(in srgb, var(--app-accent) 16%, transparent),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 63% 74%,
+      color-mix(in srgb, var(--app-cyan) 9%, transparent),
+      transparent 34%
+    );
+}
+:focus-visible {
+  outline-color: var(--app-accent);
+}
+* {
+  scrollbar-color: var(--app-border-strong) transparent;
+  scrollbar-width: thin;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto;
+    transition-duration: 0.01ms;
+  }
+}
