@@ -6,12 +6,14 @@ import {
   localCredentials,
   oauthCredentials,
   providerConnections,
+  providerPatCredentials,
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { createProvider } from ".";
+import { openProviderPat } from "./pat-credential";
 import type { PullRequestProvider } from "./types";
 
 type Database = typeof database;
@@ -84,6 +86,25 @@ async function localToken(
     throw new Error("Local provider credential is invalid");
   }
   return payload.token;
+}
+
+/** Opens one workspace-bound provider PAT stored by the SaaS credential adapter. */
+async function hostedPatToken(
+  db: Database,
+  connection: typeof providerConnections.$inferSelect,
+) {
+  const credential = await db.query.providerPatCredentials.findFirst({
+    where: eq(providerPatCredentials.connectionId, connection.id),
+  });
+  if (!credential) throw new Error("Provider PAT credential not found");
+  return openProviderPat(
+    {
+      workspaceId: connection.workspaceId,
+      connectionId: connection.id,
+      provider: connection.provider,
+    },
+    credential.encryptedToken,
+  );
 }
 
 /** Returns a valid hosted OAuth token, refreshing it when required. */
@@ -281,9 +302,11 @@ export async function providerForConnection(
     token = await githubInstallationToken(connection.installationId);
   } else if (connection.credentialKind === "oauth") {
     token = await oauthToken(db, connection);
+  } else if (!isLocalDeployment() && connection.credentialKind === "pat") {
+    token = await hostedPatToken(db, connection);
   } else {
     if (!isLocalDeployment()) {
-      throw new Error("PAT credentials are prohibited in SaaS");
+      throw new Error("Unsupported SaaS provider credential");
     }
     token = await localToken(db, connection);
   }

@@ -71,6 +71,10 @@ Open Settings, add a connection, and follow the permission guide shown for your
 provider. Local credentials are encrypted before they are written to the data
 volume.
 
+On the hosted service, GitHub App and OAuth connections are the easiest option.
+If your organization does not allow application authorization, you can instead
+use an encrypted personal access token with GitHub, GitLab, or Azure DevOps.
+
 - GitHub needs a fine-grained token with read access to repository contents and
   read/write access to pull requests.
 - GitLab needs an `api`-scoped personal, project, or group token. The token's

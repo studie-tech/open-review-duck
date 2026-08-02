@@ -15,6 +15,13 @@
       "when": 1785666397593,
       "tag": "0001_handy_sinister_six",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785670519300,
+      "tag": "0002_oval_beast",
+      "breakpoints": true
     }
   ]
 }

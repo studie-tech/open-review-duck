@@ -3,11 +3,12 @@
 ReviewDuck processes repository metadata, changed source, review state,
 comments, and optional AI prompts/results to deliver a review. AI is optional.
 
-In SaaS, source-provider authorization uses a GitHub App, GitLab.com OAuth, or
-Microsoft Entra delegated OAuth. ReviewDuck does not accept hosted PATs or user
-model keys. OAuth credentials, service subkeys, and AI transcripts are
-encrypted with workspace-derived keys rooted in a Vercel Sensitive Environment
-Variable. Losing or replacing that root makes the encrypted records unreadable.
+In SaaS, source-provider authorization uses a GitHub App, GitLab.com OAuth,
+Microsoft Entra delegated OAuth, or a provider personal access token supplied by
+a workspace administrator. ReviewDuck does not accept user model keys. OAuth
+credentials, provider PATs, service subkeys, and AI transcripts are encrypted
+with workspace-derived keys rooted in a Vercel Sensitive Environment Variable.
+Losing or replacing that root makes the encrypted records unreadable.
 Source and SCIP artifacts are private UploadThing objects in Frankfurt; object
 metadata contains no repository path, commit, or user.
 Authorized browsers receive a non-persisted 60-second signed URL and download

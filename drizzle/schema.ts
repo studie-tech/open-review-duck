@@ -288,6 +288,18 @@ export const oauthCredentials = createTable(
   (t) => [index("oauth_expiry_idx").on(t.expiresAt)],
 );
 
+export const providerPatCredentials = createTable("provider_pat_credential", {
+  connectionId: uuid()
+    .primaryKey()
+    .references(() => providerConnections.id, { onDelete: "cascade" }),
+  encryptedToken: text().notNull(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp({ withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
 export const oauthStates = createTable("oauth_state", {
   id: uuid().primaryKey().defaultRandom(),
   workspaceId: uuid()

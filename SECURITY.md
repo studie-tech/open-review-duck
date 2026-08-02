@@ -16,15 +16,17 @@ PAT and BYOK credentials are
 encrypted with a volume-owned root key stored with mode `0600`. Local telemetry
 is redacted stdout/stderr only.
 
-SaaS requires Clerk workspace membership on every resource boundary. Source
-providers use GitHub App or OAuth identities; users cannot submit PATs or model
-keys. OAuth state is signed, one-time, exact-callback-bound, and PKCE-protected.
+SaaS requires Clerk workspace membership on every resource boundary. GitHub App
+and provider OAuth identities are the preferred source-provider credentials;
+workspace administrators can also submit provider PATs when organization policy
+prevents application authorization. Hosted BYOK model keys remain unsupported.
+OAuth state is signed, one-time, exact-callback-bound, and PKCE-protected.
 Webhook signatures are checked before parsing and delivery IDs are deduplicated.
 
-SaaS OAuth tokens, managed-model credentials, and AI transcripts use
-AES-256-GCM with workspace/record/provider additional authenticated data. A
-shared 256-bit root stored as a Vercel Sensitive Environment Variable derives
-an isolated key for each workspace. The root is never stored in the database or
+SaaS OAuth tokens, provider PATs, managed-model credentials, and AI transcripts
+use AES-256-GCM with workspace/record/provider additional authenticated data. A
+shared 256-bit root stored as a Vercel Sensitive Environment Variable derives an
+isolated key for each workspace. The root is never stored in the database or
 exposed to the browser. Losing or replacing it makes existing encrypted records
 unreadable, so operators must retain it in protected recovery material and must
 not rotate it without a re-encryption procedure.

@@ -29,6 +29,11 @@ const config = {
   ],
   productionBrowserSourceMaps: false,
   serverExternalPackages: ["web-tree-sitter"],
+  turbopack: {
+    resolveAlias: {
+      "reviewduck-deployment-proxy": `./src/server/request-proxy.${deploymentMode}.ts`,
+    },
+  },
   webpack(webpackConfig) {
     webpackConfig.resolve.alias = {
       ...webpackConfig.resolve.alias,
