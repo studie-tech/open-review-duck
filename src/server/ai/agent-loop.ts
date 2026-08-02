@@ -71,7 +71,6 @@ async function persistMessage(
       sequence,
       role: message.role,
       encryptedContent: await sealVaultSecret(
-        db,
         { workspaceId: job.workspaceId, recordId: id, provider: "ai-turn" },
         JSON.stringify(message),
       ),
@@ -92,7 +91,6 @@ async function loadMessages(db: Database, job: typeof aiJobs.$inferSelect) {
       z.custom<ModelMessage>().parse(
         JSON.parse(
           await openVaultSecret(
-            db,
             {
               workspaceId: job.workspaceId,
               recordId: turn.id,
@@ -127,7 +125,6 @@ async function persistToolCall(
   if (existing?.status === "completed" && existing.encryptedOutput) {
     return JSON.parse(
       await openVaultSecret(
-        db,
         {
           workspaceId: job.workspaceId,
           recordId: existing.id,
@@ -146,7 +143,6 @@ async function persistToolCall(
       toolCallId: input.callId,
       toolName: input.name,
       encryptedInput: await sealVaultSecret(
-        db,
         {
           workspaceId: job.workspaceId,
           recordId: id,
@@ -164,7 +160,6 @@ async function persistToolCall(
       .set({
         status: "completed",
         encryptedOutput: await sealVaultSecret(
-          db,
           {
             workspaceId: job.workspaceId,
             recordId: id,
@@ -183,7 +178,6 @@ async function persistToolCall(
       .set({
         status: "failed",
         encryptedOutput: await sealVaultSecret(
-          db,
           {
             workspaceId: job.workspaceId,
             recordId: id,
@@ -569,7 +563,6 @@ export async function executeAiTurn(
         sequence: currentChunkCount,
         kind: "text",
         encryptedContent: await sealVaultSecret(
-          db,
           {
             workspaceId: job.workspaceId,
             recordId: chunkId,
@@ -651,7 +644,6 @@ async function finishAtLimit(
     await Promise.all(
       chunks.map((chunk) =>
         openVaultSecret(
-          db,
           {
             workspaceId: job.workspaceId,
             recordId: chunk.id,

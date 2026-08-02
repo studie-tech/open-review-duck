@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  Check,
-  ChevronDown,
-  CircleAlert,
-  CircleCheck,
-  KeyRound,
-  Loader2,
-  PlugZap,
-  Sparkles,
-} from "lucide-react";
+import { CircleAlert, CircleCheck, Loader2, PlugZap } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -22,7 +13,6 @@ import {
   matchingAiProviderPreset,
 } from "~/lib/ai-provider-presets";
 import { api, type RouterOutputs } from "~/trpc/react";
-import type { AiProtocol } from "~/validators/ai";
 
 type Configuration = RouterOutputs["ai"]["configuration"];
 
@@ -50,13 +40,8 @@ export function LocalAiSettings({
 }: {
   initialConfiguration: Configuration;
 }) {
-  const localMode = true;
   const router = useRouter();
   const utils = api.useUtils();
-  const [managed, setManaged] = useState(
-    !localMode ||
-      (initialConfiguration.configuration?.useManagedModels ?? true),
-  );
   const [mode, setMode] = useState(initialConfiguration.mode);
   const [reviewPullRequests, setReviewPullRequests] = useState(
     initialConfiguration.reviewPullRequests,
@@ -66,51 +51,41 @@ export function LocalAiSettings({
   );
   const configuredProvider =
     initialConfiguration.configuration?.provider ??
-    (!localMode ? "openai" : localDefaultAiPreset.provider);
+    localDefaultAiPreset.provider;
   const configuredPreset = matchingAiProviderPreset(configuredProvider);
   const [preset, setPreset] = useState<AiProviderPreset>(configuredPreset);
   const [provider, setProvider] = useState(configuredProvider);
   const [model, setModel] = useState(
-    initialConfiguration.configuration?.model ??
-      (!localMode
-        ? initialConfiguration.managedModel
-        : localDefaultAiPreset.model),
+    initialConfiguration.configuration?.model ?? localDefaultAiPreset.model,
   );
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState<string>(
     initialConfiguration.configuration?.baseUrl ??
       aiProviderPresets[configuredPreset].baseUrl,
   );
-  const [apiProtocol, setApiProtocol] = useState<AiProtocol>(
-    (initialConfiguration.configuration?.apiProtocol as
-      | AiProtocol
-      | undefined) ?? aiProviderPresets[configuredPreset].protocol,
-  );
-  const [contextWindow, setContextWindow] = useState(
-    initialConfiguration.configuration?.contextWindow ?? 128_000,
-  );
-  const [maxTokens, setMaxTokens] = useState(
-    initialConfiguration.configuration?.maxTokens ?? 8_000,
-  );
-  const [storeResponses, setStoreResponses] = useState(
-    initialConfiguration.configuration?.storeResponses ?? false,
-  );
+  const [clearApiKey, setClearApiKey] = useState(false);
+  const [clearHeaders, setClearHeaders] = useState(false);
   const [headers, setHeaders] = useState("{}");
   const parsedHeaders = parseHeaders(headers);
+  const hasStoredApiKey = Boolean(
+    initialConfiguration.configuration?.provider === provider &&
+      initialConfiguration.configuration.hasApiKey,
+  );
+  const hasStoredHeaders = Boolean(
+    initialConfiguration.configuration?.provider === provider &&
+      initialConfiguration.configuration.hasHeaders,
+  );
   const connectionFingerprint = JSON.stringify([
     provider,
     model,
-    apiProtocol,
     apiKey,
     baseUrl,
-    contextWindow,
-    maxTokens,
-    storeResponses,
+    clearApiKey,
+    clearHeaders,
     headers,
   ]);
   const [verification, setVerification] = useState<{
     fingerprint: string;
-    token: string;
     latencyMs: number;
   } | null>(null);
   const [testFailure, setTestFailure] = useState<{
@@ -120,19 +95,16 @@ export function LocalAiSettings({
   const isVerified = verification?.fingerprint === connectionFingerprint;
   const visibleFailure =
     testFailure?.fingerprint === connectionFingerprint ? testFailure : null;
-  const hasStoredCredential =
-    initialConfiguration.configuration?.provider === provider &&
-    (initialConfiguration.configuration.hasApiKey ||
-      initialConfiguration.configuration.hasHeaders);
+  const disclosureSatisfied = preset !== "opencode" || disclosureAccepted;
   const byokIsValid =
     Boolean(model) &&
     Boolean(provider) &&
+    Boolean(baseUrl) &&
+    disclosureSatisfied &&
     parsedHeaders !== null &&
-    Number.isFinite(contextWindow) &&
-    Number.isFinite(maxTokens) &&
-    (Object.keys(parsedHeaders ?? {}).length > 0 ||
+    (preset !== "opencode" ||
       Boolean(apiKey) ||
-      Boolean(hasStoredCredential));
+      (hasStoredApiKey && !clearApiKey));
   const testConnection = api.ai.testConfiguration.useMutation();
   const save = api.ai.saveConfiguration.useMutation({
     onSuccess: () => {
@@ -160,13 +132,11 @@ export function LocalAiSettings({
   const byokInput = () => ({
     provider,
     model,
-    apiProtocol,
     apiKey: apiKey || undefined,
+    clearApiKey,
+    clearHeaders,
     headers: parsedHeaders ?? {},
     baseUrl: baseUrl || undefined,
-    contextWindow,
-    maxTokens,
-    storeResponses,
     useManagedModels: false as const,
     mode,
     reviewPullRequests,
@@ -185,10 +155,9 @@ export function LocalAiSettings({
       }
       setVerification({
         fingerprint,
-        token: result.verificationToken,
-        latencyMs: 0,
+        latencyMs: result.latencyMs,
       });
-      toast.success("Agent workflow verified");
+      toast.success("Provider connection verified");
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : "Model workflow test failed";
@@ -211,47 +180,7 @@ export function LocalAiSettings({
         used for model requests.
       </p>
 
-      {localMode && (
-        <div className="mt-9 grid gap-4 sm:grid-cols-2">
-          {[
-            {
-              value: true,
-              title: "Built-in Big Pickle",
-              detail: "No account or API key · privacy disclosure required",
-              icon: Sparkles,
-            },
-            {
-              value: false,
-              title: "Local or BYOK model",
-              detail:
-                "Ollama, a local endpoint, or your encrypted provider key",
-              icon: KeyRound,
-            },
-          ].map(({ value, title, detail, icon: Icon }) => (
-            <button
-              type="button"
-              key={title}
-              onClick={() => setManaged(value)}
-              className={`rounded-2xl border p-5 text-left transition ${
-                managed === value
-                  ? "border-violet/35 bg-violet/[.06]"
-                  : "bg-surface/70 border-line"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <Icon className="text-violet size-5" />
-                {managed === value && <Check className="text-violet size-4" />}
-              </div>
-              <p className="mt-5 text-sm font-medium">{title}</p>
-              <p className="text-mist mt-2 text-xs leading-5">{detail}</p>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <section
-        className={`bg-surface/70 grid gap-5 rounded-3xl border border-line p-6 ${localMode ? "mt-6" : "mt-9"}`}
-      >
+      <section className="bg-surface/70 mt-9 grid gap-5 rounded-3xl border border-line p-6">
         <label
           htmlFor="ai-assistance-timing"
           className="text-mist grid gap-2 text-xs"
@@ -270,33 +199,31 @@ export function LocalAiSettings({
             <option value="automatic">Automatically explain each unit</option>
           </select>
         </label>
-        {managed &&
-          initialConfiguration.managedModel === "big-pickle" &&
-          !disclosureAccepted && (
-            <div className="border-violet/25 bg-violet/[.05] rounded-2xl border p-5">
-              <p className="text-cloud text-sm font-medium">
-                Big Pickle data disclosure
-              </p>
-              <p className="text-mist mt-2 text-xs leading-5">
-                Internet access is required. Source snippets, prompts, tool
-                results, and output are sent to OpenCode-hosted infrastructure
-                in the US. Access is free for a limited period and submitted
-                data may be used to improve the model. Confirm that you have
-                authority to submit this repository.
-              </p>
-              <Button
-                className="mt-4"
-                variant="secondary"
-                disabled={acceptDisclosure.isPending}
-                onClick={() => acceptDisclosure.mutate()}
-              >
-                {acceptDisclosure.isPending && (
-                  <Loader2 className="size-4 animate-spin" />
-                )}
-                Accept disclosure
-              </Button>
-            </div>
-          )}
+        {preset === "opencode" && !disclosureAccepted && (
+          <div className="border-violet/25 bg-violet/[.05] rounded-2xl border p-5">
+            <p className="text-cloud text-sm font-medium">
+              Big Pickle data disclosure
+            </p>
+            <p className="text-mist mt-2 text-xs leading-5">
+              Internet access is required. Source snippets, prompts, tool
+              results, and output are sent to OpenCode-hosted infrastructure in
+              the US. Access is free for a limited period and submitted data may
+              be used to improve the model. Confirm that you have authority to
+              submit this repository.
+            </p>
+            <Button
+              className="mt-4"
+              variant="secondary"
+              disabled={acceptDisclosure.isPending}
+              onClick={() => acceptDisclosure.mutate()}
+            >
+              {acceptDisclosure.isPending && (
+                <Loader2 className="size-4 animate-spin" />
+              )}
+              Accept disclosure
+            </Button>
+          </div>
+        )}
         <label className="bg-surface-subtle text-mist flex items-center justify-between gap-5 rounded-xl border border-line p-4 text-xs">
           <span>
             <span className="text-cloud block text-sm font-medium">
@@ -314,33 +241,32 @@ export function LocalAiSettings({
             className="accent-lime size-4"
           />
         </label>
-        {!managed && (
-          <label className="text-mist grid gap-2 text-xs">
-            Provider
-            <select
-              value={preset}
-              onChange={(event) => {
-                const next = event.target.value as AiProviderPreset;
-                const defaults = aiProviderPresets[next];
-                setPreset(next);
-                setProvider(next === "custom" ? "" : next);
-                setApiProtocol(defaults.protocol);
-                setBaseUrl(defaults.baseUrl);
-                setModel(
-                  "defaultModel" in defaults ? defaults.defaultModel : "",
-                );
-              }}
-              className="bg-surface text-cloud h-11 rounded-xl border border-line px-4 text-sm outline-none"
-            >
-              {Object.entries(aiProviderPresets).map(([value, item]) => (
-                <option key={value} value={value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {!managed && preset === "custom" && (
+        <label className="text-mist grid gap-2 text-xs">
+          Provider
+          <select
+            value={preset}
+            onChange={(event) => {
+              const next = event.target.value as AiProviderPreset;
+              const defaults = aiProviderPresets[next];
+              setPreset(next);
+              setProvider(next === "custom" ? "" : next);
+              setBaseUrl(defaults.baseUrl);
+              setModel("defaultModel" in defaults ? defaults.defaultModel : "");
+              setApiKey("");
+              setHeaders("{}");
+              setClearApiKey(false);
+              setClearHeaders(false);
+            }}
+            className="bg-surface text-cloud h-11 rounded-xl border border-line px-4 text-sm outline-none"
+          >
+            {Object.entries(aiProviderPresets).map(([value, item]) => (
+              <option key={value} value={value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {preset === "custom" && (
           <label className="text-mist grid gap-2 text-xs">
             Provider ID
             <input
@@ -351,7 +277,7 @@ export function LocalAiSettings({
             />
           </label>
         )}
-        {!managed && preset === "opencode" && (
+        {preset === "opencode" && (
           <div className="border-violet/20 bg-violet/[.045] rounded-2xl border p-4 text-xs leading-5 sm:p-5">
             <p className="text-cloud font-medium">
               Big Pickle · limited free access
@@ -377,268 +303,151 @@ export function LocalAiSettings({
           htmlFor="ai-provider-model"
           className="text-mist grid gap-2 text-xs"
         >
-          {managed ? "Managed model" : "Model"}
-          {managed && initialConfiguration.managedModels.length > 1 ? (
-            <select
-              id="ai-provider-model"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              className="bg-surface text-cloud h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-            >
-              {initialConfiguration.managedModels.map((modelId) => (
-                <option key={modelId} value={modelId}>
-                  {modelId}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              id="ai-provider-model"
-              value={managed ? initialConfiguration.managedModel : model}
-              onChange={(event) => setModel(event.target.value)}
-              readOnly={managed}
-              className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-            />
+          Model
+          <input
+            id="ai-provider-model"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
+          />
+        </label>
+        <label className="text-mist grid gap-2 text-xs">
+          Base URL
+          <input
+            value={baseUrl}
+            onChange={(event) => setBaseUrl(event.target.value)}
+            placeholder="https://provider.example.com/v1"
+            className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
+          />
+        </label>
+        <label className="text-mist grid gap-2 text-xs">
+          Custom headers (JSON)
+          <textarea
+            rows={4}
+            spellCheck={false}
+            value={headers}
+            onChange={(event) => {
+              setHeaders(event.target.value);
+              setClearHeaders(false);
+            }}
+            placeholder={'{"api-key":"…","x-provider-version":"…"}'}
+            className="bg-surface text-cloud focus:border-violet/40 rounded-xl border border-line px-4 py-3 font-mono text-xs outline-none"
+          />
+          {parsedHeaders === null && (
+            <span className="text-red-700 dark:text-red-300">
+              Enter a JSON object containing string values.
+            </span>
+          )}
+          {hasStoredHeaders && (
+            <span className="grid gap-2">
+              <span className="text-lime">
+                Encrypted headers are stored. Leave {"{}"} to keep them.
+              </span>
+              <span className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={clearHeaders}
+                  onChange={(event) => setClearHeaders(event.target.checked)}
+                  className="accent-violet size-4"
+                />
+                Remove the stored headers when saving
+              </span>
+            </span>
           )}
         </label>
-        {!managed && (
-          <>
-            <label className="text-mist grid gap-2 text-xs">
-              Base URL
+        <label className="text-mist grid gap-2 text-xs">
+          API key{" "}
+          {hasStoredApiKey && (
+            <span className="text-lime">A key is already stored</span>
+          )}
+          <input
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(event) => {
+              setApiKey(event.target.value);
+              setClearApiKey(false);
+            }}
+            placeholder={
+              hasStoredApiKey ? "Leave blank to keep current key" : undefined
+            }
+            className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
+          />
+          {hasStoredApiKey && (
+            <span className="flex items-center gap-2">
               <input
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
-                placeholder="https://provider.example.com/v1"
-                className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
+                type="checkbox"
+                checked={clearApiKey}
+                onChange={(event) => setClearApiKey(event.target.checked)}
+                className="accent-violet size-4"
               />
-            </label>
-            <details className="group rounded-2xl border border-line">
-              <summary className="focus-visible:ring-violet/50 flex cursor-pointer list-none items-center justify-between gap-4 rounded-2xl px-4 py-3.5 outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
-                <span>
-                  <span className="text-cloud block text-sm font-medium">
-                    Advanced settings
-                  </span>
-                  <span className="text-mist mt-0.5 block text-xs leading-5">
-                    Protocol, token limits, headers, and response storage
-                  </span>
-                </span>
-                <ChevronDown className="text-mist size-4 shrink-0 transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="grid gap-4 border-t border-line p-4 sm:grid-cols-2">
-                <label className="text-mist grid gap-2 text-xs sm:col-span-2">
-                  API protocol
-                  <select
-                    value={apiProtocol}
-                    onChange={(event) =>
-                      setApiProtocol(event.target.value as AiProtocol)
-                    }
-                    className="bg-surface text-cloud h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-                  >
-                    <option value="openai-responses">OpenAI Responses</option>
-                    <option value="openai-completions">
-                      OpenAI Chat Completions
-                    </option>
-                    <option value="azure-openai-responses">
-                      Azure OpenAI Responses
-                    </option>
-                    <option value="anthropic-messages">
-                      Anthropic Messages
-                    </option>
-                    <option value="google-generative-ai">
-                      Google Generative AI
-                    </option>
-                    <option value="google-vertex">Google Vertex AI</option>
-                    <option value="mistral-conversations">
-                      Mistral Conversations
-                    </option>
-                  </select>
-                </label>
-                <label className="text-mist grid gap-2 text-xs">
-                  Context window
-                  <input
-                    type="number"
-                    min={1024}
-                    value={contextWindow}
-                    onChange={(event) =>
-                      setContextWindow(event.target.valueAsNumber)
-                    }
-                    className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-                  />
-                </label>
-                <label className="text-mist grid gap-2 text-xs">
-                  Maximum output tokens
-                  <input
-                    type="number"
-                    min={16}
-                    value={maxTokens}
-                    onChange={(event) =>
-                      setMaxTokens(event.target.valueAsNumber)
-                    }
-                    className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-                  />
-                </label>
-                <label className="text-mist grid gap-2 text-xs sm:col-span-2">
-                  Custom headers (JSON)
-                  <textarea
-                    rows={4}
-                    spellCheck={false}
-                    value={headers}
-                    onChange={(event) => setHeaders(event.target.value)}
-                    placeholder={'{"api-key":"…","x-provider-version":"…"}'}
-                    className="bg-surface text-cloud focus:border-violet/40 rounded-xl border border-line px-4 py-3 font-mono text-xs outline-none"
-                  />
-                  {parsedHeaders === null && (
-                    <span className="text-red-700 dark:text-red-300">
-                      Enter a JSON object containing string values.
-                    </span>
-                  )}
-                  {initialConfiguration.configuration?.hasHeaders && (
-                    <span className="text-lime">
-                      Encrypted headers are already stored. Leave {"{}"} to keep
-                      them.
-                    </span>
-                  )}
-                </label>
-                <label className="bg-surface-subtle text-mist flex items-center justify-between gap-4 rounded-xl border border-line p-4 text-xs sm:col-span-2">
-                  <span>
-                    <span className="text-cloud block text-sm font-medium">
-                      Provider-side response storage
-                    </span>
-                    <span className="mt-1 block">
-                      Only enable this when the selected Responses API requires
-                      provider-side item persistence.
-                    </span>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={storeResponses}
-                    onChange={(event) =>
-                      setStoreResponses(event.target.checked)
-                    }
-                    className="accent-violet size-4"
-                  />
-                </label>
-              </div>
-            </details>
-            <label className="text-mist grid gap-2 text-xs">
-              API key{" "}
-              {initialConfiguration.configuration?.provider === provider &&
-                initialConfiguration.configuration.hasApiKey && (
-                  <span className="text-lime">A key is already stored</span>
-                )}
-              <input
-                type="password"
-                autoComplete="off"
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder={
-                  initialConfiguration.configuration?.provider === provider &&
-                  initialConfiguration.configuration.hasApiKey
-                    ? "Leave blank to keep current key"
-                    : undefined
-                }
-                className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-              />
-            </label>
-          </>
-        )}
-        {!managed ? (
-          <div className="bg-surface-subtle grid gap-4 rounded-2xl border border-line p-4 sm:grid-cols-[1fr_auto] sm:items-center sm:p-5">
-            <div className="flex min-w-0 items-start gap-3" aria-live="polite">
-              {testConnection.isPending ? (
-                <Loader2 className="text-violet mt-0.5 size-5 shrink-0 animate-spin" />
-              ) : isVerified ? (
-                <CircleCheck className="text-lime mt-0.5 size-5 shrink-0" />
-              ) : visibleFailure ? (
-                <CircleAlert className="mt-0.5 size-5 shrink-0 text-red-700 dark:text-red-300" />
-              ) : (
-                <PlugZap className="text-mist mt-0.5 size-5 shrink-0" />
-              )}
-              <div className="min-w-0">
-                <p className="text-cloud text-sm font-medium">
-                  {testConnection.isPending
-                    ? "Testing the agent workflow…"
-                    : isVerified
-                      ? "Agent workflow verified"
-                      : visibleFailure
-                        ? "Model workflow test failed"
-                        : "Model workflow test required"}
-                </p>
-                <p
-                  className={`mt-1 text-xs leading-5 ${
-                    visibleFailure
-                      ? "text-red-700 dark:text-red-300"
-                      : "text-mist"
-                  }`}
-                >
-                  {testConnection.isPending
-                    ? "Running a short multi-step tool workflow against this exact model configuration."
-                    : isVerified
-                      ? `Completed a multi-step tool run in ${verification.latencyMs.toLocaleString()} ms. This exact configuration can now be selected.`
-                      : visibleFailure?.message ||
-                        "Test tool calling, structured arguments, and follow-up generation before using this configuration for reviews."}
-                </p>
-              </div>
-            </div>
-            <div className="grid gap-2 sm:flex sm:justify-end">
-              <Button
-                variant="secondary"
-                className="w-full sm:w-auto"
-                disabled={
-                  !byokIsValid || testConnection.isPending || save.isPending
-                }
-                onClick={handleTestConnection}
+              Remove the stored key when saving
+            </span>
+          )}
+        </label>
+        <div className="bg-surface-subtle grid gap-4 rounded-2xl border border-line p-4 sm:grid-cols-[1fr_auto] sm:items-center sm:p-5">
+          <div className="flex min-w-0 items-start gap-3" aria-live="polite">
+            {testConnection.isPending ? (
+              <Loader2 className="text-violet mt-0.5 size-5 shrink-0 animate-spin" />
+            ) : isVerified ? (
+              <CircleCheck className="text-lime mt-0.5 size-5 shrink-0" />
+            ) : visibleFailure ? (
+              <CircleAlert className="mt-0.5 size-5 shrink-0 text-red-700 dark:text-red-300" />
+            ) : (
+              <PlugZap className="text-mist mt-0.5 size-5 shrink-0" />
+            )}
+            <div className="min-w-0">
+              <p className="text-cloud text-sm font-medium">
+                {testConnection.isPending
+                  ? "Checking provider access…"
+                  : isVerified
+                    ? "Provider connection verified"
+                    : visibleFailure
+                      ? "Provider connection failed"
+                      : "Provider connection test required"}
+              </p>
+              <p
+                className={`mt-1 text-xs leading-5 ${
+                  visibleFailure
+                    ? "text-red-700 dark:text-red-300"
+                    : "text-mist"
+                }`}
               >
-                {testConnection.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <PlugZap className="size-4" />
-                )}
-                {isVerified ? "Test again" : "Test model workflow"}
-              </Button>
-              <Button
-                className="w-full sm:w-auto"
-                disabled={!byokIsValid || !isVerified || save.isPending}
-                onClick={() =>
-                  save.mutate({
-                    ...byokInput(),
-                    verificationToken: verification?.token,
-                  })
-                }
-              >
-                {save.isPending && <Loader2 className="size-4 animate-spin" />}
-                Save & use model
-              </Button>
+                {testConnection.isPending
+                  ? "Checking authentication and confirming that the selected model is available."
+                  : isVerified
+                    ? `Authenticated and found the selected model in ${verification.latencyMs.toLocaleString()} ms.`
+                    : visibleFailure?.message ||
+                      "ReviewDuck checks the provider endpoint, credentials, and selected model without spending inference tokens."}
+              </p>
             </div>
           </div>
-        ) : (
-          <div className="flex justify-end">
+          <div className="grid gap-2 sm:flex sm:justify-end">
             <Button
+              variant="secondary"
+              className="w-full sm:w-auto"
               disabled={
-                save.isPending ||
-                (initialConfiguration.managedModel === "big-pickle" &&
-                  !disclosureAccepted)
+                !byokIsValid || testConnection.isPending || save.isPending
               }
-              onClick={() =>
-                save.mutate({
-                  provider: "openai",
-                  model,
-                  apiProtocol,
-                  headers: {},
-                  contextWindow,
-                  maxTokens,
-                  storeResponses,
-                  useManagedModels: true,
-                  mode,
-                  reviewPullRequests,
-                })
-              }
+              onClick={handleTestConnection}
+            >
+              {testConnection.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <PlugZap className="size-4" />
+              )}
+              {isVerified ? "Test again" : "Test connection"}
+            </Button>
+            <Button
+              className="w-full sm:w-auto"
+              disabled={!byokIsValid || !isVerified || save.isPending}
+              onClick={() => save.mutate(byokInput())}
             >
               {save.isPending && <Loader2 className="size-4 animate-spin" />}
-              Save configuration
+              Save & use model
             </Button>
           </div>
-        )}
+        </div>
       </section>
     </PageContainer>
   );

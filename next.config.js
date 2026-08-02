@@ -41,7 +41,6 @@ const config = {
     if (deploymentMode === "local") {
       webpackConfig.resolve.alias = {
         ...webpackConfig.resolve.alias,
-        "@aws-sdk/client-kms$": false,
         "@clerk/nextjs$": false,
         "@clerk/nextjs/server$": false,
         "@sentry/nextjs$": false,

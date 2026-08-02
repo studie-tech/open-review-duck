@@ -26,6 +26,20 @@ describe("sidebar guidance", () => {
     ).toMatchObject({ kind: "ai", href: "/settings/ai" });
   });
 
+  it("does not advertise account-free AI in a local workspace", () => {
+    expect(
+      sidebarGuidance({
+        hasProviderConnection: true,
+        hasAiConfiguration: false,
+        reviewedToday: false,
+        currentStreak: 0,
+        localMode: true,
+      }),
+    ).toMatchObject({
+      description: "Connect a local model or add your own provider key.",
+    });
+  });
+
   it("guides local users to a provider connection", () => {
     expect(
       sidebarGuidance({

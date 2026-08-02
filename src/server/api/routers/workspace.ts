@@ -50,7 +50,9 @@ export const workspaceRouter = createTRPCRouter({
 
     return {
       hasProviderConnection: Boolean(connection),
-      hasAiConfiguration: Boolean(aiPreference ?? localAiConfiguration),
+      hasAiConfiguration: isLocalDeployment()
+        ? Boolean(localAiConfiguration)
+        : Boolean(aiPreference),
       reviewedToday: Boolean(todaySignOff),
       currentStreak: user?.currentStreak ?? 0,
       localMode: isLocalDeployment(),

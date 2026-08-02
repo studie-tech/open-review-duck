@@ -5,17 +5,26 @@ const container =
   process.env.LOCAL_E2E_CONTAINER ?? "reviewduck-local-playwright";
 const baseUrl = process.env.LOCAL_E2E_BASE_URL ?? "http://127.0.0.1:3941";
 
-/** Reads the one-time bootstrap URL without exposing its token in test output. */
-function bootstrapUrl() {
+/** Reads one-time bootstrap URLs without exposing their tokens in test output. */
+function bootstrapUrls() {
   const result = spawnSync("docker", ["logs", container], {
     encoding: "utf8",
   });
   const logs = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-  const match = logs.match(
-    /http:\/\/localhost:3000\/api\/local\/bootstrap\?token=[^\s]+/,
+  return Array.from(
+    logs.matchAll(
+      /http:\/\/localhost:3000\/api\/local\/bootstrap\?token=[^\s]+/g,
+    ),
+    (match) => match[0].replace("http://localhost:3000", baseUrl),
   );
-  if (!match) throw new Error("Local appliance did not print a bootstrap URL");
-  return match[0].replace("http://localhost:3000", baseUrl);
+}
+
+/** Reads the newest one-time bootstrap URL from the appliance logs. */
+function bootstrapUrl() {
+  const urls = bootstrapUrls();
+  const url = urls.at(-1);
+  if (!url) throw new Error("Local appliance did not print a bootstrap URL");
+  return url;
 }
 
 test("bootstraps local provider setup and preserves the session across restart", async ({
@@ -25,6 +34,11 @@ test("bootstraps local provider setup and preserves the session across restart",
   await expect(page).toHaveURL(/\/local\/setup$/);
   await expect(
     page.getByRole("heading", { name: "Authorize this browser" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "docker exec --tty <container-name> reviewduck-local admin bootstrap",
+    ),
   ).toBeVisible();
 
   await page.goto(bootstrapUrl());
@@ -45,6 +59,7 @@ test("bootstraps local provider setup and preserves the session across restart",
     page.getByRole("button", { name: "Add connection" }),
   ).toBeVisible();
 
+  const bootstrapCountBeforeRestart = bootstrapUrls().length;
   execFileSync("docker", ["restart", container]);
   await expect
     .poll(
@@ -66,6 +81,7 @@ test("bootstraps local provider setup and preserves the session across restart",
       { timeout: 60_000 },
     )
     .toBe(true);
+  expect(bootstrapUrls()).toHaveLength(bootstrapCountBeforeRestart);
 
   await page.goto("/dashboard");
   await expect(

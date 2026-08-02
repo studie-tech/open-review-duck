@@ -72,7 +72,6 @@ async function localToken(
   if (!credential) throw new Error("Local provider credential not found");
   const payload = JSON.parse(
     await openVaultSecret(
-      db,
       {
         workspaceId: connection.workspaceId,
         recordId: credential.id,
@@ -103,7 +102,6 @@ async function oauthToken(
     credential = await refreshOauthToken(db, connection.id);
   }
   return openVaultSecret(
-    db,
     {
       workspaceId: connection.workspaceId,
       recordId: credential.id,
@@ -160,7 +158,6 @@ async function refreshOauthToken(db: Database, connectionId: string) {
     throw new Error("OAuth credential expired without a refresh token");
   }
   const refreshToken = await openVaultSecret(
-    db,
     {
       workspaceId: row.connection.workspaceId,
       recordId: row.credential.id,
@@ -223,7 +220,6 @@ async function refreshOauthToken(db: Database, connectionId: string) {
     throw new Error("OAuth refresh response is invalid");
   }
   const encryptedAccessToken = await sealVaultSecret(
-    db,
     {
       workspaceId: row.connection.workspaceId,
       recordId: row.credential.id,
@@ -234,7 +230,6 @@ async function refreshOauthToken(db: Database, connectionId: string) {
   const encryptedRefreshToken =
     typeof tokens.refresh_token === "string"
       ? await sealVaultSecret(
-          db,
           {
             workspaceId: row.connection.workspaceId,
             recordId: row.credential.id,

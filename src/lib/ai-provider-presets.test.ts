@@ -10,7 +10,6 @@ describe("AI provider presets", () => {
     expect(localDefaultAiPreset).toMatchObject({
       provider: "opencode",
       model: "big-pickle",
-      protocol: "openai-completions",
       baseUrl: "https://opencode.ai/zen/v1",
     });
   });

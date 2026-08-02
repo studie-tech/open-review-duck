@@ -7,17 +7,6 @@ const aiProviderSchema = z
   .max(48)
   .regex(/^[a-z0-9][a-z0-9_-]*$/);
 
-const aiProtocolSchema = z.enum([
-  "openai-responses",
-  "openai-completions",
-  "azure-openai-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-  "google-vertex",
-  "mistral-conversations",
-]);
-export type AiProtocol = z.infer<typeof aiProtocolSchema>;
-
 const headerValueSchema = z.string().min(1).max(2_000);
 const aiHeadersSchema = z
   .record(
@@ -35,13 +24,11 @@ const aiHeadersSchema = z
 const aiConfigurationSchema = z.object({
   provider: aiProviderSchema,
   model: z.string().trim().min(1).max(160),
-  apiProtocol: aiProtocolSchema,
   apiKey: z.string().trim().min(1).optional(),
+  clearApiKey: z.boolean().default(false),
+  clearHeaders: z.boolean().default(false),
   headers: aiHeadersSchema.default({}),
   baseUrl: z.string().url().optional(),
-  contextWindow: z.number().int().min(1_024).max(10_000_000),
-  maxTokens: z.number().int().min(16).max(1_000_000),
-  storeResponses: z.boolean(),
   useManagedModels: z.boolean(),
   mode: z.enum(["off", "on_demand", "automatic"]),
   reviewPullRequests: z.boolean(),
@@ -71,9 +58,8 @@ export const testAiConfigurationSchema = aiConfigurationSchema
   .extend({ useManagedModels: z.literal(false) })
   .superRefine(validateProviderUrl);
 
-export const saveAiConfigurationSchema = aiConfigurationSchema
-  .extend({ verificationToken: z.string().min(1).max(2_000).optional() })
-  .superRefine(validateProviderUrl);
+export const saveAiConfigurationSchema =
+  aiConfigurationSchema.superRefine(validateProviderUrl);
 
 export const startAiJobSchema = z.discriminatedUnion("kind", [
   z

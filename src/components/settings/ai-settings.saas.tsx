@@ -135,11 +135,9 @@ export function SaasAiSettings({
               save.mutate({
                 provider: model === "big-pickle" ? "opencode" : "openrouter",
                 model,
-                apiProtocol: "openai-completions",
+                clearApiKey: false,
+                clearHeaders: false,
                 headers: {},
-                contextWindow: 128_000,
-                maxTokens: 8_000,
-                storeResponses: false,
                 useManagedModels: true,
                 mode,
                 reviewPullRequests,

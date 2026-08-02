@@ -1,11 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import pg from "pg";
+import {
+  formatLocalBootstrapLink,
+  formatLocalSessionReady,
+} from "./local-bootstrap-output.mjs";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
 const client = new pg.Client({ connectionString });
 await client.connect();
+let output = "";
 try {
   await client.query("begin");
   await client.query(
@@ -33,29 +38,29 @@ try {
   );
   const activeSession = await client.query(
     `select 1 from open_review_duck_local_session
-     where "revokedAt" is null and "expiresAt" > now() limit 1`,
+     where "revokedAt" is null and "expiresAt" > now()
+     limit 1`,
   );
-  let bootstrap;
-  if (activeSession.rowCount === 0) {
+  if (activeSession.rowCount) {
+    output = formatLocalSessionReady(port);
+  } else {
     await client.query(
       `update open_review_duck_local_bootstrap_token
        set "consumedAt" = now()
        where "consumedAt" is null`,
     );
-    bootstrap = randomBytes(48).toString("base64url");
+    const bootstrap = randomBytes(48).toString("base64url");
     await client.query(
       `insert into open_review_duck_local_bootstrap_token
         ("tokenHash", "expiresAt", "createdAt")
        values ($1, now() + interval '15 minutes', now())`,
       [createHash("sha256").update(bootstrap).digest("hex")],
     );
+    const url = `http://localhost:${port}/api/local/bootstrap?token=${bootstrap}`;
+    output = formatLocalBootstrapLink(url);
   }
   await client.query("commit");
-  if (bootstrap) {
-    process.stdout.write(
-      `Open this one-time owner link within 15 minutes:\nhttp://localhost:${port}/api/local/bootstrap?token=${bootstrap}\n`,
-    );
-  }
+  process.stdout.write(output);
 } catch (cause) {
   await client.query("rollback");
   throw cause;

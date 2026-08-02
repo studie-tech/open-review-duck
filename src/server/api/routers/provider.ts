@@ -101,7 +101,6 @@ export const providerRouter = createTRPCRouter({
         .update(`${workspace.id}\0${input.provider}\0${input.accessToken}`)
         .digest("hex");
       const encryptedPayload = await sealVaultSecret(
-        ctx.db,
         {
           workspaceId: workspace.id,
           recordId: credentialId,

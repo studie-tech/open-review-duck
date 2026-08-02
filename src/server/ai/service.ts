@@ -114,13 +114,17 @@ async function jobScope(
   const selectedModel = paid
     ? (preference?.selectedModel ?? "")
     : (preference?.selectedModel ?? "big-pickle");
-  const provider = paid
-    ? "openrouter"
-    : localConfiguration &&
-        selectedModel === localConfiguration.model &&
-        selectedModel !== "big-pickle"
-      ? localConfiguration.provider
-      : "opencode";
+  let provider: string;
+  if (paid) {
+    provider = "openrouter";
+  } else if (local) {
+    if (!localConfiguration || selectedModel !== localConfiguration.model) {
+      throw new Error("Configure a local AI provider before using AI");
+    }
+    provider = localConfiguration.provider;
+  } else {
+    provider = "opencode";
+  }
   if (
     provider === "opencode" &&
     !preference?.freeProviderDisclosureAcceptedAt
@@ -150,7 +154,7 @@ async function jobScope(
     paid,
     provider,
     snapshot,
-    useManagedQuota: !local || provider === "opencode",
+    useManagedQuota: !local,
     workspaceId: scope.workspace.id,
   };
 }

@@ -27,8 +27,7 @@ export function assertSaasConfigured() {
     ["CLERK_WEBHOOK_SIGNING_SECRET", env.CLERK_WEBHOOK_SIGNING_SECRET],
     ["UPLOADTHING_TOKEN", env.UPLOADTHING_TOKEN],
     ["STORAGE_ID_KEY", env.STORAGE_ID_KEY],
-    ["KMS_KEY_ID", env.KMS_KEY_ID],
-    ["AWS_KMS_ROLE_ARN", env.AWS_KMS_ROLE_ARN],
+    ["ENCRYPTION_KEY", env.ENCRYPTION_KEY],
     ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
     ["OPENROUTER_MANAGEMENT_KEY", env.OPENROUTER_MANAGEMENT_KEY],
     ["OPENROUTER_MODEL_ALLOWLIST", env.OPENROUTER_MODEL_ALLOWLIST],
@@ -70,8 +69,5 @@ export function assertSaasConfigured() {
   }
   if (new URL(env.APP_URL).protocol !== "https:") {
     throw new Error("SaaS APP_URL must use HTTPS");
-  }
-  if (env.KMS_REGION !== "eu-central-1") {
-    throw new Error("SaaS KMS must be colocated in eu-central-1");
   }
 }

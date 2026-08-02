@@ -78,7 +78,6 @@ export async function POST(
     provider,
     stateHash: createHash("sha256").update(state).digest("hex"),
     encryptedVerifier: await sealVaultSecret(
-      db,
       { workspaceId: workspace.id, recordId: id, provider: "oauth-state" },
       JSON.stringify({ verifier, organizationUrl }),
     ),

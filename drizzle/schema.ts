@@ -235,17 +235,6 @@ export const credentialAuditEvents = createTable(
   ],
 );
 
-export const workspaceDataKeys = createTable("workspace_data_key", {
-  workspaceId: uuid()
-    .primaryKey()
-    .references(() => workspaces.id, { onDelete: "cascade" }),
-  keyVersion: integer().notNull().default(1),
-  encryptedKey: text().notNull(),
-  kmsKeyId: text().notNull(),
-  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
-  rotatedAt: timestamp({ withTimezone: true }),
-});
-
 export const providerConnections = createTable(
   "provider_connection",
   {

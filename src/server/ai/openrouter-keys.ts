@@ -96,7 +96,6 @@ export async function openRouterWorkspaceKey(
     const created = createKeyResponse.parse(await response.json());
     const recordId = crypto.randomUUID();
     const encryptedCredential = await sealVaultSecret(
-      db,
       { workspaceId, recordId, provider: "openrouter" },
       created.key,
     );
@@ -143,7 +142,6 @@ export async function openRouterWorkspaceKey(
   }
   if (!credential) throw new Error("OpenRouter workspace key is unavailable");
   return openVaultSecret(
-    db,
     {
       workspaceId,
       recordId: credential.id,

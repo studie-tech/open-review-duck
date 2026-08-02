@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import pg from "pg";
+import { formatLocalBootstrapLink } from "./local-bootstrap-output.mjs";
 
 const [command = "status"] = process.argv.slice(2);
 const execute = promisify(execFile);
@@ -71,8 +72,10 @@ try {
       await client.query("rollback");
       throw cause;
     }
-    console.log(
-      `http://localhost:${process.env.PORT ?? "3000"}/api/local/bootstrap?token=${token}`,
+    process.stdout.write(
+      formatLocalBootstrapLink(
+        `http://localhost:${process.env.PORT ?? "3000"}/api/local/bootstrap?token=${token}`,
+      ),
     );
   } else if (command === "backup") {
     const target =

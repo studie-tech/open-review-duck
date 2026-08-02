@@ -21,10 +21,13 @@ providers use GitHub App or OAuth identities; users cannot submit PATs or model
 keys. OAuth state is signed, one-time, exact-callback-bound, and PKCE-protected.
 Webhook signatures are checked before parsing and delivery IDs are deduplicated.
 
-SaaS credential records use per-workspace AES-256-GCM data keys with
-workspace/record/provider additional authenticated data. AWS KMS wraps the data
-keys through a narrowly scoped Vercel OIDC role; no long-lived AWS credential
-is stored in Vercel.
+SaaS OAuth tokens, managed-model credentials, and AI transcripts use
+AES-256-GCM with workspace/record/provider additional authenticated data. A
+shared 256-bit root stored as a Vercel Sensitive Environment Variable derives
+an isolated key for each workspace. The root is never stored in the database or
+exposed to the browser. Losing or replacing it makes existing encrypted records
+unreadable, so operators must retain it in protected recovery material and must
+not rotate it without a re-encryption procedure.
 
 Private source objects are workspace-addressed. UploadThing identifiers contain
 an HMAC rather than tenant or repository metadata. Signed URLs are issued only

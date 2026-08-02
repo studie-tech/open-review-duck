@@ -82,7 +82,6 @@ export async function GET(
   }
   const stateSecret = JSON.parse(
     await openVaultSecret(
-      db,
       {
         workspaceId: state.workspaceId,
         recordId: state.id,
@@ -229,7 +228,6 @@ export async function GET(
     });
     const credentialId = existing?.id ?? randomUUID();
     const encryptedAccessToken = await sealVaultSecret(
-      db,
       {
         workspaceId: state.workspaceId,
         recordId: credentialId,
@@ -240,7 +238,6 @@ export async function GET(
     const encryptedRefreshToken =
       typeof tokens.refresh_token === "string"
         ? await sealVaultSecret(
-            db,
             {
               workspaceId: state.workspaceId,
               recordId: credentialId,

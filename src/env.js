@@ -15,11 +15,6 @@ export const env = createEnv({
     MIGRATION_DATABASE_URL: z.string().url().optional(),
     CLERK_SECRET_KEY: z.string().min(1).optional(),
     ENCRYPTION_KEY: environmentSecretSchema.optional(),
-    ENCRYPTION_KEY_ID: z
-      .string()
-      .regex(/^[a-zA-Z0-9_-]{1,64}$/)
-      .default("primary"),
-    ENCRYPTION_PREVIOUS_KEYS: z.string().default("{}"),
     CLERK_WEBHOOK_SIGNING_SECRET: z.string().min(1).optional(),
     CRON_SECRET: environmentSecretSchema.optional(),
     APP_URL: z.string().url().optional(),
@@ -27,9 +22,6 @@ export const env = createEnv({
     LOCAL_SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     STORAGE_ID_KEY: environmentSecretSchema.optional(),
     UPLOADTHING_TOKEN: z.string().min(1).optional(),
-    KMS_KEY_ID: z.string().min(1).optional(),
-    KMS_REGION: z.string().min(1).default("eu-central-1"),
-    AWS_KMS_ROLE_ARN: z.string().min(1).optional(),
     OPENROUTER_MANAGEMENT_KEY: z.string().min(1).optional(),
     OPENROUTER_MODEL_ALLOWLIST: z.string().min(1).optional(),
     OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD: z.coerce
@@ -73,7 +65,6 @@ export const env = createEnv({
       .int()
       .positive()
       .default(250_000),
-    MANAGED_AI_MODEL: z.string().min(1).default("big-pickle"),
     AI_MAX_MODEL_STEPS: z.coerce.number().int().min(9).max(64).default(64),
     AI_MAX_TOOL_CALLS: z.coerce.number().int().min(32).max(256).default(256),
     AI_MAX_DISTINCT_FILES: z.coerce
@@ -122,8 +113,6 @@ export const env = createEnv({
     MIGRATION_DATABASE_URL: process.env.MIGRATION_DATABASE_URL,
     CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
-    ENCRYPTION_KEY_ID: process.env.ENCRYPTION_KEY_ID,
-    ENCRYPTION_PREVIOUS_KEYS: process.env.ENCRYPTION_PREVIOUS_KEYS,
     CLERK_WEBHOOK_SIGNING_SECRET: process.env.CLERK_WEBHOOK_SIGNING_SECRET,
     CRON_SECRET: process.env.CRON_SECRET,
     APP_URL: process.env.APP_URL,
@@ -131,9 +120,6 @@ export const env = createEnv({
     LOCAL_SESSION_TTL_DAYS: process.env.LOCAL_SESSION_TTL_DAYS,
     STORAGE_ID_KEY: process.env.STORAGE_ID_KEY,
     UPLOADTHING_TOKEN: process.env.UPLOADTHING_TOKEN,
-    KMS_KEY_ID: process.env.KMS_KEY_ID,
-    KMS_REGION: process.env.KMS_REGION,
-    AWS_KMS_ROLE_ARN: process.env.AWS_KMS_ROLE_ARN,
     OPENROUTER_MANAGEMENT_KEY: process.env.OPENROUTER_MANAGEMENT_KEY,
     OPENROUTER_MODEL_ALLOWLIST: process.env.OPENROUTER_MODEL_ALLOWLIST,
     OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD:
@@ -161,7 +147,6 @@ export const env = createEnv({
     MANAGED_AI_USER_DAILY_REQUEST_LIMIT:
       process.env.MANAGED_AI_USER_DAILY_REQUEST_LIMIT,
     MANAGED_AI_WEEKLY_TOKEN_LIMIT: process.env.MANAGED_AI_WEEKLY_TOKEN_LIMIT,
-    MANAGED_AI_MODEL: process.env.MANAGED_AI_MODEL,
     AI_MAX_MODEL_STEPS: process.env.AI_MAX_MODEL_STEPS,
     AI_MAX_TOOL_CALLS: process.env.AI_MAX_TOOL_CALLS,
     AI_MAX_DISTINCT_FILES: process.env.AI_MAX_DISTINCT_FILES,
