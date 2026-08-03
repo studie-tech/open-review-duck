@@ -305,7 +305,7 @@ export default async function Home() {
             <span>GitLab</span>
             <span>Azure DevOps</span>
             <span className="h-4 w-px bg-line" />
-            <span>JavaScript · TypeScript · Python</span>
+            <span>60+ languages supported</span>
           </div>
         </div>
 
