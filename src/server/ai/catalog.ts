@@ -49,15 +49,21 @@ export async function synchronizeOpenRouterCatalog(db: Database) {
     throw new Error(`OpenRouter managed model is missing: ${modelId}`);
   }
   const synchronizedAt = new Date();
+  const promptNanoUsdPerToken = nanoUsdPerToken(selected.pricing.prompt);
+  const completionNanoUsdPerToken = nanoUsdPerToken(
+    selected.pricing.completion,
+  );
+  const supportsTools =
+    selected.supported_parameters?.includes("tools") ?? false;
   await db
     .insert(managedAiModels)
     .values({
       modelId: selected.id,
       name: selected.name,
       contextLength: selected.context_length,
-      promptNanoUsdPerToken: nanoUsdPerToken(selected.pricing.prompt),
-      completionNanoUsdPerToken: nanoUsdPerToken(selected.pricing.completion),
-      supportsTools: selected.supported_parameters?.includes("tools") ?? false,
+      promptNanoUsdPerToken,
+      completionNanoUsdPerToken,
+      supportsTools,
       synchronizedAt,
     })
     .onConflictDoUpdate({
@@ -65,10 +71,9 @@ export async function synchronizeOpenRouterCatalog(db: Database) {
       set: {
         name: selected.name,
         contextLength: selected.context_length,
-        promptNanoUsdPerToken: nanoUsdPerToken(selected.pricing.prompt),
-        completionNanoUsdPerToken: nanoUsdPerToken(selected.pricing.completion),
-        supportsTools:
-          selected.supported_parameters?.includes("tools") ?? false,
+        promptNanoUsdPerToken,
+        completionNanoUsdPerToken,
+        supportsTools,
         synchronizedAt,
       },
     });

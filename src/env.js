@@ -28,7 +28,7 @@ export const env = createEnv({
       .trim()
       .min(1)
       .refine((value) => !value.includes(","), {
-        message: "OPENROUTER_MODEL_ALLOWLIST must contain one model slug",
+        error: "OPENROUTER_MODEL_ALLOWLIST must contain one model slug",
       })
       .optional(),
     OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD: z.coerce

@@ -32,6 +32,7 @@ import { paidReservationMicroUsd } from "~/server/ai/cost";
 import {
   managedAiMonthlyTokenLimit,
   managedAiMonthWindow,
+  managedSaasModel,
 } from "~/server/ai/plan";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
@@ -127,7 +128,7 @@ async function jobScope(
   const subscribed = !local && input.subscribed;
   const selectedModel = local
     ? (preference?.selectedModel ?? "big-pickle")
-    : (env.OPENROUTER_MODEL_ALLOWLIST ?? "");
+    : managedSaasModel();
   let provider: string;
   if (local) {
     if (!localConfiguration || selectedModel !== localConfiguration.model) {
@@ -142,9 +143,6 @@ async function jobScope(
     !preference?.freeProviderDisclosureAcceptedAt
   ) {
     throw new Error("Accept the Big Pickle data disclosure before using AI");
-  }
-  if (!local && !selectedModel) {
-    throw new Error("The managed SaaS model is not configured");
   }
   return {
     model: selectedModel,
@@ -174,7 +172,10 @@ async function reserveManagedQuota(
   const { startsAt: monthStart, resetsAt: monthEnd } =
     managedAiMonthWindow(dayStart);
   await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${`ai-quota:${input.userId}`}))`,
+    sql`select pg_advisory_xact_lock(hashtext(${`ai-quota:workspace:${input.workspaceId}`}))`,
+  );
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${`ai-quota:user:${input.userId}`}))`,
   );
   if (input.reservedMicroUsd > 0) {
     const month = new Date().toISOString().slice(0, 7);
