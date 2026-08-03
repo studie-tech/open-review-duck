@@ -3,6 +3,7 @@ import "server-only";
 import { createPrivateKey } from "node:crypto";
 import { env } from "~/env";
 import type { DeploymentMode } from "~/lib/deployment";
+import { normalizeNodePostgresUrl } from "./db/url";
 
 let deploymentConfigurationValidated = false;
 
@@ -26,6 +27,7 @@ export function assertDeploymentConfigured() {
     deploymentConfigurationValidated = true;
     return;
   }
+  // Feature-specific credentials are validated by the routes and services that use them.
   const missing = [
     ["APP_URL", env.APP_URL],
     ["MIGRATION_DATABASE_URL", env.MIGRATION_DATABASE_URL],
@@ -37,25 +39,19 @@ export function assertDeploymentConfigured() {
     ["CLERK_WEBHOOK_SIGNING_SECRET", env.CLERK_WEBHOOK_SIGNING_SECRET],
     ["UPLOADTHING_TOKEN", env.UPLOADTHING_TOKEN],
     ["STORAGE_ID_KEY", env.STORAGE_ID_KEY],
-    ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
     ["OPENROUTER_MANAGEMENT_KEY", env.OPENROUTER_MANAGEMENT_KEY],
     ["OPENROUTER_MODEL_ALLOWLIST", env.OPENROUTER_MODEL_ALLOWLIST],
     [
       "OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD",
       env.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD,
     ],
-    ["OAUTH_STATE_SECRET", env.OAUTH_STATE_SECRET],
     ["GITHUB_APP_ID", env.GITHUB_APP_ID],
     ["GITHUB_APP_SLUG", env.GITHUB_APP_SLUG],
-    ["GITHUB_APP_CLIENT_ID", env.GITHUB_APP_CLIENT_ID],
-    ["GITHUB_APP_CLIENT_SECRET", env.GITHUB_APP_CLIENT_SECRET],
     ["GITHUB_APP_PRIVATE_KEY", env.GITHUB_APP_PRIVATE_KEY],
     ["GITHUB_WEBHOOK_SECRET", env.GITHUB_WEBHOOK_SECRET],
     ["GITLAB_CLIENT_ID", env.GITLAB_CLIENT_ID],
     ["GITLAB_CLIENT_SECRET", env.GITLAB_CLIENT_SECRET],
     ["AZURE_ENTRA_CLIENT_ID", env.AZURE_ENTRA_CLIENT_ID],
-    ["AZURE_ENTRA_CLIENT_SECRET", env.AZURE_ENTRA_CLIENT_SECRET],
-    ["CRON_SECRET", env.CRON_SECRET],
     ["SENTRY_DSN", env.SENTRY_DSN],
     ["NEXT_PUBLIC_SENTRY_DSN", env.NEXT_PUBLIC_SENTRY_DSN],
   ]
@@ -69,9 +65,10 @@ export function assertDeploymentConfigured() {
   if (!env.MIGRATION_DATABASE_URL || !env.APP_URL) {
     throw new Error("SaaS database and application URLs are required");
   }
-  const runtimeDatabase = new URL(env.DATABASE_URL);
+  const runtimeDatabase = new URL(normalizeNodePostgresUrl(env.DATABASE_URL));
   const migrationDatabase = new URL(env.MIGRATION_DATABASE_URL);
-  if (runtimeDatabase.port !== "6432" || migrationDatabase.port !== "5432") {
+  const migrationPort = migrationDatabase.port || "5432";
+  if (runtimeDatabase.port !== "6432" || migrationPort !== "5432") {
     throw new Error(
       "SaaS requires PlanetScale PgBouncer on port 6432 and direct migrations on port 5432",
     );

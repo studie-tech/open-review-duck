@@ -1,7 +1,12 @@
 "use client";
 
+import "~/styles/globals.css";
+
+import { RecoveryError } from "~/components/recovery-error";
+
 /** Provides an entirely local recovery UI for otherwise-unhandled React failures. */
 export default function LocalGlobalError({
+  error,
   reset,
 }: {
   error: Error & { digest?: string };
@@ -9,14 +14,17 @@ export default function LocalGlobalError({
 }) {
   return (
     <html lang="en">
-      <body>
-        <main>
-          <h1>ReviewDuck could not load.</h1>
-          <p>Your saved work is safe. Retry the request to continue.</p>
-          <button type="button" onClick={reset}>
-            Try again
-          </button>
-        </main>
+      <body className="bg-ink text-cloud antialiased">
+        <RecoveryError
+          backHref="/"
+          backLabel="Back to home"
+          description="An unexpected error prevented your workspace from loading. Try again or return home."
+          error={error}
+          eyebrow="ReviewDuck temporarily unavailable"
+          logLabel="Local application failed to load"
+          reset={reset}
+          title="We couldn’t load your workspace."
+        />
       </body>
     </html>
   );

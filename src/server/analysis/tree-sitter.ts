@@ -10,10 +10,15 @@ import { grammarAssets, type SupportedLanguage } from "./types";
 export type TreeSitterLanguage = Exclude<SupportedLanguage, "text">;
 
 const assetDirectory = join(process.cwd(), "public", "tree-sitter");
+let parserInitialization: Promise<void> | undefined;
 
-await Parser.init({
-  locateFile: () => join(assetDirectory, "tree-sitter.wasm"),
-});
+/** Initializes the Tree-sitter runtime only when a request begins source analysis. */
+function initializeParser() {
+  parserInitialization ??= Parser.init({
+    locateFile: () => join(assetDirectory, "tree-sitter.wasm"),
+  });
+  return parserInitialization;
+}
 
 const MAXIMUM_CACHED_LANGUAGES =
   process.env.NODE_ENV === "test" ? Object.keys(grammarAssets).length : 8;
@@ -24,6 +29,7 @@ const pendingLanguages = new Map<TreeSitterLanguage, Promise<Language>>();
 export async function prepareTreeSitterLanguages(
   requested: Iterable<TreeSitterLanguage>,
 ) {
+  await initializeParser();
   const requestedSet = new Set(requested);
   for (const language of requestedSet) {
     const cached = languages.get(language);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { env } from "~/env";
+import { workflowUsesApplicationDatabase } from "~/lib/deployment";
 import { db } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 
@@ -18,20 +19,29 @@ export async function GET() {
     checks.postgres = false;
   }
   try {
-    const result = await db.execute<{ exists: boolean }>(
-      sql`select to_regclass('drizzle.__drizzle_migrations') is not null as exists`,
+    const result = await db.execute<{ ready: boolean }>(
+      sql`select
+        to_regclass('drizzle.__drizzle_migrations') is not null
+        and to_regclass('public.open_review_duck_ai_preference') is not null
+        and to_regclass('public.open_review_duck_review_queue_item') is not null
+        as ready`,
     );
-    checks.migrations = result.rows[0]?.exists === true;
+    checks.migrations = result.rows[0]?.ready === true;
   } catch {
     checks.migrations = false;
   }
-  try {
-    const result = await db.execute<{ exists: boolean }>(
-      sql`select to_regclass('workflow.workflow_runs') is not null as exists`,
-    );
-    checks.workflow = result.rows[0]?.exists === true;
-  } catch {
-    checks.workflow = false;
+  if (workflowUsesApplicationDatabase(process.env.WORKFLOW_TARGET_WORLD)) {
+    try {
+      const result = await db.execute<{ exists: boolean }>(
+        sql`select to_regclass('workflow.workflow_runs') is not null as exists`,
+      );
+      checks.workflow = result.rows[0]?.exists === true;
+    } catch {
+      checks.workflow = false;
+    }
+  } else {
+    // Vercel supplies its managed Workflow world outside the application database.
+    checks.workflow = true;
   }
   if (isLocalDeployment()) {
     try {
