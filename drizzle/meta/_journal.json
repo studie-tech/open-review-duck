@@ -22,6 +22,20 @@
       "when": 1785670519300,
       "tag": "0002_oval_beast",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785737001178,
+      "tag": "0003_happy_cable",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785738248756,
+      "tag": "0004_chief_magik",
+      "breakpoints": true
     }
   ]
 }

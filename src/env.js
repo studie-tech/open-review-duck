@@ -34,17 +34,28 @@ export const env = createEnv({
       .url()
       .default("https://opencode.ai/zen/v1"),
     BIG_PICKLE_DISCLOSURE_VERSION: z.string().min(1).default("2026-07-29"),
-    GITHUB_APP_ID: z.string().min(1).optional(),
-    GITHUB_APP_SLUG: z.string().min(1).optional(),
+    GITHUB_APP_ID: z
+      .string()
+      .regex(/^[1-9]\d{0,19}$/)
+      .optional(),
+    GITHUB_APP_SLUG: z
+      .string()
+      .regex(/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/)
+      .optional(),
+    GITHUB_APP_CLIENT_ID: z.string().min(1).optional(),
+    GITHUB_APP_CLIENT_SECRET: environmentSecretSchema.optional(),
     GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
-    GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
+    GITHUB_WEBHOOK_SECRET: environmentSecretSchema.optional(),
     GITLAB_CLIENT_ID: z.string().min(1).optional(),
-    GITLAB_CLIENT_SECRET: z.string().min(1).optional(),
-    GITLAB_WEBHOOK_SECRET: z.string().min(1).optional(),
+    GITLAB_CLIENT_SECRET: environmentSecretSchema.optional(),
     AZURE_ENTRA_CLIENT_ID: z.string().min(1).optional(),
-    AZURE_ENTRA_CLIENT_SECRET: z.string().min(1).optional(),
-    AZURE_ENTRA_TENANT_ID: z.string().min(1).default("common"),
-    AZURE_WEBHOOK_SECRET: z.string().min(1).optional(),
+    AZURE_ENTRA_CLIENT_SECRET: environmentSecretSchema.optional(),
+    AZURE_ENTRA_TENANT_ID: z
+      .string()
+      .regex(
+        /^(?:organizations|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+      )
+      .default("organizations"),
     OAUTH_STATE_SECRET: environmentSecretSchema.optional(),
     SENTRY_DSN: z.string().url().optional(),
     SENTRY_ENVIRONMENT: z.string().min(1).optional(),
@@ -129,15 +140,15 @@ export const env = createEnv({
     BIG_PICKLE_DISCLOSURE_VERSION: process.env.BIG_PICKLE_DISCLOSURE_VERSION,
     GITHUB_APP_ID: process.env.GITHUB_APP_ID,
     GITHUB_APP_SLUG: process.env.GITHUB_APP_SLUG,
+    GITHUB_APP_CLIENT_ID: process.env.GITHUB_APP_CLIENT_ID,
+    GITHUB_APP_CLIENT_SECRET: process.env.GITHUB_APP_CLIENT_SECRET,
     GITHUB_APP_PRIVATE_KEY: process.env.GITHUB_APP_PRIVATE_KEY,
     GITHUB_WEBHOOK_SECRET: process.env.GITHUB_WEBHOOK_SECRET,
     GITLAB_CLIENT_ID: process.env.GITLAB_CLIENT_ID,
     GITLAB_CLIENT_SECRET: process.env.GITLAB_CLIENT_SECRET,
-    GITLAB_WEBHOOK_SECRET: process.env.GITLAB_WEBHOOK_SECRET,
     AZURE_ENTRA_CLIENT_ID: process.env.AZURE_ENTRA_CLIENT_ID,
     AZURE_ENTRA_CLIENT_SECRET: process.env.AZURE_ENTRA_CLIENT_SECRET,
     AZURE_ENTRA_TENANT_ID: process.env.AZURE_ENTRA_TENANT_ID,
-    AZURE_WEBHOOK_SECRET: process.env.AZURE_WEBHOOK_SECRET,
     OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,
     SENTRY_DSN: process.env.SENTRY_DSN,
     SENTRY_ENVIRONMENT: process.env.SENTRY_ENVIRONMENT,

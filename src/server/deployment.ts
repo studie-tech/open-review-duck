@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createPrivateKey } from "node:crypto";
 import { env } from "~/env";
 import type { DeploymentMode } from "~/lib/deployment";
 
@@ -38,14 +39,14 @@ export function assertSaasConfigured() {
     ["OAUTH_STATE_SECRET", env.OAUTH_STATE_SECRET],
     ["GITHUB_APP_ID", env.GITHUB_APP_ID],
     ["GITHUB_APP_SLUG", env.GITHUB_APP_SLUG],
+    ["GITHUB_APP_CLIENT_ID", env.GITHUB_APP_CLIENT_ID],
+    ["GITHUB_APP_CLIENT_SECRET", env.GITHUB_APP_CLIENT_SECRET],
     ["GITHUB_APP_PRIVATE_KEY", env.GITHUB_APP_PRIVATE_KEY],
     ["GITHUB_WEBHOOK_SECRET", env.GITHUB_WEBHOOK_SECRET],
     ["GITLAB_CLIENT_ID", env.GITLAB_CLIENT_ID],
     ["GITLAB_CLIENT_SECRET", env.GITLAB_CLIENT_SECRET],
-    ["GITLAB_WEBHOOK_SECRET", env.GITLAB_WEBHOOK_SECRET],
     ["AZURE_ENTRA_CLIENT_ID", env.AZURE_ENTRA_CLIENT_ID],
     ["AZURE_ENTRA_CLIENT_SECRET", env.AZURE_ENTRA_CLIENT_SECRET],
-    ["AZURE_WEBHOOK_SECRET", env.AZURE_WEBHOOK_SECRET],
     ["CRON_SECRET", env.CRON_SECRET],
     ["SENTRY_DSN", env.SENTRY_DSN],
     ["NEXT_PUBLIC_SENTRY_DSN", env.NEXT_PUBLIC_SENTRY_DSN],
@@ -69,5 +70,11 @@ export function assertSaasConfigured() {
   }
   if (new URL(env.APP_URL).protocol !== "https:") {
     throw new Error("SaaS APP_URL must use HTTPS");
+  }
+  const githubKey = createPrivateKey(
+    env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n") ?? "",
+  );
+  if (githubKey.asymmetricKeyType !== "rsa") {
+    throw new Error("GITHUB_APP_PRIVATE_KEY must be an RSA private key");
   }
 }

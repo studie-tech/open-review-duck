@@ -1,0 +1,98 @@
+import { generateKeyPairSync } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import {
+  exchangeGitHubUserCode,
+  githubAppPrivateKey,
+  revokeGitHubUserToken,
+  verifyGitHubInstallationAccess,
+} from "./github-app-authorization";
+
+describe("GitHub App user authorization", () => {
+  it("loads the PKCS#1 private-key format downloaded for GitHub Apps", () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+    expect(githubAppPrivateKey(pem).asymmetricKeyType).toBe("rsa");
+  });
+
+  it("exchanges a code with PKCE without exposing credentials in the URL", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: "ghu_verification" }), {
+        status: 200,
+      }),
+    );
+    await expect(
+      exchangeGitHubUserCode(
+        {
+          clientId: "Iv1.client",
+          clientSecret: "secret",
+          code: "one-time-code",
+          codeVerifier: "verifier",
+          redirectUri:
+            "https://reviewduck.example/api/integrations/github/callback",
+        },
+        fetcher,
+      ),
+    ).resolves.toBe("ghu_verification");
+    const [url, init] = fetcher.mock.calls[0] ?? [];
+    expect(url).toBe("https://github.com/login/oauth/access_token");
+    expect(String(init.body)).toContain("code_verifier=verifier");
+    expect(String(url)).not.toContain("secret");
+    expect(init.redirect).toBe("error");
+  });
+
+  it("fails closed when GitHub does not return a user token", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: "bad_verification_code" })),
+      );
+    await expect(
+      exchangeGitHubUserCode(
+        {
+          clientId: "client",
+          clientSecret: "secret",
+          code: "bad",
+          codeVerifier: "verifier",
+          redirectUri: "https://reviewduck.example/callback",
+        },
+        fetcher,
+      ),
+    ).rejects.toThrow("response is invalid");
+  });
+
+  it("accepts only an installation accessible to the user token", async () => {
+    const allowed = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    await expect(
+      verifyGitHubInstallationAccess("42", "ghu_token", allowed),
+    ).resolves.toBeUndefined();
+    expect(allowed).toHaveBeenCalledWith(
+      "https://api.github.com/user/installations/42/repositories?per_page=1",
+      expect.objectContaining({ redirect: "error" }),
+    );
+
+    const denied = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    await expect(
+      verifyGitHubInstallationAccess("43", "ghu_token", denied),
+    ).rejects.toThrow("not accessible");
+  });
+
+  it("revokes the verification token with GitHub App credentials", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    await revokeGitHubUserToken(
+      { clientId: "client", clientSecret: "secret", token: "ghu_token" },
+      fetcher,
+    );
+    const [url, init] = fetcher.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.github.com/applications/client/token");
+    expect(new Headers(init.headers).get("authorization")).toBe(
+      `Basic ${Buffer.from("client:secret").toString("base64")}`,
+    );
+    expect(init.body).toBe(JSON.stringify({ access_token: "ghu_token" }));
+  });
+});

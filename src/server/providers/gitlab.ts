@@ -133,34 +133,36 @@ export class GitLabProvider implements PullRequestProvider {
     const hooks = await this.getAllPages<GitLabProjectHook>(
       `${this.apiUrl}/projects/${project}/hooks?per_page=100`,
     );
-    if (hooks.some((hook) => hook.url === input.callbackUrl)) return;
-    await providerFetch<GitLabProjectHook>(
-      this.name,
-      `${this.apiUrl}/projects/${project}/hooks`,
-      {
-        method: "POST",
-        headers: { ...this.headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: input.callbackUrl,
-          token: input.secret,
-          merge_requests_events: true,
-          enable_ssl_verification: true,
-        }),
-      },
-    );
-  }
-  /** Removes every matching application hook from a GitLab project. */
-  async removeRepositoryWebhook(input: {
-    repositoryExternalId: string;
-    callbackUrl: string;
-  }) {
-    const project = encodeURIComponent(input.repositoryExternalId);
-    const hooks = await this.getAllPages<GitLabProjectHook>(
-      `${this.apiUrl}/projects/${project}/hooks?per_page=100`,
-    );
+    const matching = hooks.filter((hook) => hook.url === input.callbackUrl);
+    const body = JSON.stringify({
+      url: input.callbackUrl,
+      signing_token: input.secret,
+      merge_requests_events: true,
+      enable_ssl_verification: true,
+      name: "ReviewDuck",
+    });
+    const primary = matching[0]
+      ? await providerFetch<GitLabProjectHook>(
+          this.name,
+          `${this.apiUrl}/projects/${project}/hooks/${matching[0].id}`,
+          {
+            method: "PUT",
+            headers: { ...this.headers, "Content-Type": "application/json" },
+            body,
+          },
+        )
+      : await providerFetch<GitLabProjectHook>(
+          this.name,
+          `${this.apiUrl}/projects/${project}/hooks`,
+          {
+            method: "POST",
+            headers: { ...this.headers, "Content-Type": "application/json" },
+            body,
+          },
+        );
     await Promise.all(
-      hooks
-        .filter((hook) => hook.url === input.callbackUrl)
+      matching
+        .slice(1)
         .map((hook) =>
           providerVoid(
             this.name,
@@ -168,6 +170,25 @@ export class GitLabProvider implements PullRequestProvider {
             { method: "DELETE", headers: this.headers },
           ),
         ),
+    );
+    return [String(primary.id)];
+  }
+  /** Removes every matching application hook from a GitLab project. */
+  async removeRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+    remoteHookIds: string[];
+  }) {
+    const project = encodeURIComponent(input.repositoryExternalId);
+    await Promise.all(
+      input.remoteHookIds.map((hookId) =>
+        providerVoid(
+          this.name,
+          `${this.apiUrl}/projects/${project}/hooks/${encodeURIComponent(hookId)}`,
+          { method: "DELETE", headers: this.headers },
+          [404],
+        ),
+      ),
     );
   }
   /** Lists open pull requests for a provider repository. */

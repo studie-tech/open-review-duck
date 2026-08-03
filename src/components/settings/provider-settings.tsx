@@ -346,6 +346,16 @@ export function ProviderSettings({
 
   /** Derives a truthful connection state from the latest provider request. */
   const connectionStatus = (connection: Connection) => {
+    if (connection.credentialStatus !== "active") {
+      return {
+        label:
+          connection.credentialStatus === "suspended"
+            ? "Suspended"
+            : "Reconnect required",
+        tone: "text-coral",
+        dot: "bg-coral",
+      };
+    }
     if (connection.id !== selectedConnectionId) {
       return { label: "Saved", tone: "text-mist", dot: "bg-fog" };
     }
@@ -599,8 +609,9 @@ export function ProviderSettings({
                   />
                   {!localMode && provider === "azure_devops" && (
                     <span className="text-fog text-[10px] leading-4">
-                      Azure DevOps PATs are always limited to the organization
-                      that issued them.
+                      Enter an organization this PAT can access. Add another
+                      connection for each additional organization you want to
+                      review.
                     </span>
                   )}
                 </label>

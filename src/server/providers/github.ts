@@ -185,8 +185,8 @@ export class GitHubProvider implements PullRequestProvider {
    * repositories selected by each installation; creating repository hooks would
    * require broader repository administration permission.
    */
-  async ensureRepositoryWebhook(): Promise<void> {
-    if (!this.installation) return;
+  async ensureRepositoryWebhook(): Promise<string[]> {
+    return [];
   }
   /** GitHub App installation removal automatically stops repository delivery. */
   async removeRepositoryWebhook(): Promise<void> {

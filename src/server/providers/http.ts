@@ -212,6 +212,7 @@ export async function providerVoid(
   provider: ProviderName,
   url: string,
   init: RequestInit,
+  acceptedStatuses: readonly number[] = [],
 ): Promise<void> {
   const response = await requestProvider(url, init);
   if (response.status >= 300 && response.status < 400) {
@@ -222,7 +223,7 @@ export async function providerVoid(
       response.status,
     );
   }
-  if (!response.ok) {
+  if (!response.ok && !acceptedStatuses.includes(response.status)) {
     throw new ProviderError(
       provider,
       await providerFailureMessage(provider, response),

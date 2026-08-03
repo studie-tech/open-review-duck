@@ -95,11 +95,12 @@ export interface PullRequestProvider {
     repositoryExternalId: string;
     callbackUrl: string;
     secret: string;
-  }): Promise<void>;
+  }): Promise<string[]>;
   /** Removes provider events previously registered for this application. */
   removeRepositoryWebhook(input: {
     repositoryExternalId: string;
     callbackUrl: string;
+    remoteHookIds: string[];
   }): Promise<void>;
   /** Lists open pull requests for a provider repository. */
   listOpenPullRequests(

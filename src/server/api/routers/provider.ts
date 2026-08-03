@@ -4,16 +4,21 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   credentialAuditEvents,
   localCredentials,
-  providerPatCredentials,
   providerConnections,
+  providerPatCredentials,
   pullRequests,
   repositories,
   reviewQueueItems,
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { isLocalDeployment } from "~/server/deployment";
+import { createProvider } from "~/server/providers";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
-import { providerForConnection } from "~/server/providers/credentials";
+import {
+  providerForConnection,
+  revokeGitHubInstallation,
+  revokeProviderOAuth,
+} from "~/server/providers/credentials";
 import { exportRepositoryReviewData } from "~/server/providers/export";
 import {
   reconcileRepositoryIntake,
@@ -25,7 +30,10 @@ import {
   sealProviderPat,
 } from "~/server/providers/pat-credential";
 import { ProviderError } from "~/server/providers/types";
-import { createProvider } from "~/server/providers";
+import {
+  ensureProviderWebhook,
+  removeProviderWebhook,
+} from "~/server/providers/webhook-registration";
 import { shouldActivateQueueItem } from "~/server/review/queue-policy";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { assertSafeRemoteUrl } from "~/server/security/remote-url";
@@ -55,6 +63,7 @@ export const providerRouter = createTRPCRouter({
         displayName: providerConnections.displayName,
         baseUrl: providerConnections.baseUrl,
         credentialKind: providerConnections.credentialKind,
+        credentialStatus: providerConnections.credentialStatus,
         createdAt: providerConnections.createdAt,
       })
       .from(providerConnections)
@@ -99,7 +108,9 @@ export const providerRouter = createTRPCRouter({
         );
       }
       const fingerprint = createHash("sha256")
-        .update(`${workspace.id}\0${input.provider}\0${input.accessToken}`)
+        .update(
+          `${workspace.id}\0${input.provider}\0${baseUrl ?? ""}\0${input.accessToken}`,
+        )
         .digest("hex");
       const provider = createProvider(
         input.provider,
@@ -141,6 +152,7 @@ export const providerRouter = createTRPCRouter({
               set: {
                 externalAccountId: identity.externalAccountId,
                 credentialKind: "pat",
+                credentialStatus: "active",
                 displayName: input.displayName ?? identity.displayName,
                 installationId: null,
                 localCredentialId: null,
@@ -178,6 +190,7 @@ export const providerRouter = createTRPCRouter({
             displayName: connection.displayName,
             baseUrl: connection.baseUrl,
             credentialKind: connection.credentialKind,
+            credentialStatus: connection.credentialStatus,
             createdAt: connection.createdAt,
           };
         });
@@ -222,6 +235,7 @@ export const providerRouter = createTRPCRouter({
             provider: input.provider,
             externalAccountId: identity.externalAccountId,
             credentialKind: "local_pat",
+            credentialStatus: "active",
             credentialFingerprint: fingerprint,
             displayName: input.displayName ?? identity.displayName,
             localCredentialId: credential.id,
@@ -237,6 +251,7 @@ export const providerRouter = createTRPCRouter({
               externalAccountId: identity.externalAccountId,
               displayName: input.displayName ?? identity.displayName,
               credentialKind: "local_pat",
+              credentialStatus: "active",
               localCredentialId: credential.id,
               installationId: null,
               baseUrl,
@@ -248,6 +263,7 @@ export const providerRouter = createTRPCRouter({
             displayName: providerConnections.displayName,
             baseUrl: providerConnections.baseUrl,
             credentialKind: providerConnections.credentialKind,
+            credentialStatus: providerConnections.credentialStatus,
             createdAt: providerConnections.createdAt,
           });
         await tx.insert(credentialAuditEvents).values({
@@ -278,29 +294,43 @@ export const providerRouter = createTRPCRouter({
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
       if (!isLocalDeployment() && connection.provider !== "github") {
-        const provider = await providerForConnection(ctx.db, connection);
         const imported = await ctx.db.query.repositories.findMany({
           where: eq(repositories.connectionId, connection.id),
-          columns: { externalId: true },
         });
-        await Promise.allSettled(
-          imported.map((repository) =>
-            provider.removeRepositoryWebhook({
-              repositoryExternalId: repository.externalId,
-              callbackUrl: `${env.APP_URL}/api/webhooks/${connection.provider}`,
-            }),
-          ),
-        );
+        for (const repository of imported) {
+          await removeProviderWebhook(ctx.db, { connection, repository });
+        }
       }
-      const [removed] = await ctx.db
-        .delete(providerConnections)
-        .where(
-          and(
-            eq(providerConnections.id, input.connectionId),
-            eq(providerConnections.workspaceId, workspace.id),
-          ),
-        )
-        .returning({ id: providerConnections.id });
+      if (!isLocalDeployment()) {
+        if (
+          connection.provider === "github" &&
+          connection.credentialKind === "github_app" &&
+          connection.installationId
+        ) {
+          await revokeGitHubInstallation(connection.installationId);
+        }
+        await revokeProviderOAuth(ctx.db, connection);
+      }
+      const removed = await ctx.db.transaction(async (tx) => {
+        await tx.insert(credentialAuditEvents).values({
+          workspaceId: workspace.id,
+          actorId: ctx.auth.userId,
+          credentialId: connection.id,
+          action: "disconnected",
+          provider: connection.provider,
+          metadata: { credentialKind: connection.credentialKind },
+        });
+        const [deleted] = await tx
+          .delete(providerConnections)
+          .where(
+            and(
+              eq(providerConnections.id, input.connectionId),
+              eq(providerConnections.workspaceId, workspace.id),
+            ),
+          )
+          .returning({ id: providerConnections.id });
+        return deleted;
+      });
       if (!removed) throw new TRPCError({ code: "NOT_FOUND" });
       return removed;
     }),
@@ -355,15 +385,6 @@ export const providerRouter = createTRPCRouter({
         ).listRepositories()
       ).find((repository) => repository.externalId === input.externalId);
       if (!remote) throw new TRPCError({ code: "NOT_FOUND" });
-      const provider = await providerForConnection(ctx.db, connection);
-      const existing = await ctx.db.query.repositories.findFirst({
-        where: and(
-          eq(repositories.workspaceId, workspace.id),
-          eq(repositories.connectionId, connection.id),
-          eq(repositories.externalId, remote.externalId),
-        ),
-        columns: { id: true },
-      });
       const [repository] = await ctx.db
         .insert(repositories)
         .values({
@@ -411,41 +432,30 @@ export const providerRouter = createTRPCRouter({
         !isLocalDeployment() &&
         connection.provider !== "github"
       ) {
-        const secret =
-          connection.provider === "gitlab"
-            ? env.GITLAB_WEBHOOK_SECRET
-            : env.AZURE_WEBHOOK_SECRET;
-        if (!secret) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Provider webhook secret is not configured",
-          });
-        }
         try {
-          await provider.ensureRepositoryWebhook({
-            repositoryExternalId: repository.externalId,
-            callbackUrl: `${env.APP_URL}/api/webhooks/${connection.provider}`,
-            secret,
-          });
+          await ensureProviderWebhook(ctx.db, { connection, repository });
+          const [updated] = await ctx.db
+            .update(repositories)
+            .set({ intakeLastError: null })
+            .where(eq(repositories.id, repository.id))
+            .returning();
+          importedRepository = updated ?? repository;
         } catch (cause) {
-          if (connection.credentialKind === "pat") {
-            const [updated] = await ctx.db
-              .update(repositories)
-              .set({
-                intakeLastError:
-                  "Automatic provider notifications could not be enabled with this PAT. Reviews still work; use Check now to fetch updates.",
-              })
-              .where(eq(repositories.id, repository.id))
-              .returning();
-            importedRepository = updated ?? repository;
-          } else {
-            if (!existing) {
-              await ctx.db
-                .delete(repositories)
-                .where(eq(repositories.id, repository.id));
-            }
-            throw cause;
-          }
+          console.error("Provider webhook registration failed", {
+            provider: connection.provider,
+            repositoryId: repository.id,
+            cause,
+          });
+          const [updated] = await ctx.db
+            .update(repositories)
+            .set({
+              reviewIntakeMode: "manual",
+              intakeLastError:
+                "Automatic provider notifications could not be enabled with this account. Reviews still work; use Check now to fetch updates.",
+            })
+            .where(eq(repositories.id, repository.id))
+            .returning();
+          importedRepository = updated ?? repository;
         }
       }
       return importedRepository;
@@ -534,6 +544,13 @@ export const providerRouter = createTRPCRouter({
         where: eq(providerConnections.id, repository.connectionId),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      if (connection.credentialStatus !== "active") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Reconnect this provider before enabling automatic pull-request intake.",
+        });
+      }
       if (input.mode === "assigned" && !supportsAssignedIntake(connection)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -643,6 +660,13 @@ export const providerRouter = createTRPCRouter({
         where: eq(providerConnections.id, repository.connectionId),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      if (input.mode !== "manual" && connection.credentialStatus !== "active") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Reconnect this provider before enabling automatic pull-request intake.",
+        });
+      }
       if (input.mode === "assigned" && !supportsAssignedIntake(connection)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -734,6 +758,11 @@ export const providerRouter = createTRPCRouter({
     .input(repositoryIdSchema)
     .mutation(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      await requireWorkspaceAdministrator(
+        ctx.db,
+        workspace.id,
+        ctx.auth.userId,
+      );
       const repository = await ctx.db.query.repositories.findFirst({
         where: and(
           eq(repositories.id, input.repositoryId),
@@ -746,12 +775,7 @@ export const providerRouter = createTRPCRouter({
           where: eq(providerConnections.id, repository.connectionId),
         });
         if (connection && connection.provider !== "github") {
-          await (
-            await providerForConnection(ctx.db, connection)
-          ).removeRepositoryWebhook({
-            repositoryExternalId: repository.externalId,
-            callbackUrl: `${env.APP_URL}/api/webhooks/${connection.provider}`,
-          });
+          await removeProviderWebhook(ctx.db, { connection, repository });
         }
       }
       const [deleted] = await ctx.db
@@ -771,6 +795,11 @@ export const providerRouter = createTRPCRouter({
     .input(repositoryRetentionSchema)
     .mutation(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      await requireWorkspaceAdministrator(
+        ctx.db,
+        workspace.id,
+        ctx.auth.userId,
+      );
       const [updated] = await ctx.db
         .update(repositories)
         .set({

@@ -6,8 +6,13 @@ import { env } from "~/env";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
 import { normalizeAzureOrganizationUrl } from "~/server/providers/azure-organization-url";
+import { safeOAuthRedirectPath } from "~/server/security/oauth-flow";
+import { enforceRateLimit } from "~/server/security/rate-limit";
 import { sealVaultSecret } from "~/server/security/vault";
-import { ensurePersonalWorkspace } from "~/server/workspaces/service";
+import {
+  ensurePersonalWorkspace,
+  requireWorkspaceAdministrator,
+} from "~/server/workspaces/service";
 
 type HostedProvider = "github" | "gitlab" | "azure_devops";
 
@@ -36,10 +41,18 @@ export async function POST(
     throw new Error("Hosted OAuth is not configured");
   }
   const workspace = await ensurePersonalWorkspace(db, authentication.userId);
+  await requireWorkspaceAdministrator(db, workspace.id, authentication.userId);
+  await enforceRateLimit(
+    db,
+    `provider-oauth-start:${workspace.id}:${authentication.userId}`,
+    10,
+    10 * 60_000,
+  );
   const id = randomUUID();
   const state = await new SignJWT({ workspaceId: workspace.id, provider })
     .setProtectedHeader({ alg: "HS256" })
     .setJti(id)
+    .setSubject(authentication.userId)
     .setIssuer("reviewduck")
     .setAudience("provider-oauth")
     .setIssuedAt()
@@ -81,10 +94,7 @@ export async function POST(
       { workspaceId: workspace.id, recordId: id, provider: "oauth-state" },
       JSON.stringify({ verifier, organizationUrl }),
     ),
-    redirectPath:
-      typeof body.redirectPath === "string" && body.redirectPath.startsWith("/")
-        ? body.redirectPath
-        : "/settings/providers",
+    redirectPath: safeOAuthRedirectPath(body.redirectPath, env.APP_URL),
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
   const callback = `${env.APP_URL}/api/integrations/${provider}/callback`;
@@ -101,7 +111,7 @@ export async function POST(
     authorizationUrl.searchParams.set("client_id", env.GITLAB_CLIENT_ID);
     authorizationUrl.searchParams.set("redirect_uri", callback);
     authorizationUrl.searchParams.set("response_type", "code");
-    authorizationUrl.searchParams.set("scope", "api read_user");
+    authorizationUrl.searchParams.set("scope", "api");
     authorizationUrl.searchParams.set(
       "code_challenge",
       createHash("sha256").update(verifier).digest("base64url"),
@@ -119,7 +129,7 @@ export async function POST(
     authorizationUrl.searchParams.set("response_type", "code");
     authorizationUrl.searchParams.set(
       "scope",
-      "499b84ac-1321-427f-aa17-267ca6975798/user_impersonation offline_access openid profile",
+      "499b84ac-1321-427f-aa17-267ca6975798/user_impersonation offline_access",
     );
     authorizationUrl.searchParams.set(
       "code_challenge",
