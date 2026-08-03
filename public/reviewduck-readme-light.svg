@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 480" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 240" role="img" aria-labelledby="title description">
   <title id="title">ReviewDuck.ai</title>
   <desc id="description">For those of us who still have to review all the AI slop.</desc>
-  <rect x="1" y="1" width="1438" height="478" rx="27" fill="#f7f5ef" stroke="#ded9cf" stroke-width="2"/>
-  <g transform="translate(130 126) scale(1.9)">
+  <rect x="1" y="1" width="1438" height="238" rx="19" fill="#f7f5ef" stroke="#ded9cf" stroke-width="2"/>
+  <g transform="translate(130 16) scale(1.9)">
     <rect x="6" y="30" width="72" height="66" rx="13" fill="#31bfea"/>
     <rect x="44" y="18" width="70" height="66" rx="13" fill="#df6545"/>
     <path d="M18 49h20M18 59h13M18 69h18" fill="none" stroke="#2c241f" stroke-linecap="round" stroke-width="5"/>
@@ -10,6 +10,6 @@
     <path d="M70 42c0-10-8-18-18-18s-18 8-18 18c0 6 3 11 7 14-10 4-17 12-17 22 0 13 11 22 27 22h13c14 0 24-9 24-21 0-10-7-18-17-22 8-1 16-5 22-11-7-3-15-5-23-4Z" fill="#fffaf0"/>
     <circle cx="56" cy="38" r="3.5" fill="#2c241f"/>
   </g>
-  <text x="420" y="224" fill="#191c1e" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="94" font-weight="750" letter-spacing="-4">ReviewDuck.ai</text>
-  <text x="425" y="292" fill="#645d57" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="32" font-weight="450" letter-spacing="-.4">For those of us who still have to review all the AI slop.</text>
+  <text x="420" y="114" fill="#191c1e" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="94" font-weight="750" letter-spacing="-4">ReviewDuck.ai</text>
+  <text x="425" y="182" fill="#645d57" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="32" font-weight="450" letter-spacing="-.4">For those of us who still have to review all the AI slop.</text>
 </svg>
