@@ -147,6 +147,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [verify, local-container]
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 45
     permissions:
       contents: read

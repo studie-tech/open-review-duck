@@ -1,0 +1,9 @@
+# The maintainer reviews changes across the repository. Keep explicit entries
+# for security, release, and automation surfaces so ownership remains visible if
+# more granular ownership is added later.
+* @MathiasGruber
+/.github/ @MathiasGruber
+/Dockerfile @MathiasGruber
+/SECURITY.md @MathiasGruber
+/src/server/security/ @MathiasGruber
+/src/server/providers/ @MathiasGruber
