@@ -17,7 +17,8 @@ ENV DEPLOYMENT_MODE=local
 ENV SKIP_ENV_VALIDATION=1
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL=postgresql://reviewduck:build-only@localhost/reviewduck
-RUN pnpm build
+RUN ENCRYPTION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
+    pnpm build
 
 FROM dependencies AS workflow-runtime
 COPY docker/workflow-runtime/package.json ./docker/workflow-runtime/package.json
