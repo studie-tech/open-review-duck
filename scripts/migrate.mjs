@@ -23,7 +23,13 @@ await client.connect();
 try {
   await client.query("select pg_advisory_lock($1)", [1_683_524_535]);
   const migrations = readMigrationFiles({ migrationsFolder: "./drizzle" });
-  if (await upgradeLegacyDatabase(client, migrations)) {
+  let upgradedLegacyDatabase = false;
+  try {
+    upgradedLegacyDatabase = await upgradeLegacyDatabase(client, migrations);
+  } catch (cause) {
+    throw new Error("Legacy database schema upgrade failed", { cause });
+  }
+  if (upgradedLegacyDatabase) {
     process.stdout.write("Legacy database schema upgraded.\n");
   }
   await migrate(drizzle(client), { migrationsFolder: "./drizzle" });

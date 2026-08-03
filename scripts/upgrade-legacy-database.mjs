@@ -3,6 +3,7 @@ const FIRST_PASS_SKIPPABLE_CODES = new Set([
   ...DUPLICATE_OBJECT_CODES,
   "42703",
 ]);
+const LEGACY_UPGRADE_LOCK_KEY = 4_182_339_001;
 
 /** Returns whether a table or column from the pre-platform schema is present. */
 async function legacySchemaDetected(client, baseline) {
@@ -90,8 +91,6 @@ async function addLegacyColumns(client) {
       add column if not exists "credentialKind" varchar(32) default 'local_pat' not null,
       add column if not exists "installationId" text,
       add column if not exists "localCredentialId" uuid;
-    alter table "open_review_duck_provider_connection"
-      alter column "credentialFingerprint" drop not null;
 
     alter table "open_review_duck_repository"
       add column if not exists "workspaceId" uuid,
@@ -107,8 +106,6 @@ async function addLegacyColumns(client) {
     from "open_review_duck_provider_connection" connection
     where repository."connectionId" = connection."id"
       and repository."workspaceId" is null;
-    alter table "open_review_duck_repository"
-      alter column "workspaceId" set not null;
 
     alter table "open_review_duck_review_unit"
       add column if not exists "snapshotFileId" uuid,
@@ -119,6 +116,46 @@ async function addLegacyColumns(client) {
       add column if not exists "previousStartByte" integer,
       add column if not exists "previousEndByte" integer,
       add column if not exists "relatedRanges" jsonb;
+  `);
+
+  if (
+    await columnExists(
+      client,
+      "open_review_duck_provider_connection",
+      "credentialFingerprint",
+    )
+  ) {
+    await client.query(`
+      alter table "open_review_duck_provider_connection"
+        alter column "credentialFingerprint" drop not null;
+    `);
+  }
+
+  const unresolvedRepositories = await client.query(`
+    select
+      "id",
+      "connectionId",
+      (count(*) over ())::integer as "unresolvedCount"
+    from "open_review_duck_repository"
+    where "workspaceId" is null
+    order by "id"
+    limit 10
+  `);
+  if (unresolvedRepositories.rows.length > 0) {
+    const count = unresolvedRepositories.rows[0].unresolvedCount;
+    const examples = unresolvedRepositories.rows
+      .map(
+        ({ id, connectionId }) =>
+          `${id} (connection ${connectionId ?? "missing"})`,
+      )
+      .join(", ");
+    throw new Error(
+      `Legacy database schema upgrade found ${count} repositories without a workspace: ${examples}`,
+    );
+  }
+  await client.query(`
+    alter table "open_review_duck_repository"
+      alter column "workspaceId" set not null;
   `);
 }
 
@@ -157,16 +194,30 @@ async function migrateLegacyRows(client) {
     `);
   }
 
-  await client.query(`
-    insert into "open_review_duck_ai_preference" (
-      "workspaceId",
-      "mode",
-      "reviewPullRequests"
-    )
-    select "id", "aiMode", "aiReviewEnabled"
-    from "open_review_duck_workspace"
-    on conflict ("workspaceId") do nothing;
+  const hasLegacyAiPreferences =
+    (await columnExists(client, "open_review_duck_workspace", "aiMode")) &&
+    (await columnExists(
+      client,
+      "open_review_duck_workspace",
+      "aiReviewEnabled",
+    ));
+  if (hasLegacyAiPreferences) {
+    await client.query(`
+      insert into "open_review_duck_ai_preference" (
+        "workspaceId",
+        "mode",
+        "reviewPullRequests"
+      )
+      select "id", "aiMode", "aiReviewEnabled"
+      from "open_review_duck_workspace"
+      on conflict ("workspaceId") do nothing;
+    `);
+  }
 
+  // The legacy dashboard showed every open or draft pull request to every
+  // workspace member. Seed exactly those users so the new personal queue keeps
+  // the previous dashboard behavior without surfacing completed pull requests.
+  await client.query(`
     insert into "open_review_duck_review_queue_item" (
       "pullRequestId",
       "userId",
@@ -179,6 +230,7 @@ async function migrateLegacyRows(client) {
       on repository."id" = pull_request."repositoryId"
     inner join "open_review_duck_workspace_member" member
       on member."workspaceId" = repository."workspaceId"
+    where pull_request."state" in ('open', 'draft')
     on conflict ("pullRequestId", "userId") do nothing;
   `);
 }
@@ -196,6 +248,13 @@ export async function upgradeLegacyDatabase(
 
   await client.query("begin");
   try {
+    await client.query("select pg_advisory_xact_lock($1)", [
+      LEGACY_UPGRADE_LOCK_KEY,
+    ]);
+    if (!(await legacySchemaDetected(client, baseline))) {
+      await client.query("rollback");
+      return false;
+    }
     await applyBaselinePass(client, baseline, FIRST_PASS_SKIPPABLE_CODES);
     await addLegacyColumns(client);
     await migrateLegacyRows(client);
@@ -213,7 +272,11 @@ export async function upgradeLegacyDatabase(
     await client.query(dryRun ? "rollback" : "commit");
     return true;
   } catch (error) {
-    await client.query("rollback");
+    try {
+      await client.query("rollback");
+    } catch {
+      // Keep the upgrade failure as the actionable cause.
+    }
     throw error;
   }
 }

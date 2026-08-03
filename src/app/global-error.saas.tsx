@@ -23,7 +23,7 @@ export default function GlobalError({
         <RecoveryError
           backHref="/"
           backLabel="Back to home"
-          description="The data connection may still be waking up or temporarily unavailable. Your saved reviews and settings are safe."
+          description="An unexpected error prevented your workspace from loading. Try again or return home."
           error={error}
           eyebrow="ReviewDuck temporarily unavailable"
           logLabel="Application failed to load"

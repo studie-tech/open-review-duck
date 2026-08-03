@@ -18,7 +18,7 @@ export default function LocalGlobalError({
         <RecoveryError
           backHref="/"
           backLabel="Back to home"
-          description="The local data service may still be starting or temporarily unavailable. Your saved reviews and settings are safe."
+          description="An unexpected error prevented your workspace from loading. Try again or return home."
           error={error}
           eyebrow="ReviewDuck temporarily unavailable"
           logLabel="Local application failed to load"
