@@ -1,7 +1,10 @@
 import "server-only";
 
+import { createPrivateKey } from "node:crypto";
 import { env } from "~/env";
 import type { DeploymentMode } from "~/lib/deployment";
+
+let deploymentConfigurationValidated = false;
 
 /** Returns the explicitly configured application deployment mode. */
 export function deploymentMode(): DeploymentMode {
@@ -13,9 +16,16 @@ export function isLocalDeployment() {
   return deploymentMode() === "local";
 }
 
-/** Fails early when SaaS mode is missing mandatory platform configuration. */
-export function assertSaasConfigured() {
-  if (isLocalDeployment()) return;
+/** Fails early when the selected deployment is missing mandatory configuration. */
+export function assertDeploymentConfigured() {
+  if (deploymentConfigurationValidated) return;
+  if (!env.ENCRYPTION_KEY) {
+    throw new Error("Deployment is missing required ENCRYPTION_KEY");
+  }
+  if (isLocalDeployment()) {
+    deploymentConfigurationValidated = true;
+    return;
+  }
   const missing = [
     ["APP_URL", env.APP_URL],
     ["MIGRATION_DATABASE_URL", env.MIGRATION_DATABASE_URL],
@@ -27,8 +37,6 @@ export function assertSaasConfigured() {
     ["CLERK_WEBHOOK_SIGNING_SECRET", env.CLERK_WEBHOOK_SIGNING_SECRET],
     ["UPLOADTHING_TOKEN", env.UPLOADTHING_TOKEN],
     ["STORAGE_ID_KEY", env.STORAGE_ID_KEY],
-    ["KMS_KEY_ID", env.KMS_KEY_ID],
-    ["AWS_KMS_ROLE_ARN", env.AWS_KMS_ROLE_ARN],
     ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
     ["OPENROUTER_MANAGEMENT_KEY", env.OPENROUTER_MANAGEMENT_KEY],
     ["OPENROUTER_MODEL_ALLOWLIST", env.OPENROUTER_MODEL_ALLOWLIST],
@@ -39,14 +47,14 @@ export function assertSaasConfigured() {
     ["OAUTH_STATE_SECRET", env.OAUTH_STATE_SECRET],
     ["GITHUB_APP_ID", env.GITHUB_APP_ID],
     ["GITHUB_APP_SLUG", env.GITHUB_APP_SLUG],
+    ["GITHUB_APP_CLIENT_ID", env.GITHUB_APP_CLIENT_ID],
+    ["GITHUB_APP_CLIENT_SECRET", env.GITHUB_APP_CLIENT_SECRET],
     ["GITHUB_APP_PRIVATE_KEY", env.GITHUB_APP_PRIVATE_KEY],
     ["GITHUB_WEBHOOK_SECRET", env.GITHUB_WEBHOOK_SECRET],
     ["GITLAB_CLIENT_ID", env.GITLAB_CLIENT_ID],
     ["GITLAB_CLIENT_SECRET", env.GITLAB_CLIENT_SECRET],
-    ["GITLAB_WEBHOOK_SECRET", env.GITLAB_WEBHOOK_SECRET],
     ["AZURE_ENTRA_CLIENT_ID", env.AZURE_ENTRA_CLIENT_ID],
     ["AZURE_ENTRA_CLIENT_SECRET", env.AZURE_ENTRA_CLIENT_SECRET],
-    ["AZURE_WEBHOOK_SECRET", env.AZURE_WEBHOOK_SECRET],
     ["CRON_SECRET", env.CRON_SECRET],
     ["SENTRY_DSN", env.SENTRY_DSN],
     ["NEXT_PUBLIC_SENTRY_DSN", env.NEXT_PUBLIC_SENTRY_DSN],
@@ -71,7 +79,18 @@ export function assertSaasConfigured() {
   if (new URL(env.APP_URL).protocol !== "https:") {
     throw new Error("SaaS APP_URL must use HTTPS");
   }
-  if (env.KMS_REGION !== "eu-central-1") {
-    throw new Error("SaaS KMS must be colocated in eu-central-1");
+  let githubKey: ReturnType<typeof createPrivateKey>;
+  try {
+    githubKey = createPrivateKey(
+      env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n") ?? "",
+    );
+  } catch (cause) {
+    throw new Error("GITHUB_APP_PRIVATE_KEY is not a readable private key", {
+      cause,
+    });
   }
+  if (githubKey.asymmetricKeyType !== "rsa") {
+    throw new Error("GITHUB_APP_PRIVATE_KEY must be an RSA private key");
+  }
+  deploymentConfigurationValidated = true;
 }

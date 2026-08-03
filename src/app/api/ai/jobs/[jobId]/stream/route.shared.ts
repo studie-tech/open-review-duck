@@ -84,7 +84,6 @@ export async function GET(
             await Promise.all(
               precedingChunks.map((chunk) =>
                 openVaultSecret(
-                  db,
                   {
                     workspaceId: job.workspaceId,
                     recordId: chunk.id,
@@ -108,7 +107,6 @@ export async function GET(
           });
           for (const chunk of chunks) {
             text += await openVaultSecret(
-              db,
               {
                 workspaceId: job.workspaceId,
                 recordId: chunk.id,

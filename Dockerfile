@@ -3,7 +3,7 @@
 FROM node:24-bookworm-slim AS node-base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@11.14.0 --activate
+RUN corepack enable && corepack prepare pnpm@11.18.0 --activate
 WORKDIR /app
 
 FROM node-base AS dependencies
@@ -17,7 +17,8 @@ ENV DEPLOYMENT_MODE=local
 ENV SKIP_ENV_VALIDATION=1
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL=postgresql://reviewduck:build-only@localhost/reviewduck
-RUN pnpm build
+RUN ENCRYPTION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
+    pnpm build
 
 FROM dependencies AS workflow-runtime
 COPY docker/workflow-runtime/package.json ./docker/workflow-runtime/package.json
@@ -57,6 +58,7 @@ COPY --from=build --chown=reviewduck:reviewduck /app/scripts/migrate.mjs ./scrip
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/latest-migration-hash.mjs ./scripts/latest-migration-hash.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/setup-workflow.mjs ./scripts/setup-workflow.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-bootstrap.mjs ./scripts/local-bootstrap.mjs
+COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-bootstrap-output.mjs ./scripts/local-bootstrap-output.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-admin.mjs ./scripts/local-admin.mjs
 COPY --chown=root:root docker/local-entrypoint.sh /usr/local/bin/reviewduck-local
 

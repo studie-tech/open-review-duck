@@ -29,6 +29,11 @@ const config = {
   ],
   productionBrowserSourceMaps: false,
   serverExternalPackages: ["web-tree-sitter"],
+  turbopack: {
+    resolveAlias: {
+      "reviewduck-deployment-proxy": `./src/server/request-proxy.${deploymentMode}.ts`,
+    },
+  },
   webpack(webpackConfig) {
     webpackConfig.resolve.alias = {
       ...webpackConfig.resolve.alias,
@@ -41,7 +46,6 @@ const config = {
     if (deploymentMode === "local") {
       webpackConfig.resolve.alias = {
         ...webpackConfig.resolve.alias,
-        "@aws-sdk/client-kms$": false,
         "@clerk/nextjs$": false,
         "@clerk/nextjs/server$": false,
         "@sentry/nextjs$": false,

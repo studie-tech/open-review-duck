@@ -7,7 +7,10 @@ import { redirect } from "next/navigation";
 import { localSessions } from "@/drizzle/schema";
 import { LOCAL_SESSION_COOKIE } from "~/lib/deployment";
 import { db } from "~/server/db";
-import { assertSaasConfigured, isLocalDeployment } from "~/server/deployment";
+import {
+  assertDeploymentConfigured,
+  isLocalDeployment,
+} from "~/server/deployment";
 import { setSentryUser } from "~/server/observability/sentry";
 
 export interface ApplicationAuth {
@@ -17,6 +20,7 @@ export interface ApplicationAuth {
 
 /** Resolves either Clerk authorization or the isolated local identity. */
 export async function applicationAuth(): Promise<ApplicationAuth> {
+  assertDeploymentConfigured();
   if (isLocalDeployment()) {
     const token = (await cookies()).get(LOCAL_SESSION_COOKIE)?.value;
     if (!token) return { userId: null, has: () => false };
@@ -30,7 +34,6 @@ export async function applicationAuth(): Promise<ApplicationAuth> {
     });
     return { userId: session?.userId ?? null, has: () => false };
   }
-  assertSaasConfigured();
   const { auth } = await import("@clerk/nextjs/server");
   const authentication = await auth();
   await setSentryUser(authentication.userId);
@@ -42,6 +45,7 @@ export async function applicationAuth(): Promise<ApplicationAuth> {
 
 /** Protects a route in SaaS mode; local routes use the local session adapter. */
 export async function protectApplicationRoute() {
+  assertDeploymentConfigured();
   if (isLocalDeployment()) {
     const local = await applicationAuth();
     if (!local.userId) {
@@ -49,7 +53,6 @@ export async function protectApplicationRoute() {
     }
     return;
   }
-  assertSaasConfigured();
   const { auth } = await import("@clerk/nextjs/server");
   await auth.protect();
 }

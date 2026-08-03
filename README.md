@@ -14,9 +14,9 @@ related edits into review units and starts with the code that other changes
 depend on. Sign-offs survive new commits when the code you reviewed has not
 changed, so an updated pull request does not send you back to the beginning.
 
-It works with GitHub, GitLab, and Azure DevOps. You can comment, approve,
-request changes, and keep the provider's review state in sync from the same
-screen.
+It works with GitHub, GitLab, and Azure DevOps. You can comment, approve, make
+the other review decisions supported by your provider, and keep its review
+state in sync from the same screen.
 
 Use the hosted app at [reviewduck.ai](https://reviewduck.ai), or run the local
 appliance below.
@@ -28,19 +28,38 @@ workflows, Tree-sitter grammars, and private file storage. You do not need an
 account, an `.env` file, or a separate database.
 
 ```bash
+export REVIEWDUCK_IMAGE=ghcr.io/studie-tech/open-review-duck:latest
+
+docker run --rm --tty \
+  --name open-review-duck \
+  -p 127.0.0.1:3000:3000 \
+  -v open-review-duck-data:/data \
+  "$REVIEWDUCK_IMAGE"
+```
+
+The command prints a highlighted, clickable owner link. Open it within 15
+minutes and keep this terminal open while you use ReviewDuck. Press `Ctrl+C` to
+stop it. The container is removed automatically, while your session, reviews,
+credentials, source files, and backups stay in the Docker volume for the next
+run.
+
+To keep the appliance running after the terminal closes and restart it with the
+host, use the background form instead:
+
+```bash
 docker run --detach \
   --name open-review-duck \
   --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
   -v open-review-duck-data:/data \
-  ghcr.io/studie-tech/open-review-duck:latest
+  "$REVIEWDUCK_IMAGE"
 
-docker logs --follow open-review-duck
+docker logs open-review-duck
 ```
 
-The first boot prints a one-time owner link. Open that link within 15 minutes,
-then go to [http://localhost:3000](http://localhost:3000). Your session, reviews,
-credentials, source files, and backups stay in the Docker volume.
+The first start prints the owner link to the logs. Later restarts preserve the
+existing session without minting another owner link. Generate a fresh link with
+the administration command below when you need to authorize another browser.
 
 Keep the port bound to `127.0.0.1`. The local appliance is meant to run on the
 same machine as your browser and rejects non-loopback hosts.
@@ -53,6 +72,10 @@ digest from the [releases](https://github.com/studie-tech/open-review-duck/relea
 Open Settings, add a connection, and follow the permission guide shown for your
 provider. Local credentials are encrypted before they are written to the data
 volume.
+
+On the hosted service, GitHub App and OAuth connections are the easiest option.
+If your organization does not allow application authorization, you can instead
+use an encrypted personal access token with GitHub, GitLab, or Azure DevOps.
 
 - GitHub needs a fine-grained token with read access to repository contents and
   read/write access to pull requests.
@@ -82,7 +105,7 @@ relationships. ReviewDuck uses those links to place foundational changes before
 the code that depends on them. Related edits and removals can appear together
 when the relationship is clear enough.
 
-There are 62 bundled language grammars, including SQL. The current list lives in
+There are 63 bundled language grammars, including SQL. The current list lives in
 [`tree-sitter-languages.json`](./tree-sitter-languages.json). Grammars load only
 when a file needs them, and browser parsing runs in a worker so large diffs do
 not block the review screen.
@@ -106,22 +129,24 @@ Local installations can use Ollama, a local OpenAI-compatible server, or a
 supported provider with your own key. Those settings and credentials remain
 encrypted on the local volume.
 
-Big Pickle is also available as an optional free model. Before the first request,
-ReviewDuck explains that selected source and prompts are sent to OpenCode's US
-infrastructure and may be used for model improvement. It stays off until you
-accept that disclosure. If the free model becomes unavailable or requires an
-account, ReviewDuck disables it instead of selecting a paid model.
+Big Pickle is also available through your own OpenCode Zen API key and is free
+for a limited time. Before the first request, ReviewDuck explains that selected
+source and prompts are sent to OpenCode's US infrastructure and may be used for
+model improvement. It stays off until you accept that disclosure. If the free
+model becomes unavailable, ReviewDuck does not select a paid model in its
+place.
 
 ## Back up and upgrade
 
-The appliance provides a small set of administration commands:
+The appliance provides a small set of administration commands. Run them in a
+second terminal while ReviewDuck is running:
 
 ```bash
 # Check the application, database, worker, disk, and migration state
 docker exec open-review-duck reviewduck-local admin status
 
 # Revoke local sessions and print a new one-time owner link
-docker exec open-review-duck reviewduck-local admin bootstrap
+docker exec --tty open-review-duck reviewduck-local admin bootstrap
 
 # Create and verify a database backup
 docker exec open-review-duck reviewduck-local admin backup
@@ -135,16 +160,17 @@ When a new image contains schema changes, ReviewDuck creates and verifies a
 backup before applying them. The three most recent automatic upgrade backups
 are kept in the data volume.
 
-To restore a backup, stop the appliance and run the same image in administration
-mode:
+To restore a backup, stop the appliance with `Ctrl+C` and run the same image in
+administration mode against its data volume:
 
 ```bash
-docker stop open-review-duck
-docker run --rm --volumes-from open-review-duck \
-  ghcr.io/studie-tech/open-review-duck:latest \
+docker run --rm \
+  -v open-review-duck-data:/data \
+  "$REVIEWDUCK_IMAGE" \
   admin restore /data/backups/<backup>.dump
-docker start open-review-duck
 ```
+
+Start ReviewDuck again with the normal command after the restore completes.
 
 ## Develop ReviewDuck
 

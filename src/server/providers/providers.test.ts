@@ -8,7 +8,10 @@ vi.mock("~/server/security/remote-url", () => ({
     globalThis.fetch(url, init),
 }));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 /** Stubs fetch with a successful JSON response for provider tests. */
 function mockJson(body: unknown) {
@@ -187,13 +190,7 @@ describe("provider normalization", () => {
       .mockResolvedValueOnce(
         jsonResponse({ id: 91, url: "https://app.test/hook" }),
       )
-      .mockResolvedValueOnce(
-        jsonResponse([
-          { id: 91, url: "https://app.test/hook" },
-          { id: 92, url: "https://other.test/hook" },
-        ]),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
     const provider = new GitLabProvider("token");
 
@@ -205,17 +202,48 @@ describe("provider normalization", () => {
     await provider.removeRepositoryWebhook({
       repositoryExternalId: "42",
       callbackUrl: "https://app.test/hook",
+      remoteHookIds: ["91"],
     });
 
     const create = fetchMock.mock.calls[1];
     expect(create?.[1]).toMatchObject({ method: "POST" });
     expect(JSON.parse(String(create?.[1]?.body))).toMatchObject({
-      token: "signed-secret",
+      signing_token: "signed-secret",
       merge_requests_events: true,
       enable_ssl_verification: true,
     });
-    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "DELETE" });
-    expect(requestUrl(fetchMock.mock.calls[3]?.[0])).toContain("/hooks/91");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toContain("/hooks/91");
+  });
+
+  it("keeps a working GitLab hook when duplicate cleanup fails", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { id: 91, url: "https://app.test/hook" },
+          { id: 92, url: "https://app.test/hook" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ id: 91, url: "https://app.test/hook" }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitLabProvider("token").ensureRepositoryWebhook({
+        repositoryExternalId: "42",
+        callbackUrl: "https://app.test/hook",
+        secret: "signed-secret",
+      }),
+    ).resolves.toEqual(["91"]);
+
+    expect(warning).toHaveBeenCalledWith(
+      "Duplicate GitLab webhook cleanup failed",
+      expect.objectContaining({ hookId: 92 }),
+    );
   });
 
   it("creates the three required Azure pull-request service hooks", async () => {
@@ -252,6 +280,88 @@ describe("provider normalization", () => {
         basicAuthPassword: "signed-secret",
       });
     }
+  });
+
+  it("replaces disabled Azure subscriptions instead of reusing them", async () => {
+    const callbackUrl = "https://app.test/api/webhooks/azure_devops";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          value: [
+            {
+              id: "created-active",
+              status: "enabled",
+              eventType: "git.pullrequest.created",
+              consumerInputs: { url: callbackUrl },
+              publisherInputs: { repository: "repository" },
+            },
+            {
+              id: "updated-probation",
+              status: "onProbation",
+              eventType: "git.pullrequest.updated",
+              consumerInputs: { url: callbackUrl },
+              publisherInputs: { repository: "repository" },
+            },
+            {
+              id: "merged-disabled",
+              status: "disabledBySystem",
+              eventType: "git.pullrequest.merged",
+              consumerInputs: { url: callbackUrl },
+              publisherInputs: { repository: "repository" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "merged-replacement" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new AzureDevOpsProvider(
+        "token",
+        "https://dev.azure.com/acme",
+      ).ensureRepositoryWebhook({
+        repositoryExternalId: "repository",
+        callbackUrl,
+        secret: "signed-secret",
+      }),
+    ).resolves.toEqual([
+      "created-active",
+      "updated-probation",
+      "merged-replacement",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)),
+    ).toMatchObject({
+      eventType: "git.pullrequest.merged",
+    });
+  });
+
+  it("removes only recorded Azure service hooks and tolerates missing hooks", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).removeRepositoryWebhook({
+      repositoryExternalId: "repository",
+      callbackUrl: "https://app.test/api/webhooks/azure_devops?hook=opaque",
+      remoteHookIds: ["first", "second"],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/subscriptions/first?",
+    );
+    expect(requestUrl(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/subscriptions/second?",
+    );
   });
 
   it("follows GitHub Link pagination without guessing a page limit", async () => {

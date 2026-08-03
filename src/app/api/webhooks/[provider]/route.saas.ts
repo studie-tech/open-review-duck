@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -11,47 +10,44 @@ import {
 import { env } from "~/env";
 import { db } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
+import {
+  applyGitHubLifecycleEvent,
+  isGitHubLifecycleEvent,
+} from "~/server/providers/github-lifecycle";
 import { supportsAssignedIntake } from "~/server/providers/intake-policy";
+import { providerWebhookTarget } from "~/server/providers/webhook-registration";
+import {
+  boundedWebhookBody,
+  verifyAzureWebhook,
+  verifyGitHubWebhook,
+  verifyGitLabWebhook,
+} from "~/server/providers/webhook-security";
+import { githubInstallationId } from "~/server/security/oauth-flow";
 import { startPullRequestSync } from "~/server/workflows/service";
 
 type HostedProvider = "github" | "gitlab" | "azure_devops";
 
-/** Compares webhook authenticators without timing-dependent early exits. */
-function safeEqual(left: string, right: string) {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 /** Verifies the provider-specific signature before payload parsing. */
-function verify(provider: HostedProvider, request: Request, body: Uint8Array) {
+function verify(
+  provider: HostedProvider,
+  request: Request,
+  body: Uint8Array,
+  registeredSecret?: string,
+) {
   if (provider === "github") {
-    if (!env.GITHUB_WEBHOOK_SECRET) return false;
-    const expected = `sha256=${createHmac("sha256", env.GITHUB_WEBHOOK_SECRET)
-      .update(body)
-      .digest("hex")}`;
-    return safeEqual(
-      request.headers.get("x-hub-signature-256") ?? "",
-      expected,
+    return Boolean(
+      env.GITHUB_WEBHOOK_SECRET &&
+        verifyGitHubWebhook(env.GITHUB_WEBHOOK_SECRET, request.headers, body),
     );
   }
   if (provider === "gitlab") {
     return Boolean(
-      env.GITLAB_WEBHOOK_SECRET &&
-        safeEqual(
-          request.headers.get("x-gitlab-token") ?? "",
-          env.GITLAB_WEBHOOK_SECRET,
-        ),
+      registeredSecret &&
+        verifyGitLabWebhook(registeredSecret, request.headers, body),
     );
   }
   return Boolean(
-    env.AZURE_WEBHOOK_SECRET &&
-      safeEqual(
-        request.headers.get("authorization") ?? "",
-        `Basic ${Buffer.from(`reviewduck:${env.AZURE_WEBHOOK_SECRET}`).toString(
-          "base64",
-        )}`,
-      ),
+    registeredSecret && verifyAzureWebhook(registeredSecret, request.headers),
   );
 }
 
@@ -62,10 +58,8 @@ function deliveryIdentity(
   payload: unknown,
 ) {
   if (provider === "github") return request.headers.get("x-github-delivery");
-  if (provider === "gitlab") return request.headers.get("x-gitlab-event-uuid");
-  return (
-    request.headers.get("x-vss-activityid") ?? azurePayload.parse(payload).id
-  );
+  if (provider === "gitlab") return request.headers.get("webhook-id");
+  return azurePayload.parse(payload).id;
 }
 
 /** Returns the provider's event-kind header. */
@@ -76,9 +70,7 @@ function eventName(
 ) {
   if (provider === "github") return request.headers.get("x-github-event");
   if (provider === "gitlab") return request.headers.get("x-gitlab-event");
-  return (
-    request.headers.get("x-vss-event") ?? azurePayload.parse(payload).eventType
-  );
+  return azurePayload.parse(payload).eventType;
 }
 
 const githubPayload = z.object({
@@ -87,6 +79,7 @@ const githubPayload = z.object({
   pull_request: z
     .object({ number: z.number(), updated_at: z.string().datetime() })
     .optional(),
+  installation: z.object({ id: z.union([z.string(), z.number()]) }),
 });
 const gitlabPayload = z.object({
   project: z.object({ id: z.union([z.string(), z.number()]) }),
@@ -96,8 +89,8 @@ const gitlabPayload = z.object({
   }),
 });
 const azurePayload = z.object({
-  id: z.string().min(1),
-  eventType: z.string().min(1),
+  id: z.string().min(1).max(200),
+  eventType: z.string().min(1).max(120),
   createdDate: z.string().datetime(),
   resource: z.object({
     pullRequestId: z.number(),
@@ -109,7 +102,51 @@ const azurePayload = z.object({
 function supportedEvent(provider: HostedProvider, event: string) {
   if (provider === "github") return event === "pull_request";
   if (provider === "gitlab") return event === "Merge Request Hook";
-  return event.startsWith("git.pullrequest.");
+  return [
+    "git.pullrequest.created",
+    "git.pullrequest.updated",
+    "git.pullrequest.merged",
+  ].includes(event);
+}
+
+/** Claims one delivery identity, allowing an explicitly failed attempt to retry. */
+async function claimDelivery(
+  provider: HostedProvider,
+  deliveryId: string,
+  event: string,
+) {
+  let [delivery] = await db
+    .insert(webhookDeliveries)
+    .values({
+      provider,
+      deliveryId,
+      event,
+      expiresAt: new Date(Date.now() + 7 * 86_400_000),
+    })
+    .onConflictDoNothing({
+      target: [webhookDeliveries.provider, webhookDeliveries.deliveryId],
+    })
+    .returning();
+  if (delivery) return delivery;
+  const failed = await db.query.webhookDeliveries.findFirst({
+    where: and(
+      eq(webhookDeliveries.provider, provider),
+      eq(webhookDeliveries.deliveryId, deliveryId),
+      eq(webhookDeliveries.status, "failed"),
+    ),
+  });
+  if (!failed) return undefined;
+  [delivery] = await db
+    .update(webhookDeliveries)
+    .set({ status: "received", error: null, processedAt: null })
+    .where(
+      and(
+        eq(webhookDeliveries.id, failed.id),
+        eq(webhookDeliveries.status, "failed"),
+      ),
+    )
+    .returning();
+  return delivery;
 }
 
 /** Extracts and validates provider event time for stale-delivery rejection. */
@@ -156,11 +193,21 @@ export async function POST(
     return new NextResponse(null, { status: 404 });
   }
   const provider = rawProvider as HostedProvider;
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > 2 * 1024 * 1024) {
+  const hookId = new URL(request.url).searchParams.get("hook");
+  const registeredHookId =
+    hookId && z.uuid().safeParse(hookId).success ? hookId : undefined;
+  const registeredTarget =
+    provider === "github" || !registeredHookId
+      ? undefined
+      : await providerWebhookTarget(db, provider, registeredHookId);
+  if (provider !== "github" && !registeredTarget) {
+    return new NextResponse(null, { status: 404 });
+  }
+  const bytes = await boundedWebhookBody(request, 2 * 1024 * 1024);
+  if (!bytes) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
-  if (!verify(provider, request, bytes)) {
+  if (!verify(provider, request, bytes, registeredTarget?.secret)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
   let payload: unknown;
@@ -169,51 +216,83 @@ export async function POST(
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const deliveryId = deliveryIdentity(provider, request, payload);
-  const event = eventName(provider, request, payload);
-  if (!deliveryId || !event) {
+  let deliveryId: string | null;
+  let event: string | null;
+  try {
+    deliveryId = deliveryIdentity(provider, request, payload);
+    event = eventName(provider, request, payload);
+  } catch {
+    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  }
+  if (!deliveryId || deliveryId.length > 200 || !event || event.length > 120) {
     return NextResponse.json(
-      { error: "Delivery identity is missing" },
+      { error: "Delivery identity is missing or invalid" },
       { status: 400 },
     );
   }
-  if (!supportedEvent(provider, event)) {
+  if (
+    provider === "azure_devops" &&
+    request.headers.has("x-vss-event") &&
+    request.headers.get("x-vss-event") !== event
+  ) {
+    return NextResponse.json(
+      { error: "Event identity mismatch" },
+      { status: 400 },
+    );
+  }
+  const lifecycle = provider === "github" && isGitHubLifecycleEvent(event);
+  if (!supportedEvent(provider, event) && !lifecycle) {
     return NextResponse.json({ ignored: true }, { status: 202 });
   }
-  let [delivery] = await db
-    .insert(webhookDeliveries)
-    .values({
-      provider,
-      deliveryId,
-      event,
-      expiresAt: new Date(Date.now() + 7 * 86_400_000),
-    })
-    .onConflictDoNothing({
-      target: [webhookDeliveries.provider, webhookDeliveries.deliveryId],
-    })
-    .returning();
-  if (!delivery) {
-    const failed = await db.query.webhookDeliveries.findFirst({
-      where: and(
-        eq(webhookDeliveries.provider, provider),
-        eq(webhookDeliveries.deliveryId, deliveryId),
-        eq(webhookDeliveries.status, "failed"),
-      ),
-    });
-    if (failed) {
-      [delivery] = await db
+  const scopedDeliveryId = registeredTarget
+    ? `${registeredTarget.hook.id}:${deliveryId}`
+    : deliveryId;
+  const delivery = await claimDelivery(provider, scopedDeliveryId, event);
+  if (!delivery) return NextResponse.json({ duplicate: true }, { status: 202 });
+  if (lifecycle) {
+    try {
+      const applied = await applyGitHubLifecycleEvent(db, event, payload);
+      await db
         .update(webhookDeliveries)
-        .set({ status: "received", error: null, processedAt: null })
-        .where(
-          and(
-            eq(webhookDeliveries.id, failed.id),
-            eq(webhookDeliveries.status, "failed"),
-          ),
-        )
-        .returning();
+        .set({
+          status: applied ? "processed" : "ignored",
+          processedAt: new Date(),
+        })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      return NextResponse.json(
+        applied ? { processed: true } : { ignored: true },
+        { status: 202 },
+      );
+    } catch (cause) {
+      await db
+        .update(webhookDeliveries)
+        .set({
+          status: "failed",
+          error: cause instanceof Error ? cause.message : "Webhook failed",
+          processedAt: new Date(),
+        })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      throw cause;
     }
   }
-  if (!delivery) return NextResponse.json({ duplicate: true }, { status: 202 });
+  const parsedPayload =
+    provider === "github"
+      ? githubPayload.safeParse(payload)
+      : provider === "gitlab"
+        ? gitlabPayload.safeParse(payload)
+        : azurePayload.safeParse(payload);
+  if (!parsedPayload.success) {
+    await db
+      .update(webhookDeliveries)
+      .set({
+        status: "rejected",
+        error: "Invalid payload",
+        processedAt: new Date(),
+      })
+      .where(eq(webhookDeliveries.id, delivery.id));
+    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  }
+  payload = parsedPayload.data;
   try {
     const occurredAt = new Date(eventTime(provider, payload) ?? Number.NaN);
     const age = Date.now() - occurredAt.getTime();
@@ -244,26 +323,62 @@ export async function POST(
         .where(eq(webhookDeliveries.id, delivery.id));
       return NextResponse.json({ ignored: true }, { status: 202 });
     }
-    const matchingRepositories = await db
-      .select({
-        id: repositories.id,
-        workspaceId: repositories.workspaceId,
-        connectionId: repositories.connectionId,
-        externalId: repositories.externalId,
-        reviewIntakeMode: repositories.reviewIntakeMode,
-        intakeOwnerId: repositories.intakeOwnerId,
-      })
-      .from(repositories)
-      .innerJoin(
-        providerConnections,
-        eq(repositories.connectionId, providerConnections.id),
-      )
-      .where(
-        and(
-          eq(providerConnections.provider, provider),
-          eq(repositories.externalId, target.repositoryExternalId),
-        ),
+    if (
+      registeredTarget &&
+      registeredTarget.repository.externalId !== target.repositoryExternalId
+    ) {
+      await db
+        .update(webhookDeliveries)
+        .set({
+          status: "rejected",
+          error: "Webhook repository does not match its registered target",
+          processedAt: new Date(),
+        })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      return NextResponse.json(
+        { error: "Repository mismatch" },
+        { status: 400 },
       );
+    }
+    const matchingRepositories = registeredTarget
+      ? [
+          {
+            id: registeredTarget.repository.id,
+            workspaceId: registeredTarget.repository.workspaceId,
+            connectionId: registeredTarget.repository.connectionId,
+            externalId: registeredTarget.repository.externalId,
+            reviewIntakeMode: registeredTarget.repository.reviewIntakeMode,
+            intakeOwnerId: registeredTarget.repository.intakeOwnerId,
+          },
+        ]
+      : await db
+          .select({
+            id: repositories.id,
+            workspaceId: repositories.workspaceId,
+            connectionId: repositories.connectionId,
+            externalId: repositories.externalId,
+            reviewIntakeMode: repositories.reviewIntakeMode,
+            intakeOwnerId: repositories.intakeOwnerId,
+          })
+          .from(repositories)
+          .innerJoin(
+            providerConnections,
+            eq(repositories.connectionId, providerConnections.id),
+          )
+          .where(
+            and(
+              eq(providerConnections.provider, "github"),
+              eq(providerConnections.credentialKind, "github_app"),
+              eq(providerConnections.credentialStatus, "active"),
+              eq(
+                providerConnections.installationId,
+                githubInstallationId(
+                  String(githubPayload.parse(payload).installation.id),
+                ) ?? "invalid",
+              ),
+              eq(repositories.externalId, target.repositoryExternalId),
+            ),
+          );
     if (matchingRepositories.length === 0) {
       await db
         .update(webhookDeliveries)

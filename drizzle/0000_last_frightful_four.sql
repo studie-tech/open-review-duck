@@ -533,15 +533,6 @@ CREATE TABLE "open_review_duck_workflow_run" (
 	CONSTRAINT "open_review_duck_workflow_run_providerRunId_unique" UNIQUE("providerRunId")
 );
 --> statement-breakpoint
-CREATE TABLE "open_review_duck_workspace_data_key" (
-	"workspaceId" uuid PRIMARY KEY NOT NULL,
-	"keyVersion" integer DEFAULT 1 NOT NULL,
-	"encryptedKey" text NOT NULL,
-	"kmsKeyId" text NOT NULL,
-	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
-	"rotatedAt" timestamp with time zone
-);
---> statement-breakpoint
 CREATE TABLE "open_review_duck_workspace_member" (
 	"workspaceId" uuid NOT NULL,
 	"userId" text NOT NULL,
@@ -628,7 +619,6 @@ ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_ru
 ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_workflowRunId_open_review_duck_workflow_run_id_fk" FOREIGN KEY ("workflowRunId") REFERENCES "public"."open_review_duck_workflow_run"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_review_duck_workflow_run" ADD CONSTRAINT "open_review_duck_workflow_run_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_workspace_data_key" ADD CONSTRAINT "open_review_duck_workspace_data_key_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_review_duck_workspace_member" ADD CONSTRAINT "open_review_duck_workspace_member_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_review_duck_workspace_member" ADD CONSTRAINT "open_review_duck_workspace_member_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_review_duck_workspace" ADD CONSTRAINT "open_review_duck_workspace_ownerId_open_review_duck_user_id_fk" FOREIGN KEY ("ownerId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

@@ -16,15 +16,29 @@ PAT and BYOK credentials are
 encrypted with a volume-owned root key stored with mode `0600`. Local telemetry
 is redacted stdout/stderr only.
 
-SaaS requires Clerk workspace membership on every resource boundary. Source
-providers use GitHub App or OAuth identities; users cannot submit PATs or model
-keys. OAuth state is signed, one-time, exact-callback-bound, and PKCE-protected.
+SaaS requires Clerk workspace membership on every resource boundary. GitHub App
+and provider OAuth identities are the preferred source-provider credentials;
+workspace administrators can also submit provider PATs when organization policy
+prevents application authorization. Hosted BYOK model keys remain unsupported.
+OAuth state is signed, one-time, exact-callback-bound, and PKCE-protected.
 Webhook signatures are checked before parsing and delivery IDs are deduplicated.
 
-SaaS credential records use per-workspace AES-256-GCM data keys with
-workspace/record/provider additional authenticated data. AWS KMS wraps the data
-keys through a narrowly scoped Vercel OIDC role; no long-lived AWS credential
-is stored in Vercel.
+GitHub PAT connections cannot install repository webhooks, so automatic intake
+uses five-minute reconciliation and **Check now** provides an immediate manual
+refresh. GitLab and Azure DevOps PAT connections install repository webhooks
+when the token is allowed to do so; if registration fails, ReviewDuck switches
+that repository to manual intake and exposes **Check now**. Webhook-backed
+changes arrive with provider delivery latency. Reconciled changes and revoked
+credentials can take up to five minutes to surface unless an administrator runs
+**Check now** first.
+
+SaaS OAuth tokens, provider PATs, managed-model credentials, and AI transcripts
+use AES-256-GCM with workspace/record/provider additional authenticated data. A
+shared 256-bit root stored as a Vercel Sensitive Environment Variable derives an
+isolated key for each workspace. The root is never stored in the database or
+exposed to the browser. Losing or replacing it makes existing encrypted records
+unreadable, so operators must retain it in protected recovery material and must
+not rotate it without a re-encryption procedure.
 
 Private source objects are workspace-addressed. UploadThing identifiers contain
 an HMAC rather than tenant or repository metadata. Signed URLs are issued only

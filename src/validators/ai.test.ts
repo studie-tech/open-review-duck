@@ -8,15 +8,13 @@ import {
 } from "./ai";
 
 const configuration = {
-  provider: "azure_openai",
+  provider: "openai",
   model: "gpt-5.5",
-  apiProtocol: "azure-openai-responses" as const,
   apiKey: "secret",
+  clearApiKey: false,
+  clearHeaders: false,
   headers: { "X-Custom-Option": "enabled" },
-  baseUrl: "https://example.openai.azure.com",
-  contextWindow: 128_000,
-  maxTokens: 8_000,
-  storeResponses: true,
+  baseUrl: "https://api.openai.com/v1",
   useManagedModels: false,
   mode: "on_demand" as const,
   reviewPullRequests: true,
@@ -34,7 +32,6 @@ describe("AI configuration validation", () => {
       saveAiConfigurationSchema.safeParse({
         ...configuration,
         provider: "my_company_gateway",
-        apiProtocol: "openai-completions",
       }).success,
     ).toBe(true);
   });
@@ -70,13 +67,14 @@ describe("AI configuration validation", () => {
     ).toBe(false);
   });
 
-  it("accepts a signed verification receipt when saving", () => {
-    expect(
-      saveAiConfigurationSchema.safeParse({
-        ...configuration,
-        verificationToken: "signed-receipt",
-      }).success,
-    ).toBe(true);
+  it("supports explicit stored-credential removal", () => {
+    const parsed = saveAiConfigurationSchema.parse({
+      ...configuration,
+      clearApiKey: true,
+      clearHeaders: true,
+    });
+    expect(parsed.clearApiKey).toBe(true);
+    expect(parsed.clearHeaders).toBe(true);
   });
 });
 

@@ -11,6 +11,10 @@ import {
   workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import {
+  readLocalAiSecret,
+  resolveLocalAiCredentials,
+} from "~/server/ai/local-configuration";
 import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
   CURRENT_AI_AGENT_VERSION,
@@ -41,6 +45,10 @@ import { createTRPCRouter, protectedProcedure } from "../trpc";
 
 const terminalStatuses = ["completed", "failed", "cancelled"] as const;
 
+const providerModelsSchema = z.object({
+  data: z.array(z.object({ id: z.string().min(1) })),
+});
+
 /** Returns the immutable intersection exposed by deployment configuration. */
 function allowedManagedModels() {
   return new Set([
@@ -60,11 +68,7 @@ function publicConfiguration(
     provider:
       preference?.selectedModel === "big-pickle" ? "opencode" : "openrouter",
     model: preference?.selectedModel ?? "big-pickle",
-    apiProtocol: "ai-sdk",
     baseUrl: null,
-    contextWindow: 0,
-    maxTokens: 8_000,
-    storeResponses: false,
     useManagedModels: true,
     hasApiKey: false,
     hasHeaders: false,
@@ -83,6 +87,7 @@ const safeAiStartMessages = new Set([
   "Weekly managed AI token limit reached",
   "Workspace monthly AI budget is exhausted",
   "The selected paid model is missing a current tool-capable catalog entry",
+  "Configure a local AI provider before using AI",
   "Too many requests. Wait a moment and try again.",
 ]);
 
@@ -105,6 +110,9 @@ export const aiRouter = createTRPCRouter({
           where: eq(localAiConfigurations.workspaceId, workspace.id),
         })
       : undefined;
+    const localSecret = localConfiguration
+      ? await readLocalAiSecret(workspace.id, localConfiguration)
+      : undefined;
     return {
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
@@ -117,26 +125,24 @@ export const aiRouter = createTRPCRouter({
         accepted: Boolean(preference?.freeProviderDisclosureAcceptedAt),
         version: env.BIG_PICKLE_DISCLOSURE_VERSION,
       },
-      configuration: localConfiguration
-        ? {
-            provider: localConfiguration.provider,
-            model: localConfiguration.model,
-            apiProtocol: "ai-sdk",
-            baseUrl: null,
-            contextWindow: 0,
-            maxTokens: 8_000,
-            storeResponses: false,
-            useManagedModels: false,
-            hasApiKey: true,
-            hasHeaders: false,
-          }
+      configuration: isLocalDeployment()
+        ? localConfiguration && localSecret
+          ? {
+              provider: localConfiguration.provider,
+              model: localConfiguration.model,
+              baseUrl: localSecret.baseUrl,
+              useManagedModels: false,
+              hasApiKey: Boolean(localSecret.apiKey),
+              hasHeaders: Object.keys(localSecret.headers).length > 0,
+            }
+          : null
         : publicConfiguration(preference),
     };
   }),
 
   testConfiguration: protectedProcedure
     .input(testAiConfigurationSchema)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       if (!isLocalDeployment()) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -150,16 +156,49 @@ export const aiRouter = createTRPCRouter({
         };
       }
       try {
+        const workspace = await ensurePersonalWorkspace(
+          ctx.db,
+          ctx.auth.userId,
+        );
+        await requireWorkspaceAdministrator(
+          ctx.db,
+          workspace.id,
+          ctx.auth.userId,
+        );
+        const existing = await ctx.db.query.localAiConfigurations.findFirst({
+          where: eq(localAiConfigurations.workspaceId, workspace.id),
+        });
+        const previousSecret =
+          existing?.provider === input.provider
+            ? await readLocalAiSecret(workspace.id, existing)
+            : undefined;
+        const { apiKey, headers } = resolveLocalAiCredentials(
+          {
+            apiKey: input.apiKey,
+            baseUrl: input.baseUrl,
+            clearApiKey: input.clearApiKey,
+            clearHeaders: input.clearHeaders,
+            headers: input.headers,
+          },
+          previousSecret,
+        );
+        if (input.provider === "opencode" && !apiKey) {
+          return {
+            ok: false as const,
+            error: "OpenCode Zen requires your own API key",
+          };
+        }
         await assertSafeRemoteUrl(input.baseUrl, env.ALLOW_PRIVATE_AI_HOSTS);
+        const startedAt = performance.now();
         const response = await safeRemoteFetch(
           new URL(
             "models",
             input.baseUrl.endsWith("/") ? input.baseUrl : `${input.baseUrl}/`,
           ).toString(),
           {
-            headers: input.apiKey
-              ? { authorization: `Bearer ${input.apiKey}` }
-              : input.headers,
+            headers: apiKey
+              ? { ...headers, authorization: `Bearer ${apiKey}` }
+              : headers,
             signal: AbortSignal.timeout(10_000),
           },
           env.ALLOW_PRIVATE_AI_HOSTS,
@@ -170,10 +209,19 @@ export const aiRouter = createTRPCRouter({
             error: `Provider returned HTTP ${response.status}`,
           };
         }
+        const availableModels = providerModelsSchema.parse(
+          await response.json(),
+        ).data;
+        if (!availableModels.some(({ id }) => id === input.model)) {
+          return {
+            ok: false as const,
+            error: `Provider does not list model ${input.model}`,
+          };
+        }
         return {
           ok: true as const,
           model: input.model,
-          verificationToken: "local-direct-verification",
+          latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
         };
       } catch (cause) {
         return {
@@ -206,6 +254,12 @@ export const aiRouter = createTRPCRouter({
           message: "SaaS uses service-owned managed models only",
         });
       }
+      if (local && input.useManagedModels) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Local AI requires your own model or provider credential",
+        });
+      }
       if (!local && !allowedManagedModels().has(selectedModel)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -224,17 +278,36 @@ export const aiRouter = createTRPCRouter({
           where: eq(localAiConfigurations.workspaceId, workspace.id),
         });
         const id = existing?.id ?? randomUUID();
+        const previousSecret =
+          existing?.provider === input.provider
+            ? await readLocalAiSecret(workspace.id, existing)
+            : undefined;
+        const credentials = resolveLocalAiCredentials(
+          {
+            apiKey: input.apiKey,
+            baseUrl: input.baseUrl,
+            clearApiKey: input.clearApiKey,
+            clearHeaders: input.clearHeaders,
+            headers: input.headers,
+          },
+          previousSecret,
+        );
+        if (input.provider === "opencode" && !credentials.apiKey) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "OpenCode Zen requires your own API key",
+          });
+        }
         const encryptedConfiguration = await sealVaultSecret(
-          ctx.db,
           {
             workspaceId: workspace.id,
             recordId: id,
             provider: input.provider,
           },
           JSON.stringify({
-            apiKey: input.apiKey,
+            apiKey: credentials.apiKey,
             baseUrl: input.baseUrl,
-            headers: input.headers,
+            headers: credentials.headers,
           }),
         );
         await ctx.db

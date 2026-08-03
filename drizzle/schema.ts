@@ -235,17 +235,6 @@ export const credentialAuditEvents = createTable(
   ],
 );
 
-export const workspaceDataKeys = createTable("workspace_data_key", {
-  workspaceId: uuid()
-    .primaryKey()
-    .references(() => workspaces.id, { onDelete: "cascade" }),
-  keyVersion: integer().notNull().default(1),
-  encryptedKey: text().notNull(),
-  kmsKeyId: text().notNull(),
-  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
-  rotatedAt: timestamp({ withTimezone: true }),
-});
-
 export const providerConnections = createTable(
   "provider_connection",
   {
@@ -256,6 +245,7 @@ export const providerConnections = createTable(
     provider: providerEnum().notNull(),
     externalAccountId: text().notNull(),
     credentialKind: varchar({ length: 32 }).notNull().default("local_pat"),
+    credentialStatus: varchar({ length: 24 }).notNull().default("active"),
     credentialFingerprint: varchar({ length: 64 }),
     displayName: varchar({ length: 160 }).notNull(),
     installationId: text(),
@@ -275,6 +265,7 @@ export const providerConnections = createTable(
       t.provider,
       t.credentialFingerprint,
     ),
+    uniqueIndex("github_app_installation_idx").on(t.installationId),
   ],
 );
 
@@ -298,6 +289,18 @@ export const oauthCredentials = createTable(
   },
   (t) => [index("oauth_expiry_idx").on(t.expiresAt)],
 );
+
+export const providerPatCredentials = createTable("provider_pat_credential", {
+  connectionId: uuid()
+    .primaryKey()
+    .references(() => providerConnections.id, { onDelete: "cascade" }),
+  encryptedToken: text().notNull(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp({ withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
 
 export const oauthStates = createTable("oauth_state", {
   id: uuid().primaryKey().defaultRandom(),
@@ -374,6 +377,29 @@ export const repositories = createTable(
       t.externalId,
     ),
   ],
+);
+
+export const providerWebhooks = createTable(
+  "provider_webhook",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    repositoryId: uuid()
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" })
+      .unique(),
+    provider: providerEnum().notNull(),
+    encryptedSecret: text().notNull(),
+    remoteHookIds: jsonb()
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [index("provider_webhook_provider_idx").on(t.provider)],
 );
 
 export const pullRequests = createTable(

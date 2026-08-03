@@ -34,6 +34,42 @@ describe("Sentry telemetry safety", () => {
     });
   });
 
+  it("removes callback query credentials and route request data", () => {
+    expect(
+      redactSentryEvent({
+        request: {
+          url: "https://reviewduck.example/api/integrations/github/callback?code=secret&state=signed",
+          data: { harmless: "still sensitive in this route" },
+          method: "GET",
+        },
+        breadcrumb: {
+          url: "/api/webhooks/gitlab?hook=opaque",
+          body: "private provider payload",
+        },
+        span: {
+          "http.url":
+            "https://reviewduck.example/api/integrations/gitlab/callback?code=secret",
+          "url.query": "code=secret",
+        },
+      }),
+    ).toEqual({
+      request: {
+        url: "https://reviewduck.example/api/integrations/github/callback",
+        data: "[REDACTED]",
+        method: "GET",
+      },
+      breadcrumb: {
+        url: "/api/webhooks/gitlab",
+        body: "[REDACTED]",
+      },
+      span: {
+        "http.url":
+          "https://reviewduck.example/api/integrations/gitlab/callback",
+        "url.query": "[REDACTED]",
+      },
+    });
+  });
+
   it("keeps the intended trace budgets", () => {
     expect(tracesSampler({ name: "GET /health" })).toBe(0);
     expect(tracesSampler({ name: "sync pull request" })).toBe(0.1);

@@ -133,41 +133,71 @@ export class GitLabProvider implements PullRequestProvider {
     const hooks = await this.getAllPages<GitLabProjectHook>(
       `${this.apiUrl}/projects/${project}/hooks?per_page=100`,
     );
-    if (hooks.some((hook) => hook.url === input.callbackUrl)) return;
-    await providerFetch<GitLabProjectHook>(
-      this.name,
-      `${this.apiUrl}/projects/${project}/hooks`,
-      {
-        method: "POST",
-        headers: { ...this.headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: input.callbackUrl,
-          token: input.secret,
-          merge_requests_events: true,
-          enable_ssl_verification: true,
-        }),
-      },
-    );
-  }
-  /** Removes every matching application hook from a GitLab project. */
-  async removeRepositoryWebhook(input: {
-    repositoryExternalId: string;
-    callbackUrl: string;
-  }) {
-    const project = encodeURIComponent(input.repositoryExternalId);
-    const hooks = await this.getAllPages<GitLabProjectHook>(
-      `${this.apiUrl}/projects/${project}/hooks?per_page=100`,
-    );
-    await Promise.all(
-      hooks
-        .filter((hook) => hook.url === input.callbackUrl)
+    const matching = hooks.filter((hook) => hook.url === input.callbackUrl);
+    const body = JSON.stringify({
+      url: input.callbackUrl,
+      signing_token: input.secret,
+      merge_requests_events: true,
+      enable_ssl_verification: true,
+      name: "ReviewDuck",
+    });
+    const primary = matching[0]
+      ? await providerFetch<GitLabProjectHook>(
+          this.name,
+          `${this.apiUrl}/projects/${project}/hooks/${matching[0].id}`,
+          {
+            method: "PUT",
+            headers: { ...this.headers, "Content-Type": "application/json" },
+            body,
+          },
+        )
+      : await providerFetch<GitLabProjectHook>(
+          this.name,
+          `${this.apiUrl}/projects/${project}/hooks`,
+          {
+            method: "POST",
+            headers: { ...this.headers, "Content-Type": "application/json" },
+            body,
+          },
+        );
+    const duplicateCleanup = await Promise.allSettled(
+      matching
+        .slice(1)
         .map((hook) =>
           providerVoid(
             this.name,
             `${this.apiUrl}/projects/${project}/hooks/${hook.id}`,
             { method: "DELETE", headers: this.headers },
+            [404],
           ),
         ),
+    );
+    for (const [index, result] of duplicateCleanup.entries()) {
+      if (result.status === "rejected") {
+        console.warn("Duplicate GitLab webhook cleanup failed", {
+          hookId: matching[index + 1]?.id,
+          cause: result.reason,
+        });
+      }
+    }
+    return [String(primary.id)];
+  }
+  /** Removes every matching application hook from a GitLab project. */
+  async removeRepositoryWebhook(input: {
+    repositoryExternalId: string;
+    callbackUrl: string;
+    remoteHookIds: string[];
+  }) {
+    const project = encodeURIComponent(input.repositoryExternalId);
+    await Promise.all(
+      input.remoteHookIds.map((hookId) =>
+        providerVoid(
+          this.name,
+          `${this.apiUrl}/projects/${project}/hooks/${encodeURIComponent(hookId)}`,
+          { method: "DELETE", headers: this.headers },
+          [404],
+        ),
+      ),
     );
   }
   /** Lists open pull requests for a provider repository. */

@@ -61,6 +61,7 @@ interface AzureItem {
 }
 interface AzureHookSubscription {
   id: string;
+  status?: string;
   eventType: string;
   consumerInputs?: { url?: string };
   publisherInputs?: { repository?: string };
@@ -150,61 +151,66 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       endpoint,
       { headers: this.headers },
     );
-    const matching = new Set(
+    const matching = new Map(
       existing.value
         .filter(
           (hook) =>
             hook.consumerInputs?.url === input.callbackUrl &&
-            hook.publisherInputs?.repository === input.repositoryExternalId,
+            hook.publisherInputs?.repository === input.repositoryExternalId &&
+            (hook.status === undefined ||
+              hook.status === "enabled" ||
+              hook.status === "onProbation"),
         )
-        .map((hook) => hook.eventType),
+        .map((hook) => [hook.eventType, hook.id]),
     );
+    const hookIds: string[] = [];
     for (const eventType of AZURE_PULL_REQUEST_EVENTS) {
-      if (matching.has(eventType)) continue;
-      await providerFetch<AzureHookSubscription>(this.name, endpoint, {
-        method: "POST",
-        headers: { ...this.headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publisherId: "tfs",
-          eventType,
-          resourceVersion: "1.0",
-          consumerId: "webHooks",
-          consumerActionId: "httpRequest",
-          publisherInputs: { repository: input.repositoryExternalId },
-          consumerInputs: {
-            url: input.callbackUrl,
-            basicAuthUsername: "reviewduck",
-            basicAuthPassword: input.secret,
-          },
-        }),
-      });
+      const existingId = matching.get(eventType);
+      if (existingId) {
+        hookIds.push(existingId);
+        continue;
+      }
+      const created = await providerFetch<AzureHookSubscription>(
+        this.name,
+        endpoint,
+        {
+          method: "POST",
+          headers: { ...this.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            publisherId: "tfs",
+            eventType,
+            resourceVersion: "1.0",
+            consumerId: "webHooks",
+            consumerActionId: "httpRequest",
+            publisherInputs: { repository: input.repositoryExternalId },
+            consumerInputs: {
+              url: input.callbackUrl,
+              basicAuthUsername: "reviewduck",
+              basicAuthPassword: input.secret,
+            },
+          }),
+        },
+      );
+      hookIds.push(created.id);
     }
+    return hookIds;
   }
   /** Removes this application's Azure service-hook subscriptions. */
   async removeRepositoryWebhook(input: {
     repositoryExternalId: string;
     callbackUrl: string;
+    remoteHookIds: string[];
   }) {
     const endpoint = `${this.organizationUrl}/_apis/hooks/subscriptions`;
-    const existing = await providerFetch<{ value: AzureHookSubscription[] }>(
-      this.name,
-      `${endpoint}?api-version=7.1`,
-      { headers: this.headers },
-    );
     await Promise.all(
-      existing.value
-        .filter(
-          (hook) =>
-            hook.consumerInputs?.url === input.callbackUrl &&
-            hook.publisherInputs?.repository === input.repositoryExternalId,
-        )
-        .map((hook) =>
-          providerVoid(
-            this.name,
-            `${endpoint}/${encodeURIComponent(hook.id)}?api-version=7.1`,
-            { method: "DELETE", headers: this.headers },
-          ),
+      input.remoteHookIds.map((hookId) =>
+        providerVoid(
+          this.name,
+          `${endpoint}/${encodeURIComponent(hookId)}?api-version=7.1`,
+          { method: "DELETE", headers: this.headers },
+          [404],
         ),
+      ),
     );
   }
   /** Lists open pull requests for a provider repository. */

@@ -1,37 +1,43 @@
 import "server-only";
 
-import { and, eq, lte, sql } from "drizzle-orm";
-import { importPKCS8, SignJWT } from "jose";
+import { and, eq, sql } from "drizzle-orm";
+import { SignJWT } from "jose";
 import {
+  credentialAuditEvents,
   localCredentials,
   oauthCredentials,
   providerConnections,
+  providerPatCredentials,
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { createProvider } from ".";
+import { githubAppPrivateKey } from "./github-app-authorization";
+import { openProviderPat } from "./pat-credential";
 import type { PullRequestProvider } from "./types";
 
 type Database = typeof database;
 
-/** Mints a short-lived GitHub App installation token on demand. */
-async function githubInstallationToken(installationId: string) {
+/** Signs one short-lived JWT for GitHub App administrative operations. */
+async function githubAppJwt() {
   if (!env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY) {
     throw new Error("GitHub App credentials are not configured");
   }
-  const key = await importPKCS8(
-    env.GITHUB_APP_PRIVATE_KEY.replaceAll("\\n", "\n"),
-    "RS256",
-  );
+  const key = githubAppPrivateKey(env.GITHUB_APP_PRIVATE_KEY);
   const now = Math.floor(Date.now() / 1_000);
-  const jwt = await new SignJWT({})
+  return new SignJWT({})
     .setProtectedHeader({ alg: "RS256" })
     .setIssuer(env.GITHUB_APP_ID)
     .setIssuedAt(now - 60)
     .setExpirationTime(now + 9 * 60)
     .sign(key);
+}
+
+/** Mints a short-lived GitHub App installation token on demand. */
+async function githubInstallationToken(installationId: string) {
+  const jwt = await githubAppJwt();
   const response = await fetch(
     `https://api.github.com/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
     {
@@ -39,8 +45,12 @@ async function githubInstallationToken(installationId: string) {
       headers: {
         accept: "application/vnd.github+json",
         authorization: `Bearer ${jwt}`,
+        "content-type": "application/json",
         "x-github-api-version": "2022-11-28",
       },
+      body: JSON.stringify({
+        permissions: { contents: "read", pull_requests: "write" },
+      }),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     },
@@ -53,6 +63,27 @@ async function githubInstallationToken(installationId: string) {
     throw new Error("GitHub installation token response is invalid");
   }
   return body.token;
+}
+
+/** Uninstalls the service-owned GitHub App before local disconnect completes. */
+export async function revokeGitHubInstallation(installationId: string) {
+  const response = await fetch(
+    `https://api.github.com/app/installations/${encodeURIComponent(installationId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${await githubAppJwt()}`,
+        "x-github-api-version": "2022-11-28",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  await response.body?.cancel();
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`GitHub App uninstall failed (${response.status})`);
+  }
 }
 
 /** Opens one local-only provider token from the volume vault. */
@@ -72,7 +103,6 @@ async function localToken(
   if (!credential) throw new Error("Local provider credential not found");
   const payload = JSON.parse(
     await openVaultSecret(
-      db,
       {
         workspaceId: connection.workspaceId,
         recordId: credential.id,
@@ -85,6 +115,25 @@ async function localToken(
     throw new Error("Local provider credential is invalid");
   }
   return payload.token;
+}
+
+/** Opens one workspace-bound provider PAT stored by the SaaS credential adapter. */
+async function hostedPatToken(
+  db: Database,
+  connection: typeof providerConnections.$inferSelect,
+) {
+  const credential = await db.query.providerPatCredentials.findFirst({
+    where: eq(providerPatCredentials.connectionId, connection.id),
+  });
+  if (!credential) throw new Error("Provider PAT credential not found");
+  return openProviderPat(
+    {
+      workspaceId: connection.workspaceId,
+      connectionId: connection.id,
+      provider: connection.provider,
+    },
+    credential.encryptedToken,
+  );
 }
 
 /** Returns a valid hosted OAuth token, refreshing it when required. */
@@ -103,7 +152,6 @@ async function oauthToken(
     credential = await refreshOauthToken(db, connection.id);
   }
   return openVaultSecret(
-    db,
     {
       workspaceId: connection.workspaceId,
       recordId: credential.id,
@@ -113,160 +161,192 @@ async function oauthToken(
   );
 }
 
-/** Returns a concurrently refreshed credential when another caller won the CAS. */
-async function concurrentRefreshWinner(
+/** Revokes a stored GitLab OAuth grant before its encrypted copy is deleted. */
+export async function revokeProviderOAuth(
   db: Database,
-  connectionId: string,
-  previousVersion: number,
+  connection: typeof providerConnections.$inferSelect,
 ) {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const credential = await db.query.oauthCredentials.findFirst({
-      where: eq(oauthCredentials.connectionId, connectionId),
-    });
-    if (
-      credential &&
-      credential.refreshVersion > previousVersion &&
-      (!credential.expiresAt ||
-        credential.expiresAt.getTime() > Date.now() + 60_000)
-    ) {
-      return credential;
-    }
-    if (attempt < 19) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    }
+  if (
+    connection.credentialKind !== "oauth" ||
+    connection.provider !== "gitlab"
+  ) {
+    return;
   }
-  return undefined;
+  if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
+    throw new Error("GitLab OAuth client credentials are not configured");
+  }
+  const credential = await db.query.oauthCredentials.findFirst({
+    where: eq(oauthCredentials.connectionId, connection.id),
+  });
+  if (!credential) return;
+  const tokens = [
+    await openVaultSecret(
+      {
+        workspaceId: connection.workspaceId,
+        recordId: credential.id,
+        provider: "gitlab-oauth-access",
+      },
+      credential.encryptedAccessToken,
+    ),
+  ];
+  if (credential.encryptedRefreshToken) {
+    tokens.push(
+      await openVaultSecret(
+        {
+          workspaceId: connection.workspaceId,
+          recordId: credential.id,
+          provider: "gitlab-oauth-refresh",
+        },
+        credential.encryptedRefreshToken,
+      ),
+    );
+  }
+  for (const token of tokens) {
+    const response = await fetch("https://gitlab.com/oauth/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: env.GITLAB_CLIENT_ID,
+        client_secret: env.GITLAB_CLIENT_SECRET,
+        token,
+      }),
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`GitLab OAuth revocation failed (${response.status})`);
+    }
+    await response.body?.cancel();
+  }
 }
 
-/** Rotates an expiring OAuth credential without holding a DB transaction over I/O. */
+/** Rotates a one-time refresh token under a transaction-scoped provider lock. */
 async function refreshOauthToken(db: Database, connectionId: string) {
-  const [row] = await db
-    .select({ connection: providerConnections, credential: oauthCredentials })
-    .from(providerConnections)
-    .innerJoin(
-      oauthCredentials,
-      eq(oauthCredentials.connectionId, providerConnections.id),
-    )
-    .where(eq(providerConnections.id, connectionId))
-    .limit(1);
-  if (!row) throw new Error("OAuth credential not found");
-  if (
-    !row.credential.expiresAt ||
-    row.credential.expiresAt.getTime() > Date.now() + 60_000
-  ) {
-    return row.credential;
-  }
-  if (!row.credential.encryptedRefreshToken) {
-    throw new Error("OAuth credential expired without a refresh token");
-  }
-  const refreshToken = await openVaultSecret(
-    db,
-    {
-      workspaceId: row.connection.workspaceId,
-      recordId: row.credential.id,
-      provider: `${row.connection.provider}-oauth-refresh`,
-    },
-    row.credential.encryptedRefreshToken,
-  );
-  const tokenUrl =
-    row.connection.provider === "gitlab"
-      ? "https://gitlab.com/oauth/token"
-      : `https://login.microsoftonline.com/${env.AZURE_ENTRA_TENANT_ID}/oauth2/v2.0/token`;
-  const clientId =
-    row.connection.provider === "gitlab"
-      ? env.GITLAB_CLIENT_ID
-      : env.AZURE_ENTRA_CLIENT_ID;
-  const clientSecret =
-    row.connection.provider === "gitlab"
-      ? env.GITLAB_CLIENT_SECRET
-      : env.AZURE_ENTRA_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error("OAuth client credentials are not configured");
-  }
-  const form = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
-  });
-  if (row.connection.provider === "azure_devops") {
-    form.set(
-      "scope",
-      "499b84ac-1321-427f-aa17-267ca6975798/.default offline_access",
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`oauth-refresh:${connectionId}`}, 0))`,
     );
-  }
-  const response = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: form,
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    const winner = await concurrentRefreshWinner(
-      db,
-      connectionId,
-      row.credential.refreshVersion,
+    const [row] = await tx
+      .select({ connection: providerConnections, credential: oauthCredentials })
+      .from(providerConnections)
+      .innerJoin(
+        oauthCredentials,
+        eq(oauthCredentials.connectionId, providerConnections.id),
+      )
+      .where(eq(providerConnections.id, connectionId))
+      .limit(1);
+    if (!row) throw new Error("OAuth credential not found");
+    if (
+      !row.credential.expiresAt ||
+      row.credential.expiresAt.getTime() > Date.now() + 60_000
+    ) {
+      return row.credential;
+    }
+    if (!row.credential.encryptedRefreshToken) {
+      throw new Error("OAuth credential expired without a refresh token");
+    }
+    const refreshToken = await openVaultSecret(
+      {
+        workspaceId: row.connection.workspaceId,
+        recordId: row.credential.id,
+        provider: `${row.connection.provider}-oauth-refresh`,
+      },
+      row.credential.encryptedRefreshToken,
     );
-    if (winner) return winner;
-    throw new Error(`OAuth token refresh failed (${response.status})`);
-  }
-  const tokens = (await response.json()) as {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-  };
-  if (
-    typeof tokens.access_token !== "string" ||
-    typeof tokens.expires_in !== "number"
-  ) {
-    throw new Error("OAuth refresh response is invalid");
-  }
-  const encryptedAccessToken = await sealVaultSecret(
-    db,
-    {
+    const tokenUrl =
+      row.connection.provider === "gitlab"
+        ? "https://gitlab.com/oauth/token"
+        : `https://login.microsoftonline.com/${env.AZURE_ENTRA_TENANT_ID}/oauth2/v2.0/token`;
+    const clientId =
+      row.connection.provider === "gitlab"
+        ? env.GITLAB_CLIENT_ID
+        : env.AZURE_ENTRA_CLIENT_ID;
+    const clientSecret =
+      row.connection.provider === "gitlab"
+        ? env.GITLAB_CLIENT_SECRET
+        : env.AZURE_ENTRA_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      throw new Error("OAuth client credentials are not configured");
+    }
+    const form = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+    const response = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      throw new Error(`OAuth token refresh failed (${response.status})`);
+    }
+    const tokens = (await response.json()) as {
+      access_token?: unknown;
+      refresh_token?: unknown;
+      expires_in?: unknown;
+    };
+    if (
+      typeof tokens.access_token !== "string" ||
+      tokens.access_token.length === 0 ||
+      tokens.access_token.length > 65_536 ||
+      typeof tokens.expires_in !== "number" ||
+      !Number.isFinite(tokens.expires_in) ||
+      tokens.expires_in <= 0 ||
+      tokens.expires_in > 7 * 86_400 ||
+      (tokens.refresh_token !== undefined &&
+        (typeof tokens.refresh_token !== "string" ||
+          tokens.refresh_token.length === 0 ||
+          tokens.refresh_token.length > 65_536)) ||
+      (row.connection.provider === "gitlab" &&
+        typeof tokens.refresh_token !== "string")
+    ) {
+      throw new Error("OAuth refresh response is invalid");
+    }
+    const encryptedAccessToken = await sealVaultSecret(
+      {
+        workspaceId: row.connection.workspaceId,
+        recordId: row.credential.id,
+        provider: `${row.connection.provider}-oauth-access`,
+      },
+      tokens.access_token,
+    );
+    const encryptedRefreshToken =
+      typeof tokens.refresh_token === "string"
+        ? await sealVaultSecret(
+            {
+              workspaceId: row.connection.workspaceId,
+              recordId: row.credential.id,
+              provider: `${row.connection.provider}-oauth-refresh`,
+            },
+            tokens.refresh_token,
+          )
+        : row.credential.encryptedRefreshToken;
+    const [updated] = await tx
+      .update(oauthCredentials)
+      .set({
+        encryptedAccessToken,
+        encryptedRefreshToken,
+        expiresAt: new Date(Date.now() + tokens.expires_in * 1_000),
+        refreshVersion: sql`${oauthCredentials.refreshVersion} + 1`,
+      })
+      .where(eq(oauthCredentials.id, row.credential.id))
+      .returning();
+    if (!updated)
+      throw new Error("OAuth credential disappeared during refresh");
+    await tx.insert(credentialAuditEvents).values({
       workspaceId: row.connection.workspaceId,
-      recordId: row.credential.id,
-      provider: `${row.connection.provider}-oauth-access`,
-    },
-    tokens.access_token,
-  );
-  const encryptedRefreshToken =
-    typeof tokens.refresh_token === "string"
-      ? await sealVaultSecret(
-          db,
-          {
-            workspaceId: row.connection.workspaceId,
-            recordId: row.credential.id,
-            provider: `${row.connection.provider}-oauth-refresh`,
-          },
-          tokens.refresh_token,
-        )
-      : row.credential.encryptedRefreshToken;
-  const [updated] = await db
-    .update(oauthCredentials)
-    .set({
-      encryptedAccessToken,
-      encryptedRefreshToken,
-      expiresAt: new Date(Date.now() + tokens.expires_in * 1_000),
-      refreshVersion: sql`${oauthCredentials.refreshVersion} + 1`,
-    })
-    .where(
-      and(
-        eq(oauthCredentials.id, row.credential.id),
-        eq(oauthCredentials.refreshVersion, row.credential.refreshVersion),
-        lte(oauthCredentials.expiresAt, new Date(Date.now() + 60_000)),
-      ),
-    )
-    .returning();
-  if (updated) return updated;
-  const winner = await concurrentRefreshWinner(
-    db,
-    connectionId,
-    row.credential.refreshVersion,
-  );
-  if (!winner) throw new Error("OAuth refresh race did not settle");
-  return winner;
+      credentialId: row.connection.id,
+      action: "rotated",
+      provider: row.connection.provider,
+      metadata: { credentialKind: "oauth" },
+    });
+    return updated;
+  });
 }
 
 /** Resolves a provider client through the target-specific credential adapter. */
@@ -274,6 +354,11 @@ export async function providerForConnection(
   db: Database,
   connection: typeof providerConnections.$inferSelect,
 ): Promise<PullRequestProvider> {
+  if (connection.credentialStatus !== "active") {
+    throw new Error(
+      `Provider authorization is ${connection.credentialStatus}; reconnect it before continuing`,
+    );
+  }
   let token: string;
   if (
     !isLocalDeployment() &&
@@ -286,9 +371,11 @@ export async function providerForConnection(
     token = await githubInstallationToken(connection.installationId);
   } else if (connection.credentialKind === "oauth") {
     token = await oauthToken(db, connection);
+  } else if (!isLocalDeployment() && connection.credentialKind === "pat") {
+    token = await hostedPatToken(db, connection);
   } else {
     if (!isLocalDeployment()) {
-      throw new Error("PAT credentials are prohibited in SaaS");
+      throw new Error("Unsupported SaaS provider credential");
     }
     token = await localToken(db, connection);
   }

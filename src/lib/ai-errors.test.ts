@@ -6,7 +6,7 @@ describe("aiErrorPresentation", () => {
     expect(aiErrorPresentation("fetch failed")).toEqual({
       title: "AI service unavailable",
       detail:
-        "The explanation service could not be reached. Try again now. If you self-host ReviewDuck, start it with make start.",
+        "The configured model could not be reached. Check its URL and credentials, then try again.",
     });
   });
 

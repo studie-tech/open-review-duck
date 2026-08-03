@@ -5,21 +5,35 @@ import {
   credentialAuditEvents,
   localCredentials,
   providerConnections,
+  providerPatCredentials,
   pullRequests,
   repositories,
   reviewQueueItems,
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { isLocalDeployment } from "~/server/deployment";
+import { createProvider } from "~/server/providers";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
-import { providerForConnection } from "~/server/providers/credentials";
+import {
+  providerForConnection,
+  revokeGitHubInstallation,
+  revokeProviderOAuth,
+} from "~/server/providers/credentials";
 import { exportRepositoryReviewData } from "~/server/providers/export";
 import {
   reconcileRepositoryIntake,
   reconcileWorkspaceIntake,
 } from "~/server/providers/intake";
 import { supportsAssignedIntake } from "~/server/providers/intake-policy";
+import {
+  hostedPatBaseUrl,
+  sealProviderPat,
+} from "~/server/providers/pat-credential";
 import { ProviderError } from "~/server/providers/types";
+import {
+  ensureProviderWebhook,
+  removeProviderWebhook,
+} from "~/server/providers/webhook-registration";
 import { shouldActivateQueueItem } from "~/server/review/queue-policy";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { assertSafeRemoteUrl } from "~/server/security/remote-url";
@@ -39,6 +53,9 @@ import {
 } from "~/validators/provider";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
+const PROVIDER_WEBHOOK_REGISTRATION_ERROR =
+  "Automatic provider notifications could not be enabled with this account. Reviews still work; use Check now to fetch updates.";
+
 export const providerRouter = createTRPCRouter({
   listConnections: protectedProcedure.query(async ({ ctx }) => {
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
@@ -49,6 +66,7 @@ export const providerRouter = createTRPCRouter({
         displayName: providerConnections.displayName,
         baseUrl: providerConnections.baseUrl,
         credentialKind: providerConnections.credentialKind,
+        credentialStatus: providerConnections.credentialStatus,
         createdAt: providerConnections.createdAt,
       })
       .from(providerConnections)
@@ -58,12 +76,7 @@ export const providerRouter = createTRPCRouter({
   connect: protectedProcedure
     .input(connectProviderSchema)
     .mutation(async ({ ctx, input }) => {
-      if (!isLocalDeployment()) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "SaaS provider connections use App or OAuth authorization",
-        });
-      }
+      const localMode = isLocalDeployment();
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
       await requireWorkspaceAdministrator(
         ctx.db,
@@ -76,51 +89,38 @@ export const providerRouter = createTRPCRouter({
         10,
         10 * 60_000,
       );
-      if (input.baseUrl) {
+      let baseUrl = input.baseUrl;
+      if (!localMode) {
+        try {
+          baseUrl = hostedPatBaseUrl(input.provider, baseUrl);
+        } catch (cause) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              cause instanceof Error
+                ? cause.message
+                : "Provider PAT settings are invalid",
+            cause,
+          });
+        }
+      }
+      if (baseUrl) {
         await assertSafeRemoteUrl(
-          input.baseUrl,
-          env.ALLOW_PRIVATE_PROVIDER_HOSTS,
+          baseUrl,
+          localMode && env.ALLOW_PRIVATE_PROVIDER_HOSTS,
         );
       }
-      const temporaryConnection = {
-        id: randomUUID(),
-        workspaceId: workspace.id,
-        provider: input.provider,
-        externalAccountId: "pending",
-        credentialKind: "local_pat",
-        credentialFingerprint: null,
-        displayName: input.displayName ?? input.provider,
-        installationId: null,
-        localCredentialId: null,
-        baseUrl: input.baseUrl ?? null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as const;
-      const credentialId = randomUUID();
       const fingerprint = createHash("sha256")
-        .update(`${workspace.id}\0${input.provider}\0${input.accessToken}`)
+        .update(
+          `${workspace.id}\0${input.provider}\0${baseUrl ?? ""}\0${input.accessToken}`,
+        )
         .digest("hex");
-      const encryptedPayload = await sealVaultSecret(
-        ctx.db,
-        {
-          workspaceId: workspace.id,
-          recordId: credentialId,
-          provider: input.provider,
-        },
-        JSON.stringify({ token: input.accessToken }),
+      const provider = createProvider(
+        input.provider,
+        input.accessToken,
+        baseUrl,
+        localMode ? "local_pat" : "pat",
       );
-      const provider = await providerForConnection(ctx.db, {
-        ...temporaryConnection,
-        localCredentialId: credentialId,
-      }).catch(async () => {
-        const { createProvider } = await import("~/server/providers");
-        return createProvider(
-          input.provider,
-          input.accessToken,
-          input.baseUrl,
-          "local_pat",
-        );
-      });
       let identity: Awaited<ReturnType<typeof provider.getConnectionIdentity>>;
       try {
         identity = await provider.getConnectionIdentity();
@@ -131,6 +131,82 @@ export const providerRouter = createTRPCRouter({
           cause,
         });
       }
+      if (!localMode) {
+        const connectionId = randomUUID();
+        return ctx.db.transaction(async (tx) => {
+          const [connection] = await tx
+            .insert(providerConnections)
+            .values({
+              id: connectionId,
+              workspaceId: workspace.id,
+              provider: input.provider,
+              externalAccountId: identity.externalAccountId,
+              credentialKind: "pat",
+              credentialFingerprint: fingerprint,
+              displayName: input.displayName ?? identity.displayName,
+              baseUrl,
+            })
+            .onConflictDoUpdate({
+              target: [
+                providerConnections.workspaceId,
+                providerConnections.provider,
+                providerConnections.credentialFingerprint,
+              ],
+              set: {
+                externalAccountId: identity.externalAccountId,
+                credentialKind: "pat",
+                credentialStatus: "active",
+                displayName: input.displayName ?? identity.displayName,
+                installationId: null,
+                localCredentialId: null,
+                baseUrl,
+              },
+            })
+            .returning();
+          if (!connection) throw new Error("Could not persist PAT connection");
+          const encryptedToken = await sealProviderPat(
+            {
+              workspaceId: workspace.id,
+              connectionId: connection.id,
+              provider: input.provider,
+            },
+            input.accessToken,
+          );
+          await tx
+            .insert(providerPatCredentials)
+            .values({ connectionId: connection.id, encryptedToken })
+            .onConflictDoUpdate({
+              target: providerPatCredentials.connectionId,
+              set: { encryptedToken },
+            });
+          await tx.insert(credentialAuditEvents).values({
+            workspaceId: workspace.id,
+            actorId: ctx.auth.userId,
+            credentialId: connection.id,
+            action: "created",
+            provider: input.provider,
+            metadata: { credentialKind: "pat" },
+          });
+          return {
+            id: connection.id,
+            provider: connection.provider,
+            displayName: connection.displayName,
+            baseUrl: connection.baseUrl,
+            credentialKind: connection.credentialKind,
+            credentialStatus: connection.credentialStatus,
+            createdAt: connection.createdAt,
+          };
+        });
+      }
+      const credentialId = randomUUID();
+      const encryptedPayload = await sealVaultSecret(
+        {
+          workspaceId: workspace.id,
+          recordId: credentialId,
+          provider: input.provider,
+        },
+        JSON.stringify({ token: input.accessToken }),
+      );
       return ctx.db.transaction(async (tx) => {
         const [credential] = await tx
           .insert(localCredentials)
@@ -162,10 +238,11 @@ export const providerRouter = createTRPCRouter({
             provider: input.provider,
             externalAccountId: identity.externalAccountId,
             credentialKind: "local_pat",
+            credentialStatus: "active",
             credentialFingerprint: fingerprint,
             displayName: input.displayName ?? identity.displayName,
             localCredentialId: credential.id,
-            baseUrl: input.baseUrl,
+            baseUrl,
           })
           .onConflictDoUpdate({
             target: [
@@ -176,14 +253,21 @@ export const providerRouter = createTRPCRouter({
             set: {
               externalAccountId: identity.externalAccountId,
               displayName: input.displayName ?? identity.displayName,
+              credentialKind: "local_pat",
+              credentialStatus: "active",
               localCredentialId: credential.id,
-              baseUrl: input.baseUrl,
+              installationId: null,
+              baseUrl,
             },
           })
           .returning({
             id: providerConnections.id,
             provider: providerConnections.provider,
             displayName: providerConnections.displayName,
+            baseUrl: providerConnections.baseUrl,
+            credentialKind: providerConnections.credentialKind,
+            credentialStatus: providerConnections.credentialStatus,
+            createdAt: providerConnections.createdAt,
           });
         await tx.insert(credentialAuditEvents).values({
           workspaceId: workspace.id,
@@ -212,32 +296,85 @@ export const providerRouter = createTRPCRouter({
         ),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      let remoteCleanupFailures = 0;
+      /** Records one provider-side cleanup failure without retaining credentials. */
+      const recordRemoteCleanupFailure = (
+        operation: string,
+        cause: unknown,
+        repositoryId?: string,
+      ) => {
+        remoteCleanupFailures += 1;
+        console.error("Provider disconnect cleanup failed", {
+          provider: connection.provider,
+          connectionId: connection.id,
+          operation,
+          repositoryId,
+          cause,
+        });
+      };
       if (!isLocalDeployment() && connection.provider !== "github") {
-        const provider = await providerForConnection(ctx.db, connection);
         const imported = await ctx.db.query.repositories.findMany({
           where: eq(repositories.connectionId, connection.id),
-          columns: { externalId: true },
         });
-        await Promise.all(
-          imported.map((repository) =>
-            provider.removeRepositoryWebhook({
-              repositoryExternalId: repository.externalId,
-              callbackUrl: `${env.APP_URL}/api/webhooks/${connection.provider}`,
-            }),
-          ),
-        );
+        for (const repository of imported) {
+          try {
+            await removeProviderWebhook(ctx.db, { connection, repository });
+          } catch (cause) {
+            recordRemoteCleanupFailure(
+              "remove_repository_webhook",
+              cause,
+              repository.id,
+            );
+          }
+        }
       }
-      const [removed] = await ctx.db
-        .delete(providerConnections)
-        .where(
-          and(
-            eq(providerConnections.id, input.connectionId),
-            eq(providerConnections.workspaceId, workspace.id),
-          ),
-        )
-        .returning({ id: providerConnections.id });
+      if (!isLocalDeployment()) {
+        if (
+          connection.provider === "github" &&
+          connection.credentialKind === "github_app" &&
+          connection.installationId
+        ) {
+          try {
+            await revokeGitHubInstallation(connection.installationId);
+          } catch (cause) {
+            recordRemoteCleanupFailure("revoke_github_installation", cause);
+          }
+        }
+        try {
+          await revokeProviderOAuth(ctx.db, connection);
+        } catch (cause) {
+          recordRemoteCleanupFailure("revoke_oauth_token", cause);
+        }
+      }
+      const removed = await ctx.db.transaction(async (tx) => {
+        await tx.insert(credentialAuditEvents).values({
+          workspaceId: workspace.id,
+          actorId: ctx.auth.userId,
+          credentialId: connection.id,
+          action: "disconnected",
+          provider: connection.provider,
+          metadata: {
+            credentialKind: connection.credentialKind,
+            remoteCleanupComplete: remoteCleanupFailures === 0,
+            remoteCleanupFailures,
+          },
+        });
+        const [deleted] = await tx
+          .delete(providerConnections)
+          .where(
+            and(
+              eq(providerConnections.id, input.connectionId),
+              eq(providerConnections.workspaceId, workspace.id),
+            ),
+          )
+          .returning({ id: providerConnections.id });
+        return deleted;
+      });
       if (!removed) throw new TRPCError({ code: "NOT_FOUND" });
-      return removed;
+      return {
+        ...removed,
+        remoteCleanupComplete: remoteCleanupFailures === 0,
+      };
     }),
 
   listAvailableRepositories: protectedProcedure
@@ -290,15 +427,6 @@ export const providerRouter = createTRPCRouter({
         ).listRepositories()
       ).find((repository) => repository.externalId === input.externalId);
       if (!remote) throw new TRPCError({ code: "NOT_FOUND" });
-      const provider = await providerForConnection(ctx.db, connection);
-      const existing = await ctx.db.query.repositories.findFirst({
-        where: and(
-          eq(repositories.workspaceId, workspace.id),
-          eq(repositories.connectionId, connection.id),
-          eq(repositories.externalId, remote.externalId),
-        ),
-        columns: { id: true },
-      });
       const [repository] = await ctx.db
         .insert(repositories)
         .values({
@@ -324,37 +452,45 @@ export const providerRouter = createTRPCRouter({
           },
         })
         .returning();
+      let importedRepository = repository;
       if (
         repository &&
         !isLocalDeployment() &&
         connection.provider !== "github"
       ) {
-        const secret =
-          connection.provider === "gitlab"
-            ? env.GITLAB_WEBHOOK_SECRET
-            : env.AZURE_WEBHOOK_SECRET;
-        if (!secret) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Provider webhook secret is not configured",
-          });
-        }
         try {
-          await provider.ensureRepositoryWebhook({
-            repositoryExternalId: repository.externalId,
-            callbackUrl: `${env.APP_URL}/api/webhooks/${connection.provider}`,
-            secret,
-          });
+          await ensureProviderWebhook(ctx.db, { connection, repository });
+          const [updated] = await ctx.db
+            .update(repositories)
+            .set({ intakeLastError: null })
+            .where(
+              and(
+                eq(repositories.id, repository.id),
+                eq(
+                  repositories.intakeLastError,
+                  PROVIDER_WEBHOOK_REGISTRATION_ERROR,
+                ),
+              ),
+            )
+            .returning();
+          importedRepository = updated ?? repository;
         } catch (cause) {
-          if (!existing) {
-            await ctx.db
-              .delete(repositories)
-              .where(eq(repositories.id, repository.id));
-          }
-          throw cause;
+          console.error("Provider webhook registration failed", {
+            provider: connection.provider,
+            repositoryId: repository.id,
+            cause,
+          });
+          const [updated] = await ctx.db
+            .update(repositories)
+            .set({
+              intakeLastError: PROVIDER_WEBHOOK_REGISTRATION_ERROR,
+            })
+            .where(eq(repositories.id, repository.id))
+            .returning();
+          importedRepository = updated ?? repository;
         }
       }
-      return repository;
+      return importedRepository;
     }),
 
   listImportedRepositories: protectedProcedure.query(async ({ ctx }) => {
@@ -440,6 +576,13 @@ export const providerRouter = createTRPCRouter({
         where: eq(providerConnections.id, repository.connectionId),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      if (connection.credentialStatus !== "active") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Reconnect this provider before enabling automatic pull-request intake.",
+        });
+      }
       if (input.mode === "assigned" && !supportsAssignedIntake(connection)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -549,6 +692,13 @@ export const providerRouter = createTRPCRouter({
         where: eq(providerConnections.id, repository.connectionId),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      if (input.mode !== "manual" && connection.credentialStatus !== "active") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Reconnect this provider before enabling automatic pull-request intake.",
+        });
+      }
       if (input.mode === "assigned" && !supportsAssignedIntake(connection)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -640,6 +790,11 @@ export const providerRouter = createTRPCRouter({
     .input(repositoryIdSchema)
     .mutation(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      await requireWorkspaceAdministrator(
+        ctx.db,
+        workspace.id,
+        ctx.auth.userId,
+      );
       const repository = await ctx.db.query.repositories.findFirst({
         where: and(
           eq(repositories.id, input.repositoryId),
@@ -652,12 +807,15 @@ export const providerRouter = createTRPCRouter({
           where: eq(providerConnections.id, repository.connectionId),
         });
         if (connection && connection.provider !== "github") {
-          await (
-            await providerForConnection(ctx.db, connection)
-          ).removeRepositoryWebhook({
-            repositoryExternalId: repository.externalId,
-            callbackUrl: `${env.APP_URL}/api/webhooks/${connection.provider}`,
-          });
+          try {
+            await removeProviderWebhook(ctx.db, { connection, repository });
+          } catch (cause) {
+            console.error("Provider webhook cleanup failed during deletion", {
+              provider: connection.provider,
+              repositoryId: repository.id,
+              cause,
+            });
+          }
         }
       }
       const [deleted] = await ctx.db
@@ -677,6 +835,11 @@ export const providerRouter = createTRPCRouter({
     .input(repositoryRetentionSchema)
     .mutation(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      await requireWorkspaceAdministrator(
+        ctx.db,
+        workspace.id,
+        ctx.auth.userId,
+      );
       const [updated] = await ctx.db
         .update(repositories)
         .set({

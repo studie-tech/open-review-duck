@@ -4,22 +4,15 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import { eq } from "drizzle-orm";
-import { z } from "zod";
 import { localAiConfigurations } from "@/drizzle/schema";
 import { env } from "~/env";
+import { readLocalAiSecret } from "~/server/ai/local-configuration";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { createSafeRemoteFetch } from "~/server/security/remote-url";
-import { openVaultSecret } from "~/server/security/vault";
 import { openRouterWorkspaceKey } from "./openrouter-keys";
 
 type Database = typeof database;
-
-const localConfiguration = z.object({
-  apiKey: z.string().optional(),
-  baseUrl: z.string().url(),
-  headers: z.record(z.string(), z.string()).default({}),
-});
 
 export interface ResolvedAiModel {
   model: LanguageModel;
@@ -64,7 +57,8 @@ export async function resolveAiModel(
     };
   }
   if (input.provider === "opencode") {
-    const apiKey = isLocalDeployment() ? "public" : env.OPENCODE_API_KEY;
+    if (isLocalDeployment()) return resolveLocalModel(db, input);
+    const apiKey = env.OPENCODE_API_KEY;
     if (!apiKey) throw new Error("Managed Big Pickle is not configured");
     const provider = createOpenAICompatible({
       name: "opencode",
@@ -91,19 +85,11 @@ async function resolveLocalModel(
   if (!row || row.provider !== input.provider || row.model !== input.model) {
     throw new Error("Local AI provider is not configured");
   }
-  const configuration = localConfiguration.parse(
-    JSON.parse(
-      await openVaultSecret(
-        db,
-        {
-          workspaceId: input.workspaceId,
-          recordId: row.id,
-          provider: row.provider,
-        },
-        row.encryptedConfiguration,
-      ),
-    ),
-  );
+  const configuration = await readLocalAiSecret(input.workspaceId, row);
+  if (!configuration) throw new Error("Local AI configuration is unreadable");
+  if (row.provider === "opencode" && !configuration.apiKey) {
+    throw new Error("OpenCode Zen requires your own API key");
+  }
   const provider = createOpenAICompatible({
     name: row.provider,
     apiKey: configuration.apiKey ?? "local",

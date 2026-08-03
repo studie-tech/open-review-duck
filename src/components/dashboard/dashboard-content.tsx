@@ -131,10 +131,12 @@ export function DashboardContent({
               : "Choose a managed model",
           ]
         : configuration.configuration.useManagedModels
-          ? localMode
-            ? ["Free", "Big Pickle with local privacy controls"]
+          ? configuration.configuration.provider === "opencode"
+            ? ["Free", "Managed Big Pickle with privacy controls"]
             : ["Subscriber", "Managed ZDR model with quota guardrails"]
-          : ["BYOK", "Using your encrypted provider key"];
+          : localMode
+            ? ["Connected", "Using your local AI configuration"]
+            : ["BYOK", "Using your encrypted provider key"];
 
   return (
     <PageContainer>

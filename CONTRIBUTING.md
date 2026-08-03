@@ -7,14 +7,15 @@ tests at the layer where behavior is owned.
 Use Node.js 24 and the pinned pnpm version, then run:
 
 ```bash
-pnpm install
-pnpm check
-pnpm test:coverage
+make install
+make check
 pnpm audit:prod
-pnpm db:generate
-pnpm build:agent
-pnpm build
+make build
 ```
+
+Schema changes also need a generated migration and the PostgreSQL integration
+suite. The same checks run in CI against PostgreSQL 18 and both deployment
+targets.
 
 Database lifecycle, authorization, concurrency, quota, and retry changes need a
 PostgreSQL-backed integration test. Do not include credentials, private source,

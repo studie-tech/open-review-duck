@@ -3,11 +3,14 @@
 ReviewDuck processes repository metadata, changed source, review state,
 comments, and optional AI prompts/results to deliver a review. AI is optional.
 
-In SaaS, source-provider authorization uses a GitHub App, GitLab.com OAuth, or
-Microsoft Entra delegated OAuth. ReviewDuck does not accept hosted PATs or user
-model keys. OAuth credentials and service subkeys use per-workspace envelope
-encryption. Source and SCIP artifacts are private UploadThing objects in
-Frankfurt; object metadata contains no repository path, commit, or user.
+In SaaS, source-provider authorization uses a GitHub App, GitLab.com OAuth,
+Microsoft Entra delegated OAuth, or a provider personal access token supplied by
+a workspace administrator. ReviewDuck does not accept user model keys. OAuth
+credentials, provider PATs, service subkeys, and AI transcripts are encrypted
+with workspace-derived keys rooted in a Vercel Sensitive Environment Variable.
+Losing or replacing that root makes the encrypted records unreadable.
+Source and SCIP artifacts are private UploadThing objects in Frankfurt; object
+metadata contains no repository path, commit, or user.
 Authorized browsers receive a non-persisted 60-second signed URL and download
 directly from UploadThing.
 
@@ -34,9 +37,15 @@ request bodies, cookies, and authorization headers are prohibited.
 
 The local appliance sends no telemetry and performs no network request during
 startup or ordinary non-AI use. All state remains in the `/data` volume.
-Optional provider or AI credentials are encrypted there. Big Pickle contacts
-OpenCode only after disclosure acceptance; locally configured providers are
-contacted only after explicit selection.
+Optional provider or AI credentials are encrypted there. Big Pickle requires a
+user-supplied OpenCode Zen API key and contacts OpenCode only after the provider
+is configured and its disclosure is accepted. Other locally configured
+providers are contacted only after explicit selection.
+
+The first local start prints a 15-minute owner link. Once an active owner
+session exists, restarts do not mint another link. The explicit bootstrap
+administration command revokes existing sessions before printing a replacement,
+so its output must be treated as a credential until it expires or is exchanged.
 
 Operators accepting other users' data must publish their controller identity,
 subprocessors, regional scope, contact address, and legally required

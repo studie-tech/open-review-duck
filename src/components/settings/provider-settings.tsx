@@ -20,6 +20,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
 import {
+  type ProviderConnectionMethod,
+  ProviderConnectionMethodPicker,
+} from "~/components/settings/provider-connection-method";
+import {
   type CodeProvider,
   ProviderTokenGuide,
 } from "~/components/settings/provider-token-guide";
@@ -37,23 +41,34 @@ const providers: Array<{
   id: Provider;
   label: string;
   description: string;
+  hostedDescription: string;
 }> = [
   {
     id: "github",
     label: "GitHub",
     description: "Fine-grained token · code read + PR comments",
+    hostedDescription: "GitHub App or fine-grained token",
   },
   {
     id: "gitlab",
     label: "GitLab",
     description: "api scope · personal, project, or group token",
+    hostedDescription: "OAuth or personal, project, or group token",
   },
   {
     id: "azure_devops",
     label: "Azure DevOps",
     description: "PAT · Code (Read & write) permission",
+    hostedDescription: "Microsoft Entra or organization PAT",
   },
 ];
+
+/** Returns the user-facing authorization method for a saved connection. */
+function credentialLabel(kind: string) {
+  if (kind === "github_app") return "GitHub App";
+  if (kind === "oauth") return "OAuth";
+  return "PAT";
+}
 
 /** Renders the provider settings interface. */
 export function ProviderSettings({
@@ -70,6 +85,8 @@ export function ProviderSettings({
   const [connections, setConnections] = useState(initialConnections);
   const [repositories, setRepositories] = useState(initialRepositories);
   const [provider, setProvider] = useState<Provider>("github");
+  const [connectionMethod, setConnectionMethod] =
+    useState<ProviderConnectionMethod>("managed");
   const [showForm, setShowForm] = useState(
     !localMode && initialConnections.length === 0,
   );
@@ -141,17 +158,13 @@ export function ProviderSettings({
       if (connection) {
         setConnections((current) => [
           ...current.filter(({ id }) => id !== connection.id),
-          {
-            ...connection,
-            baseUrl: baseUrl || null,
-            credentialKind: "local_pat",
-            createdAt: new Date(),
-          },
+          connection,
         ]);
         setSelectedConnectionId(connection.id);
       }
       setToken("");
       setAccount("");
+      setConnectionMethod("managed");
       setShowForm(false);
       void invalidateProviderState();
       router.refresh();
@@ -200,7 +213,7 @@ export function ProviderSettings({
     onError: (error) => toast.error(error.message),
   });
   const disconnect = api.provider.disconnect.useMutation({
-    onSuccess: ({ id }) => {
+    onSuccess: ({ id, remoteCleanupComplete }) => {
       setConnectionToDisconnect(undefined);
       const remainingConnections = connections.filter(
         (connection) => connection.id !== id,
@@ -226,7 +239,13 @@ export function ProviderSettings({
         utils.review.dashboard.invalidate(),
       ]);
       router.refresh();
-      toast.success("Provider disconnected");
+      if (remoteCleanupComplete) {
+        toast.success("Provider disconnected");
+      } else {
+        toast.warning(
+          "Provider disconnected locally. The provider could not confirm every remote revocation; verify access in the provider's settings.",
+        );
+      }
     },
     onError: (error) => toast.error(error.message),
   });
@@ -328,6 +347,16 @@ export function ProviderSettings({
 
   /** Derives a truthful connection state from the latest provider request. */
   const connectionStatus = (connection: Connection) => {
+    if (connection.credentialStatus !== "active") {
+      return {
+        label:
+          connection.credentialStatus === "suspended"
+            ? "Suspended"
+            : "Reconnect required",
+        tone: "text-coral",
+        dot: "bg-coral",
+      };
+    }
     if (connection.id !== selectedConnectionId) {
       return { label: "Saved", tone: "text-mist", dot: "bg-fog" };
     }
@@ -385,6 +414,7 @@ export function ProviderSettings({
     setToken("");
     setAccount("");
     setBaseUrl("");
+    setConnectionMethod(localMode ? "pat" : "managed");
     connect.reset();
     setShowForm(true);
     requestAnimationFrame(() =>
@@ -407,7 +437,7 @@ export function ProviderSettings({
           <p className="text-mist mt-2 text-sm">
             {localMode
               ? "Access tokens are encrypted before they are stored in your local data volume."
-              : "Connect through GitHub Apps or provider OAuth. ReviewDuck never asks for or stores a SaaS PAT."}
+              : "Use the provider's authorization flow, or connect with an encrypted access token when organization policy requires it."}
           </p>
         </div>
         {(connections.length > 0 || localMode) && (
@@ -463,6 +493,7 @@ export function ProviderSettings({
                 onClick={() => {
                   setProvider(item.id);
                   setBaseUrl("");
+                  setConnectionMethod("managed");
                   connect.reset();
                 }}
                 className={`rounded-2xl border p-4 text-left transition ${
@@ -478,24 +509,42 @@ export function ProviderSettings({
                   )}
                 </div>
                 <p className="text-mist mt-2 text-[11px] leading-5">
-                  {localMode
-                    ? item.description
-                    : item.id === "github"
-                      ? "GitHub App installation · no user token stored"
-                      : item.id === "gitlab"
-                        ? "OAuth authorization code + PKCE"
-                        : "Microsoft Entra delegated OAuth"}
+                  {localMode ? item.description : item.hostedDescription}
                 </p>
               </button>
             ))}
           </div>
-          {localMode ? (
+          {!localMode && (
+            <ProviderConnectionMethodPicker
+              provider={provider}
+              method={connectionMethod}
+              onChange={(method) => {
+                setConnectionMethod(method);
+                setBaseUrl("");
+                if (method === "managed") setToken("");
+                connect.reset();
+              }}
+            />
+          )}
+          {localMode || connectionMethod === "pat" ? (
             <div className="mt-6 grid gap-4">
               <ProviderTokenGuide
                 key={provider}
                 provider={provider}
                 baseUrl={baseUrl}
               />
+              {!localMode && (
+                <div className="border-line bg-surface-subtle text-mist flex gap-3 rounded-xl border px-4 py-3 text-[11px] leading-5">
+                  <ShieldCheck className="text-lime mt-0.5 size-4 shrink-0" />
+                  <p>
+                    The listed permissions cover source, comments, and review
+                    decisions. ReviewDuck also tries to enable provider event
+                    delivery; if your account cannot manage hooks, the
+                    connection still works and you can fetch updates with
+                    <span className="text-cloud"> Check now</span>.
+                  </p>
+                </div>
+              )}
               <label className="text-mist grid gap-2 text-xs">
                 {provider === "github"
                   ? "Fine-grained personal access token"
@@ -514,8 +563,9 @@ export function ProviderSettings({
                   className="bg-surface text-cloud focus:border-lime/40 h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
                 />
                 <span className="text-fog text-[10px] leading-4">
-                  Stored encrypted. ReviewDuck never displays the token after
-                  connection.
+                  {localMode
+                    ? "Stored encrypted in your local data volume. ReviewDuck never displays the token after connection."
+                    : "Stored with workspace-bound AES-256-GCM encryption. ReviewDuck never displays the token after connection."}
                 </span>
               </label>
               <label className="text-mist grid gap-2 text-xs">
@@ -528,7 +578,7 @@ export function ProviderSettings({
                     setAccount(event.target.value);
                     connect.reset();
                   }}
-                  placeholder="e.g. Work GitHub"
+                  placeholder={`e.g. Work ${providers.find(({ id }) => id === provider)?.label}`}
                   className="bg-surface text-cloud focus:border-lime/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
                 />
                 {requiresConnectionLabel && (
@@ -538,26 +588,35 @@ export function ProviderSettings({
                   </span>
                 )}
               </label>
-              <label className="text-mist grid gap-2 text-xs">
-                {provider === "azure_devops"
-                  ? "Organization URL"
-                  : `${provider === "github" ? "Enterprise" : "Custom"} API URL (optional)`}
-                <input
-                  value={baseUrl}
-                  onChange={(event) => {
-                    setBaseUrl(event.target.value);
-                    connect.reset();
-                  }}
-                  placeholder={
-                    provider === "azure_devops"
-                      ? "https://dev.azure.com/acme"
-                      : provider === "github"
-                        ? "https://github.example.com/api/v3"
-                        : "https://gitlab.example.com/api/v4"
-                  }
-                  className="bg-surface text-cloud focus:border-lime/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
-                />
-              </label>
+              {(localMode || provider === "azure_devops") && (
+                <label className="text-mist grid gap-2 text-xs">
+                  {provider === "azure_devops"
+                    ? "Organization URL"
+                    : `${provider === "github" ? "Enterprise" : "Custom"} API URL (optional)`}
+                  <input
+                    value={baseUrl}
+                    onChange={(event) => {
+                      setBaseUrl(event.target.value);
+                      connect.reset();
+                    }}
+                    placeholder={
+                      provider === "azure_devops"
+                        ? "https://dev.azure.com/acme"
+                        : provider === "github"
+                          ? "https://github.example.com/api/v3"
+                          : "https://gitlab.example.com/api/v4"
+                    }
+                    className="bg-surface text-cloud focus:border-lime/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
+                  />
+                  {!localMode && provider === "azure_devops" && (
+                    <span className="text-fog text-[10px] leading-4">
+                      Enter an organization this PAT can access. Add another
+                      connection for each additional organization you want to
+                      review.
+                    </span>
+                  )}
+                </label>
+              )}
               {connect.error && (
                 <div
                   role="alert"
@@ -576,6 +635,7 @@ export function ProviderSettings({
                 <Button
                   disabled={
                     !token ||
+                    (provider === "azure_devops" && !baseUrl) ||
                     (requiresConnectionLabel && !account.trim()) ||
                     connect.isPending
                   }
@@ -598,8 +658,9 @@ export function ProviderSettings({
           ) : (
             <div className="mt-6 grid gap-4">
               <p className="text-mist text-sm leading-6">
-                Authorization happens on the provider. Access can be revoked
-                from either ReviewDuck or the provider at any time.
+                Authorization happens on the provider. ReviewDuck stores the
+                resulting App or OAuth identity and never receives your
+                password.
               </p>
               {provider === "azure_devops" && (
                 <label className="text-mist grid gap-2 text-xs">
@@ -670,6 +731,9 @@ export function ProviderSettings({
                       <p className="text-fog text-xs capitalize">
                         {connection.provider.replace("_", " ")}
                       </p>
+                      <span className="border-line bg-surface-subtle text-fog rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase">
+                        {credentialLabel(connection.credentialKind)}
+                      </span>
                       <span
                         className={`${status.tone} flex items-center gap-1.5 text-xs sm:hidden`}
                       >
@@ -710,7 +774,9 @@ export function ProviderSettings({
               Imported repositories and their review history will be removed.
               {localMode
                 ? " The locally encrypted provider credential will also be deleted."
-                : " The App/OAuth authorization record will also be deleted."}
+                : connectionToDisconnect.credentialKind === "pat"
+                  ? " The encrypted personal access token will also be deleted. You can revoke it at the provider as well."
+                  : " The App/OAuth authorization record will also be deleted."}
             </>
           }
           confirmLabel="Disconnect"
@@ -767,7 +833,7 @@ export function ProviderSettings({
                   Available repositories
                   {availableRepositories.data && (
                     <span className="border-line bg-surface-subtle text-fog rounded-full border px-2 py-0.5 text-[10px]">
-                      {availableRepositories.data.length} from this token
+                      {availableRepositories.data.length} from this connection
                     </span>
                   )}
                 </p>
