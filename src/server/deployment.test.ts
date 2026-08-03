@@ -38,7 +38,6 @@ import { assertDeploymentConfigured } from "./deployment";
 describe("deployment configuration", () => {
   beforeAll(() => {
     Object.assign(configuration, {
-      OPENCODE_API_KEY: undefined,
       OAUTH_STATE_SECRET: undefined,
       GITHUB_APP_CLIENT_ID: undefined,
       GITHUB_APP_CLIENT_SECRET: undefined,

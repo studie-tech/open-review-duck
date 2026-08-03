@@ -1,7 +1,18 @@
 import "server-only";
 
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, gte, isNotNull, isNull, ne, or, sql, sum } from "drizzle-orm";
+import {
+  and,
+  eq,
+  gte,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+  sum,
+} from "drizzle-orm";
 import {
   aiJobs,
   aiPreferences,
@@ -18,6 +29,10 @@ import {
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { paidReservationMicroUsd } from "~/server/ai/cost";
+import {
+  managedAiMonthlyTokenLimit,
+  managedAiMonthWindow,
+} from "~/server/ai/plan";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
@@ -60,7 +75,7 @@ function estimateAiReservation(
   const estimatedInput = Math.ceil(requestBytes / 3.2);
   return {
     input: Math.min(
-      env.MANAGED_AI_WEEKLY_TOKEN_LIMIT,
+      env.MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT,
       estimatedInput + AI_PROMPT_AND_TOOL_OVERHEAD_TOKENS,
     ),
     output: kind === "review" ? 16_000 : 8_000,
@@ -73,13 +88,12 @@ async function jobScope(
   input: {
     pullRequestId: string;
     userId: string;
-    hasManagedAi: boolean;
+    subscribed: boolean;
   },
 ) {
   const [scope] = await db
     .select({
       workspace: workspaces,
-      repositoryPrivate: repositories.isPrivate,
     })
     .from(pullRequests)
     .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -110,20 +124,18 @@ async function jobScope(
         where: eq(localAiConfigurations.workspaceId, scope.workspace.id),
       })
     : undefined;
-  const paid = !local && input.hasManagedAi;
-  const selectedModel = paid
-    ? (preference?.selectedModel ?? "")
-    : (preference?.selectedModel ?? "big-pickle");
+  const subscribed = !local && input.subscribed;
+  const selectedModel = local
+    ? (preference?.selectedModel ?? "big-pickle")
+    : (env.OPENROUTER_MODEL_ALLOWLIST ?? "");
   let provider: string;
-  if (paid) {
-    provider = "openrouter";
-  } else if (local) {
+  if (local) {
     if (!localConfiguration || selectedModel !== localConfiguration.model) {
       throw new Error("Configure a local AI provider before using AI");
     }
     provider = localConfiguration.provider;
   } else {
-    provider = "opencode";
+    provider = "openrouter";
   }
   if (
     provider === "opencode" &&
@@ -131,29 +143,14 @@ async function jobScope(
   ) {
     throw new Error("Accept the Big Pickle data disclosure before using AI");
   }
-  if (!paid && !local && scope.repositoryPrivate) {
-    throw new Error(
-      "Free AI is available only for provider-verified public repositories",
-    );
-  }
-  if (paid) {
-    const allowed = new Set(
-      (env.OPENROUTER_MODEL_ALLOWLIST ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    );
-    if (!selectedModel || !allowed.has(selectedModel)) {
-      throw new Error(
-        "The selected paid model is not in the deployment allowlist",
-      );
-    }
+  if (!local && !selectedModel) {
+    throw new Error("The managed SaaS model is not configured");
   }
   return {
     model: selectedModel,
-    paid,
     provider,
     snapshot,
+    monthlyTokenLimit: managedAiMonthlyTokenLimit(subscribed),
     useManagedQuota: !local,
     workspaceId: scope.workspace.id,
   };
@@ -169,14 +166,15 @@ async function reserveManagedQuota(
     inputTokens: number;
     outputTokens: number;
     reservedMicroUsd: number;
+    monthlyTokenLimit: number;
   },
 ) {
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
-  const weekStart = new Date(dayStart);
-  weekStart.setUTCDate(weekStart.getUTCDate() - weekStart.getUTCDay());
+  const { startsAt: monthStart, resetsAt: monthEnd } =
+    managedAiMonthWindow(dayStart);
   await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${`ai-quota:${input.workspaceId}`}))`,
+    sql`select pg_advisory_xact_lock(hashtext(${`ai-quota:${input.userId}`}))`,
   );
   if (input.reservedMicroUsd > 0) {
     const month = new Date().toISOString().slice(0, 7);
@@ -234,7 +232,7 @@ async function reserveManagedQuota(
   ) {
     throw new Error("Daily user AI request limit reached");
   }
-  const [weekly] = await tx
+  const [monthly] = await tx
     .select({
       input: sum(aiUsage.inputTokens),
       output: sum(aiUsage.outputTokens),
@@ -244,19 +242,20 @@ async function reserveManagedQuota(
     .from(aiUsage)
     .where(
       and(
-        eq(aiUsage.workspaceId, input.workspaceId),
-        gte(aiUsage.day, weekStart),
+        eq(aiUsage.userId, input.userId),
+        gte(aiUsage.day, monthStart),
+        lt(aiUsage.day, monthEnd),
       ),
     );
-  const weeklyTokens =
-    Number(weekly?.input ?? 0) +
-    Number(weekly?.output ?? 0) +
-    Number(weekly?.reservedInput ?? 0) +
-    Number(weekly?.reservedOutput ?? 0) +
+  const monthlyTokens =
+    Number(monthly?.input ?? 0) +
+    Number(monthly?.output ?? 0) +
+    Number(monthly?.reservedInput ?? 0) +
+    Number(monthly?.reservedOutput ?? 0) +
     input.inputTokens +
     input.outputTokens;
-  if (weeklyTokens > env.MANAGED_AI_WEEKLY_TOKEN_LIMIT) {
-    throw new Error("Weekly managed AI token limit reached");
+  if (monthlyTokens > input.monthlyTokenLimit) {
+    throw new Error("Monthly AI token limit reached");
   }
   await tx
     .insert(aiUsage)
@@ -289,7 +288,7 @@ async function estimatePaidCostReservation(
   });
   if (!model?.supportsTools) {
     throw new Error(
-      "The selected paid model is missing a current tool-capable catalog entry",
+      "The managed model is missing a current tool-capable catalog entry",
     );
   }
   return paidReservationMicroUsd(reservation, model);
@@ -306,7 +305,7 @@ export async function createAiJob(
     focusLine?: number;
     threadId?: string;
     userId: string;
-    hasManagedAi: boolean;
+    subscribed: boolean;
   },
 ) {
   const scope = await jobScope(db, input);
@@ -323,7 +322,7 @@ export async function createAiJob(
   );
   if (units.length === 0) throw new Error("No review context found");
   const reservation = estimateAiReservation(units, input.kind);
-  const reservedMicroUsd = scope.paid
+  const reservedMicroUsd = scope.useManagedQuota
     ? await estimatePaidCostReservation(db, scope.model, reservation)
     : 0;
   return db.transaction(async (tx) => {
@@ -355,6 +354,7 @@ export async function createAiJob(
         inputTokens: reservation.input,
         outputTokens: reservation.output,
         reservedMicroUsd,
+        monthlyTokenLimit: scope.monthlyTokenLimit,
       });
     }
     const jobId = crypto.randomUUID();

@@ -14,11 +14,10 @@ metadata contains no repository path, commit, or user.
 Authorized browsers receive a non-persisted 60-second signed URL and download
 directly from UploadThing.
 
-Free Big Pickle is limited to provider-verified public SaaS repositories. Paid
-AI uses a service-owned OpenRouter workspace subkey and requires Zero Data
-Retention. The current Big Pickle disclosure states that processing occurs in
-the United States, access is limited-time, and submitted data may be used for
-model improvement. Consent is versioned and revocable.
+SaaS AI uses one deployment-managed model through a service-owned OpenRouter
+workspace subkey and requires Zero Data Retention. Free and subscribed accounts
+use the same model with different monthly token allowances. SaaS users never
+provide model credentials or select a provider or model.
 
 Workflow event payloads contain identifiers, hashes, counters, and statuses
 only. Source, prompts, tool output, model output, credentials, and signed URLs

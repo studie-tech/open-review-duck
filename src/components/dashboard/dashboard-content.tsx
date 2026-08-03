@@ -17,19 +17,23 @@ import { PullRequestList } from "~/components/dashboard/pull-request-list";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import { partitionReviewQueue } from "~/lib/review-queue";
+import { formatTokenCount } from "~/lib/token-usage";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type DashboardPullRequests = RouterOutputs["review"]["dashboard"];
 type AiConfiguration = RouterOutputs["ai"]["configuration"];
+type AiPlanUsage = RouterOutputs["ai"]["planUsage"];
 
 /** Renders live dashboard data and follows durable synchronization progress. */
 export function DashboardContent({
   initialPullRequests,
   initialAiConfiguration,
+  initialAiPlanUsage,
   localMode,
 }: {
   initialPullRequests: DashboardPullRequests;
   initialAiConfiguration: AiConfiguration;
+  initialAiPlanUsage: AiPlanUsage;
   localMode: boolean;
 }) {
   const utils = api.useUtils();
@@ -51,10 +55,17 @@ export function DashboardContent({
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
+  const aiPlanUsage = api.ai.planUsage.useQuery(undefined, {
+    enabled: !localMode,
+    initialData: initialAiPlanUsage ?? undefined,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
   const hadActiveSync = useRef(false);
   const reviews = pullRequests.data ?? initialPullRequests;
   const synchronizing = activeSyncs.data ?? [];
   const configuration = aiConfiguration.data ?? initialAiConfiguration;
+  const planUsage = aiPlanUsage.data ?? initialAiPlanUsage;
 
   /** Updates one queue item immediately while the server mutation settles. */
   function setQueueState(
@@ -120,23 +131,30 @@ export function DashboardContent({
 
   const { needsReview, reviewed, closed, removed } =
     partitionReviewQueue(reviews);
-  const aiStatus =
+  const localAiStatus =
     configuration.mode === "off"
       ? ["Off", "Enable when you want assistance"]
       : !configuration.configuration
-        ? [
-            "Setup",
-            localMode
-              ? "Connect your preferred model provider"
-              : "Choose a managed model",
-          ]
+        ? ["Setup", "Connect your preferred model provider"]
         : configuration.configuration.useManagedModels
           ? configuration.configuration.provider === "opencode"
             ? ["Free", "Managed Big Pickle with privacy controls"]
             : ["Subscriber", "Managed ZDR model with quota guardrails"]
-          : localMode
-            ? ["Connected", "Using your local AI configuration"]
-            : ["BYOK", "Using your encrypted provider key"];
+          : ["Connected", "Using your local AI configuration"];
+  const resetLabel = planUsage?.resetsAt.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  const aiStatus =
+    !localMode && planUsage
+      ? [
+          `${formatTokenCount(planUsage.usedTokens)} / ${formatTokenCount(planUsage.limitTokens)}`,
+          `${formatTokenCount(planUsage.remainingTokens)} left · resets ${resetLabel}`,
+        ]
+      : localAiStatus;
+  const aiUsagePercent = planUsage
+    ? Math.min(100, (planUsage.usedTokens / planUsage.limitTokens) * 100)
+    : 0;
 
   return (
     <PageContainer>
@@ -186,6 +204,29 @@ export function DashboardContent({
               {value}
             </p>
             <p className="text-fog mt-1 text-[11px]">{detail}</p>
+            {index === 2 && !localMode && planUsage && (
+              <>
+                <div
+                  className="bg-surface-subtle mt-3 h-1.5 overflow-hidden rounded-full"
+                  role="progressbar"
+                  aria-label="Monthly AI token usage"
+                  aria-valuemin={0}
+                  aria-valuemax={planUsage.limitTokens}
+                  aria-valuenow={planUsage.usedTokens}
+                >
+                  <div
+                    className="bg-violet h-full rounded-full"
+                    style={{ width: `${aiUsagePercent}%` }}
+                  />
+                </div>
+                <Link
+                  href="/settings/ai"
+                  className="text-violet mt-3 inline-flex text-[11px] font-medium hover:underline"
+                >
+                  {planUsage.subscribed ? "Manage plan" : "View plans"}
+                </Link>
+              </>
+            )}
           </article>
         ))}
       </section>

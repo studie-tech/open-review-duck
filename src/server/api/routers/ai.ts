@@ -15,6 +15,7 @@ import {
   readLocalAiSecret,
   resolveLocalAiCredentials,
 } from "~/server/ai/local-configuration";
+import { managedAiPlanUsage, PAID_AI_FEATURE } from "~/server/ai/plan";
 import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
   CURRENT_AI_AGENT_VERSION,
@@ -49,25 +50,20 @@ const providerModelsSchema = z.object({
   data: z.array(z.object({ id: z.string().min(1) })),
 });
 
-/** Returns the immutable intersection exposed by deployment configuration. */
-function allowedManagedModels() {
-  return new Set([
-    "big-pickle",
-    ...(env.OPENROUTER_MODEL_ALLOWLIST ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
-  ]);
+/** Returns the single managed model selected by the SaaS deployment. */
+function managedSaasModel() {
+  const model = env.OPENROUTER_MODEL_ALLOWLIST?.trim();
+  if (!model || model.includes(",")) {
+    throw new Error("The managed SaaS model is not configured");
+  }
+  return model;
 }
 
 /** Projects a stored preference without returning any encrypted credentials. */
-function publicConfiguration(
-  preference: typeof aiPreferences.$inferSelect | undefined,
-) {
+function publicConfiguration(managedModel: string) {
   return {
-    provider:
-      preference?.selectedModel === "big-pickle" ? "opencode" : "openrouter",
-    model: preference?.selectedModel ?? "big-pickle",
+    provider: "openrouter",
+    model: managedModel,
     baseUrl: null,
     useManagedModels: true,
     hasApiKey: false,
@@ -78,15 +74,14 @@ function publicConfiguration(
 const safeAiStartMessages = new Set([
   "Pull request not found",
   "Accept the Big Pickle data disclosure before using AI",
-  "Free AI is available only for provider-verified public repositories",
-  "The selected paid model is not in the deployment allowlist",
+  "The managed SaaS model is not configured",
   "No review snapshot found",
   "No review context found",
   "Daily managed AI request limit reached",
   "Daily user AI request limit reached",
-  "Weekly managed AI token limit reached",
+  "Monthly AI token limit reached",
   "Workspace monthly AI budget is exhausted",
-  "The selected paid model is missing a current tool-capable catalog entry",
+  "The managed model is missing a current tool-capable catalog entry",
   "Configure a local AI provider before using AI",
   "Too many requests. Wait a moment and try again.",
 ]);
@@ -105,7 +100,8 @@ export const aiRouter = createTRPCRouter({
     const preference = await ctx.db.query.aiPreferences.findFirst({
       where: eq(aiPreferences.workspaceId, workspace.id),
     });
-    const localConfiguration = isLocalDeployment()
+    const local = isLocalDeployment();
+    const localConfiguration = local
       ? await ctx.db.query.localAiConfigurations.findFirst({
           where: eq(localAiConfigurations.workspaceId, workspace.id),
         })
@@ -113,19 +109,20 @@ export const aiRouter = createTRPCRouter({
     const localSecret = localConfiguration
       ? await readLocalAiSecret(workspace.id, localConfiguration)
       : undefined;
+    const managedModel = local
+      ? (preference?.selectedModel ?? "big-pickle")
+      : managedSaasModel();
     return {
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
-      managedModel: preference?.selectedModel ?? "big-pickle",
-      managedModels: ctx.auth.has({ feature: "paid_ai_models" })
-        ? [...allowedManagedModels()]
-        : ["big-pickle"],
+      managedModel,
+      managedModels: [managedModel],
       disclosure: {
         accepted: Boolean(preference?.freeProviderDisclosureAcceptedAt),
         version: env.BIG_PICKLE_DISCLOSURE_VERSION,
       },
-      configuration: isLocalDeployment()
+      configuration: local
         ? localConfiguration && localSecret
           ? {
               provider: localConfiguration.provider,
@@ -136,8 +133,16 @@ export const aiRouter = createTRPCRouter({
               hasHeaders: Object.keys(localSecret.headers).length > 0,
             }
           : null
-        : publicConfiguration(preference),
+        : publicConfiguration(managedModel),
     };
+  }),
+
+  planUsage: protectedProcedure.query(async ({ ctx }) => {
+    if (isLocalDeployment()) return null;
+    return managedAiPlanUsage(ctx.db, {
+      userId: ctx.auth.userId,
+      subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
+    });
   }),
 
   testConfiguration: protectedProcedure
@@ -242,12 +247,7 @@ export const aiRouter = createTRPCRouter({
         ctx.auth.userId,
       );
       const local = isLocalDeployment();
-      const paid = !local && ctx.auth.has({ feature: "paid_ai_models" });
-      const selectedModel = input.useManagedModels
-        ? paid
-          ? input.model
-          : "big-pickle"
-        : input.model;
+      const selectedModel = local ? input.model : managedSaasModel();
       if (!local && !input.useManagedModels) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -260,10 +260,10 @@ export const aiRouter = createTRPCRouter({
           message: "Local AI requires your own model or provider credential",
         });
       }
-      if (!local && !allowedManagedModels().has(selectedModel)) {
+      if (!local && input.model !== selectedModel) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "The selected model is not in the deployment allowlist",
+          message: "SaaS uses the deployment-managed model",
         });
       }
       if (local && !input.useManagedModels) {
@@ -348,6 +348,9 @@ export const aiRouter = createTRPCRouter({
     }),
 
   acceptBigPickleDisclosure: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!isLocalDeployment()) {
+      throw new TRPCError({ code: "NOT_FOUND" });
+    }
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
     await ctx.db
       .insert(aiPreferences)
@@ -367,6 +370,9 @@ export const aiRouter = createTRPCRouter({
   }),
 
   revokeBigPickleDisclosure: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!isLocalDeployment()) {
+      throw new TRPCError({ code: "NOT_FOUND" });
+    }
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
     const activeJobs = await ctx.db.query.aiJobs.findMany({
       columns: { id: true, workflowRunId: true },
@@ -435,7 +441,7 @@ export const aiRouter = createTRPCRouter({
         const job = await createAiJob(ctx.db, {
           ...input,
           userId: ctx.auth.userId,
-          hasManagedAi: ctx.auth.has({ feature: "paid_ai_models" }),
+          subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
         });
         const run = await scheduleAiJob(ctx.db, job.id);
         return { ...job, workflowRunId: run.workflowRunId };

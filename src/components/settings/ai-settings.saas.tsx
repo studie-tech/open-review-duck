@@ -1,37 +1,46 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { PricingTable, Show } from "@clerk/nextjs";
+import { SubscriptionDetailsButton } from "@clerk/nextjs/experimental";
+import { ArrowUpRight, Loader2, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
+import { formatTokenCount } from "~/lib/token-usage";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Configuration = RouterOutputs["ai"]["configuration"];
+type PlanUsage = NonNullable<RouterOutputs["ai"]["planUsage"]>;
 
-/** Renders managed SaaS model preferences without credential inputs. */
+/** Renders SaaS AI preferences, monthly usage, and Clerk subscription controls. */
 export function SaasAiSettings({
   initialConfiguration,
+  initialPlanUsage,
 }: {
   initialConfiguration: Configuration;
+  initialPlanUsage: PlanUsage;
 }) {
   const router = useRouter();
   const utils = api.useUtils();
   const [mode, setMode] = useState(initialConfiguration.mode);
-  const [model, setModel] = useState(initialConfiguration.managedModel);
   const [reviewPullRequests, setReviewPullRequests] = useState(
     initialConfiguration.reviewPullRequests,
   );
-  const [disclosureAccepted, setDisclosureAccepted] = useState(
-    initialConfiguration.disclosure.accepted,
+  const planUsage = api.ai.planUsage.useQuery(undefined, {
+    initialData: initialPlanUsage,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+  const usage = planUsage.data ?? initialPlanUsage;
+  const usagePercent = Math.min(
+    100,
+    Math.round((usage.usedTokens / usage.limitTokens) * 100),
   );
-  const acceptDisclosure = api.ai.acceptBigPickleDisclosure.useMutation({
-    onSuccess: () => {
-      setDisclosureAccepted(true);
-      void utils.ai.configuration.invalidate();
-    },
-    onError: (error) => toast.error(error.message),
+  const resetLabel = usage.resetsAt.toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
   });
   const save = api.ai.saveConfiguration.useMutation({
     onSuccess: () => {
@@ -48,19 +57,98 @@ export function SaasAiSettings({
   return (
     <PageContainer>
       <p className="text-violet text-xs font-semibold tracking-[.18em] uppercase">
-        Optional assistant
+        AI assistant
       </p>
       <h1 className="font-editorial mt-3 text-4xl font-medium tracking-[-.04em]">
-        Managed AI with clear boundaries
+        Usage, preferences, and billing
       </h1>
       <p className="text-mist mt-2 max-w-2xl text-sm leading-6">
-        SaaS uses service-owned models only. You never need to enter a model API
-        key, provider token, or custom endpoint.
+        ReviewDuck manages one privacy-protected model for every account. Your
+        plan controls how many tokens you can use each month.
       </p>
-      <section className="bg-surface/70 mt-9 grid gap-5 rounded-3xl border border-line p-6">
-        <label className="text-mist grid gap-2 text-xs">
+
+      <section className="mt-9 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(16rem,.55fr)]">
+        <article className="bg-surface/70 rounded-3xl border border-line p-6">
+          <div className="flex items-start justify-between gap-5">
+            <div>
+              <p className="text-mist text-xs">Monthly token usage</p>
+              <p className="mt-2 text-3xl font-semibold tracking-tight">
+                {usage.usedTokens.toLocaleString()}{" "}
+                <span className="text-mist text-base font-normal">
+                  / {usage.limitTokens.toLocaleString()}
+                </span>
+              </p>
+            </div>
+            <span className="bg-violet/10 text-violet grid size-10 place-items-center rounded-xl">
+              <Sparkles className="size-4" />
+            </span>
+          </div>
+          <div
+            className="bg-surface-subtle mt-6 h-2 overflow-hidden rounded-full"
+            role="progressbar"
+            aria-label="Monthly AI token usage"
+            aria-valuemin={0}
+            aria-valuemax={usage.limitTokens}
+            aria-valuenow={usage.usedTokens}
+          >
+            <div
+              className="bg-violet h-full rounded-full transition-[width]"
+              style={{ width: `${usagePercent}%` }}
+            />
+          </div>
+          <div className="text-fog mt-3 flex flex-wrap justify-between gap-2 text-xs">
+            <span>{formatTokenCount(usage.remainingTokens)} tokens left</span>
+            <span>
+              Resets{" "}
+              <time dateTime={usage.resetsAt.toISOString()}>{resetLabel}</time>
+            </span>
+          </div>
+        </article>
+
+        <article className="bg-surface/70 rounded-3xl border border-line p-6">
+          <p className="text-mist text-xs">Current plan</p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight">
+            {usage.subscribed ? "Pro" : "Free"}
+          </p>
+          <p className="text-fog mt-2 text-xs leading-5">
+            {usage.subscribed
+              ? "5 million managed AI tokens each month for $20 USD."
+              : "100,000 managed AI tokens included each month."}
+          </p>
+          {usage.subscribed ? (
+            <Show when="signed-in">
+              <SubscriptionDetailsButton for="user">
+                <Button variant="secondary" className="mt-5 w-full">
+                  Manage subscription <ArrowUpRight className="size-4" />
+                </Button>
+              </SubscriptionDetailsButton>
+            </Show>
+          ) : (
+            <a
+              href="#plans"
+              className="text-violet mt-5 inline-flex items-center gap-1 text-sm font-medium hover:underline"
+            >
+              View Pro plan <ArrowUpRight className="size-4" />
+            </a>
+          )}
+        </article>
+      </section>
+
+      <section className="bg-surface/70 mt-6 grid gap-5 rounded-3xl border border-line p-6">
+        <div>
+          <h2 className="text-lg font-medium">Assistant preferences</h2>
+          <p className="text-mist mt-1 text-xs leading-5">
+            Choose when ReviewDuck should spend tokens. The managed model and
+            privacy controls are fixed by the SaaS deployment.
+          </p>
+        </div>
+        <label
+          htmlFor="ai-assistance-timing"
+          className="text-mist grid gap-2 text-xs"
+        >
           Assistance timing
           <select
+            id="ai-assistance-timing"
             value={mode}
             onChange={(event) => setMode(event.target.value as typeof mode)}
             className="bg-surface text-cloud h-11 rounded-xl border border-line px-4 text-sm outline-none"
@@ -68,48 +156,10 @@ export function SaasAiSettings({
             <option value="off">Off</option>
             <option value="on_demand">On demand</option>
             <option value="automatic">
-              Automatically review new revisions
+              Automatically explain each review unit
             </option>
           </select>
         </label>
-        <label className="text-mist grid gap-2 text-xs">
-          Managed model
-          <select
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            className="bg-surface text-cloud h-11 rounded-xl border border-line px-4 font-mono text-sm outline-none"
-          >
-            {initialConfiguration.managedModels.map((modelId) => (
-              <option key={modelId} value={modelId}>
-                {modelId}
-              </option>
-            ))}
-          </select>
-        </label>
-        {model === "big-pickle" && !disclosureAccepted && (
-          <div className="border-violet/25 bg-violet/[.05] rounded-2xl border p-5">
-            <p className="text-cloud text-sm font-medium">
-              Big Pickle data disclosure
-            </p>
-            <p className="text-mist mt-2 text-xs leading-5">
-              Free AI is limited to public repositories. Source snippets,
-              prompts, tool results, and output are processed by OpenCode-hosted
-              infrastructure in the US, may be used for model improvement, and
-              are available free for a limited period.
-            </p>
-            <Button
-              className="mt-4"
-              variant="secondary"
-              disabled={acceptDisclosure.isPending}
-              onClick={() => acceptDisclosure.mutate()}
-            >
-              {acceptDisclosure.isPending && (
-                <Loader2 className="size-4 animate-spin" />
-              )}
-              Accept disclosure
-            </Button>
-          </div>
-        )}
         <label className="bg-surface-subtle text-mist flex items-center justify-between gap-5 rounded-xl border border-line p-4 text-xs">
           <span>
             <span className="text-cloud block text-sm font-medium">
@@ -128,13 +178,11 @@ export function SaasAiSettings({
         </label>
         <div className="flex justify-end">
           <Button
-            disabled={
-              save.isPending || (model === "big-pickle" && !disclosureAccepted)
-            }
+            disabled={save.isPending}
             onClick={() =>
               save.mutate({
-                provider: model === "big-pickle" ? "opencode" : "openrouter",
-                model,
+                provider: "openrouter",
+                model: initialConfiguration.managedModel,
                 clearApiKey: false,
                 clearHeaders: false,
                 headers: {},
@@ -149,6 +197,35 @@ export function SaasAiSettings({
           </Button>
         </div>
       </section>
+
+      {!usage.subscribed && (
+        <section id="plans" className="mt-10 scroll-mt-8">
+          <div className="mb-5">
+            <p className="text-violet text-xs font-semibold tracking-[.18em] uppercase">
+              Upgrade
+            </p>
+            <h2 className="font-editorial mt-2 text-3xl font-medium tracking-[-.035em]">
+              More room for deeper reviews
+            </h2>
+            <p className="text-mist mt-2 max-w-2xl text-sm leading-6">
+              Upgrade securely through Clerk for 5 million tokens every month.
+              Cancel from this page at any time.
+            </p>
+          </div>
+          <div className="bg-surface/55 overflow-hidden rounded-3xl border border-line p-3 sm:p-6">
+            <PricingTable
+              for="user"
+              highlightedPlan="pro"
+              newSubscriptionRedirectUrl="/settings/ai"
+              fallback={
+                <div className="text-mist grid min-h-48 place-items-center text-sm">
+                  Loading subscription options…
+                </div>
+              }
+            />
+          </div>
+        </section>
+      )}
     </PageContainer>
   );
 }
