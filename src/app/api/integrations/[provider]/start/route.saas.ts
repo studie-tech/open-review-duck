@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import { SignJWT } from "jose";
 import { NextResponse } from "next/server";
 import { oauthStates } from "@/drizzle/schema";
@@ -41,13 +42,36 @@ export async function POST(
     throw new Error("Hosted OAuth is not configured");
   }
   const workspace = await ensurePersonalWorkspace(db, authentication.userId);
-  await requireWorkspaceAdministrator(db, workspace.id, authentication.userId);
-  await enforceRateLimit(
-    db,
-    `provider-oauth-start:${workspace.id}:${authentication.userId}`,
-    10,
-    10 * 60_000,
-  );
+  try {
+    await requireWorkspaceAdministrator(
+      db,
+      workspace.id,
+      authentication.userId,
+    );
+    await enforceRateLimit(
+      db,
+      `provider-oauth-start:${workspace.id}:${authentication.userId}`,
+      10,
+      10 * 60_000,
+    );
+  } catch (cause) {
+    if (cause instanceof TRPCError && cause.code === "FORBIDDEN") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    if (cause instanceof TRPCError && cause.code === "TOO_MANY_REQUESTS") {
+      return NextResponse.json(
+        { error: "Too many authorization attempts" },
+        { status: 429 },
+      );
+    }
+    if (cause instanceof TRPCError) {
+      return NextResponse.json(
+        { error: "Authorization could not be started" },
+        { status: 500 },
+      );
+    }
+    throw cause;
+  }
   const id = randomUUID();
   const state = await new SignJWT({ workspaceId: workspace.id, provider })
     .setProtectedHeader({ alg: "HS256" })

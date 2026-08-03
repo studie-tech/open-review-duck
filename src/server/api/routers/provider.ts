@@ -53,6 +53,9 @@ import {
 } from "~/validators/provider";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
+const PROVIDER_WEBHOOK_REGISTRATION_ERROR =
+  "Automatic provider notifications could not be enabled with this account. Reviews still work; use Check now to fetch updates.";
+
 export const providerRouter = createTRPCRouter({
   listConnections: protectedProcedure.query(async ({ ctx }) => {
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
@@ -293,12 +296,36 @@ export const providerRouter = createTRPCRouter({
         ),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      let remoteCleanupFailures = 0;
+      /** Records one provider-side cleanup failure without retaining credentials. */
+      const recordRemoteCleanupFailure = (
+        operation: string,
+        cause: unknown,
+        repositoryId?: string,
+      ) => {
+        remoteCleanupFailures += 1;
+        console.error("Provider disconnect cleanup failed", {
+          provider: connection.provider,
+          connectionId: connection.id,
+          operation,
+          repositoryId,
+          cause,
+        });
+      };
       if (!isLocalDeployment() && connection.provider !== "github") {
         const imported = await ctx.db.query.repositories.findMany({
           where: eq(repositories.connectionId, connection.id),
         });
         for (const repository of imported) {
-          await removeProviderWebhook(ctx.db, { connection, repository });
+          try {
+            await removeProviderWebhook(ctx.db, { connection, repository });
+          } catch (cause) {
+            recordRemoteCleanupFailure(
+              "remove_repository_webhook",
+              cause,
+              repository.id,
+            );
+          }
         }
       }
       if (!isLocalDeployment()) {
@@ -307,9 +334,17 @@ export const providerRouter = createTRPCRouter({
           connection.credentialKind === "github_app" &&
           connection.installationId
         ) {
-          await revokeGitHubInstallation(connection.installationId);
+          try {
+            await revokeGitHubInstallation(connection.installationId);
+          } catch (cause) {
+            recordRemoteCleanupFailure("revoke_github_installation", cause);
+          }
         }
-        await revokeProviderOAuth(ctx.db, connection);
+        try {
+          await revokeProviderOAuth(ctx.db, connection);
+        } catch (cause) {
+          recordRemoteCleanupFailure("revoke_oauth_token", cause);
+        }
       }
       const removed = await ctx.db.transaction(async (tx) => {
         await tx.insert(credentialAuditEvents).values({
@@ -318,7 +353,11 @@ export const providerRouter = createTRPCRouter({
           credentialId: connection.id,
           action: "disconnected",
           provider: connection.provider,
-          metadata: { credentialKind: connection.credentialKind },
+          metadata: {
+            credentialKind: connection.credentialKind,
+            remoteCleanupComplete: remoteCleanupFailures === 0,
+            remoteCleanupFailures,
+          },
         });
         const [deleted] = await tx
           .delete(providerConnections)
@@ -332,7 +371,10 @@ export const providerRouter = createTRPCRouter({
         return deleted;
       });
       if (!removed) throw new TRPCError({ code: "NOT_FOUND" });
-      return removed;
+      return {
+        ...removed,
+        remoteCleanupComplete: remoteCleanupFailures === 0,
+      };
     }),
 
   listAvailableRepositories: protectedProcedure
@@ -421,7 +463,15 @@ export const providerRouter = createTRPCRouter({
           const [updated] = await ctx.db
             .update(repositories)
             .set({ intakeLastError: null })
-            .where(eq(repositories.id, repository.id))
+            .where(
+              and(
+                eq(repositories.id, repository.id),
+                eq(
+                  repositories.intakeLastError,
+                  PROVIDER_WEBHOOK_REGISTRATION_ERROR,
+                ),
+              ),
+            )
             .returning();
           importedRepository = updated ?? repository;
         } catch (cause) {
@@ -433,9 +483,7 @@ export const providerRouter = createTRPCRouter({
           const [updated] = await ctx.db
             .update(repositories)
             .set({
-              reviewIntakeMode: "manual",
-              intakeLastError:
-                "Automatic provider notifications could not be enabled with this account. Reviews still work; use Check now to fetch updates.",
+              intakeLastError: PROVIDER_WEBHOOK_REGISTRATION_ERROR,
             })
             .where(eq(repositories.id, repository.id))
             .returning();
@@ -759,7 +807,15 @@ export const providerRouter = createTRPCRouter({
           where: eq(providerConnections.id, repository.connectionId),
         });
         if (connection && connection.provider !== "github") {
-          await removeProviderWebhook(ctx.db, { connection, repository });
+          try {
+            await removeProviderWebhook(ctx.db, { connection, repository });
+          } catch (cause) {
+            console.error("Provider webhook cleanup failed during deletion", {
+              provider: connection.provider,
+              repositoryId: repository.id,
+              cause,
+            });
+          }
         }
       }
       const [deleted] = await ctx.db

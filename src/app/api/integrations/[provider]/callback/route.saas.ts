@@ -24,6 +24,10 @@ import { requireWorkspaceAdministrator } from "~/server/workspaces/service";
 
 type HostedProvider = "github" | "gitlab" | "azure_devops";
 
+class InstallationClaimedError extends Error {
+  override name = "InstallationClaimedError";
+}
+
 /** Narrows an untrusted route segment to one supported SaaS provider. */
 function hostedProvider(value: string): value is HostedProvider {
   return ["github", "gitlab", "azure_devops"].includes(value);
@@ -280,7 +284,7 @@ async function completeProviderAuthorization(
         columns: { workspaceId: true },
       });
       if (claimed && claimed.workspaceId !== state.workspaceId) {
-        throw new Error(
+        throw new InstallationClaimedError(
           "This GitHub App installation is already connected to another workspace",
         );
       }
@@ -515,6 +519,11 @@ export async function GET(
   try {
     return await completeProviderAuthorization(request, context);
   } catch (cause) {
+    if (cause instanceof InstallationClaimedError) {
+      return securedCallbackResponse(
+        NextResponse.json({ error: cause.message }, { status: 409 }),
+      );
+    }
     console.error("Provider authorization callback failed", {
       provider: (await context.params).provider,
       cause,

@@ -194,10 +194,12 @@ export async function POST(
   }
   const provider = rawProvider as HostedProvider;
   const hookId = new URL(request.url).searchParams.get("hook");
+  const registeredHookId =
+    hookId && z.uuid().safeParse(hookId).success ? hookId : undefined;
   const registeredTarget =
-    provider === "github" || !hookId
+    provider === "github" || !registeredHookId
       ? undefined
-      : await providerWebhookTarget(db, provider, hookId);
+      : await providerWebhookTarget(db, provider, registeredHookId);
   if (provider !== "github" && !registeredTarget) {
     return new NextResponse(null, { status: 404 });
   }

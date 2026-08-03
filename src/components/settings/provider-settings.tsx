@@ -213,7 +213,7 @@ export function ProviderSettings({
     onError: (error) => toast.error(error.message),
   });
   const disconnect = api.provider.disconnect.useMutation({
-    onSuccess: ({ id }) => {
+    onSuccess: ({ id, remoteCleanupComplete }) => {
       setConnectionToDisconnect(undefined);
       const remainingConnections = connections.filter(
         (connection) => connection.id !== id,
@@ -239,7 +239,13 @@ export function ProviderSettings({
         utils.review.dashboard.invalidate(),
       ]);
       router.refresh();
-      toast.success("Provider disconnected");
+      if (remoteCleanupComplete) {
+        toast.success("Provider disconnected");
+      } else {
+        toast.warning(
+          "Provider disconnected locally. The provider could not confirm every remote revocation; verify access in the provider's settings.",
+        );
+      }
     },
     onError: (error) => toast.error(error.message),
   });

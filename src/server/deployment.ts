@@ -4,6 +4,8 @@ import { createPrivateKey } from "node:crypto";
 import { env } from "~/env";
 import type { DeploymentMode } from "~/lib/deployment";
 
+let deploymentConfigurationValidated = false;
+
 /** Returns the explicitly configured application deployment mode. */
 export function deploymentMode(): DeploymentMode {
   return env.DEPLOYMENT_MODE;
@@ -16,10 +18,14 @@ export function isLocalDeployment() {
 
 /** Fails early when the selected deployment is missing mandatory configuration. */
 export function assertDeploymentConfigured() {
+  if (deploymentConfigurationValidated) return;
   if (!env.ENCRYPTION_KEY) {
     throw new Error("Deployment is missing required ENCRYPTION_KEY");
   }
-  if (isLocalDeployment()) return;
+  if (isLocalDeployment()) {
+    deploymentConfigurationValidated = true;
+    return;
+  }
   const missing = [
     ["APP_URL", env.APP_URL],
     ["MIGRATION_DATABASE_URL", env.MIGRATION_DATABASE_URL],
@@ -73,10 +79,18 @@ export function assertDeploymentConfigured() {
   if (new URL(env.APP_URL).protocol !== "https:") {
     throw new Error("SaaS APP_URL must use HTTPS");
   }
-  const githubKey = createPrivateKey(
-    env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n") ?? "",
-  );
+  let githubKey: ReturnType<typeof createPrivateKey>;
+  try {
+    githubKey = createPrivateKey(
+      env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n") ?? "",
+    );
+  } catch (cause) {
+    throw new Error("GITHUB_APP_PRIVATE_KEY is not a readable private key", {
+      cause,
+    });
+  }
   if (githubKey.asymmetricKeyType !== "rsa") {
     throw new Error("GITHUB_APP_PRIVATE_KEY must be an RSA private key");
   }
+  deploymentConfigurationValidated = true;
 }

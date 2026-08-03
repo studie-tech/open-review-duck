@@ -157,7 +157,9 @@ export class AzureDevOpsProvider implements PullRequestProvider {
           (hook) =>
             hook.consumerInputs?.url === input.callbackUrl &&
             hook.publisherInputs?.repository === input.repositoryExternalId &&
-            hook.status !== "disabled",
+            (hook.status === undefined ||
+              hook.status === "enabled" ||
+              hook.status === "onProbation"),
         )
         .map((hook) => [hook.eventType, hook.id]),
     );

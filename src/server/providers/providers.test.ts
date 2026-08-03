@@ -8,7 +8,10 @@ vi.mock("~/server/security/remote-url", () => ({
     globalThis.fetch(url, init),
 }));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 /** Stubs fetch with a successful JSON response for provider tests. */
 function mockJson(body: unknown) {
@@ -213,6 +216,36 @@ describe("provider normalization", () => {
     expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toContain("/hooks/91");
   });
 
+  it("keeps a working GitLab hook when duplicate cleanup fails", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { id: 91, url: "https://app.test/hook" },
+          { id: 92, url: "https://app.test/hook" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ id: 91, url: "https://app.test/hook" }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitLabProvider("token").ensureRepositoryWebhook({
+        repositoryExternalId: "42",
+        callbackUrl: "https://app.test/hook",
+        secret: "signed-secret",
+      }),
+    ).resolves.toEqual(["91"]);
+
+    expect(warning).toHaveBeenCalledWith(
+      "Duplicate GitLab webhook cleanup failed",
+      expect.objectContaining({ hookId: 92 }),
+    );
+  });
+
   it("creates the three required Azure pull-request service hooks", async () => {
     const fetchMock = vi
       .fn()
@@ -247,6 +280,63 @@ describe("provider normalization", () => {
         basicAuthPassword: "signed-secret",
       });
     }
+  });
+
+  it("replaces disabled Azure subscriptions instead of reusing them", async () => {
+    const callbackUrl = "https://app.test/api/webhooks/azure_devops";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          value: [
+            {
+              id: "created-active",
+              status: "enabled",
+              eventType: "git.pullrequest.created",
+              consumerInputs: { url: callbackUrl },
+              publisherInputs: { repository: "repository" },
+            },
+            {
+              id: "updated-probation",
+              status: "onProbation",
+              eventType: "git.pullrequest.updated",
+              consumerInputs: { url: callbackUrl },
+              publisherInputs: { repository: "repository" },
+            },
+            {
+              id: "merged-disabled",
+              status: "disabledBySystem",
+              eventType: "git.pullrequest.merged",
+              consumerInputs: { url: callbackUrl },
+              publisherInputs: { repository: "repository" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "merged-replacement" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new AzureDevOpsProvider(
+        "token",
+        "https://dev.azure.com/acme",
+      ).ensureRepositoryWebhook({
+        repositoryExternalId: "repository",
+        callbackUrl,
+        secret: "signed-secret",
+      }),
+    ).resolves.toEqual([
+      "created-active",
+      "updated-probation",
+      "merged-replacement",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)),
+    ).toMatchObject({
+      eventType: "git.pullrequest.merged",
+    });
   });
 
   it("removes only recorded Azure service hooks and tolerates missing hooks", async () => {

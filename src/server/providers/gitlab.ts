@@ -160,7 +160,7 @@ export class GitLabProvider implements PullRequestProvider {
             body,
           },
         );
-    await Promise.all(
+    const duplicateCleanup = await Promise.allSettled(
       matching
         .slice(1)
         .map((hook) =>
@@ -168,9 +168,18 @@ export class GitLabProvider implements PullRequestProvider {
             this.name,
             `${this.apiUrl}/projects/${project}/hooks/${hook.id}`,
             { method: "DELETE", headers: this.headers },
+            [404],
           ),
         ),
     );
+    for (const [index, result] of duplicateCleanup.entries()) {
+      if (result.status === "rejected") {
+        console.warn("Duplicate GitLab webhook cleanup failed", {
+          hookId: matching[index + 1]?.id,
+          cause: result.reason,
+        });
+      }
+    }
     return [String(primary.id)];
   }
   /** Removes every matching application hook from a GitLab project. */

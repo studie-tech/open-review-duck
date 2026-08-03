@@ -67,30 +67,40 @@ export async function ensureProviderWebhook(
       ),
     });
   });
-  return db.transaction(async (tx) => {
+  const hook = await db.query.providerWebhooks.findFirst({
+    where: eq(providerWebhooks.repositoryId, input.repository.id),
+  });
+  if (!hook || hook.provider !== input.connection.provider) {
+    throw new Error("Provider webhook ownership is inconsistent");
+  }
+  const secret = await openVaultSecret(
+    {
+      workspaceId: input.repository.workspaceId,
+      recordId: hook.id,
+      provider: `${input.connection.provider}-webhook`,
+    },
+    hook.encryptedSecret,
+  );
+  const remoteHookIds = await provider.ensureRepositoryWebhook({
+    repositoryExternalId: input.repository.externalId,
+    callbackUrl: callbackUrl(input.connection.provider, hook.id),
+    secret,
+  });
+  const updated = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`provider-webhook:${input.repository.id}`}, 0))`,
     );
-    const hook = await tx.query.providerWebhooks.findFirst({
+    const current = await tx.query.providerWebhooks.findFirst({
       where: eq(providerWebhooks.repositoryId, input.repository.id),
     });
-    if (!hook || hook.provider !== input.connection.provider) {
-      throw new Error("Provider webhook ownership is inconsistent");
+    if (
+      !current ||
+      current.id !== hook.id ||
+      current.provider !== input.connection.provider
+    ) {
+      return undefined;
     }
-    const secret = await openVaultSecret(
-      {
-        workspaceId: input.repository.workspaceId,
-        recordId: hook.id,
-        provider: `${input.connection.provider}-webhook`,
-      },
-      hook.encryptedSecret,
-    );
-    const remoteHookIds = await provider.ensureRepositoryWebhook({
-      repositoryExternalId: input.repository.externalId,
-      callbackUrl: callbackUrl(input.connection.provider, hook.id),
-      secret,
-    });
-    const [updated] = await tx
+    const [persisted] = await tx
       .update(providerWebhooks)
       .set({ remoteHookIds })
       .where(
@@ -100,9 +110,25 @@ export async function ensureProviderWebhook(
         ),
       )
       .returning();
-    if (!updated) throw new Error("Could not persist provider webhook");
-    return updated;
+    return persisted;
   });
+  if (!updated) {
+    try {
+      await provider.removeRepositoryWebhook({
+        repositoryExternalId: input.repository.externalId,
+        callbackUrl: callbackUrl(input.connection.provider, hook.id),
+        remoteHookIds,
+      });
+    } catch (cause) {
+      console.error("Orphaned provider webhook cleanup failed", {
+        provider: input.connection.provider,
+        repositoryId: input.repository.id,
+        cause,
+      });
+    }
+    throw new Error("Could not persist provider webhook");
+  }
+  return updated;
 }
 
 /** Removes only the exact remote hooks owned by one imported repository. */
@@ -117,7 +143,7 @@ export async function removeProviderWebhook(
   });
   if (!registered) return;
   const provider = await providerForConnection(db, input.connection);
-  await db.transaction(async (tx) => {
+  const hook = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`provider-webhook:${input.repository.id}`}, 0))`,
     );
@@ -128,11 +154,6 @@ export async function removeProviderWebhook(
     if (hook.provider !== input.connection.provider) {
       throw new Error("Provider webhook ownership is inconsistent");
     }
-    await provider.removeRepositoryWebhook({
-      repositoryExternalId: input.repository.externalId,
-      callbackUrl: callbackUrl(input.connection.provider, hook.id),
-      remoteHookIds: hook.remoteHookIds,
-    });
     await tx
       .delete(providerWebhooks)
       .where(
@@ -141,6 +162,13 @@ export async function removeProviderWebhook(
           eq(providerWebhooks.repositoryId, input.repository.id),
         ),
       );
+    return hook;
+  });
+  if (!hook) return;
+  await provider.removeRepositoryWebhook({
+    repositoryExternalId: input.repository.externalId,
+    callbackUrl: callbackUrl(input.connection.provider, hook.id),
+    remoteHookIds: hook.remoteHookIds,
   });
 }
 
