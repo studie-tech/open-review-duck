@@ -26,7 +26,7 @@ function upgradeClient({
       ) {
         return { rows: [{ journal_exists: true, legacy: true }] };
       }
-      if (sql.includes("from drizzle.__drizzle_migrations")) {
+      if (sql.includes("as baseline_applied")) {
         const applied = baselineApplied[baselineCheck] ?? false;
         baselineCheck += 1;
         return { rows: [{ baseline_applied: applied }] };
