@@ -3,6 +3,7 @@ import pg from "pg";
 import {
   formatLocalBootstrapLink,
   formatLocalSessionReady,
+  LOCAL_BOOTSTRAP_TTL_MINUTES,
 } from "./local-bootstrap-output.mjs";
 
 const connectionString = process.env.DATABASE_URL;
@@ -53,8 +54,11 @@ try {
     await client.query(
       `insert into open_review_duck_local_bootstrap_token
         ("tokenHash", "expiresAt", "createdAt")
-       values ($1, now() + interval '15 minutes', now())`,
-      [createHash("sha256").update(bootstrap).digest("hex")],
+       values ($1, now() + ($2 * interval '1 minute'), now())`,
+      [
+        createHash("sha256").update(bootstrap).digest("hex"),
+        LOCAL_BOOTSTRAP_TTL_MINUTES,
+      ],
     );
     const url = `http://localhost:${port}/api/local/bootstrap?token=${bootstrap}`;
     output = formatLocalBootstrapLink(url);

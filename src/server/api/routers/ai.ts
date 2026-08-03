@@ -160,6 +160,11 @@ export const aiRouter = createTRPCRouter({
           ctx.db,
           ctx.auth.userId,
         );
+        await requireWorkspaceAdministrator(
+          ctx.db,
+          workspace.id,
+          ctx.auth.userId,
+        );
         const existing = await ctx.db.query.localAiConfigurations.findFirst({
           where: eq(localAiConfigurations.workspaceId, workspace.id),
         });

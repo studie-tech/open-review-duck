@@ -1,3 +1,5 @@
+export const LOCAL_BOOTSTRAP_TTL_MINUTES = 15;
+
 /**
  * Formats a local owner URL as an unmistakable terminal action banner.
  *
@@ -15,7 +17,7 @@ export function formatLocalBootstrapLink(url, options = {}) {
   return (
     `\n${action} ACTION REQUIRED: AUTHORIZE YOUR BROWSER ${reset}\n\n` +
     `${link}>>> ${url} <<<${reset}\n\n` +
-    `${accent}This one-time link expires in 15 minutes.${reset}\n\n`
+    `${accent}This one-time link expires in ${LOCAL_BOOTSTRAP_TTL_MINUTES} minutes.${reset}\n\n`
   );
 }
 

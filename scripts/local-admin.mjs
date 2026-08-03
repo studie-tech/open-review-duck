@@ -4,7 +4,10 @@ import { mkdir, readdir, readFile, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import pg from "pg";
-import { formatLocalBootstrapLink } from "./local-bootstrap-output.mjs";
+import {
+  formatLocalBootstrapLink,
+  LOCAL_BOOTSTRAP_TTL_MINUTES,
+} from "./local-bootstrap-output.mjs";
 
 const [command = "status"] = process.argv.slice(2);
 const execute = promisify(execFile);
@@ -64,8 +67,11 @@ try {
       await client.query(
         `insert into open_review_duck_local_bootstrap_token
          ("tokenHash", "expiresAt", "createdAt")
-         values ($1, now() + interval '15 minutes', now())`,
-        [createHash("sha256").update(token).digest("hex")],
+         values ($1, now() + ($2 * interval '1 minute'), now())`,
+        [
+          createHash("sha256").update(token).digest("hex"),
+          LOCAL_BOOTSTRAP_TTL_MINUTES,
+        ],
       );
       await client.query("commit");
     } catch (cause) {

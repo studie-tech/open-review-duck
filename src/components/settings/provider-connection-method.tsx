@@ -22,10 +22,10 @@ export function ProviderConnectionMethodPicker({
   provider: CodeProvider;
 }) {
   return (
-    <div className="mt-6">
-      <p className="text-fog text-[10px] font-semibold tracking-[.14em] uppercase">
+    <fieldset className="mt-6">
+      <legend className="text-fog text-[10px] font-semibold tracking-[.14em] uppercase">
         Connection method
-      </p>
+      </legend>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <button
           type="button"
@@ -73,6 +73,6 @@ export function ProviderConnectionMethodPicker({
           </p>
         </button>
       </div>
-    </div>
+    </fieldset>
   );
 }

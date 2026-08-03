@@ -56,5 +56,8 @@ describe("hosted provider PAT credential", () => {
     expect(() =>
       hostedPatBaseUrl("github", "https://github.example.com/api/v3"),
     ).toThrow("support GitHub.com and GitLab.com only");
+    expect(() => hostedPatBaseUrl("azure_devops", undefined)).toThrow(
+      "Azure DevOps requires an organization URL",
+    );
   });
 });

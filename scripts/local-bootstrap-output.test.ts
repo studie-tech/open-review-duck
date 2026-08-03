@@ -11,6 +11,7 @@ describe("formatLocalBootstrapLink", () => {
 
     expect(output).toContain("ACTION REQUIRED: AUTHORIZE YOUR BROWSER");
     expect(output).toContain(`>>> ${url} <<<`);
+    expect(output).toContain("This one-time link expires in 15 minutes.");
     expect(output).toContain("\u001b[1;30;103m");
     expect(output).toContain("\u001b[1;4;96m");
   });

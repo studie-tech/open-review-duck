@@ -23,6 +23,15 @@ prevents application authorization. Hosted BYOK model keys remain unsupported.
 OAuth state is signed, one-time, exact-callback-bound, and PKCE-protected.
 Webhook signatures are checked before parsing and delivery IDs are deduplicated.
 
+GitHub PAT connections cannot install repository webhooks, so automatic intake
+uses five-minute reconciliation and **Check now** provides an immediate manual
+refresh. GitLab and Azure DevOps PAT connections install repository webhooks
+when the token is allowed to do so; if registration fails, ReviewDuck switches
+that repository to manual intake and exposes **Check now**. Webhook-backed
+changes arrive with provider delivery latency. Reconciled changes and revoked
+credentials can take up to five minutes to surface unless an administrator runs
+**Check now** first.
+
 SaaS OAuth tokens, provider PATs, managed-model credentials, and AI transcripts
 use AES-256-GCM with workspace/record/provider additional authenticated data. A
 shared 256-bit root stored as a Vercel Sensitive Environment Variable derives an

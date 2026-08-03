@@ -28,11 +28,13 @@ workflows, Tree-sitter grammars, and private file storage. You do not need an
 account, an `.env` file, or a separate database.
 
 ```bash
+export REVIEWDUCK_IMAGE=ghcr.io/studie-tech/open-review-duck:latest
+
 docker run --rm --tty \
   --name open-review-duck \
   -p 127.0.0.1:3000:3000 \
   -v open-review-duck-data:/data \
-  ghcr.io/studie-tech/open-review-duck:latest
+  "$REVIEWDUCK_IMAGE"
 ```
 
 The command prints a highlighted, clickable owner link. Open it within 15
@@ -50,7 +52,7 @@ docker run --detach \
   --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
   -v open-review-duck-data:/data \
-  ghcr.io/studie-tech/open-review-duck:latest
+  "$REVIEWDUCK_IMAGE"
 
 docker logs open-review-duck
 ```
@@ -164,7 +166,7 @@ administration mode against its data volume:
 ```bash
 docker run --rm \
   -v open-review-duck-data:/data \
-  ghcr.io/studie-tech/open-review-duck:latest \
+  "$REVIEWDUCK_IMAGE" \
   admin restore /data/backups/<backup>.dump
 ```
 

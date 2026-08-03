@@ -16,22 +16,23 @@ vi.mock("~/server/security/remote-url", () => ({
 afterEach(() => vi.clearAllMocks());
 
 describe("hosted provider credential resolution", () => {
+  const connection = {
+    id: "22222222-2222-4222-8222-222222222222",
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    provider: "github",
+    externalAccountId: "42",
+    credentialKind: "pat",
+    credentialStatus: "active",
+    credentialFingerprint: "fingerprint",
+    displayName: "Work GitHub",
+    installationId: null,
+    localCredentialId: null,
+    baseUrl: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  } satisfies typeof providerConnections.$inferSelect;
+
   it("opens a saved PAT and authenticates the provider request", async () => {
-    const connection = {
-      id: "22222222-2222-4222-8222-222222222222",
-      workspaceId: "11111111-1111-4111-8111-111111111111",
-      provider: "github",
-      externalAccountId: "42",
-      credentialKind: "pat",
-      credentialStatus: "active",
-      credentialFingerprint: "fingerprint",
-      displayName: "Work GitHub",
-      installationId: null,
-      localCredentialId: null,
-      baseUrl: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    } satisfies typeof providerConnections.$inferSelect;
     const encryptedToken = await sealProviderPat(
       {
         workspaceId: connection.workspaceId,
@@ -68,6 +69,22 @@ describe("hosted provider credential resolution", () => {
       "Bearer hosted-github-pat",
     );
     expect(allowPrivateHosts).toBe(false);
+  });
+
+  it("fails closed when a PAT credential record is missing", async () => {
+    const { providerForConnection } = await import("./credentials");
+    await expect(
+      providerForConnection(
+        {
+          query: {
+            providerPatCredentials: {
+              findFirst: vi.fn().mockResolvedValue(undefined),
+            },
+          },
+        } as never,
+        connection,
+      ),
+    ).rejects.toThrow("Provider PAT credential not found");
   });
 
   it("fails closed for a disabled provider authorization", async () => {

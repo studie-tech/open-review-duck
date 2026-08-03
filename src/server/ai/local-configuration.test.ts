@@ -4,6 +4,7 @@ import { sealVaultSecret } from "~/server/security/vault";
 import {
   readLocalAiSecret,
   resolveLocalAiCredentials,
+  sameProviderEndpoint,
 } from "./local-configuration";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
@@ -68,6 +69,7 @@ describe("local AI credential handling", () => {
         previous,
       ),
     ).toEqual({ apiKey: undefined, headers: {} });
+    expect(sameProviderEndpoint("not a URL", "still not a URL")).toBe(false);
   });
 
   it("supports explicit replacement and removal", () => {

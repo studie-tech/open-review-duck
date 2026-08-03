@@ -158,12 +158,7 @@ export function ProviderSettings({
       if (connection) {
         setConnections((current) => [
           ...current.filter(({ id }) => id !== connection.id),
-          {
-            ...connection,
-            baseUrl: connection.baseUrl,
-            credentialKind: connection.credentialKind,
-            createdAt: connection.createdAt,
-          },
+          connection,
         ]);
         setSelectedConnectionId(connection.id);
       }

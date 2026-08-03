@@ -14,8 +14,11 @@ export function isLocalDeployment() {
   return deploymentMode() === "local";
 }
 
-/** Fails early when SaaS mode is missing mandatory platform configuration. */
-export function assertSaasConfigured() {
+/** Fails early when the selected deployment is missing mandatory configuration. */
+export function assertDeploymentConfigured() {
+  if (!env.ENCRYPTION_KEY) {
+    throw new Error("Deployment is missing required ENCRYPTION_KEY");
+  }
   if (isLocalDeployment()) return;
   const missing = [
     ["APP_URL", env.APP_URL],
@@ -28,7 +31,6 @@ export function assertSaasConfigured() {
     ["CLERK_WEBHOOK_SIGNING_SECRET", env.CLERK_WEBHOOK_SIGNING_SECRET],
     ["UPLOADTHING_TOKEN", env.UPLOADTHING_TOKEN],
     ["STORAGE_ID_KEY", env.STORAGE_ID_KEY],
-    ["ENCRYPTION_KEY", env.ENCRYPTION_KEY],
     ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
     ["OPENROUTER_MANAGEMENT_KEY", env.OPENROUTER_MANAGEMENT_KEY],
     ["OPENROUTER_MODEL_ALLOWLIST", env.OPENROUTER_MODEL_ALLOWLIST],

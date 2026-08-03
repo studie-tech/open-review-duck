@@ -6,6 +6,7 @@ import { cookies, headers } from "next/headers";
 import { AppToaster } from "~/components/app-toaster";
 import { ThemePreferenceScript } from "~/components/theme-preference-script";
 import { THEME_COOKIE_NAME, themePreference } from "~/lib/theme-preference";
+import { assertDeploymentConfigured } from "~/server/deployment";
 import { TRPCReactProvider } from "~/trpc/react";
 
 const siteDescription =
@@ -36,6 +37,7 @@ const geistMono = Geist_Mono({
 export default async function LocalRootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  assertDeploymentConfigured();
   const nonce = (await headers()).get("x-nonce") ?? undefined;
   const savedTheme = themePreference(
     (await cookies()).get(THEME_COOKIE_NAME)?.value,

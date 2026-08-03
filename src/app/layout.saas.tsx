@@ -8,7 +8,7 @@ import { cookies, headers } from "next/headers";
 import { AppToaster } from "~/components/app-toaster";
 import { ThemePreferenceScript } from "~/components/theme-preference-script";
 import { THEME_COOKIE_NAME, themePreference } from "~/lib/theme-preference";
-import { assertSaasConfigured } from "~/server/deployment";
+import { assertDeploymentConfigured } from "~/server/deployment";
 import { TRPCReactProvider } from "~/trpc/react";
 
 const siteDescription =
@@ -51,7 +51,7 @@ export default async function RootLayout({
   const savedTheme = themePreference(
     (await cookies()).get(THEME_COOKIE_NAME)?.value,
   );
-  assertSaasConfigured();
+  assertDeploymentConfigured();
   const application = (
     <body className="bg-ink text-cloud antialiased">
       <TRPCReactProvider localMode={false}>{children}</TRPCReactProvider>

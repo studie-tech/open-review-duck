@@ -414,22 +414,6 @@ export const providerRouter = createTRPCRouter({
       if (
         repository &&
         !isLocalDeployment() &&
-        connection.provider === "github" &&
-        connection.credentialKind === "pat"
-      ) {
-        const [updated] = await ctx.db
-          .update(repositories)
-          .set({
-            intakeLastError:
-              "GitHub PAT connections do not install repository webhooks. Reviews still work; use Check now to fetch updates.",
-          })
-          .where(eq(repositories.id, repository.id))
-          .returning();
-        importedRepository = updated ?? repository;
-      }
-      if (
-        repository &&
-        !isLocalDeployment() &&
         connection.provider !== "github"
       ) {
         try {

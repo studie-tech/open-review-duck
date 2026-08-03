@@ -45,14 +45,22 @@ interface CredentialUpdate {
 
 /** Normalizes a provider endpoint without changing its host or route. */
 function normalizeProviderEndpoint(value: string) {
-  const url = new URL(value);
-  url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-  return url.href;
+  try {
+    const url = new URL(value);
+    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+    return url.href;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Compares provider endpoints without treating a trailing slash as a change. */
 export function sameProviderEndpoint(left: string, right: string) {
-  return normalizeProviderEndpoint(left) === normalizeProviderEndpoint(right);
+  const normalizedLeft = normalizeProviderEndpoint(left);
+  const normalizedRight = normalizeProviderEndpoint(right);
+  return Boolean(
+    normalizedLeft && normalizedRight && normalizedLeft === normalizedRight,
+  );
 }
 
 /** Applies explicit replacement and clearing without replaying secrets to a new host. */
