@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hostnameFromHostHeader, isLoopbackHostname } from "./deployment";
+import {
+  hostnameFromHostHeader,
+  isLoopbackHostname,
+  workflowUsesApplicationDatabase,
+} from "./deployment";
 
 describe("deployment boundaries", () => {
   it.each(["localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]"])(
@@ -20,5 +24,15 @@ describe("deployment boundaries", () => {
     [null, ""],
   ])("extracts the hostname from %s", (host, expected) => {
     expect(hostnameFromHostHeader(host)).toBe(expected);
+  });
+
+  it("checks Workflow tables only for the explicit PostgreSQL world", () => {
+    expect(workflowUsesApplicationDatabase("@workflow/world-postgres")).toBe(
+      true,
+    );
+    expect(workflowUsesApplicationDatabase(undefined)).toBe(false);
+    expect(workflowUsesApplicationDatabase("@workflow/world-vercel")).toBe(
+      false,
+    );
   });
 });

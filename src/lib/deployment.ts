@@ -3,6 +3,11 @@ export type DeploymentMode = "local" | "saas";
 export const LOCAL_USER_ID = "reviewduck-local-user";
 export const LOCAL_SESSION_COOKIE = "reviewduck_local_session";
 
+/** Returns whether the selected Workflow world persists into ReviewDuck's PostgreSQL database. */
+export function workflowUsesApplicationDatabase(targetWorld?: string) {
+  return targetWorld === "@workflow/world-postgres";
+}
+
 /** Returns whether a hostname is confined to the current machine. */
 export function isLoopbackHostname(hostname: string) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");

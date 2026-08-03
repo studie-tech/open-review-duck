@@ -20,6 +20,9 @@ const config = {
   outputFileTracingExcludes: {
     "/api/*": ["**/route_client-reference-manifest.js"],
   },
+  outputFileTracingIncludes: {
+    "/.well-known/workflow/v1/step": ["./public/tree-sitter/**/*.wasm"],
+  },
   pageExtensions: [
     "shared.tsx",
     "shared.ts",

@@ -1,9 +1,12 @@
 "use client";
 
+import "~/styles/globals.css";
+
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
+import { RecoveryError } from "~/components/recovery-error";
 
-/** Reports otherwise-unhandled React failures and provides a minimal recovery UI. */
+/** Reports otherwise-unhandled React failures and provides a branded recovery UI. */
 export default function GlobalError({
   error,
   reset,
@@ -16,14 +19,17 @@ export default function GlobalError({
   }, [error]);
   return (
     <html lang="en">
-      <body>
-        <main>
-          <h1>ReviewDuck could not load.</h1>
-          <p>Your saved work is safe. Retry the request to continue.</p>
-          <button type="button" onClick={reset}>
-            Try again
-          </button>
-        </main>
+      <body className="bg-ink text-cloud antialiased">
+        <RecoveryError
+          backHref="/"
+          backLabel="Back to home"
+          description="The data connection may still be waking up or temporarily unavailable. Your saved reviews and settings are safe."
+          error={error}
+          eyebrow="ReviewDuck temporarily unavailable"
+          logLabel="Application failed to load"
+          reset={reset}
+          title="We couldn’t load your workspace."
+        />
       </body>
     </html>
   );
