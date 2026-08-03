@@ -221,6 +221,7 @@ More information:
 
 - [Privacy and retention](./docs/PRIVACY.md)
 - [Contributing](./CONTRIBUTING.md)
+- [Code of conduct](./CODE_OF_CONDUCT.md)
 - [Support](./SUPPORT.md)
 - [Third-party notices](./THIRD_PARTY_NOTICES.md)
 

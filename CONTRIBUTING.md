@@ -1,5 +1,8 @@
 # Contributing
 
+Participation in this project is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md). By contributing, you agree to follow it.
+
 Open an issue before undertaking a broad behavior or schema change. Keep pull
 requests focused, preserve the language-parser folder boundary, and include
 tests at the layer where behavior is owned.

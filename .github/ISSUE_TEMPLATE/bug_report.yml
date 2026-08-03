@@ -1,0 +1,89 @@
+name: Bug report
+description: Report a reproducible problem with ReviewDuck
+title: "[Bug]: "
+labels:
+  - bug
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve ReviewDuck. Do not include credentials,
+        private source code, or other sensitive data. Security vulnerabilities
+        must be reported through GitHub's private vulnerability-reporting flow.
+  - type: input
+    id: version
+    attributes:
+      label: ReviewDuck version
+      description: Use a release tag, image digest, or hosted deployment date.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - Hosted service
+        - Local appliance
+        - Local development
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Code provider
+      options:
+        - GitHub
+        - GitLab
+        - Azure DevOps
+        - Not provider-specific
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and operating system
+      placeholder: Firefox 142 on Ubuntu 26.04
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable sequence that demonstrates the problem.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or screenshots
+      description: Remove tokens, private source, repository paths, and personal data.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed credentials, private source, and other sensitive data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
