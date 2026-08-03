@@ -7,14 +7,16 @@ import { api } from "~/trpc/server";
 export default async function DashboardPage() {
   await protectApplicationRoute();
   const local = isLocalDeployment();
-  const [pullRequests, aiConfiguration] = await Promise.all([
+  const [pullRequests, aiConfiguration, aiPlanUsage] = await Promise.all([
     api.review.dashboard(),
     api.ai.configuration(),
+    local ? Promise.resolve(null) : api.ai.planUsage(),
   ]);
   return (
     <DashboardContent
       initialPullRequests={pullRequests}
       initialAiConfiguration={aiConfiguration}
+      initialAiPlanUsage={aiPlanUsage}
       localMode={local}
     />
   );

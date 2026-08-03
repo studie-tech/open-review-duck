@@ -23,16 +23,18 @@ export const env = createEnv({
     STORAGE_ID_KEY: environmentSecretSchema.optional(),
     UPLOADTHING_TOKEN: z.string().min(1).optional(),
     OPENROUTER_MANAGEMENT_KEY: z.string().min(1).optional(),
-    OPENROUTER_MODEL_ALLOWLIST: z.string().min(1).optional(),
+    OPENROUTER_MODEL_ALLOWLIST: z
+      .string()
+      .trim()
+      .min(1)
+      .refine((value) => !value.includes(","), {
+        message: "OPENROUTER_MODEL_ALLOWLIST must contain one model slug",
+      })
+      .optional(),
     OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD: z.coerce
       .number()
       .positive()
       .optional(),
-    OPENCODE_API_KEY: z.string().min(1).optional(),
-    OPENCODE_PUBLIC_BASE_URL: z
-      .string()
-      .url()
-      .default("https://opencode.ai/zen/v1"),
     BIG_PICKLE_DISCLOSURE_VERSION: z.string().min(1).default("2026-07-29"),
     GITHUB_APP_ID: z
       .string()
@@ -71,11 +73,16 @@ export const env = createEnv({
       .int()
       .positive()
       .default(10),
-    MANAGED_AI_WEEKLY_TOKEN_LIMIT: z.coerce
+    MANAGED_AI_FREE_MONTHLY_TOKEN_LIMIT: z.coerce
       .number()
       .int()
       .positive()
-      .default(250_000),
+      .default(100_000),
+    MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5_000_000),
     AI_MAX_MODEL_STEPS: z.coerce.number().int().min(9).max(64).default(64),
     AI_MAX_TOOL_CALLS: z.coerce.number().int().min(32).max(256).default(256),
     AI_MAX_DISTINCT_FILES: z.coerce
@@ -135,8 +142,6 @@ export const env = createEnv({
     OPENROUTER_MODEL_ALLOWLIST: process.env.OPENROUTER_MODEL_ALLOWLIST,
     OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD:
       process.env.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD,
-    OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
-    OPENCODE_PUBLIC_BASE_URL: process.env.OPENCODE_PUBLIC_BASE_URL,
     BIG_PICKLE_DISCLOSURE_VERSION: process.env.BIG_PICKLE_DISCLOSURE_VERSION,
     GITHUB_APP_ID: process.env.GITHUB_APP_ID,
     GITHUB_APP_SLUG: process.env.GITHUB_APP_SLUG,
@@ -157,7 +162,10 @@ export const env = createEnv({
     MANAGED_AI_DAILY_REQUEST_LIMIT: process.env.MANAGED_AI_DAILY_REQUEST_LIMIT,
     MANAGED_AI_USER_DAILY_REQUEST_LIMIT:
       process.env.MANAGED_AI_USER_DAILY_REQUEST_LIMIT,
-    MANAGED_AI_WEEKLY_TOKEN_LIMIT: process.env.MANAGED_AI_WEEKLY_TOKEN_LIMIT,
+    MANAGED_AI_FREE_MONTHLY_TOKEN_LIMIT:
+      process.env.MANAGED_AI_FREE_MONTHLY_TOKEN_LIMIT,
+    MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT:
+      process.env.MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT,
     AI_MAX_MODEL_STEPS: process.env.AI_MAX_MODEL_STEPS,
     AI_MAX_TOOL_CALLS: process.env.AI_MAX_TOOL_CALLS,
     AI_MAX_DISTINCT_FILES: process.env.AI_MAX_DISTINCT_FILES,

@@ -58,15 +58,7 @@ export async function resolveAiModel(
   }
   if (input.provider === "opencode") {
     if (isLocalDeployment()) return resolveLocalModel(db, input);
-    const apiKey = env.OPENCODE_API_KEY;
-    if (!apiKey) throw new Error("Managed Big Pickle is not configured");
-    const provider = createOpenAICompatible({
-      name: "opencode",
-      apiKey,
-      baseURL: env.OPENCODE_PUBLIC_BASE_URL,
-      fetch: createSafeRemoteFetch(false),
-    });
-    return { model: provider.chatModel("big-pickle") };
+    throw new Error("SaaS model provider is not allowed");
   }
   if (!isLocalDeployment()) {
     throw new Error("SaaS model provider is not allowed");

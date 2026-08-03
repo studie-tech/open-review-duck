@@ -40,6 +40,11 @@ vi.mock("~/trpc/react", () => ({
           data: options.initialData,
         })),
       },
+      planUsage: {
+        useQuery: vi.fn((_input, options) => ({
+          data: options.initialData,
+        })),
+      },
     },
     review: {
       removeFromQueue: {
@@ -98,6 +103,7 @@ describe("DashboardContent", () => {
           version: "test",
         },
       },
+      initialAiPlanUsage: null,
       localMode: true,
     };
     const view = render(<DashboardContent {...properties} />);
@@ -131,34 +137,6 @@ describe("DashboardContent", () => {
       localMode: true,
       mode: "on_demand" as const,
       configuration: null,
-    },
-    {
-      name: "managed free model",
-      status: "Free",
-      localMode: false,
-      mode: "on_demand" as const,
-      configuration: {
-        provider: "opencode",
-        model: "big-pickle",
-        baseUrl: null,
-        useManagedModels: true,
-        hasApiKey: false,
-        hasHeaders: false,
-      },
-    },
-    {
-      name: "managed subscriber model",
-      status: "Subscriber",
-      localMode: false,
-      mode: "on_demand" as const,
-      configuration: {
-        provider: "openrouter",
-        model: "provider/model",
-        baseUrl: null,
-        useManagedModels: true,
-        hasApiKey: false,
-        hasHeaders: false,
-      },
     },
     {
       name: "configured local provider",
@@ -199,10 +177,53 @@ describe("DashboardContent", () => {
           configuration: testCase.configuration,
           disclosure: { accepted: false, version: "test" },
         }}
+        initialAiPlanUsage={null}
         localMode={testCase.localMode}
       />,
     );
 
     expect(screen.getByText(testCase.status)).toBeVisible();
+  });
+
+  it("shows SaaS monthly token usage and an upgrade link", () => {
+    queryState.activeSyncs = [];
+    render(
+      <DashboardContent
+        initialPullRequests={[]}
+        initialAiConfiguration={{
+          mode: "on_demand",
+          managedModel: "provider/model",
+          managedModels: ["provider/model"],
+          reviewPullRequests: false,
+          configuration: {
+            provider: "openrouter",
+            model: "provider/model",
+            baseUrl: null,
+            useManagedModels: true,
+            hasApiKey: false,
+            hasHeaders: false,
+          },
+          disclosure: { accepted: false, version: "test" },
+        }}
+        initialAiPlanUsage={{
+          tier: "free",
+          subscribed: false,
+          usedTokens: 25_000,
+          limitTokens: 100_000,
+          remainingTokens: 75_000,
+          resetsAt: new Date("2026-09-01T00:00:00Z"),
+        }}
+        localMode={false}
+      />,
+    );
+
+    expect(screen.getByText("25k / 100k")).toBeVisible();
+    expect(screen.getByRole("link", { name: "View plans" })).toHaveAttribute(
+      "href",
+      "/settings/ai",
+    );
+    expect(
+      screen.getByRole("progressbar", { name: "Monthly AI token usage" }),
+    ).toHaveAttribute("aria-valuenow", "25000");
   });
 });
