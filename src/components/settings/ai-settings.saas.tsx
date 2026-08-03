@@ -38,10 +38,12 @@ export function SaasAiSettings({
     100,
     Math.round((usage.usedTokens / usage.limitTokens) * 100),
   );
-  const resetLabel = usage.resetsAt.toLocaleDateString(undefined, {
+  const resetLabel = usage.resetsAt.toLocaleDateString("en-US", {
+    timeZone: "UTC",
     month: "long",
     day: "numeric",
   });
+  const planTokenLimit = usage.limitTokens.toLocaleString("en-US");
   const save = api.ai.saveConfiguration.useMutation({
     onSuccess: () => {
       void Promise.all([
@@ -73,9 +75,9 @@ export function SaasAiSettings({
             <div>
               <p className="text-mist text-xs">Monthly token usage</p>
               <p className="mt-2 text-3xl font-semibold tracking-tight">
-                {usage.usedTokens.toLocaleString()}{" "}
+                {usage.usedTokens.toLocaleString("en-US")}{" "}
                 <span className="text-mist text-base font-normal">
-                  / {usage.limitTokens.toLocaleString()}
+                  / {planTokenLimit}
                 </span>
               </p>
             </div>
@@ -112,8 +114,8 @@ export function SaasAiSettings({
           </p>
           <p className="text-fog mt-2 text-xs leading-5">
             {usage.subscribed
-              ? "5 million managed AI tokens each month for $20 USD."
-              : "100,000 managed AI tokens included each month."}
+              ? `${planTokenLimit} managed AI tokens each month for $20 USD.`
+              : `${planTokenLimit} managed AI tokens included each month.`}
           </p>
           {usage.subscribed ? (
             <Show when="signed-in">

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   configurationInvalidate: vi.fn(),
   guidanceInvalidate: vi.fn(),
   refresh: vi.fn(),
+  toastSuccess: vi.fn(),
 }));
 
 vi.mock("@clerk/nextjs", () => ({
@@ -28,6 +29,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: mocks.refresh }),
 }));
 
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: mocks.toastSuccess },
+}));
+
 vi.mock("~/trpc/react", () => ({
   api: {
     useUtils: () => ({
@@ -41,7 +46,13 @@ vi.mock("~/trpc/react", () => ({
         }),
       },
       saveConfiguration: {
-        useMutation: () => ({ mutate: mocks.save, isPending: false }),
+        useMutation: (options: { onSuccess: () => void }) => ({
+          mutate: (input: unknown) => {
+            mocks.save(input);
+            options.onSuccess();
+          },
+          isPending: false,
+        }),
       },
     },
   },
@@ -104,5 +115,48 @@ describe("SaasAiSettings", () => {
       mode: "on_demand",
       reviewPullRequests: false,
     });
+    expect(mocks.configurationInvalidate).toHaveBeenCalledOnce();
+    expect(mocks.guidanceInvalidate).toHaveBeenCalledOnce();
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("AI preferences saved");
+  });
+
+  it("shows subscription management without the upgrade table for Pro", () => {
+    render(
+      <SaasAiSettings
+        initialConfiguration={{
+          mode: "automatic",
+          managedModel: "provider/model",
+          managedModels: ["provider/model"],
+          reviewPullRequests: true,
+          configuration: {
+            provider: "openrouter",
+            model: "provider/model",
+            baseUrl: null,
+            useManagedModels: true,
+            hasApiKey: false,
+            hasHeaders: false,
+          },
+          disclosure: { accepted: false, version: "test" },
+        }}
+        initialPlanUsage={{
+          tier: "pro",
+          subscribed: true,
+          usedTokens: 500_000,
+          limitTokens: 5_000_000,
+          remainingTokens: 4_500_000,
+          resetsAt: new Date("2026-09-01T00:00:00Z"),
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Pro")).toBeVisible();
+    expect(
+      screen.getByText("5,000,000 managed AI tokens each month for $20 USD."),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Manage subscription" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("clerk-pricing-table")).not.toBeInTheDocument();
   });
 });

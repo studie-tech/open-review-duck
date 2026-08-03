@@ -15,7 +15,11 @@ import {
   readLocalAiSecret,
   resolveLocalAiCredentials,
 } from "~/server/ai/local-configuration";
-import { managedAiPlanUsage, PAID_AI_FEATURE } from "~/server/ai/plan";
+import {
+  managedAiPlanUsage,
+  managedSaasModel,
+  PAID_AI_FEATURE,
+} from "~/server/ai/plan";
 import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
   CURRENT_AI_AGENT_VERSION,
@@ -49,15 +53,6 @@ const terminalStatuses = ["completed", "failed", "cancelled"] as const;
 const providerModelsSchema = z.object({
   data: z.array(z.object({ id: z.string().min(1) })),
 });
-
-/** Returns the single managed model selected by the SaaS deployment. */
-function managedSaasModel() {
-  const model = env.OPENROUTER_MODEL_ALLOWLIST?.trim();
-  if (!model || model.includes(",")) {
-    throw new Error("The managed SaaS model is not configured");
-  }
-  return model;
-}
 
 /** Projects a stored preference without returning any encrypted credentials. */
 function publicConfiguration(managedModel: string) {

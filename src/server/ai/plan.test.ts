@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("~/env", () => ({
   env: {
+    OPENROUTER_MODEL_ALLOWLIST: "provider/model",
     MANAGED_AI_FREE_MONTHLY_TOKEN_LIMIT: 100_000,
     MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT: 5_000_000,
   },
@@ -11,12 +12,17 @@ import {
   managedAiMonthlyTokenLimit,
   managedAiMonthWindow,
   managedAiPlanUsage,
+  managedSaasModel,
 } from "./plan";
 
 describe("managed AI plans", () => {
   it("uses the configured free and subscriber token allowances", () => {
     expect(managedAiMonthlyTokenLimit(false)).toBe(100_000);
     expect(managedAiMonthlyTokenLimit(true)).toBe(5_000_000);
+  });
+
+  it("returns the deployment-managed SaaS model", () => {
+    expect(managedSaasModel()).toBe("provider/model");
   });
 
   it("resets usage at the next UTC calendar month", () => {

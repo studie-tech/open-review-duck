@@ -141,7 +141,8 @@ export function DashboardContent({
             ? ["Free", "Managed Big Pickle with privacy controls"]
             : ["Subscriber", "Managed ZDR model with quota guardrails"]
           : ["Connected", "Using your local AI configuration"];
-  const resetLabel = planUsage?.resetsAt.toLocaleDateString(undefined, {
+  const resetLabel = planUsage?.resetsAt.toLocaleDateString("en-US", {
+    timeZone: "UTC",
     month: "short",
     day: "numeric",
   });

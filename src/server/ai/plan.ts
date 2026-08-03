@@ -9,6 +9,15 @@ type Database = typeof database;
 
 export const PAID_AI_FEATURE = "paid_ai_models";
 
+/** Returns the single managed model selected by the SaaS deployment. */
+export function managedSaasModel() {
+  const model = env.OPENROUTER_MODEL_ALLOWLIST?.trim();
+  if (!model || model.includes(",")) {
+    throw new Error("The managed SaaS model is not configured");
+  }
+  return model;
+}
+
 /** Returns the UTC calendar-month window containing the supplied instant. */
 export function managedAiMonthWindow(now = new Date()) {
   return {
