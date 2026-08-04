@@ -54,6 +54,15 @@ describe("deployment configuration", () => {
     configuration.UPLOADTHING_TOKEN = uploadToken;
   });
 
+  it("rejects a missing maintenance authentication secret", () => {
+    const cronSecret = configuration.CRON_SECRET;
+    configuration.CRON_SECRET = undefined;
+    expect(() => assertDeploymentConfigured()).toThrow(
+      "SaaS mode is missing required configuration: CRON_SECRET",
+    );
+    configuration.CRON_SECRET = cronSecret;
+  });
+
   it("allows feature-specific integrations to remain unconfigured", () => {
     expect(() => assertDeploymentConfigured()).not.toThrow();
   });
