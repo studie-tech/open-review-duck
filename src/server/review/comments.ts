@@ -14,9 +14,9 @@ export function providerCommentBody(body: string, commentId: string) {
   return `${body}\n\n<!-- reviewduck-comment:${commentId} -->`;
 }
 
-/** Derives one provider idempotency key from a fenced publication attempt. */
-export function publicationAttemptKey(commentId: string, leaseToken: string) {
-  return `${commentId}:${leaseToken}`;
+/** Derives one stable provider idempotency key for a logical comment. */
+export function publicationAttemptKey(commentId: string) {
+  return commentId;
 }
 
 /** Removes ReviewDuck's invisible publication marker before rendering a conversation. */

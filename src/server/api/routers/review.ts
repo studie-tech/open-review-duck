@@ -1842,10 +1842,7 @@ export const reviewRouter = createTRPCRouter({
               line: input.line,
               side: scope.changeType === "deleted" ? "left" : "right",
               body: providerCommentBody(body, comment.id),
-              idempotencyKey: publicationAttemptKey(
-                comment.id,
-                publicationLeaseToken,
-              ),
+              idempotencyKey: publicationAttemptKey(comment.id),
             });
         const [updated] = await ctx.db
           .update(reviewComments)
