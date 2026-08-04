@@ -69,14 +69,6 @@ export async function GET(
   if (!authentication.userId) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
-  try {
-    await enforceRateLimit(db, `ai-stream:${authentication.userId}`, 4, 60_000);
-  } catch {
-    return Response.json(
-      { error: "Too many AI stream connections" },
-      { status: 429 },
-    );
-  }
   const { jobId } = await params;
   const job = await db.query.aiJobs.findFirst({
     where: and(
@@ -86,6 +78,25 @@ export async function GET(
     ),
   });
   if (!job) return Response.json({ error: "Not found" }, { status: 404 });
+  try {
+    await enforceRateLimit(
+      db,
+      `ai-stream:${authentication.userId}:${job.id}`,
+      8,
+      60_000,
+    );
+    await enforceRateLimit(
+      db,
+      `ai-stream-user:${authentication.userId}`,
+      20,
+      60_000,
+    );
+  } catch {
+    return Response.json(
+      { error: "Too many AI stream connections" },
+      { status: 429 },
+    );
+  }
   const streamLeaseId = await acquireStreamLease(authentication.userId, job.id);
   if (!streamLeaseId) {
     return Response.json(
@@ -116,7 +127,9 @@ export async function GET(
           .then(([renewed]) => {
             if (!renewed) close();
           })
-          .catch(close);
+          // A transient database error should not tear down a healthy stream;
+          // the next heartbeat retries, while the lease TTL remains the bound.
+          .catch(() => undefined);
       }, 15_000);
       close = () => {
         if (closed) return;

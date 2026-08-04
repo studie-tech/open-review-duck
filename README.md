@@ -78,6 +78,11 @@ option. If your organization does not allow application authorization, you can
 instead use an encrypted personal access token with GitHub or GitLab. Azure
 DevOps connections always use an encrypted personal access token.
 
+The hosted GitHub App must be configured with read access to organization
+members. ReviewDuck uses that permission to verify organization membership
+before accepting an installation callback; it does not infer membership from
+the installation account alone.
+
 - GitHub needs a fine-grained token with read access to repository contents and
   read/write access to pull requests.
 - GitLab needs an `api`-scoped personal, project, or group token. The token's

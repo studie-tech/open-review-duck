@@ -22,6 +22,22 @@ export function estimatePendingInputTokens(
   return contentBytes + 2_000;
 }
 
+/** Reserves enough managed quota for repeated turns over a growing transcript. */
+export function managedInvestigationReservation(input: {
+  requestBytes: number;
+  kind: "explain" | "review";
+  monthlyTokenLimit: number;
+}) {
+  const output = input.kind === "review" ? 16_000 : 8_000;
+  const maximumInput = Math.max(0, input.monthlyTokenLimit - output);
+  const onePassInput = input.requestBytes + 12_000;
+  const multiTurnFloor = input.kind === "review" ? 64_000 : 32_000;
+  return {
+    input: Math.min(maximumInput, Math.max(multiTurnFloor, onePassInput * 4)),
+    output,
+  };
+}
+
 /** Reserves pending input and cost before calculating a safe output cap. */
 export function boundedTurnOutput(input: {
   pendingInputTokens: number;

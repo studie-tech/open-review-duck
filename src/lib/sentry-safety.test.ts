@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { redactSentryEvent, tracesSampler } from "./sentry-safety";
+import {
+  redactSentryEvent,
+  sentryIngestOrigin,
+  tracesSampler,
+} from "./sentry-safety";
 
 describe("Sentry telemetry safety", () => {
+  it("allows only the configured HTTPS ingest origin", () => {
+    expect(
+      sentryIngestOrigin("https://public@example.ingest.sentry.io/123"),
+    ).toBe("https://example.ingest.sentry.io");
+    expect(sentryIngestOrigin("http://example.test/123")).toBeUndefined();
+    expect(sentryIngestOrigin("not a DSN")).toBeUndefined();
+  });
+
   it("redacts the same sensitive fields in browser, edge, and server events", () => {
     expect(
       redactSentryEvent({

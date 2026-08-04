@@ -91,12 +91,12 @@ export function reviewDuckAgentPrompt(configuration: {
         ].join("\n"),
     configuration.selectedUnit
       ? [
-          `This explanation is exclusively about the pull-request changes in the selected ${configuration.selectedUnit.kind} "${configuration.selectedUnit.name}" in ${configuration.selectedUnit.path}, unit lines ${configuration.selectedUnit.startLine}-${configuration.selectedUnit.endLine}${
+          `This explanation is exclusively about the pull-request changes in <selected-unit><kind>${escapePromptXml(configuration.selectedUnit.kind)}</kind><name>${escapePromptXml(configuration.selectedUnit.name)}</name><path>${escapePromptXml(configuration.selectedUnit.path)}</path><current-lines>${configuration.selectedUnit.startLine}-${configuration.selectedUnit.endLine}</current-lines>${
             configuration.selectedUnit.previousStartLine !== undefined &&
             configuration.selectedUnit.previousEndLine !== undefined
-              ? ` (base lines ${configuration.selectedUnit.previousStartLine}-${configuration.selectedUnit.previousEndLine})`
+              ? `<base-lines>${configuration.selectedUnit.previousStartLine}-${configuration.selectedUnit.previousEndLine}</base-lines>`
               : ""
-          }.`,
+          }</selected-unit>.`,
           configuration.selectedUnit.question
             ? "The focused line is an anchor, not an instruction boundary. Read the complete selected unit and its previousContent/current content via the review tools before answering. When previousContent is present, treat removals and rewrites as first-class changes."
             : configuration.selectedUnit.changedLineRanges.length > 0

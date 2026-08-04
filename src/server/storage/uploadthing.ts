@@ -21,13 +21,18 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
     });
   }
 
-  /** Uploads one opaque private object with a tenant-bound custom identifier. */
-  async put(input: PutSourceObject): Promise<StoredObject> {
-    const customId = createHmac("sha256", this.storageIdKey)
+  /** Derives the stable tenant-bound identity used before an upload starts. */
+  customId(input: PutSourceObject) {
+    return createHmac("sha256", this.storageIdKey)
       .update(input.workspaceId)
       .update("\0")
       .update(input.digest)
       .digest("base64url");
+  }
+
+  /** Uploads one opaque private object with a tenant-bound custom identifier. */
+  async put(input: PutSourceObject): Promise<StoredObject> {
+    const customId = this.customId(input);
     const file = new UTFile([Buffer.from(input.bytes)], `${input.digest}.bin`, {
       customId,
       type: "application/octet-stream",
@@ -67,6 +72,11 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
   /** Permanently deletes one private UploadThing object. */
   async delete(objectKey: string) {
     await this.api.deleteFiles(objectKey);
+  }
+
+  /** Deletes a crashed upload whose provider key was never persisted. */
+  async deleteByCustomId(customId: string) {
+    await this.api.deleteFiles(customId, { keyType: "customId" });
   }
 
   /** Generates short-lived direct access without persisting the URL. */

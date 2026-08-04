@@ -51,4 +51,45 @@ describe("hydratePrivateReviewSources", () => {
     expect(result.failures[0]?.path).toBe("src/unavailable.ts");
     expect(result.successfulIndexes).toEqual([0]);
   });
+
+  it("publishes successful units incrementally and forwards cancellation", async () => {
+    const source = "ready\n";
+    const digest = createHash("sha256").update(source).digest("hex");
+    const controller = new AbortController();
+    const hydrated = vi.fn();
+    const fetchMock = vi.fn(async (input: string | URL | Request) =>
+      String(input).startsWith("/api/source/")
+        ? Response.json({ digest, signedUrl: "https://private.example/source" })
+        : new Response(source),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await hydratePrivateReviewSources(
+      [
+        {
+          currentBlobId: "blob",
+          previousBlobId: null,
+          startByte: 0,
+          endByte: Buffer.byteLength(source),
+          previousStartByte: null,
+          previousEndByte: null,
+          path: "src/ready.ts",
+        },
+      ],
+      "snapshot",
+      new Map(),
+      1,
+      controller.signal,
+      hydrated,
+    );
+
+    expect(hydrated).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ source }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/source/blob"),
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
 });

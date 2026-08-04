@@ -22,8 +22,8 @@ import { observeOperation } from "~/server/observability/sentry";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
 import { aiResultSchema } from "~/validators/ai";
-import { resolveAiModel } from "./models";
 import { explanationChangedLineRanges } from "./change-scope";
+import { resolveAiModel } from "./models";
 import { createAiRepositoryContext } from "./repository-context";
 import {
   acceptAiJobResult,
@@ -263,7 +263,10 @@ export async function executeAiTurn(
     return { done: true, status: "completed" as const };
   }
   const reservedTokens = job.reservedInputTokens + job.reservedOutputTokens;
-  const consumedTokens = job.inputTokens + job.outputTokens;
+  const consumedTokens = Math.max(
+    job.totalTokens,
+    job.inputTokens + job.outputTokens,
+  );
   if (
     (reservedTokens > 0 && consumedTokens >= reservedTokens) ||
     (job.reservedMicroUsd > 0 && job.actualMicroUsd >= job.reservedMicroUsd)
@@ -307,6 +310,20 @@ export async function executeAiTurn(
       limit: 5_000,
     }),
   );
+  const selectedUnit = job.unitId
+    ? (
+        await hydrateReviewUnits(
+          db,
+          await db.query.reviewUnits.findMany({
+            where: and(
+              eq(reviewUnits.snapshotId, job.snapshotId),
+              eq(reviewUnits.id, job.unitId),
+            ),
+            limit: 1,
+          }),
+        )
+      ).at(0)
+    : undefined;
   const repositoryContext = await createAiRepositoryContext(db, job);
   const repositoryPaths = await repositoryContext.listFiles();
   const ignoreFiles =
@@ -341,9 +358,6 @@ export async function executeAiTurn(
       where: eq(pullRequests.id, job.pullRequestId),
     });
     if (!pullRequest) throw new Error("AI pull request context not found");
-    const selectedUnit = job.unitId
-      ? units.find(({ id }) => id === job.unitId)
-      : undefined;
     if (job.kind === "explain" && !selectedUnit) {
       throw new Error("AI explanation unit not found");
     }

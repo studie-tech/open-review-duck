@@ -1,5 +1,5 @@
 import { hash } from "@node-rs/argon2";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import {
   repositories,
@@ -47,21 +47,43 @@ export async function POST(request: Request) {
   if (!["owner", "admin"].includes(repository.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  const label = body.label;
   const { id, token } = newSemanticUploadCredential();
-  const [credential] = await db
-    .insert(semanticUploadCredentials)
-    .values({
-      id,
-      repositoryId: repository.id,
-      label: body.label,
-      tokenHash: await hash(token, {
-        algorithm: 2,
-        memoryCost: 19_456,
-        timeCost: 2,
-        parallelism: 1,
-      }),
-    })
-    .returning({ id: semanticUploadCredentials.id });
+  const tokenHash = await hash(token, {
+    algorithm: 2,
+    memoryCost: 19_456,
+    timeCost: 2,
+    parallelism: 1,
+  });
+  const credential = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`scip-credentials:${repository.id}`}))`,
+    );
+    const active = await tx.$count(
+      semanticUploadCredentials,
+      and(
+        eq(semanticUploadCredentials.repositoryId, repository.id),
+        isNull(semanticUploadCredentials.revokedAt),
+      ),
+    );
+    if (active >= 20) return undefined;
+    const [created] = await tx
+      .insert(semanticUploadCredentials)
+      .values({
+        id,
+        repositoryId: repository.id,
+        label,
+        tokenHash,
+      })
+      .returning({ id: semanticUploadCredentials.id });
+    return created;
+  });
+  if (!credential) {
+    return NextResponse.json(
+      { error: "Revoke an existing upload credential before creating another" },
+      { status: 409 },
+    );
+  }
   return NextResponse.json(
     { id: credential?.id, token },
     { status: 201, headers: { "Cache-Control": "no-store" } },

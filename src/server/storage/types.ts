@@ -12,9 +12,11 @@ export interface PutSourceObject {
 
 export interface SourceObjectStore {
   readonly kind: StoredObject["storage"];
+  customId?(input: PutSourceObject): string;
   put(input: PutSourceObject): Promise<StoredObject>;
   read(objectKey: string): Promise<Uint8Array>;
   delete(objectKey: string): Promise<void>;
+  deleteByCustomId?(customId: string): Promise<void>;
   createReadAccess(
     objectKey: string,
     expiresInSeconds: number,

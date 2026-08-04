@@ -3,6 +3,7 @@ import {
   acceptFirstFinalSubmission,
   boundedTurnOutput,
   estimatePendingInputTokens,
+  managedInvestigationReservation,
 } from "./turn-guards";
 
 describe("AI turn guards", () => {
@@ -77,5 +78,25 @@ describe("AI turn guards", () => {
     expect(estimatePendingInputTokens(messages, systemPrompt)).toBeGreaterThan(
       contentBytes,
     );
+  });
+
+  it("reserves repeated turns rather than only the initial prompt", () => {
+    expect(
+      managedInvestigationReservation({
+        requestBytes: 2_000,
+        kind: "explain",
+        monthlyTokenLimit: 100_000,
+      }),
+    ).toEqual({ input: 56_000, output: 8_000 });
+  });
+
+  it("keeps the complete reservation inside the monthly token limit", () => {
+    const reservation = managedInvestigationReservation({
+      requestBytes: 1_000_000,
+      kind: "review",
+      monthlyTokenLimit: 100_000,
+    });
+
+    expect(reservation.input + reservation.output).toBe(100_000);
   });
 });

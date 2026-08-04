@@ -392,6 +392,11 @@ export const providerRouter = createTRPCRouter({
     .input(importRepositorySchema.pick({ connectionId: true }))
     .query(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      await requireWorkspaceAdministrator(
+        ctx.db,
+        workspace.id,
+        ctx.auth.userId,
+      );
       const connection = await ctx.db.query.providerConnections.findFirst({
         where: and(
           eq(providerConnections.id, input.connectionId),
