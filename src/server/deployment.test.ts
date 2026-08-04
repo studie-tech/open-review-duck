@@ -18,10 +18,13 @@ const { configuration } = vi.hoisted(() => ({
     OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD: 20,
     GITHUB_APP_ID: "12345",
     GITHUB_APP_SLUG: "reviewduck-test",
+    GITHUB_APP_CLIENT_ID: "github-client-test",
+    GITHUB_APP_CLIENT_SECRET: "github-secret-test",
     GITHUB_APP_PRIVATE_KEY: "private-key-test",
     GITHUB_WEBHOOK_SECRET: "github-webhook-test",
     GITLAB_CLIENT_ID: "gitlab-client-test",
     GITLAB_CLIENT_SECRET: "gitlab-secret-test",
+    OAUTH_STATE_SECRET: "oauth-state-test",
     SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
     NEXT_PUBLIC_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
     CRON_SECRET: "cron-secret-test",
@@ -38,9 +41,6 @@ import { assertDeploymentConfigured } from "./deployment";
 describe("deployment configuration", () => {
   beforeAll(() => {
     Object.assign(configuration, {
-      OAUTH_STATE_SECRET: undefined,
-      GITHUB_APP_CLIENT_ID: undefined,
-      GITHUB_APP_CLIENT_SECRET: undefined,
       AZURE_ENTRA_CLIENT_SECRET: undefined,
     });
   });
@@ -63,7 +63,20 @@ describe("deployment configuration", () => {
     configuration.CRON_SECRET = cronSecret;
   });
 
-  it("allows feature-specific integrations to remain unconfigured", () => {
+  it.each([
+    "OAUTH_STATE_SECRET",
+    "GITHUB_APP_CLIENT_ID",
+    "GITHUB_APP_CLIENT_SECRET",
+  ])("rejects a missing %s", (name) => {
+    const value = configuration[name];
+    configuration[name] = undefined;
+    expect(() => assertDeploymentConfigured()).toThrow(
+      `SaaS mode is missing required configuration: ${name}`,
+    );
+    configuration[name] = value;
+  });
+
+  it("accepts a fully configured deployment", () => {
     expect(() => assertDeploymentConfigured()).not.toThrow();
   });
 });

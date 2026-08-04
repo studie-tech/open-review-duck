@@ -19,10 +19,13 @@ import { normalizeNodePostgresUrl } from "./db/url.js";
  * @property {number | undefined} [OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD]
  * @property {string | undefined} [GITHUB_APP_ID]
  * @property {string | undefined} [GITHUB_APP_SLUG]
+ * @property {string | undefined} [GITHUB_APP_CLIENT_ID]
+ * @property {string | undefined} [GITHUB_APP_CLIENT_SECRET]
  * @property {string | undefined} [GITHUB_APP_PRIVATE_KEY]
  * @property {string | undefined} [GITHUB_WEBHOOK_SECRET]
  * @property {string | undefined} [GITLAB_CLIENT_ID]
  * @property {string | undefined} [GITLAB_CLIENT_SECRET]
+ * @property {string | undefined} [OAUTH_STATE_SECRET]
  * @property {string | undefined} [SENTRY_DSN]
  * @property {string | undefined} [NEXT_PUBLIC_SENTRY_DSN]
  */
@@ -43,7 +46,6 @@ export function validateDeploymentConfiguration(configuration) {
     }
     return;
   }
-  // Feature-specific credentials are validated by the routes and services that use them.
   /** @type {Array<readonly [string, unknown]>} */
   const required = [
     ["APP_URL", configuration.APP_URL],
@@ -65,8 +67,11 @@ export function validateDeploymentConfiguration(configuration) {
       "OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD",
       configuration.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD,
     ],
+    ["OAUTH_STATE_SECRET", configuration.OAUTH_STATE_SECRET],
     ["GITHUB_APP_ID", configuration.GITHUB_APP_ID],
     ["GITHUB_APP_SLUG", configuration.GITHUB_APP_SLUG],
+    ["GITHUB_APP_CLIENT_ID", configuration.GITHUB_APP_CLIENT_ID],
+    ["GITHUB_APP_CLIENT_SECRET", configuration.GITHUB_APP_CLIENT_SECRET],
     ["GITHUB_APP_PRIVATE_KEY", configuration.GITHUB_APP_PRIVATE_KEY],
     ["GITHUB_WEBHOOK_SECRET", configuration.GITHUB_WEBHOOK_SECRET],
     ["GITLAB_CLIENT_ID", configuration.GITLAB_CLIENT_ID],

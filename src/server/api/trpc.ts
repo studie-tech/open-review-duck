@@ -3,6 +3,7 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
+import { publicTrpcErrorMessage } from "./error";
 
 /** Creates the authenticated request context shared by HTTP and server callers. */
 export const createTRPCContext = async (opts: { headers: Headers }) => {
@@ -19,6 +20,7 @@ const t = initTRPC.context<typeof createTRPCContext>().create({
   errorFormatter({ shape, error }) {
     return {
       ...shape,
+      message: publicTrpcErrorMessage(error.code, shape.message),
       data: {
         ...shape.data,
         zodError:
