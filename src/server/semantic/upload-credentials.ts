@@ -34,7 +34,12 @@ export async function authorizeSemanticUploadCredential(
     return undefined;
   }
   if (!credentialId) {
-    await enforceRateLimit(db, "scip-upload-legacy", 10, 60_000);
+    await enforceRateLimit(
+      db,
+      `scip-upload-legacy:${repositoryId}`,
+      10,
+      60_000,
+    );
   }
   await enforceRateLimit(db, `scip-upload:${repositoryId}`, 30, 60_000);
   const credentials = await db
