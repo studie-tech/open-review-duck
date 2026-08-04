@@ -337,7 +337,7 @@ export async function createAiJob(
     units,
     input.kind,
     scope.monthlyTokenLimit,
-    priorConversation.bytes,
+    priorConversation.promptBytes,
   );
   const pricing = scope.useManagedQuota
     ? await managedReservationPricing(db, scope.model)

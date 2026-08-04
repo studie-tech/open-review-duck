@@ -37,4 +37,11 @@ describe("LocalSourceObjectStore", () => {
       }),
     ).rejects.toThrow("Invalid");
   });
+
+  it("rejects traversal keys through crashed-write cleanup", async () => {
+    const store = new LocalSourceObjectStore("/tmp/reviewduck-test");
+    await expect(store.deleteByCustomId("../escape")).rejects.toThrow(
+      "escapes the storage root",
+    );
+  });
 });

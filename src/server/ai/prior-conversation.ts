@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, desc, eq, ne } from "drizzle-orm";
 import { aiJobs } from "@/drizzle/schema";
+import { escapePromptXml } from "~/config/prompts";
 import type { db as database } from "~/server/db";
 
 type Database = typeof database;
@@ -29,17 +30,23 @@ export function boundPriorConversation(
   );
   const selected: PriorConversationTurn[] = [];
   let bytes = 0;
+  let promptBytes = 0;
   for (const record of newestFirst) {
     if (!record.question || !record.result) continue;
     const turn = { question: record.question, answer: record.result.summary };
-    // XML entity escaping can expand one untrusted ASCII byte to six bytes.
-    // Reserve that upper bound so prompt framing never outruns this cap.
-    const turnBytes = Buffer.byteLength(JSON.stringify(turn)) * 6;
-    if (bytes + turnBytes > maximumBytes) continue;
+    const turnBytes = Buffer.byteLength(JSON.stringify(turn));
+    const turnPromptBytes = Buffer.byteLength(
+      JSON.stringify({
+        question: escapePromptXml(turn.question),
+        answer: escapePromptXml(turn.answer),
+      }),
+    );
+    if (promptBytes + turnPromptBytes > maximumBytes) break;
     selected.push(turn);
     bytes += turnBytes;
+    promptBytes += turnPromptBytes;
   }
-  return { bytes, turns: selected.reverse() };
+  return { bytes, promptBytes, turns: selected.reverse() };
 }
 
 /** Loads one authorized thread's recent completed turns with bounded prompt size. */
@@ -53,7 +60,7 @@ export async function loadPriorConversation(
     excludeJobId?: string;
   },
 ) {
-  if (!input.threadId) return { bytes: 0, turns: [] };
+  if (!input.threadId) return { bytes: 0, promptBytes: 0, turns: [] };
   const records = await db.query.aiJobs.findMany({
     columns: {
       createdAt: true,

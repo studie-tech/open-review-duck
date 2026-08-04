@@ -30,7 +30,11 @@ export function managedInvestigationReservation(input: {
   monthlyTokenLimit: number;
 }) {
   const output = input.kind === "review" ? 16_000 : 8_000;
-  const maximumInput = Math.max(0, input.monthlyTokenLimit - output);
+  const maximumReservation = Math.floor(input.monthlyTokenLimit * 0.8);
+  const maximumInput = Math.max(
+    0,
+    Math.min(input.monthlyTokenLimit - output, maximumReservation - output),
+  );
   const onePassInput = input.requestBytes + 12_000;
   const maximumFloor = input.kind === "review" ? 64_000 : 32_000;
   const scaledFloor = Math.floor(

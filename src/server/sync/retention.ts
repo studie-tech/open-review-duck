@@ -63,6 +63,7 @@ async function prunePullRequestSnapshots(
 export async function pruneExpiredReviewSnapshots(
   db: Database,
   repositoryId?: string,
+  deadline?: number,
 ) {
   const scopes = await db
     .select({
@@ -77,7 +78,18 @@ export async function pruneExpiredReviewSnapshots(
     .where(repositoryId ? eq(repositories.id, repositoryId) : undefined);
   let deleted = 0;
   for (const scope of scopes) {
+    const remainingMilliseconds = deadline
+      ? Math.max(0, deadline - Date.now())
+      : undefined;
+    if (remainingMilliseconds !== undefined && remainingMilliseconds === 0) {
+      break;
+    }
     deleted += await db.transaction(async (tx) => {
+      if (remainingMilliseconds !== undefined) {
+        await tx.execute(
+          sql`select set_config('statement_timeout', ${`${remainingMilliseconds}ms`}, true)`,
+        );
+      }
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${`${scope.repositoryId}:${scope.pullRequestNumber}`}))`,
       );
