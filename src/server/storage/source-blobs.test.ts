@@ -51,4 +51,56 @@ describe("source blob pruning", () => {
     expect(set).toHaveBeenCalledWith({ updatedAt: expect.any(Date) });
     expect(mocks.put).not.toHaveBeenCalled();
   });
+
+  it("reclaims a failed upload on the next synchronization attempt", async () => {
+    mocks.put.mockReset();
+    mocks.put.mockResolvedValue({
+      storage: "local",
+      objectKey: "objects/recovered",
+    });
+    const failed = {
+      id: "blob-id",
+      state: "failed",
+      uploadLeaseExpiresAt: null,
+    };
+    const reclaimed = {
+      ...failed,
+      state: "uploading",
+      uploadLeaseToken: "lease",
+    };
+    const ready = {
+      ...reclaimed,
+      state: "ready",
+      objectKey: "objects/recovered",
+    };
+    const returning = vi
+      .fn()
+      .mockResolvedValueOnce([reclaimed])
+      .mockResolvedValueOnce([ready]);
+    const database = {
+      query: {
+        sourceBlobs: { findFirst: vi.fn(async () => failed) },
+      },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(async () => []),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning })),
+        })),
+      })),
+    };
+
+    await expect(
+      persistSourceBlob(database as never, {
+        workspaceId: "workspace",
+        bytes: new TextEncoder().encode("retry me"),
+      }),
+    ).resolves.toMatchObject({ state: "ready" });
+    expect(mocks.put).toHaveBeenCalledOnce();
+  });
 });

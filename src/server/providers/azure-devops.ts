@@ -50,7 +50,11 @@ interface AzureReviewer {
   vote: number;
 }
 interface AzureChange {
-  item: { path: string; objectId?: string; gitObjectType?: string };
+  item?: {
+    path?: string | null;
+    objectId?: string;
+    gitObjectType?: string;
+  };
   changeType: string;
   sourceServerItem?: string;
 }
@@ -327,7 +331,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     );
     const pull = await this.getPullRequest(repositoryExternalId, number);
     return mapWithConcurrency(
-      changes.filter((change) => change.item.gitObjectType !== "tree"),
+      changes.filter(
+        (change): change is AzureChange & { item: { path: string } } =>
+          typeof change.item?.path === "string" &&
+          change.item.path.length > 0 &&
+          change.item.gitObjectType !== "tree",
+      ),
       8,
       async (change) => {
         const normalizedChangeType = change.changeType.toLowerCase();

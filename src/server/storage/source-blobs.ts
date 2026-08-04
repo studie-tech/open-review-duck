@@ -1,14 +1,14 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, or, sql } from "drizzle-orm";
 import { sourceBlobs } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { sourceObjectStore } from "./index";
 
 type Database = typeof database;
-const UPLOAD_LEASE_MILLISECONDS = 6 * 60 * 60_000;
+const UPLOAD_LEASE_MILLISECONDS = 4 * 60_000;
 const DELETION_LEASE_MILLISECONDS = 15 * 60_000;
 
 /** Returns the SHA-256 content identity used for source object deduplication. */
@@ -51,7 +51,7 @@ export async function persistSourceBlob(
     if (reused) return reused;
   }
 
-  const [claimed] = await db
+  let [claimed] = await db
     .insert(sourceBlobs)
     .values({
       workspaceId: input.workspaceId,
@@ -77,7 +77,40 @@ export async function persistSourceBlob(
       ),
     });
     if (raced?.state === "ready") return raced;
-    throw new Error("A concurrent source upload is still in progress");
+    if (raced) {
+      [claimed] = await db
+        .update(sourceBlobs)
+        .set({
+          state: "uploading",
+          storage: store.kind,
+          objectKey: null,
+          byteLength: input.bytes.byteLength,
+          encoding: input.encoding ?? "utf-8",
+          mediaType: input.mediaType ?? "application/octet-stream",
+          customId: store.customId?.(putInput),
+          error: null,
+          uploadLeaseToken,
+          uploadLeaseExpiresAt: new Date(
+            Date.now() + UPLOAD_LEASE_MILLISECONDS,
+          ),
+        })
+        .where(
+          and(
+            eq(sourceBlobs.id, raced.id),
+            or(
+              eq(sourceBlobs.state, "failed"),
+              and(
+                eq(sourceBlobs.state, "uploading"),
+                lt(sourceBlobs.uploadLeaseExpiresAt, new Date()),
+              ),
+            ),
+          ),
+        )
+        .returning();
+    }
+    if (!claimed) {
+      throw new Error("A concurrent source upload is still in progress");
+    }
   }
 
   try {

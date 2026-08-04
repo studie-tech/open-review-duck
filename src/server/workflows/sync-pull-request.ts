@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getWorkflowMetadata } from "workflow";
 import { syncQueueRequests, syncRuns, workflowRuns } from "@/drizzle/schema";
 import { db } from "~/server/db";
@@ -10,7 +10,41 @@ import { ensureWorkflowRunLink } from "./run-link";
 export async function syncPullRequestWorkflow(syncId: string) {
   "use workflow";
   const { workflowRunId } = getWorkflowMetadata();
-  return executeSynchronization(syncId, workflowRunId);
+  try {
+    return await executeSynchronization(syncId, workflowRunId);
+  } catch (cause) {
+    const error =
+      cause instanceof Error ? cause.message : "Synchronization failed";
+    await recordTerminalSynchronizationFailure(syncId, workflowRunId, error);
+    throw cause;
+  }
+}
+
+/** Records a workflow-level failure when a step exhausts retries without re-entering application code. */
+async function recordTerminalSynchronizationFailure(
+  syncId: string,
+  providerRunId: string,
+  error: string,
+) {
+  "use step";
+  await db
+    .update(syncRuns)
+    .set({ status: "failed", error, completedAt: new Date() })
+    .where(
+      and(
+        eq(syncRuns.id, syncId),
+        inArray(syncRuns.status, ["queued", "running"]),
+      ),
+    );
+  await db
+    .update(workflowRuns)
+    .set({ status: "failed", error, completedAt: new Date() })
+    .where(
+      and(
+        eq(workflowRuns.providerRunId, providerRunId),
+        inArray(workflowRuns.status, ["queued", "running"]),
+      ),
+    );
 }
 
 /** Runs one coarse, idempotent synchronization step from persisted identity. */
