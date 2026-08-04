@@ -14,10 +14,7 @@ import {
 import { env } from "~/env";
 import { db } from "~/server/db";
 import { parseScipIndex } from "./scip";
-import {
-  authorizeSemanticUploadCredential,
-  semanticUploadCallerKey,
-} from "./upload-credentials";
+import { authorizeSemanticUploadCredential } from "./upload-credentials";
 
 const upload = createUploadthing();
 const input = z.object({
@@ -52,7 +49,6 @@ export const semanticFileRouter = {
           db,
           input.repositoryId,
           token,
-          semanticUploadCallerKey(req.headers),
         );
       } catch (cause) {
         if (cause instanceof TRPCError && cause.code === "TOO_MANY_REQUESTS") {

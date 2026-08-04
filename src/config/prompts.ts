@@ -27,7 +27,7 @@ export const REVIEWDUCK_AGENT_QUESTION_PROMPT =
   "Inspect the authorized review context using the provided tools, then submit the structured focused answer exactly once. Do not modify repository files.";
 
 /** Encodes untrusted text before embedding it inside prompt XML delimiters. */
-function escapePromptXml(value: string) {
+export function escapePromptXml(value: string) {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

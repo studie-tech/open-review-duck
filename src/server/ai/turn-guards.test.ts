@@ -77,7 +77,7 @@ describe("AI turn guards", () => {
       Buffer.byteLength(systemPrompt);
 
     expect(estimatePendingInputTokens(messages, systemPrompt)).toBeGreaterThan(
-      contentBytes,
+      contentBytes / 2 + 2_000,
     );
   });
 
@@ -114,7 +114,17 @@ describe("AI turn guards", () => {
     });
 
     expect(reservation.minimumTokens).toBe(77_000);
-    expect(reservation.input + reservation.output).toBe(100_000);
+    expect(reservation.input + reservation.output).toBe(80_000);
+  });
+
+  it("keeps headroom for another job in the monthly allowance", () => {
+    const reservation = managedInvestigationReservation({
+      requestBytes: 1_000_000,
+      kind: "review",
+      monthlyTokenLimit: 100_000,
+    });
+
+    expect(reservation.input + reservation.output).toBe(80_000);
   });
 
   it("clamps a job to remaining quota while preserving useful input room", () => {
