@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { type ModelMessage, tool } from "@ai-sdk/provider-utils";
 import { generateText, stepCountIs } from "ai";
-import { and, asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobChunks,
@@ -24,6 +24,7 @@ import { hydrateReviewUnits } from "~/server/storage/review-units";
 import { aiResultSchema } from "~/validators/ai";
 import { explanationChangedLineRanges } from "./change-scope";
 import { resolveAiModel } from "./models";
+import { loadPriorConversation } from "./prior-conversation";
 import { createAiRepositoryContext } from "./repository-context";
 import {
   acceptAiJobResult,
@@ -310,7 +311,7 @@ export async function executeAiTurn(
       limit: 5_000,
     }),
   );
-  const selectedUnit = job.unitId
+  const storedSelectedUnit = job.unitId
     ? (
         await hydrateReviewUnits(
           db,
@@ -353,6 +354,16 @@ export async function executeAiTurn(
             bigPickleSourceDecision(unit.path, unit.source).allowed,
         )
       : storedUnits;
+  const selectedUnit =
+    storedSelectedUnit &&
+    (job.provider !== "opencode" ||
+      (!ignoredByRepository(storedSelectedUnit.path) &&
+        bigPickleSourceDecision(
+          storedSelectedUnit.path,
+          storedSelectedUnit.source,
+        ).allowed))
+      ? storedSelectedUnit
+      : undefined;
   if (messages.length === 0) {
     const pullRequest = await db.query.pullRequests.findFirst({
       where: eq(pullRequests.id, job.pullRequestId),
@@ -361,20 +372,13 @@ export async function executeAiTurn(
     if (job.kind === "explain" && !selectedUnit) {
       throw new Error("AI explanation unit not found");
     }
-    const priorConversation = job.threadId
-      ? await db.query.aiJobs.findMany({
-          where: and(
-            eq(aiJobs.threadId, job.threadId),
-            eq(aiJobs.userId, job.userId),
-            eq(aiJobs.workspaceId, job.workspaceId),
-            eq(aiJobs.pullRequestId, job.pullRequestId),
-            eq(aiJobs.status, "completed"),
-            ne(aiJobs.id, job.id),
-          ),
-          orderBy: [asc(aiJobs.createdAt)],
-          limit: 50,
-        })
-      : [];
+    const priorConversation = await loadPriorConversation(db, {
+      threadId: job.threadId,
+      userId: job.userId,
+      workspaceId: job.workspaceId,
+      pullRequestId: job.pullRequestId,
+      excludeJobId: job.id,
+    });
     const prompt: ModelMessage = {
       role: "user",
       content: reviewDuckAgentPrompt({
@@ -401,11 +405,7 @@ export async function executeAiTurn(
               focusLine: job.focusLine ?? undefined,
               focusSide:
                 selectedUnit.changeType === "deleted" ? "previous" : "current",
-              conversation: priorConversation.flatMap((prior) =>
-                prior.question && prior.result
-                  ? [{ question: prior.question, answer: prior.result.summary }]
-                  : [],
-              ),
+              conversation: priorConversation.turns,
             }
           : undefined,
       }),

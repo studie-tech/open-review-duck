@@ -25,17 +25,51 @@ export function estimatePendingInputTokens(
 /** Reserves enough managed quota for repeated turns over a growing transcript. */
 export function managedInvestigationReservation(input: {
   requestBytes: number;
+  minimumInputBytes?: number;
   kind: "explain" | "review";
   monthlyTokenLimit: number;
 }) {
   const output = input.kind === "review" ? 16_000 : 8_000;
   const maximumInput = Math.max(0, input.monthlyTokenLimit - output);
   const onePassInput = input.requestBytes + 12_000;
-  const multiTurnFloor = input.kind === "review" ? 64_000 : 32_000;
+  const maximumFloor = input.kind === "review" ? 64_000 : 32_000;
+  const scaledFloor = Math.floor(
+    input.monthlyTokenLimit * (input.kind === "review" ? 0.25 : 0.15),
+  );
+  const multiTurnFloor = Math.min(maximumFloor, scaledFloor);
+  const turnMultiplier = input.monthlyTokenLimit <= 200_000 ? 2 : 4;
+  const desiredInput = Math.min(
+    maximumInput,
+    Math.max(multiTurnFloor, onePassInput * turnMultiplier),
+  );
   return {
-    input: Math.min(maximumInput, Math.max(multiTurnFloor, onePassInput * 4)),
+    input: desiredInput,
     output,
+    minimumTokens: Math.min(
+      desiredInput + output,
+      (input.minimumInputBytes ?? 12_000) + 1_000,
+    ),
   };
+}
+
+/** Fits a desired job ceiling into the caller's atomically observed allowance. */
+export function clampManagedInvestigationReservation(
+  desired: { input: number; output: number; minimumTokens: number },
+  remainingTokens: number,
+) {
+  const available = Math.min(
+    desired.input + desired.output,
+    Math.max(0, remainingTokens),
+  );
+  if (available < desired.minimumTokens) return undefined;
+  if (available === desired.input + desired.output) {
+    return { input: desired.input, output: desired.output };
+  }
+  const output = Math.min(
+    desired.output,
+    Math.max(1_000, available - desired.input),
+  );
+  return { input: available - output, output };
 }
 
 /** Reserves pending input and cost before calculating a safe output cap. */

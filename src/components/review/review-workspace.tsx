@@ -249,6 +249,14 @@ export function ReviewWorkspace({
   const [sourceHydrationPending, setSourceHydrationPending] = useState(
     initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
   );
+  const [settledUnitIds, setSettledUnitIds] = useState(
+    () =>
+      new Set(
+        initialData.sourceDelivery === "direct"
+          ? []
+          : initialData.units.map(({ id }) => id),
+      ),
+  );
   useEffect(() => {
     if (initialData.sourceDelivery !== "direct" || !initialData.snapshot)
       return;
@@ -257,6 +265,7 @@ export function ReviewWorkspace({
     const controller = new AbortController();
     setSourceHydrationPending(true);
     setHydratedUnitIds(new Set());
+    setSettledUnitIds(new Set());
     const cache = new Map<string, Promise<Uint8Array>>();
     void Promise.all([
       hydratePrivateReviewSources(
@@ -270,7 +279,16 @@ export function ReviewWorkspace({
           const original = initialData.units[index];
           if (!original) return;
           setUnits((current) =>
-            current.map((unit) => (unit.id === original.id ? hydrated : unit)),
+            current.map((unit) =>
+              unit.id === original.id
+                ? {
+                    ...hydrated,
+                    status: unit.status,
+                    changedSinceSignOff: unit.changedSinceSignOff,
+                    waitingSince: unit.waitingSince,
+                  }
+                : unit,
+            ),
           );
           if (
             original.kind === "binary" ||
@@ -278,6 +296,14 @@ export function ReviewWorkspace({
             original.previousBlobId
           ) {
             setHydratedUnitIds((current) => new Set(current).add(original.id));
+          }
+          setSettledUnitIds((current) => new Set(current).add(original.id));
+        },
+        (index) => {
+          if (!active) return;
+          const original = initialData.units[index];
+          if (original) {
+            setSettledUnitIds((current) => new Set(current).add(original.id));
           }
         },
       ),
@@ -301,8 +327,6 @@ export function ReviewWorkspace({
     ]).then(([hydratedUnits, hydratedContexts]) => {
       if (!active) return;
       setSourceHydrationPending(false);
-      setUnits(hydratedUnits.units);
-      setFileContexts(hydratedContexts.units);
       setHydratedUnitIds(
         new Set(
           hydratedUnits.successfulIndexes.flatMap((index) => {
@@ -433,6 +457,9 @@ export function ReviewWorkspace({
     activeUnit &&
       (initialData.sourceDelivery !== "direct" ||
         hydratedUnitIds.has(activeUnit.id)),
+  );
+  const activeSourceHydrationPending = Boolean(
+    sourceHydrationPending && activeUnit && !settledUnitIds.has(activeUnit.id),
   );
   const settledActiveUnitId = useSettledValue(activeUnitId, 200);
   const previousActiveUnitId = useRef(activeUnitId);
@@ -4092,12 +4119,15 @@ export function ReviewWorkspace({
                 />
               </div>
             )}
-            {sourceHydrationPending && !activeSourceAvailable && (
-              <div className="text-mist grid min-h-72 place-items-center font-sans text-sm">
+            {activeSourceHydrationPending && !activeSourceAvailable && (
+              <div
+                className="text-mist grid min-h-72 place-items-center font-sans text-sm"
+                aria-live="polite"
+              >
                 Loading and verifying private source…
               </div>
             )}
-            {!sourceHydrationPending && !activeSourceAvailable && (
+            {!activeSourceHydrationPending && !activeSourceAvailable && (
               <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
                 <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
                   <FileCode2

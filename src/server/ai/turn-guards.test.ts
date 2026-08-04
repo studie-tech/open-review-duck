@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   acceptFirstFinalSubmission,
   boundedTurnOutput,
+  clampManagedInvestigationReservation,
   estimatePendingInputTokens,
   managedInvestigationReservation,
 } from "./turn-guards";
@@ -87,16 +88,50 @@ describe("AI turn guards", () => {
         kind: "explain",
         monthlyTokenLimit: 100_000,
       }),
-    ).toEqual({ input: 56_000, output: 8_000 });
+    ).toEqual({ input: 28_000, output: 8_000, minimumTokens: 13_000 });
   });
 
-  it("keeps the complete reservation inside the monthly token limit", () => {
+  it("scales free-tier reservations below the complete monthly allowance", () => {
     const reservation = managedInvestigationReservation({
-      requestBytes: 1_000_000,
+      requestBytes: 9_000,
       kind: "review",
       monthlyTokenLimit: 100_000,
     });
 
+    expect(reservation).toEqual({
+      input: 42_000,
+      output: 16_000,
+      minimumTokens: 13_000,
+    });
+  });
+
+  it("includes bounded prior conversation in the viable turn floor", () => {
+    const reservation = managedInvestigationReservation({
+      requestBytes: 67_000,
+      minimumInputBytes: 64_000 + 12_000,
+      kind: "explain",
+      monthlyTokenLimit: 100_000,
+    });
+
+    expect(reservation.minimumTokens).toBe(77_000);
     expect(reservation.input + reservation.output).toBe(100_000);
+  });
+
+  it("clamps a job to remaining quota while preserving useful input room", () => {
+    expect(
+      clampManagedInvestigationReservation(
+        { input: 42_000, output: 16_000, minimumTokens: 13_000 },
+        30_000,
+      ),
+    ).toEqual({ input: 29_000, output: 1_000 });
+  });
+
+  it("rejects a clamped job below its viable initial-turn floor", () => {
+    expect(
+      clampManagedInvestigationReservation(
+        { input: 42_000, output: 16_000, minimumTokens: 13_000 },
+        12_999,
+      ),
+    ).toBeUndefined();
   });
 });

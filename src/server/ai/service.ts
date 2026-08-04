@@ -30,7 +30,11 @@ import {
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
-import { managedInvestigationReservation } from "./turn-guards";
+import { loadPriorConversation } from "./prior-conversation";
+import {
+  clampManagedInvestigationReservation,
+  managedInvestigationReservation,
+} from "./turn-guards";
 import { nonReducingAiUsage } from "./usage";
 
 type Database = typeof database;
@@ -44,7 +48,7 @@ export type TokenUsage = {
   microUsd?: number;
 };
 
-export const CURRENT_AI_AGENT_VERSION = 13;
+export const CURRENT_AI_AGENT_VERSION = 14;
 /** Estimates a conservative token reservation for one investigation. */
 function estimateAiReservation(
   units: Array<{
@@ -56,19 +60,23 @@ function estimateAiReservation(
   }>,
   kind: "explain" | "review",
   monthlyTokenLimit: number,
+  priorConversationBytes: number,
 ) {
-  const requestBytes = units.reduce(
-    (total, unit) =>
-      total +
-      Buffer.byteLength(unit.source) +
-      Buffer.byteLength(unit.previousSource ?? "") +
-      Buffer.byteLength(unit.path) +
-      Buffer.byteLength(unit.name) +
-      Buffer.byteLength(unit.kind),
-    0,
-  );
+  const requestBytes =
+    priorConversationBytes +
+    units.reduce(
+      (total, unit) =>
+        total +
+        Buffer.byteLength(unit.source) +
+        Buffer.byteLength(unit.previousSource ?? "") +
+        Buffer.byteLength(unit.path) +
+        Buffer.byteLength(unit.name) +
+        Buffer.byteLength(unit.kind),
+      0,
+    );
   return managedInvestigationReservation({
     requestBytes,
+    minimumInputBytes: priorConversationBytes + 12_000,
     kind,
     monthlyTokenLimit,
   });
@@ -154,8 +162,12 @@ async function reserveManagedQuota(
     requests: number;
     inputTokens: number;
     outputTokens: number;
-    reservedMicroUsd: number;
+    minimumTokens: number;
     monthlyTokenLimit: number;
+    pricing: {
+      promptNanoUsdPerToken: number;
+      completionNanoUsdPerToken: number;
+    };
   },
 ) {
   const dayStart = new Date();
@@ -168,27 +180,6 @@ async function reserveManagedQuota(
   await tx.execute(
     sql`select pg_advisory_xact_lock(hashtext(${`ai-quota:user:${input.userId}`}))`,
   );
-  if (input.reservedMicroUsd > 0) {
-    const month = new Date().toISOString().slice(0, 7);
-    const [monthly] = await tx
-      .select({ microUsd: sum(aiUsageLedger.microUsd) })
-      .from(aiUsageLedger)
-      .where(
-        and(
-          eq(aiUsageLedger.workspaceId, input.workspaceId),
-          eq(aiUsageLedger.month, month),
-        ),
-      );
-    const monthlyLimit = Math.floor(
-      (env.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD ?? 0) * 1_000_000,
-    );
-    if (
-      monthlyLimit <= 0 ||
-      Number(monthly?.microUsd ?? 0) + input.reservedMicroUsd > monthlyLimit
-    ) {
-      throw new Error("Workspace monthly AI budget is exhausted");
-    }
-  }
   const [daily] = await tx
     .select({
       requests: sum(aiUsage.requests),
@@ -239,15 +230,41 @@ async function reserveManagedQuota(
         lt(aiUsage.day, monthEnd),
       ),
     );
-  const monthlyTokens =
+  const usedMonthlyTokens =
     Number(monthly?.input ?? 0) +
     Number(monthly?.output ?? 0) +
     Number(monthly?.reservedInput ?? 0) +
-    Number(monthly?.reservedOutput ?? 0) +
-    input.inputTokens +
-    input.outputTokens;
-  if (monthlyTokens > input.monthlyTokenLimit) {
+    Number(monthly?.reservedOutput ?? 0);
+  const reservation = clampManagedInvestigationReservation(
+    {
+      input: input.inputTokens,
+      output: input.outputTokens,
+      minimumTokens: input.minimumTokens,
+    },
+    input.monthlyTokenLimit - usedMonthlyTokens,
+  );
+  if (!reservation) {
     throw new Error("Monthly AI token limit reached");
+  }
+  const reservedMicroUsd = paidReservationMicroUsd(reservation, input.pricing);
+  const month = new Date().toISOString().slice(0, 7);
+  const [monthlyCost] = await tx
+    .select({ microUsd: sum(aiUsageLedger.microUsd) })
+    .from(aiUsageLedger)
+    .where(
+      and(
+        eq(aiUsageLedger.workspaceId, input.workspaceId),
+        eq(aiUsageLedger.month, month),
+      ),
+    );
+  const monthlyCostLimit = Math.floor(
+    (env.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD ?? 0) * 1_000_000,
+  );
+  if (
+    monthlyCostLimit <= 0 ||
+    Number(monthlyCost?.microUsd ?? 0) + reservedMicroUsd > monthlyCostLimit
+  ) {
+    throw new Error("Workspace monthly AI budget is exhausted");
   }
   await tx
     .insert(aiUsage)
@@ -256,25 +273,22 @@ async function reserveManagedQuota(
       userId: input.userId,
       day: dayStart,
       requests: input.requests,
-      reservedInputTokens: input.inputTokens,
-      reservedOutputTokens: input.outputTokens,
+      reservedInputTokens: reservation.input,
+      reservedOutputTokens: reservation.output,
     })
     .onConflictDoUpdate({
       target: [aiUsage.workspaceId, aiUsage.userId, aiUsage.day],
       set: {
         requests: sql`${aiUsage.requests} + ${input.requests}`,
-        reservedInputTokens: sql`${aiUsage.reservedInputTokens} + ${input.inputTokens}`,
-        reservedOutputTokens: sql`${aiUsage.reservedOutputTokens} + ${input.outputTokens}`,
+        reservedInputTokens: sql`${aiUsage.reservedInputTokens} + ${reservation.input}`,
+        reservedOutputTokens: sql`${aiUsage.reservedOutputTokens} + ${reservation.output}`,
       },
     });
+  return { reservation, reservedMicroUsd };
 }
 
 /** Loads catalog pricing and rejects models that cannot run the investigation tools. */
-async function estimatePaidCostReservation(
-  db: Database,
-  modelId: string,
-  reservation: { input: number; output: number },
-) {
+async function managedReservationPricing(db: Database, modelId: string) {
   const model = await db.query.managedAiModels.findFirst({
     where: eq(managedAiModels.modelId, modelId),
   });
@@ -283,7 +297,7 @@ async function estimatePaidCostReservation(
       "The managed model is missing a current tool-capable catalog entry",
     );
   }
-  return paidReservationMicroUsd(reservation, model);
+  return model;
 }
 
 /** Creates one deduplicated, quota-reserved AI job without dispatch polling. */
@@ -313,14 +327,21 @@ export async function createAiJob(
     }),
   );
   if (units.length === 0) throw new Error("No review context found");
-  const reservation = estimateAiReservation(
+  const priorConversation = await loadPriorConversation(db, {
+    threadId: input.threadId,
+    userId: input.userId,
+    workspaceId: scope.workspaceId,
+    pullRequestId: input.pullRequestId,
+  });
+  const desiredReservation = estimateAiReservation(
     units,
     input.kind,
     scope.monthlyTokenLimit,
+    priorConversation.bytes,
   );
-  const reservedMicroUsd = scope.useManagedQuota
-    ? await estimatePaidCostReservation(db, scope.model, reservation)
-    : 0;
+  const pricing = scope.useManagedQuota
+    ? await managedReservationPricing(db, scope.model)
+    : undefined;
   return db.transaction(async (tx) => {
     if (!input.question) {
       const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:automatic:${input.unitId ?? "pull-request"}`;
@@ -348,17 +369,24 @@ export async function createAiJob(
       });
       if (existing) return existing;
     }
-    if (scope.useManagedQuota) {
-      await reserveManagedQuota(tx, {
-        workspaceId: scope.workspaceId,
-        userId: input.userId,
-        requests: 1,
-        inputTokens: reservation.input,
-        outputTokens: reservation.output,
-        reservedMicroUsd,
-        monthlyTokenLimit: scope.monthlyTokenLimit,
-      });
-    }
+    const managedReservation =
+      scope.useManagedQuota && pricing
+        ? await reserveManagedQuota(tx, {
+            workspaceId: scope.workspaceId,
+            userId: input.userId,
+            requests: 1,
+            inputTokens: desiredReservation.input,
+            outputTokens: desiredReservation.output,
+            minimumTokens: desiredReservation.minimumTokens,
+            monthlyTokenLimit: scope.monthlyTokenLimit,
+            pricing,
+          })
+        : undefined;
+    const reservation = managedReservation?.reservation ?? {
+      input: 0,
+      output: 0,
+    };
+    const reservedMicroUsd = managedReservation?.reservedMicroUsd ?? 0;
     const jobId = crypto.randomUUID();
     const [job] = await tx
       .insert(aiJobs)
@@ -377,8 +405,8 @@ export async function createAiJob(
         status: "queued",
         model: scope.model,
         provider: scope.provider,
-        reservedInputTokens: scope.useManagedQuota ? reservation.input : 0,
-        reservedOutputTokens: scope.useManagedQuota ? reservation.output : 0,
+        reservedInputTokens: reservation.input,
+        reservedOutputTokens: reservation.output,
         reservedMicroUsd,
       })
       .returning();

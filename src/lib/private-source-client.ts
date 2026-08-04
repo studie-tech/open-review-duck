@@ -22,9 +22,12 @@ async function privateObject(
   path: string,
   signal?: AbortSignal,
 ) {
+  const requestSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+    : AbortSignal.timeout(30_000);
   const access = await fetch(
     `/api/source/${encodeURIComponent(blobId)}?snapshotId=${encodeURIComponent(snapshotId)}&path=${encodeURIComponent(path)}`,
-    { cache: "no-store", credentials: "same-origin", signal },
+    { cache: "no-store", credentials: "same-origin", signal: requestSignal },
   );
   if (!access.ok) throw new Error("Private source authorization failed");
   const metadata = (await access.json()) as {
@@ -41,7 +44,7 @@ async function privateObject(
     cache: "no-store",
     credentials: "omit",
     redirect: "error",
-    signal,
+    signal: requestSignal,
   });
   if (!response.ok) throw new Error("Private source download failed");
   const bytes = await response.arrayBuffer();
@@ -102,6 +105,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
   concurrency = 4,
   signal?: AbortSignal,
   onUnitHydrated?: (index: number, unit: Unit) => void,
+  onUnitFailed?: (index: number, unit: Unit, cause: unknown) => void,
 ) {
   const hydrated = new Array<Unit>(units.length);
   const failures: Array<{ cause: unknown; path: string }> = [];
@@ -127,6 +131,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
         if (signal?.aborted) return;
         hydrated[index] = unit;
         failures.push({ cause, path: unit.path });
+        onUnitFailed?.(index, unit, cause);
       }
     }
   };

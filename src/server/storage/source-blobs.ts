@@ -40,7 +40,16 @@ export async function persistSourceBlob(
       eq(sourceBlobs.digest, digest),
     ),
   });
-  if (existing?.state === "ready") return existing;
+  if (existing?.state === "ready") {
+    const [reused] = await db
+      .update(sourceBlobs)
+      .set({ updatedAt: new Date() })
+      .where(
+        and(eq(sourceBlobs.id, existing.id), eq(sourceBlobs.state, "ready")),
+      )
+      .returning();
+    if (reused) return reused;
+  }
 
   const [claimed] = await db
     .insert(sourceBlobs)
@@ -181,8 +190,8 @@ export async function pruneOrphanSourceBlobs(
           select 1 from open_review_duck_ai_job_evidence evidence
           where evidence."sourceBlobId" = blob.id
         )
-        and blob."createdAt" < now() - interval '1 hour'
-      order by blob."createdAt"
+        and blob."updatedAt" < now() - interval '1 hour'
+      order by blob."updatedAt"
       limit ${maximum}
       for update skip locked
     `);

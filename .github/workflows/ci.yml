@@ -20,6 +20,7 @@ jobs:
       DEPLOYMENT_MODE: local
       NEXT_PUBLIC_DEPLOYMENT_MODE: local
       ENCRYPTION_KEY: ci-only-encryption-key-with-at-least-32-characters
+      CRON_SECRET: ci-only-cron-secret-with-at-least-32-characters
       STORAGE_ID_KEY: ci-only-storage-key-with-at-least-32-characters
       WORKFLOW_TARGET_WORLD: "@workflow/world-postgres"
       WORKFLOW_POSTGRES_URL: postgresql://user:password@localhost:5432/open_review_duck

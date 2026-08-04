@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./index", () => ({ sourceObjectStore: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  put: vi.fn(),
+  sourceObjectStore: vi.fn(async () => ({ kind: "local", put: mocks.put })),
+}));
 
-import { pruneOrphanSourceBlobs } from "./source-blobs";
+vi.mock("./index", () => ({ sourceObjectStore: mocks.sourceObjectStore }));
+
+import { persistSourceBlob, pruneOrphanSourceBlobs } from "./source-blobs";
 
 describe("source blob pruning", () => {
   it("keeps newly-created unreferenced blobs inside the ingestion grace period", async () => {
@@ -20,7 +25,30 @@ describe("source blob pruning", () => {
 
     await expect(pruneOrphanSourceBlobs(database as never)).resolves.toBe(0);
     expect(JSON.stringify(candidateQuery)).toContain(
-      `blob.\\"createdAt\\" < now() - interval '1 hour'`,
+      `blob.\\"updatedAt\\" < now() - interval '1 hour'`,
     );
+  });
+
+  it("refreshes the reuse timestamp before returning a deduplicated blob", async () => {
+    const existing = { id: "blob-id", state: "ready" };
+    const returning = vi.fn(async () => [
+      { ...existing, updatedAt: new Date() },
+    ]);
+    const where = vi.fn(() => ({ returning }));
+    const set = vi.fn(() => ({ where }));
+    const database = {
+      query: {
+        sourceBlobs: { findFirst: vi.fn(async () => existing) },
+      },
+      update: vi.fn(() => ({ set })),
+    };
+
+    await persistSourceBlob(database as never, {
+      workspaceId: "workspace",
+      bytes: new TextEncoder().encode("reused"),
+    });
+
+    expect(set).toHaveBeenCalledWith({ updatedAt: expect.any(Date) });
+    expect(mocks.put).not.toHaveBeenCalled();
   });
 });

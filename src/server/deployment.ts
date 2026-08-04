@@ -24,6 +24,9 @@ export function assertDeploymentConfigured() {
     throw new Error("Deployment is missing required ENCRYPTION_KEY");
   }
   if (isLocalDeployment()) {
+    if (!env.CRON_SECRET) {
+      throw new Error("Local mode is missing required CRON_SECRET");
+    }
     deploymentConfigurationValidated = true;
     return;
   }

@@ -57,10 +57,14 @@ describe("hydratePrivateReviewSources", () => {
     const digest = createHash("sha256").update(source).digest("hex");
     const controller = new AbortController();
     const hydrated = vi.fn();
-    const fetchMock = vi.fn(async (input: string | URL | Request) =>
-      String(input).startsWith("/api/source/")
-        ? Response.json({ digest, signedUrl: "https://private.example/source" })
-        : new Response(source),
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, _init?: RequestInit) =>
+        String(input).startsWith("/api/source/")
+          ? Response.json({
+              digest,
+              signedUrl: "https://private.example/source",
+            })
+          : new Response(source),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -87,13 +91,18 @@ describe("hydratePrivateReviewSources", () => {
       0,
       expect.objectContaining({ source }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/source/blob"),
-      expect.objectContaining({ signal: controller.signal }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://private.example/source",
-      expect.objectContaining({ signal: controller.signal }),
-    );
+    const authorizationSignal = fetchMock.mock.calls.find(([url]) =>
+      String(url).startsWith("/api/source/"),
+    )?.[1]?.signal;
+    const downloadSignal = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "https://private.example/source",
+    )?.[1]?.signal;
+    expect(authorizationSignal).toBeInstanceOf(AbortSignal);
+    expect(downloadSignal).toBeInstanceOf(AbortSignal);
+    expect(authorizationSignal?.aborted).toBe(false);
+    expect(downloadSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(authorizationSignal?.aborted).toBe(true);
+    expect(downloadSignal?.aborted).toBe(true);
   });
 });

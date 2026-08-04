@@ -10,17 +10,21 @@ describe("LocalSourceObjectStore", () => {
     const store = new LocalSourceObjectStore(root);
     const digest = "a".repeat(64);
     const workspaceId = "11111111-1111-4111-8111-111111111111";
-    const stored = await store.put({
+    const input = {
       bytes: new TextEncoder().encode("select 1"),
       digest,
       workspaceId,
-    });
+    };
+    const stored = await store.put(input);
+    expect(stored.objectKey).toBe(store.customId(input));
     expect(new TextDecoder().decode(await store.read(stored.objectKey))).toBe(
       "select 1",
     );
     expect(await readFile(path.join(root, stored.objectKey), "utf8")).toBe(
       "select 1",
     );
+    await store.deleteByCustomId(store.customId(input));
+    await expect(store.read(stored.objectKey)).rejects.toThrow();
   });
 
   it("rejects traversal identities", async () => {
