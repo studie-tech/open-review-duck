@@ -28,6 +28,11 @@ export async function persistSourceBlob(
 ) {
   const digest = sourceDigest(input.bytes);
   const store = await sourceObjectStore();
+  const putInput = {
+    bytes: input.bytes,
+    digest,
+    workspaceId: input.workspaceId,
+  };
   const uploadLeaseToken = randomUUID();
   const existing = await db.query.sourceBlobs.findFirst({
     where: and(
@@ -47,6 +52,7 @@ export async function persistSourceBlob(
       byteLength: input.bytes.byteLength,
       encoding: input.encoding ?? "utf-8",
       mediaType: input.mediaType ?? "application/octet-stream",
+      customId: store.customId?.(putInput),
       uploadLeaseToken,
       uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
     })
@@ -69,12 +75,7 @@ export async function persistSourceBlob(
     const stored = await observeOperation(
       "storage.ingest-source",
       "storage",
-      () =>
-        store.put({
-          bytes: input.bytes,
-          digest,
-          workspaceId: input.workspaceId,
-        }),
+      () => store.put(putInput),
     );
     const [ready] = await db
       .update(sourceBlobs)
@@ -180,6 +181,7 @@ export async function pruneOrphanSourceBlobs(
           select 1 from open_review_duck_ai_job_evidence evidence
           where evidence."sourceBlobId" = blob.id
         )
+        and blob."createdAt" < now() - interval '1 hour'
       order by blob."createdAt"
       limit ${maximum}
       for update skip locked
@@ -241,8 +243,11 @@ export async function pruneOrphanSourceBlobs(
         ),
       });
       if (!owned) continue;
+      const store = await sourceObjectStore();
       if (blob.objectKey) {
-        await (await sourceObjectStore()).delete(blob.objectKey);
+        await store.delete(blob.objectKey);
+      } else if (blob.customId && store.deleteByCustomId) {
+        await store.deleteByCustomId(blob.customId);
       }
       const [removed] = await db
         .delete(sourceBlobs)

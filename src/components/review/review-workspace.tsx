@@ -246,25 +246,71 @@ export function ReviewWorkspace({
           : initialData.units.map(({ id }) => id),
       ),
   );
+  const [sourceHydrationPending, setSourceHydrationPending] = useState(
+    initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
+  );
   useEffect(() => {
     if (initialData.sourceDelivery !== "direct" || !initialData.snapshot)
       return;
     const snapshotId = initialData.snapshot.id;
     let active = true;
+    const controller = new AbortController();
+    setSourceHydrationPending(true);
     setHydratedUnitIds(new Set());
     const cache = new Map<string, Promise<Uint8Array>>();
     void Promise.all([
-      hydratePrivateReviewSources(initialData.units, snapshotId, cache),
-      hydratePrivateReviewSources(initialData.fileContexts, snapshotId, cache),
+      hydratePrivateReviewSources(
+        initialData.units,
+        snapshotId,
+        cache,
+        4,
+        controller.signal,
+        (index, hydrated) => {
+          if (!active) return;
+          const original = initialData.units[index];
+          if (!original) return;
+          setUnits((current) =>
+            current.map((unit) => (unit.id === original.id ? hydrated : unit)),
+          );
+          if (
+            original.kind === "binary" ||
+            original.currentBlobId ||
+            original.previousBlobId
+          ) {
+            setHydratedUnitIds((current) => new Set(current).add(original.id));
+          }
+        },
+      ),
+      hydratePrivateReviewSources(
+        initialData.fileContexts,
+        snapshotId,
+        cache,
+        4,
+        controller.signal,
+        (index, hydrated) => {
+          if (!active) return;
+          const original = initialData.fileContexts[index];
+          if (!original) return;
+          setFileContexts((current) =>
+            current.map((context) =>
+              context.path === original.path ? hydrated : context,
+            ),
+          );
+        },
+      ),
     ]).then(([hydratedUnits, hydratedContexts]) => {
       if (!active) return;
+      setSourceHydrationPending(false);
       setUnits(hydratedUnits.units);
       setFileContexts(hydratedContexts.units);
       setHydratedUnitIds(
         new Set(
           hydratedUnits.successfulIndexes.flatMap((index) => {
             const unit = initialData.units[index];
-            return unit && (unit.kind === "binary" || unit.currentBlobId)
+            return unit &&
+              (unit.kind === "binary" ||
+                unit.currentBlobId ||
+                unit.previousBlobId)
               ? [unit.id]
               : [];
           }),
@@ -284,6 +330,7 @@ export function ReviewWorkspace({
     });
     return () => {
       active = false;
+      controller.abort();
       cache.clear();
     };
   }, [
@@ -2261,7 +2308,9 @@ export function ReviewWorkspace({
     activeUnit.kind !== "binary";
   const canUsePrimaryAction =
     !!activeUnit &&
-    activeSourceAvailable &&
+    (activeSourceAvailable ||
+      activeUnit.status === "signed_off" ||
+      activeUnit.status === "waiting") &&
     !reviewComplete &&
     !activeSignOffPending &&
     !undoSignOff.isPending &&
@@ -4043,7 +4092,12 @@ export function ReviewWorkspace({
                 />
               </div>
             )}
-            {!activeSourceAvailable && (
+            {sourceHydrationPending && !activeSourceAvailable && (
+              <div className="text-mist grid min-h-72 place-items-center font-sans text-sm">
+                Loading and verifying private source…
+              </div>
+            )}
+            {!sourceHydrationPending && !activeSourceAvailable && (
               <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
                 <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
                   <FileCode2

@@ -16,10 +16,15 @@ function hex(bytes: ArrayBuffer) {
 }
 
 /** Downloads one authorized private object directly and verifies its digest. */
-async function privateObject(blobId: string, snapshotId: string, path: string) {
+async function privateObject(
+  blobId: string,
+  snapshotId: string,
+  path: string,
+  signal?: AbortSignal,
+) {
   const access = await fetch(
     `/api/source/${encodeURIComponent(blobId)}?snapshotId=${encodeURIComponent(snapshotId)}&path=${encodeURIComponent(path)}`,
-    { cache: "no-store", credentials: "same-origin" },
+    { cache: "no-store", credentials: "same-origin", signal },
   );
   if (!access.ok) throw new Error("Private source authorization failed");
   const metadata = (await access.json()) as {
@@ -36,6 +41,7 @@ async function privateObject(blobId: string, snapshotId: string, path: string) {
     cache: "no-store",
     credentials: "omit",
     redirect: "error",
+    signal,
   });
   if (!response.ok) throw new Error("Private source download failed");
   const bytes = await response.arrayBuffer();
@@ -61,12 +67,13 @@ async function hydratePrivateReviewSource<Unit extends SourceRange>(
   unit: Unit,
   snapshotId: string,
   cache: Map<string, Promise<Uint8Array>>,
+  signal?: AbortSignal,
 ) {
   /** Deduplicates downloads while hydrating related review units. */
   const load = (blobId: string) => {
     let pending = cache.get(blobId);
     if (!pending) {
-      pending = privateObject(blobId, snapshotId, unit.path);
+      pending = privateObject(blobId, snapshotId, unit.path, signal);
       cache.set(blobId, pending);
     }
     return pending;
@@ -93,6 +100,8 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
   snapshotId: string,
   cache: Map<string, Promise<Uint8Array>>,
   concurrency = 4,
+  signal?: AbortSignal,
+  onUnitHydrated?: (index: number, unit: Unit) => void,
 ) {
   const hydrated = new Array<Unit>(units.length);
   const failures: Array<{ cause: unknown; path: string }> = [];
@@ -109,8 +118,10 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
           unit,
           snapshotId,
           cache,
+          signal,
         );
         successfulIndexes.push(index);
+        onUnitHydrated?.(index, hydrated[index]);
       } catch (cause) {
         hydrated[index] = unit;
         failures.push({ cause, path: unit.path });

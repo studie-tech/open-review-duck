@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import {
@@ -48,9 +49,20 @@ export async function POST(request: Request) {
   const bearer = request.headers
     .get("authorization")
     ?.replace(/^Bearer\s+/i, "");
-  const usedCredential = bearer
-    ? await authorizeSemanticUploadCredential(db, repository.id, bearer)
-    : undefined;
+  let usedCredential: Awaited<
+    ReturnType<typeof authorizeSemanticUploadCredential>
+  >;
+  try {
+    usedCredential =
+      bearer && !member
+        ? await authorizeSemanticUploadCredential(db, repository.id, bearer)
+        : undefined;
+  } catch (cause) {
+    if (cause instanceof TRPCError && cause.code === "TOO_MANY_REQUESTS") {
+      return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+    }
+    throw cause;
+  }
   if (!member && !usedCredential) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

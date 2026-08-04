@@ -5,6 +5,17 @@ const SENSITIVE_ROUTE =
 const ROUTE_PAYLOAD_FIELD =
   /(?:^|[._-])(?:body|data|query|query_string|querystring)(?:$|[._-])/i;
 
+/** Returns the HTTPS ingest origin that browser telemetry may contact. */
+export function sentryIngestOrigin(dsn: string | undefined) {
+  if (!dsn) return undefined;
+  try {
+    const url = new URL(dsn);
+    return url.protocol === "https:" ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Removes query credentials from integration and webhook URLs. */
 function sanitizedUrl(value: string) {
   if (!SENSITIVE_ROUTE.test(value)) return value;

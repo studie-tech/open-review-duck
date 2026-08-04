@@ -17,11 +17,11 @@ import {
   workspaces,
 } from "@/drizzle/schema";
 import { env } from "~/env";
-import { paidReservationMicroUsd } from "~/server/ai/cost";
 import {
   constrainAnnotationToChangedLines,
   explanationChangedLineRanges,
 } from "~/server/ai/change-scope";
+import { paidReservationMicroUsd } from "~/server/ai/cost";
 import {
   managedAiMonthlyTokenLimit,
   managedAiMonthWindow,
@@ -30,6 +30,7 @@ import {
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
+import { managedInvestigationReservation } from "./turn-guards";
 import { nonReducingAiUsage } from "./usage";
 
 type Database = typeof database;
@@ -43,9 +44,7 @@ export type TokenUsage = {
   microUsd?: number;
 };
 
-export const CURRENT_AI_AGENT_VERSION = 12;
-const AI_PROMPT_AND_TOOL_OVERHEAD_TOKENS = 1_500;
-
+export const CURRENT_AI_AGENT_VERSION = 13;
 /** Estimates a conservative token reservation for one investigation. */
 function estimateAiReservation(
   units: Array<{
@@ -56,6 +55,7 @@ function estimateAiReservation(
     kind: string;
   }>,
   kind: "explain" | "review",
+  monthlyTokenLimit: number,
 ) {
   const requestBytes = units.reduce(
     (total, unit) =>
@@ -67,14 +67,11 @@ function estimateAiReservation(
       Buffer.byteLength(unit.kind),
     0,
   );
-  const estimatedInput = Math.ceil(requestBytes / 3.2);
-  return {
-    input: Math.min(
-      env.MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT,
-      estimatedInput + AI_PROMPT_AND_TOOL_OVERHEAD_TOKENS,
-    ),
-    output: kind === "review" ? 16_000 : 8_000,
-  };
+  return managedInvestigationReservation({
+    requestBytes,
+    kind,
+    monthlyTokenLimit,
+  });
 }
 
 /** Authorizes and resolves the immutable workspace, revision, and model scope. */
@@ -316,7 +313,11 @@ export async function createAiJob(
     }),
   );
   if (units.length === 0) throw new Error("No review context found");
-  const reservation = estimateAiReservation(units, input.kind);
+  const reservation = estimateAiReservation(
+    units,
+    input.kind,
+    scope.monthlyTokenLimit,
+  );
   const reservedMicroUsd = scope.useManagedQuota
     ? await estimatePaidCostReservation(db, scope.model, reservation)
     : 0;

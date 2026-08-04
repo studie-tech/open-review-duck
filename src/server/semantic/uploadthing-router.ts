@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash, createHmac } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createUploadthing, UTFiles } from "uploadthing/next";
 import { UploadThingError, UTApi } from "uploadthing/server";
@@ -40,11 +41,21 @@ export const semanticFileRouter = {
     .middleware(async ({ input, files, req }) => {
       const token = req.headers.get("authorization")?.replace(/^Bearer /, "");
       if (!token) throw new UploadThingError("Unauthorized");
-      const authorized = await authorizeSemanticUploadCredential(
-        db,
-        input.repositoryId,
-        token,
-      );
+      let authorized: Awaited<
+        ReturnType<typeof authorizeSemanticUploadCredential>
+      >;
+      try {
+        authorized = await authorizeSemanticUploadCredential(
+          db,
+          input.repositoryId,
+          token,
+        );
+      } catch (cause) {
+        if (cause instanceof TRPCError && cause.code === "TOO_MANY_REQUESTS") {
+          throw new UploadThingError("Too many SCIP upload attempts");
+        }
+        throw cause;
+      }
       if (
         !authorized ||
         files.length !== 1 ||

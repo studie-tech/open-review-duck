@@ -5,6 +5,7 @@ import { verify } from "@node-rs/argon2";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { repositories, semanticUploadCredentials } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
+import { enforceRateLimit } from "~/server/security/rate-limit";
 
 type Database = typeof database;
 const CREDENTIAL_TOKEN =
@@ -22,6 +23,7 @@ export async function authorizeSemanticUploadCredential(
   repositoryId: string,
   token: string,
 ) {
+  await enforceRateLimit(db, `scip-upload:${repositoryId}`, 30, 60_000);
   const credentialId = CREDENTIAL_TOKEN.exec(token)?.groups?.id;
   const credentials = await db
     .select({
@@ -44,7 +46,8 @@ export async function authorizeSemanticUploadCredential(
           : undefined,
       ),
     )
-    .orderBy(desc(semanticUploadCredentials.createdAt));
+    .orderBy(desc(semanticUploadCredentials.createdAt))
+    .limit(credentialId ? 1 : 20);
   for (const credential of credentials) {
     if (await verify(credential.tokenHash, token)) return credential;
   }
