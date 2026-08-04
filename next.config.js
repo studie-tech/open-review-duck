@@ -42,10 +42,6 @@ const config = {
         source: "/gitlab/complete",
         destination: "/api/integrations/gitlab/callback",
       },
-      {
-        source: "/azure-devops/complete",
-        destination: "/api/integrations/azure_devops/callback",
-      },
     ];
   },
   turbopack: {

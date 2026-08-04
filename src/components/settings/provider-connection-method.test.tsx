@@ -9,22 +9,19 @@ import { ProviderConnectionMethodPicker } from "./provider-connection-method";
 afterEach(cleanup);
 
 describe("ProviderConnectionMethodPicker", () => {
-  it("presents PAT as an Azure DevOps fallback without claiming it needs admin approval", async () => {
+  it("lets GitLab users choose a PAT instead of OAuth", async () => {
     const onChange = vi.fn();
     render(
       <ProviderConnectionMethodPicker
         method="managed"
         onChange={onChange}
-        provider="azure_devops"
+        provider="gitlab"
       />,
     );
 
-    expect(screen.getByText("Microsoft Entra")).toBeInTheDocument();
+    expect(screen.getByText("GitLab OAuth")).toBeInTheDocument();
     expect(screen.getByText("Personal access token")).toBeInTheDocument();
-    expect(
-      screen.getByText(/without asking a tenant admin/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
 
     await userEvent.click(
       screen.getByRole("button", { name: /personal access token/i }),

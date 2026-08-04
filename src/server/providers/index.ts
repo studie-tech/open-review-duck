@@ -18,13 +18,12 @@ export function createProvider(
       credentialKind === "github_app",
     );
   if (name === "gitlab") return new GitLabProvider(token, normalizedBaseUrl);
+  if (credentialKind !== "pat" && credentialKind !== "local_pat") {
+    throw new Error("Azure DevOps connections require a personal access token");
+  }
   if (!normalizedBaseUrl)
     throw new Error("Azure DevOps connections require an organization URL");
-  return new AzureDevOpsProvider(
-    token,
-    normalizedBaseUrl,
-    credentialKind === "oauth",
-  );
+  return new AzureDevOpsProvider(token, normalizedBaseUrl);
 }
 
 export * from "./types";

@@ -188,7 +188,6 @@ async function completeProviderAuthorization(
     ),
   ) as {
     verifier?: unknown;
-    organizationUrl?: unknown;
     installationId?: unknown;
     callback?: unknown;
   };
@@ -348,16 +347,9 @@ async function completeProviderAuthorization(
       NextResponse.json({ error: "OAuth code is missing" }, { status: 400 }),
     );
   }
-  const tokenUrl =
-    provider === "gitlab"
-      ? "https://gitlab.com/oauth/token"
-      : `https://login.microsoftonline.com/${env.AZURE_ENTRA_TENANT_ID}/oauth2/v2.0/token`;
-  const clientId =
-    provider === "gitlab" ? env.GITLAB_CLIENT_ID : env.AZURE_ENTRA_CLIENT_ID;
-  const clientSecret =
-    provider === "gitlab"
-      ? env.GITLAB_CLIENT_SECRET
-      : env.AZURE_ENTRA_CLIENT_SECRET;
+  const tokenUrl = "https://gitlab.com/oauth/token";
+  const clientId = env.GITLAB_CLIENT_ID;
+  const clientSecret = env.GITLAB_CLIENT_SECRET;
   if (!clientId || !clientSecret)
     throw new Error("OAuth client is not configured");
   const form = new URLSearchParams({
@@ -410,20 +402,7 @@ async function completeProviderAuthorization(
   const accessToken = tokens.access_token;
   const refreshToken = tokens.refresh_token;
   const expiresIn = tokens.expires_in;
-  const baseUrl =
-    provider === "gitlab"
-      ? "https://gitlab.com/api/v4"
-      : typeof stateSecret.organizationUrl === "string"
-        ? stateSecret.organizationUrl
-        : undefined;
-  if (!baseUrl) {
-    return securedCallbackResponse(
-      NextResponse.json(
-        { error: "Azure DevOps organization is missing" },
-        { status: 400 },
-      ),
-    );
-  }
+  const baseUrl = "https://gitlab.com/api/v4";
   const identity = await createProvider(
     provider,
     accessToken,
@@ -431,9 +410,7 @@ async function completeProviderAuthorization(
     "oauth",
   ).getConnectionIdentity();
   const credentialFingerprint = createHash("sha256")
-    .update(
-      `${provider}\0${provider === "azure_devops" ? `${baseUrl}\0` : ""}${identity.externalAccountId}`,
-    )
+    .update(`${provider}\0${identity.externalAccountId}`)
     .digest("hex");
   await db.transaction(async (tx) => {
     const [connection] = await tx

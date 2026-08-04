@@ -50,14 +50,6 @@ export const env = createEnv({
     GITHUB_WEBHOOK_SECRET: environmentSecretSchema.optional(),
     GITLAB_CLIENT_ID: z.string().min(1).optional(),
     GITLAB_CLIENT_SECRET: environmentSecretSchema.optional(),
-    AZURE_ENTRA_CLIENT_ID: z.string().min(1).optional(),
-    AZURE_ENTRA_CLIENT_SECRET: environmentSecretSchema.optional(),
-    AZURE_ENTRA_TENANT_ID: z
-      .string()
-      .regex(
-        /^(?:organizations|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
-      )
-      .default("organizations"),
     OAUTH_STATE_SECRET: environmentSecretSchema.optional(),
     SENTRY_DSN: z.string().url().optional(),
     SENTRY_ENVIRONMENT: z.string().min(1).optional(),
@@ -151,9 +143,6 @@ export const env = createEnv({
     GITHUB_WEBHOOK_SECRET: process.env.GITHUB_WEBHOOK_SECRET,
     GITLAB_CLIENT_ID: process.env.GITLAB_CLIENT_ID,
     GITLAB_CLIENT_SECRET: process.env.GITLAB_CLIENT_SECRET,
-    AZURE_ENTRA_CLIENT_ID: process.env.AZURE_ENTRA_CLIENT_ID,
-    AZURE_ENTRA_CLIENT_SECRET: process.env.AZURE_ENTRA_CLIENT_SECRET,
-    AZURE_ENTRA_TENANT_ID: process.env.AZURE_ENTRA_TENANT_ID,
     OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,
     SENTRY_DSN: process.env.SENTRY_DSN,
     SENTRY_ENVIRONMENT: process.env.SENTRY_ENVIRONMENT,
