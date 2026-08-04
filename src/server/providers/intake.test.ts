@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { supportsAssignedIntake } from "./intake-policy";
+import { automaticSyncSlots, supportsAssignedIntake } from "./intake-policy";
 
 describe("repository pull-request intake", () => {
   it("rejects assigned mode for GitHub App installations", () => {
@@ -30,5 +30,11 @@ describe("repository pull-request intake", () => {
         credentialKind: "oauth",
       }),
     ).toBe(true);
+  });
+
+  it("starts at most one automatic synchronization per repository", () => {
+    expect(automaticSyncSlots(0)).toBe(1);
+    expect(automaticSyncSlots(1)).toBe(0);
+    expect(automaticSyncSlots(4)).toBe(0);
   });
 });

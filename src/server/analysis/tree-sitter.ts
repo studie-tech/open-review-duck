@@ -24,6 +24,31 @@ const MAXIMUM_CACHED_LANGUAGES =
   process.env.NODE_ENV === "test" ? Object.keys(grammarAssets).length : 8;
 const languages = new Map<TreeSitterLanguage, Language>();
 const pendingLanguages = new Map<TreeSitterLanguage, Promise<Language>>();
+const activeLanguageCounts = new Map<TreeSitterLanguage, number>();
+
+/** Returns every grammar protected by an active analysis operation. */
+function activeLanguages() {
+  return new Set(activeLanguageCounts.keys());
+}
+
+/** Acquires shared grammar leases for one analysis operation. */
+function acquireLanguages(requested: Set<TreeSitterLanguage>) {
+  for (const language of requested) {
+    activeLanguageCounts.set(
+      language,
+      (activeLanguageCounts.get(language) ?? 0) + 1,
+    );
+  }
+}
+
+/** Releases shared grammar leases after one analysis operation. */
+function releaseLanguages(requested: Set<TreeSitterLanguage>) {
+  for (const language of requested) {
+    const count = activeLanguageCounts.get(language) ?? 0;
+    if (count <= 1) activeLanguageCounts.delete(language);
+    else activeLanguageCounts.set(language, count - 1);
+  }
+}
 
 /** Loads only requested grammars and keeps a bounded least-recently-used cache. */
 export async function prepareTreeSitterLanguages(
@@ -50,7 +75,7 @@ export async function prepareTreeSitterLanguages(
     pendingLanguages.delete(language);
     languages.set(language, grammar);
   }
-  trimLanguageCache(requestedSet);
+  trimLanguageCache(activeLanguages());
 }
 
 /** Reports the bounded warm grammar set for diagnostics and bundle tests. */
@@ -64,11 +89,13 @@ export async function withPreparedTreeSitterLanguages<T>(
   operation: () => T | Promise<T>,
 ) {
   const requestedSet = new Set(requested);
-  await prepareTreeSitterLanguages(requestedSet);
+  acquireLanguages(requestedSet);
   try {
+    await prepareTreeSitterLanguages(requestedSet);
     return await operation();
   } finally {
-    trimLanguageCache();
+    releaseLanguages(requestedSet);
+    trimLanguageCache(activeLanguages());
   }
 }
 

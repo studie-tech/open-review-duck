@@ -998,6 +998,13 @@ describe("provider normalization", () => {
           changeEntries: [
             {
               item: {
+                path: null,
+                gitObjectType: "blob",
+              },
+              changeType: "edit",
+            },
+            {
+              item: {
                 path: "/src/sync.py",
                 gitObjectType: "blob",
               },

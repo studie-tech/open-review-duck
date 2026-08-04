@@ -13,7 +13,7 @@ import { assignPullRequestToQueue } from "~/server/review/queue";
 import { startPullRequestSync } from "../workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
 import { providerForConnection } from "./credentials";
-import { supportsAssignedIntake } from "./intake-policy";
+import { automaticSyncSlots, supportsAssignedIntake } from "./intake-policy";
 import { refreshRepositoryPullRequestStates } from "./pull-request-state";
 
 type Database = typeof database;
@@ -43,6 +43,7 @@ export async function reconcileRepositoryIntake(
       considered: 0,
       queued: 0,
       alreadyCurrent: 0,
+      deferred: 0,
       skipped: true,
     };
   }
@@ -72,6 +73,7 @@ export async function reconcileRepositoryIntake(
         considered: 0,
         queued: 0,
         alreadyCurrent: 0,
+        deferred: 0,
         skipped: true,
       };
     }
@@ -150,7 +152,7 @@ export async function reconcileRepositoryIntake(
     const queueStateByNumber = new Map(
       queueItems.map((item) => [item.number, item.state]),
     );
-    const toQueue = candidates.filter((candidate) => {
+    const eligible = candidates.filter((candidate) => {
       if (activeNumbers.has(candidate.number)) return false;
       const known = knownByNumber.get(candidate.number);
       return (
@@ -160,6 +162,7 @@ export async function reconcileRepositoryIntake(
         known.state !== candidate.state
       );
     });
+    const toQueue = eligible.slice(0, automaticSyncSlots(activeNumbers.size));
 
     for (const candidate of toQueue) {
       await startPullRequestSync(db, {
@@ -204,7 +207,8 @@ export async function reconcileRepositoryIntake(
       mode: repository.reviewIntakeMode,
       considered: candidates.length,
       queued: toQueue.length + directlyAssigned,
-      alreadyCurrent: candidates.length - toQueue.length - directlyAssigned,
+      alreadyCurrent: candidates.length - eligible.length - directlyAssigned,
+      deferred: eligible.length - toQueue.length,
       skipped: false,
     };
   } catch (cause) {
