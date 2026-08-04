@@ -1,18 +1,7 @@
 import "server-only";
 
 import { isDeepStrictEqual } from "node:util";
-import {
-  and,
-  eq,
-  gte,
-  isNotNull,
-  isNull,
-  lt,
-  ne,
-  or,
-  sql,
-  sum,
-} from "drizzle-orm";
+import { and, eq, gte, isNull, lt, ne, or, sql, sum } from "drizzle-orm";
 import {
   aiJobs,
   aiPreferences,
@@ -30,6 +19,10 @@ import {
 import { env } from "~/env";
 import { paidReservationMicroUsd } from "~/server/ai/cost";
 import {
+  constrainAnnotationToChangedLines,
+  explanationChangedLineRanges,
+} from "~/server/ai/change-scope";
+import {
   managedAiMonthlyTokenLimit,
   managedAiMonthWindow,
   managedSaasModel,
@@ -37,6 +30,7 @@ import {
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
+import { nonReducingAiUsage } from "./usage";
 
 type Database = typeof database;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -49,7 +43,7 @@ export type TokenUsage = {
   microUsd?: number;
 };
 
-export const CURRENT_AI_AGENT_VERSION = 11;
+export const CURRENT_AI_AGENT_VERSION = 12;
 const AI_PROMPT_AND_TOOL_OVERHEAD_TOKENS = 1_500;
 
 /** Estimates a conservative token reservation for one investigation. */
@@ -327,26 +321,32 @@ export async function createAiJob(
     ? await estimatePaidCostReservation(db, scope.model, reservation)
     : 0;
   return db.transaction(async (tx) => {
-    const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:${input.question ? "question" : "automatic"}:${input.unitId ?? "pull-request"}`;
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${dedupeKey}))`);
-    const existing = await tx.query.aiJobs.findFirst({
-      where: and(
-        eq(aiJobs.snapshotId, scope.snapshot.id),
-        eq(aiJobs.userId, input.userId),
-        eq(aiJobs.kind, input.kind),
-        eq(aiJobs.agentVersion, CURRENT_AI_AGENT_VERSION),
-        input.unitId ? eq(aiJobs.unitId, input.unitId) : isNull(aiJobs.unitId),
-        input.question ? isNotNull(aiJobs.question) : isNull(aiJobs.question),
-        or(
-          eq(aiJobs.status, "queued"),
-          eq(aiJobs.status, "running"),
-          eq(aiJobs.status, "waiting_for_provider"),
-          eq(aiJobs.status, "streaming"),
+    if (!input.question) {
+      const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:automatic:${input.unitId ?? "pull-request"}`;
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${dedupeKey}))`,
+      );
+      const existing = await tx.query.aiJobs.findFirst({
+        where: and(
+          eq(aiJobs.snapshotId, scope.snapshot.id),
+          eq(aiJobs.userId, input.userId),
+          eq(aiJobs.kind, input.kind),
+          eq(aiJobs.agentVersion, CURRENT_AI_AGENT_VERSION),
+          input.unitId
+            ? eq(aiJobs.unitId, input.unitId)
+            : isNull(aiJobs.unitId),
+          isNull(aiJobs.question),
+          or(
+            eq(aiJobs.status, "queued"),
+            eq(aiJobs.status, "running"),
+            eq(aiJobs.status, "waiting_for_provider"),
+            eq(aiJobs.status, "streaming"),
+          ),
         ),
-      ),
-      orderBy: (table, { desc }) => [desc(table.createdAt)],
-    });
-    if (existing) return existing;
+        orderBy: (table, { desc }) => [desc(table.createdAt)],
+      });
+      if (existing) return existing;
+    }
     if (scope.useManagedQuota) {
       await reserveManagedQuota(tx, {
         workspaceId: scope.workspaceId,
@@ -407,23 +407,16 @@ export async function settleAiJobQuota(
       where: eq(aiJobs.id, jobId),
     });
     if (!job || job.quotaSettledAt) return;
-    const settled = usage ?? {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      microUsd: 0,
-    };
+    const settled = nonReducingAiUsage(job, usage);
     await tx
       .update(aiJobs)
       .set({
-        inputTokens: settled.input,
-        outputTokens: settled.output,
-        cacheReadTokens: settled.cacheRead,
-        cacheWriteTokens: settled.cacheWrite,
-        totalTokens: settled.totalTokens,
-        actualMicroUsd: settled.microUsd ?? 0,
+        inputTokens: sql`greatest(${aiJobs.inputTokens}, ${settled.input})`,
+        outputTokens: sql`greatest(${aiJobs.outputTokens}, ${settled.output})`,
+        cacheReadTokens: sql`greatest(${aiJobs.cacheReadTokens}, ${settled.cacheRead})`,
+        cacheWriteTokens: sql`greatest(${aiJobs.cacheWriteTokens}, ${settled.cacheWrite})`,
+        totalTokens: sql`greatest(${aiJobs.totalTokens}, ${settled.totalTokens})`,
+        actualMicroUsd: sql`greatest(${aiJobs.actualMicroUsd}, ${settled.microUsd})`,
         quotaSettledAt: new Date(),
       })
       .where(and(eq(aiJobs.id, job.id), isNull(aiJobs.quotaSettledAt)));
@@ -469,12 +462,51 @@ export async function acceptAiJobResult(
   db: Database,
   jobId: string,
   result: NonNullable<typeof aiJobs.$inferInsert.result>,
-  completionReason: "answered" | "investigation_limit" = "answered",
+  completionReason:
+    | "answered"
+    | "investigation_limit"
+    | "quota_limit"
+    | "cost_limit" = "answered",
 ) {
+  const job = await db.query.aiJobs.findFirst({
+    columns: { kind: true, unitId: true },
+    where: eq(aiJobs.id, jobId),
+  });
+  let scopedResult = result;
+  if (job?.kind === "explain" && job.unitId) {
+    const [unit] = await hydrateReviewUnits(
+      db,
+      await db.query.reviewUnits.findMany({
+        where: eq(reviewUnits.id, job.unitId),
+        limit: 1,
+      }),
+    );
+    if (!unit) throw new Error("AI explanation unit not found");
+    const ranges = explanationChangedLineRanges(unit);
+    scopedResult = {
+      ...result,
+      annotations: result.annotations.flatMap((annotation) => {
+        if (annotation.path !== unit.path) return [];
+        const constrained = constrainAnnotationToChangedLines(
+          annotation,
+          ranges,
+        );
+        return constrained ? [constrained] : [];
+      }),
+      commentProposals: (result.commentProposals ?? []).filter(
+        (proposal) =>
+          proposal.path === unit.path &&
+          ranges.some(
+            ({ startLine, endLine }) =>
+              proposal.line >= startLine && proposal.line <= endLine,
+          ),
+      ),
+    };
+  }
   const [updated] = await db
     .update(aiJobs)
     .set({
-      result,
+      result: scopedResult,
       completionReason,
       status: "completed",
       progress: 100,
@@ -495,7 +527,7 @@ export async function acceptAiJobResult(
   });
   return (
     existing?.status === "completed" &&
-    isDeepStrictEqual(existing.result, result)
+    isDeepStrictEqual(existing.result, scopedResult)
   );
 }
 

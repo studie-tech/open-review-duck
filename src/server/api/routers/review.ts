@@ -31,7 +31,7 @@ import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
 import { ProviderError } from "~/server/providers/types";
 import {
-  claimFailedCommentForPublication,
+  claimCommentForPublicationRetry,
   findEquivalentUserComment,
   providerCommentBody,
   publishedThreadForComment,
@@ -1767,8 +1767,8 @@ export const reviewRouter = createTRPCRouter({
           : undefined;
       const equivalentUserCommentFound = comment !== undefined;
       if (comment?.status === "published") return comment;
-      if (comment?.status === "failed") {
-        comment = await claimFailedCommentForPublication(ctx.db, comment.id);
+      if (comment?.status === "failed" || comment?.status === "publishing") {
+        comment = await claimCommentForPublicationRetry(ctx.db, comment.id);
         retryingPublication = comment !== undefined;
       }
       if (!comment && !equivalentUserCommentFound) {
@@ -1798,8 +1798,8 @@ export const reviewRouter = createTRPCRouter({
               })
             : undefined;
         if (comment?.status === "published") return comment;
-        if (comment?.status === "failed") {
-          comment = await claimFailedCommentForPublication(ctx.db, comment.id);
+        if (comment?.status === "failed" || comment?.status === "publishing") {
+          comment = await claimCommentForPublicationRetry(ctx.db, comment.id);
           retryingPublication = comment !== undefined;
         }
       }

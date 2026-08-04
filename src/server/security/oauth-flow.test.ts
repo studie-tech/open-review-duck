@@ -10,6 +10,8 @@ describe("safeOAuthRedirectPath", () => {
     ],
     ["//attacker.example/steal", "/settings/providers"],
     ["/\\attacker.example/steal", "/settings/providers"],
+    ["/..//attacker.example", "/settings/providers"],
+    ["/./..//attacker.example/path", "/settings/providers"],
     ["https://attacker.example/steal", "/settings/providers"],
     [undefined, "/settings/providers"],
   ])(

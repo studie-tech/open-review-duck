@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { hash } from "@node-rs/argon2";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -9,6 +8,7 @@ import {
 } from "@/drizzle/schema";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
+import { newSemanticUploadCredential } from "~/server/semantic/upload-credentials";
 
 /** Issues one repository-scoped SCIP upload capability and stores only its hash. */
 export async function POST(request: Request) {
@@ -47,10 +47,11 @@ export async function POST(request: Request) {
   if (!["owner", "admin"].includes(repository.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const token = randomBytes(48).toString("base64url");
+  const { id, token } = newSemanticUploadCredential();
   const [credential] = await db
     .insert(semanticUploadCredentials)
     .values({
+      id,
       repositoryId: repository.id,
       label: body.label,
       tokenHash: await hash(token, {

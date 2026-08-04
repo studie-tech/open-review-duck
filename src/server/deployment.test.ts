@@ -24,6 +24,7 @@ const { configuration } = vi.hoisted(() => ({
     GITLAB_CLIENT_SECRET: "gitlab-secret-test",
     SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
     NEXT_PUBLIC_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
+    CRON_SECRET: "cron-secret-test",
   } as Record<string, unknown>,
 }));
 
@@ -40,6 +41,7 @@ describe("deployment configuration", () => {
       OAUTH_STATE_SECRET: undefined,
       GITHUB_APP_CLIENT_ID: undefined,
       GITHUB_APP_CLIENT_SECRET: undefined,
+      AZURE_ENTRA_CLIENT_SECRET: undefined,
       CRON_SECRET: undefined,
     });
   });

@@ -158,12 +158,10 @@ export async function syncPullRequest(
   );
   const storedFiles = await mapWithLimit(files, 4, async (file) => {
     const [currentBlob, previousBlob] = await Promise.all([
-      file.changeType === "deleted"
-        ? undefined
-        : persistSourceBlob(db, {
-            workspaceId: repository.workspaceId,
-            bytes: Buffer.from(file.content),
-          }),
+      persistSourceBlob(db, {
+        workspaceId: repository.workspaceId,
+        bytes: Buffer.from(file.content),
+      }),
       file.previousContent === undefined
         ? undefined
         : persistSourceBlob(db, {
@@ -395,16 +393,22 @@ export async function syncPullRequest(
             changeType: file.changeType ?? "modified",
             currentBlobId: currentBlob?.id,
             previousBlobId: previousBlob?.id,
-            additions: Math.max(
-              0,
-              file.content.split("\n").length -
-                (file.previousContent?.split("\n").length ?? 0),
-            ),
-            deletions: Math.max(
-              0,
-              (file.previousContent?.split("\n").length ?? 0) -
-                file.content.split("\n").length,
-            ),
+            additions:
+              file.changeType === "deleted"
+                ? 0
+                : Math.max(
+                    0,
+                    file.content.split("\n").length -
+                      (file.previousContent?.split("\n").length ?? 0),
+                  ),
+            deletions:
+              file.changeType === "deleted"
+                ? file.content.split("\n").length
+                : Math.max(
+                    0,
+                    (file.previousContent?.split("\n").length ?? 0) -
+                      file.content.split("\n").length,
+                  ),
             isBinary: file.isBinary ?? false,
           };
         }),
@@ -441,13 +445,7 @@ export async function syncPullRequest(
         signature: unit.signature,
         startLine: unit.startLine,
         endLine: unit.endLine,
-        ...sourceRange(
-          storedFile.file.changeType === "deleted"
-            ? (storedFile.file.previousContent ?? "")
-            : storedFile.file.content,
-          unit.startLine,
-          unit.endLine,
-        ),
+        ...sourceRange(storedFile.file.content, unit.startLine, unit.endLine),
         ...previousSourceRange(storedFile.file.previousContent ?? "", unit),
         relatedRanges: unit.relatedRanges,
         contentHash: unit.contentHash,

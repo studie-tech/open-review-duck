@@ -4,7 +4,7 @@ import {
   exchangeGitHubUserCode,
   githubAppPrivateKey,
   revokeGitHubUserToken,
-  verifyGitHubInstallationAccess,
+  verifyGitHubInstallationOwnership,
 } from "./github-app-authorization";
 
 describe("GitHub App user authorization", () => {
@@ -62,24 +62,43 @@ describe("GitHub App user authorization", () => {
     ).rejects.toThrow("response is invalid");
   });
 
-  it("accepts only an installation accessible to the user token", async () => {
-    const allowed = vi
-      .fn()
-      .mockResolvedValue(new Response(null, { status: 200 }));
+  it("accepts only an installation administered by the user token", async () => {
+    const allowed = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/app/installations/")) {
+        return Response.json({
+          account: { id: 7, login: "acme", type: "Organization" },
+        });
+      }
+      if (url.endsWith("/user")) return Response.json({ id: 9 });
+      return Response.json({ role: "admin", state: "active" });
+    });
     await expect(
-      verifyGitHubInstallationAccess("42", "ghu_token", allowed),
-    ).resolves.toBeUndefined();
+      verifyGitHubInstallationOwnership(
+        "42",
+        "ghu_token",
+        "app-token",
+        allowed,
+      ),
+    ).resolves.toEqual({ accountId: "7", accountLogin: "acme" });
     expect(allowed).toHaveBeenCalledWith(
-      "https://api.github.com/user/installations/42/repositories?per_page=1",
+      "https://api.github.com/app/installations/42",
       expect.objectContaining({ redirect: "error" }),
     );
 
-    const denied = vi
-      .fn()
-      .mockResolvedValue(new Response(null, { status: 404 }));
+    const denied = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/app/installations/")) {
+        return Response.json({
+          account: { id: 7, login: "acme", type: "Organization" },
+        });
+      }
+      if (url.endsWith("/user")) return Response.json({ id: 9 });
+      return Response.json({ role: "member", state: "active" });
+    });
     await expect(
-      verifyGitHubInstallationAccess("43", "ghu_token", denied),
-    ).rejects.toThrow("not accessible");
+      verifyGitHubInstallationOwnership("43", "ghu_token", "app-token", denied),
+    ).rejects.toThrow("not administered");
   });
 
   it("revokes the verification token with GitHub App credentials", async () => {

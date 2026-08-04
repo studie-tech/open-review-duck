@@ -9,6 +9,10 @@
     "src/app/api/webhooks/**/*.ts": {
       "maxDuration": 60,
       "memory": 2048
+    },
+    "src/app/api/internal/**/*.ts": {
+      "maxDuration": 120,
+      "memory": 2048
     }
   },
   "crons": [

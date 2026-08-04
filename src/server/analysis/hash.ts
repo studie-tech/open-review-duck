@@ -25,21 +25,34 @@ export function semanticSource(source: string, language: SupportedLanguage) {
 function tokenStream(source: string, tree: Tree) {
   const tokens: string[] = [];
   const cursor = tree.walk();
+  let entering = true;
   let complete = false;
   while (!complete) {
-    if (cursor.gotoFirstChild()) continue;
     const node = cursor.currentNode;
-    if (node.endIndex > node.startIndex) {
-      const value = source.slice(node.startIndex, node.endIndex);
-      tokens.push(`${node.type.length}:${node.type}:${value.length}:${value}`);
+    if (entering) {
+      if (node.isNamed) tokens.push(`+${node.type.length}:${node.type}`);
+      if (cursor.gotoFirstChild()) continue;
+      if (node.endIndex > node.startIndex) {
+        const value = source.slice(node.startIndex, node.endIndex);
+        tokens.push(
+          `${node.type.length}:${node.type}:${value.length}:${value}`,
+        );
+      }
     }
-    if (cursor.gotoNextSibling()) continue;
     while (true) {
+      const completedNode = cursor.currentNode;
+      if (completedNode.isNamed) {
+        tokens.push(`-${completedNode.type.length}:${completedNode.type}`);
+      }
+      if (cursor.gotoNextSibling()) {
+        entering = true;
+        break;
+      }
       if (!cursor.gotoParent()) {
         complete = true;
         break;
       }
-      if (cursor.gotoNextSibling()) break;
+      entering = false;
     }
   }
   cursor.delete();

@@ -49,5 +49,6 @@ describe("hydratePrivateReviewSources", () => {
     expect(result.units[1]).not.toHaveProperty("source");
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]?.path).toBe("src/unavailable.ts");
+    expect(result.successfulIndexes).toEqual([0]);
   });
 });

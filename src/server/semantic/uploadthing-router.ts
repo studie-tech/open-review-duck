@@ -1,13 +1,11 @@
 import "server-only";
 
 import { createHash, createHmac } from "node:crypto";
-import { verify } from "@node-rs/argon2";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { createUploadthing, UTFiles } from "uploadthing/next";
 import { UploadThingError, UTApi } from "uploadthing/server";
 import { z } from "zod";
 import {
-  repositories,
   semanticArtifacts,
   semanticUploadCredentials,
   sourceBlobs,
@@ -15,6 +13,7 @@ import {
 import { env } from "~/env";
 import { db } from "~/server/db";
 import { parseScipIndex } from "./scip";
+import { authorizeSemanticUploadCredential } from "./upload-credentials";
 
 const upload = createUploadthing();
 const input = z.object({
@@ -41,34 +40,13 @@ export const semanticFileRouter = {
     .middleware(async ({ input, files, req }) => {
       const token = req.headers.get("authorization")?.replace(/^Bearer /, "");
       if (!token) throw new UploadThingError("Unauthorized");
-      const credentials = await db
-        .select({
-          id: semanticUploadCredentials.id,
-          tokenHash: semanticUploadCredentials.tokenHash,
-          workspaceId: repositories.workspaceId,
-        })
-        .from(semanticUploadCredentials)
-        .innerJoin(
-          repositories,
-          eq(semanticUploadCredentials.repositoryId, repositories.id),
-        )
-        .where(
-          and(
-            eq(semanticUploadCredentials.repositoryId, input.repositoryId),
-            isNull(semanticUploadCredentials.revokedAt),
-          ),
-        )
-        .limit(20);
-      let authorized = credentials[0];
-      for (const candidate of credentials) {
-        if (await verify(candidate.tokenHash, token)) {
-          authorized = candidate;
-          break;
-        }
-      }
+      const authorized = await authorizeSemanticUploadCredential(
+        db,
+        input.repositoryId,
+        token,
+      );
       if (
         !authorized ||
-        !(await verify(authorized.tokenHash, token)) ||
         files.length !== 1 ||
         files[0]?.size !== input.declaredSize
       ) {

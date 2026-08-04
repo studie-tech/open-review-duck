@@ -199,7 +199,7 @@ export const providerRouter = createTRPCRouter({
         });
       }
       const credentialId = randomUUID();
-      const encryptedPayload = await sealVaultSecret(
+      const initialEncryptedPayload = await sealVaultSecret(
         {
           workspaceId: workspace.id,
           recordId: credentialId,
@@ -215,7 +215,7 @@ export const providerRouter = createTRPCRouter({
             workspaceId: workspace.id,
             kind: `${input.provider}_pat`,
             label: input.displayName ?? identity.displayName,
-            encryptedPayload,
+            encryptedPayload: initialEncryptedPayload,
             fingerprint,
           })
           .onConflictDoUpdate({
@@ -225,12 +225,23 @@ export const providerRouter = createTRPCRouter({
               localCredentials.fingerprint,
             ],
             set: {
-              encryptedPayload,
               label: input.displayName ?? identity.displayName,
             },
           })
           .returning();
         if (!credential) throw new Error("Could not persist local credential");
+        const encryptedPayload = await sealVaultSecret(
+          {
+            workspaceId: workspace.id,
+            recordId: credential.id,
+            provider: input.provider,
+          },
+          JSON.stringify({ token: input.accessToken }),
+        );
+        await tx
+          .update(localCredentials)
+          .set({ encryptedPayload })
+          .where(eq(localCredentials.id, credential.id));
         const [connection] = await tx
           .insert(providerConnections)
           .values({

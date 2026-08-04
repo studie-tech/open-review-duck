@@ -18,6 +18,7 @@ describe("expiredSnapshotIds", () => {
       expiredSnapshotIds(snapshots, {
         retentionDays: 30,
         retentionSnapshots: 2,
+        retainedSnapshotId: "latest",
         now,
       }),
     ).toEqual(["old", "third"]);

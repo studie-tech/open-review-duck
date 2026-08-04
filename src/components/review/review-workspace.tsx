@@ -95,6 +95,7 @@ import {
 } from "~/lib/review-scroll";
 import {
   currentChangedLineIndexes,
+  sourceByteOffsetLine,
   sourceStartLine,
 } from "~/lib/side-by-side-diff";
 import {
@@ -237,11 +238,20 @@ export function ReviewWorkspace({
   useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
   const [fileContexts, setFileContexts] = useState(initialData.fileContexts);
+  const [hydratedUnitIds, setHydratedUnitIds] = useState(
+    () =>
+      new Set(
+        initialData.sourceDelivery === "direct"
+          ? []
+          : initialData.units.map(({ id }) => id),
+      ),
+  );
   useEffect(() => {
     if (initialData.sourceDelivery !== "direct" || !initialData.snapshot)
       return;
     const snapshotId = initialData.snapshot.id;
     let active = true;
+    setHydratedUnitIds(new Set());
     const cache = new Map<string, Promise<Uint8Array>>();
     void Promise.all([
       hydratePrivateReviewSources(initialData.units, snapshotId, cache),
@@ -250,6 +260,14 @@ export function ReviewWorkspace({
       if (!active) return;
       setUnits(hydratedUnits.units);
       setFileContexts(hydratedContexts.units);
+      setHydratedUnitIds(
+        new Set(
+          hydratedUnits.successfulIndexes.flatMap((index) => {
+            const unit = initialData.units[index];
+            return unit ? [unit.id] : [];
+          }),
+        ),
+      );
       const failures = [
         ...hydratedUnits.failures,
         ...hydratedContexts.failures,
@@ -362,6 +380,11 @@ export function ReviewWorkspace({
   const activeFileIsDeleted = activeUnit
     ? deletedFilePaths.has(activeUnit.path)
     : false;
+  const activeSourceAvailable = Boolean(
+    activeUnit &&
+      (initialData.sourceDelivery !== "direct" ||
+        hydratedUnitIds.has(activeUnit.id)),
+  );
   const settledActiveUnitId = useSettledValue(activeUnitId, 200);
   const previousActiveUnitId = useRef(activeUnitId);
   const activeUnitFoundation = activeUnit
@@ -580,7 +603,8 @@ export function ReviewWorkspace({
       ))
     : undefined;
   const diffAvailable = Boolean(
-    activeUnit &&
+    activeSourceAvailable &&
+      activeUnit &&
       activeUnit.kind !== "binary" &&
       (activeUnit.previousSource ||
         activeUnit.changeType === "added" ||
@@ -588,13 +612,19 @@ export function ReviewWorkspace({
   );
   const sideBySideVisible = showDiff && diffAvailable;
   const previousUnitStartLine =
-    activeUnit?.previousSource && activeModule
-      ? sourceStartLine(
-          activeModule.previousSource ?? undefined,
-          activeUnit.previousSource,
-          activeUnit.startLine,
-        )
-      : (activeUnit?.startLine ?? 1);
+    activeUnit?.changeType === "deleted"
+      ? activeUnit.startLine
+      : activeUnit?.previousSource && activeModule
+        ? sourceByteOffsetLine(
+            activeModule.previousSource ?? undefined,
+            activeUnit.previousStartByte,
+            sourceStartLine(
+              activeModule.previousSource ?? undefined,
+              activeUnit.previousSource,
+              activeUnit.startLine,
+            ),
+          )
+        : (activeUnit?.startLine ?? 1);
   const previousUnitEndLine = activeUnit?.previousSource
     ? previousUnitStartLine + activeUnit.previousSource.split("\n").length - 1
     : previousUnitStartLine;
@@ -2183,6 +2213,11 @@ export function ReviewWorkspace({
   const canSignOffDeletedFiles =
     activeFileIsDeleted &&
     deletedUnitsToSignOff.length > 0 &&
+    deletedUnitsToSignOff.every((unit) =>
+      initialData.sourceDelivery === "direct"
+        ? hydratedUnitIds.has(unit.id)
+        : true,
+    ) &&
     !resetReview.isPending;
   const pendingSignOffCount = signOffQueue.ids.size;
   const signOffQueueProgress = `${signOffQueue.completed}/${signOffQueue.total}`;
@@ -2224,6 +2259,7 @@ export function ReviewWorkspace({
     activeUnit.kind !== "binary";
   const canUsePrimaryAction =
     !!activeUnit &&
+    activeSourceAvailable &&
     !reviewComplete &&
     !activeSignOffPending &&
     !undoSignOff.isPending &&
@@ -4005,7 +4041,24 @@ export function ReviewWorkspace({
                 />
               </div>
             )}
-            {!sideBySideVisible && activeModule && (
+            {!activeSourceAvailable && (
+              <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
+                <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
+                  <FileCode2
+                    className="text-fog mx-auto size-6"
+                    aria-hidden="true"
+                  />
+                  <p className="text-cloud mt-4 text-sm font-medium">
+                    Source unavailable
+                  </p>
+                  <p className="text-mist mt-2 text-xs leading-5">
+                    This private source could not be verified and loaded. Reload
+                    the review before signing off this unit.
+                  </p>
+                </div>
+              </div>
+            )}
+            {!sideBySideVisible && activeSourceAvailable && activeModule && (
               <UnitImportContext
                 key={activeUnit.id}
                 fileSource={activeModule.source}
@@ -4022,6 +4075,7 @@ export function ReviewWorkspace({
               />
             )}
             {!sideBySideVisible &&
+              activeSourceAvailable &&
               contextAvailable &&
               contextBefore < availableBefore && (
                 <div className="mb-3 flex items-center gap-3 px-4 font-sans">
@@ -4046,7 +4100,7 @@ export function ReviewWorkspace({
                   <span className="h-px flex-1 bg-line" />
                 </div>
               )}
-            {activeUnit.kind === "binary" && (
+            {activeSourceAvailable && activeUnit.kind === "binary" && (
               <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
                 <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
                   <span className="bg-cyan/10 text-cyan mx-auto grid size-11 place-items-center rounded-xl">
@@ -4066,6 +4120,7 @@ export function ReviewWorkspace({
               </div>
             )}
             {!sideBySideVisible &&
+              activeSourceAvailable &&
               activeUnit.kind !== "binary" &&
               lines.map((line, index) => {
                 const lineNumber = visibleStartLine + index;

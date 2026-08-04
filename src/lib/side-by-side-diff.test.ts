@@ -3,6 +3,7 @@ import {
   compactSideBySideDiff,
   currentChangedLineIndexes,
   sideBySideDiff,
+  sourceByteOffsetLine,
   sourceStartLine,
 } from "./side-by-side-diff";
 
@@ -361,6 +362,12 @@ describe("sideBySideDiff", () => {
 describe("sourceStartLine", () => {
   it("derives base line numbers from the retained base file", () => {
     expect(sourceStartLine("first\nsecond\nunit\nlast", "unit", 99)).toBe(3);
+  });
+
+  it("uses the exact UTF-8 byte offset when source text repeats", () => {
+    const source = "å unit\nmiddle\nå unit\nlast";
+    const second = new TextEncoder().encode("å unit\nmiddle\n").byteLength;
+    expect(sourceByteOffsetLine(source, second, 99)).toBe(3);
   });
 });
 

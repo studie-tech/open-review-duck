@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lte, or } from "drizzle-orm";
 import { reviewComments } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import type { ProviderReviewThread } from "~/server/providers/types";
@@ -51,18 +51,25 @@ export async function findEquivalentUserComment(
   });
 }
 
-/** Atomically leases a failed comment for one publication retry. */
-export async function claimFailedCommentForPublication(
+/** Atomically leases a failed or stale in-flight comment for one publication retry. */
+export async function claimCommentForPublicationRetry(
   db: Database,
   commentId: string,
 ) {
+  const staleBefore = new Date(Date.now() - 5 * 60_000);
   const [claimed] = await db
     .update(reviewComments)
     .set({ status: "publishing", error: null })
     .where(
       and(
         eq(reviewComments.id, commentId),
-        eq(reviewComments.status, "failed"),
+        or(
+          eq(reviewComments.status, "failed"),
+          and(
+            eq(reviewComments.status, "publishing"),
+            lte(reviewComments.updatedAt, staleBefore),
+          ),
+        ),
       ),
     )
     .returning();

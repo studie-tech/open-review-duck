@@ -124,7 +124,13 @@ export async function pruneOrphanSourceBlobs(db: Database, maximum = 100) {
     const candidates = await tx.execute<{ id: string }>(sql`
       select blob.id
       from open_review_duck_source_blob blob
-      where blob.state in ('ready', 'failed')
+      where (
+          blob.state in ('ready', 'failed')
+          or (
+            blob.state in ('uploading', 'deleting')
+            and blob."updatedAt" < now() - interval '1 hour'
+          )
+        )
         and not exists (
           select 1 from open_review_duck_snapshot_file file
           where file."currentBlobId" = blob.id or file."previousBlobId" = blob.id
@@ -167,6 +173,22 @@ export async function pruneOrphanSourceBlobs(db: Database, maximum = 100) {
         })
         .where(eq(sourceBlobs.id, blob.id));
     }
+  }
+  return deleted;
+}
+
+/** Drains orphan batches without letting one maintenance invocation run indefinitely. */
+export async function pruneAllOrphanSourceBlobs(
+  db: Database,
+  batchSize = 100,
+  wallClockMilliseconds = 45_000,
+) {
+  const deadline = Date.now() + wallClockMilliseconds;
+  let deleted = 0;
+  while (Date.now() < deadline) {
+    const batchDeleted = await pruneOrphanSourceBlobs(db, batchSize);
+    deleted += batchDeleted;
+    if (batchDeleted < batchSize) break;
   }
   return deleted;
 }

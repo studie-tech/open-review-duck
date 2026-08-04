@@ -5,7 +5,7 @@ import { db } from "~/server/db";
 import { pruneExpiredProviderSecurityRecords } from "~/server/providers/maintenance";
 import { hasBearerToken } from "~/server/security/bearer-token";
 import { pruneExpiredRateLimits } from "~/server/security/rate-limit";
-import { pruneOrphanSourceBlobs } from "~/server/storage/source-blobs";
+import { pruneAllOrphanSourceBlobs } from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "~/server/sync/retention";
 
 /** Enforces source-retention and limiter cleanup independently of user traffic. */
@@ -15,11 +15,11 @@ export async function POST(request: NextRequest) {
     env.CRON_SECRET,
   );
   if (!authorized) return new NextResponse(null, { status: 404 });
-  const [snapshots, rateLimits, sourceObjects, modelCatalog, providerSecurity] =
+  const snapshots = await pruneExpiredReviewSnapshots(db);
+  const [rateLimits, sourceObjects, modelCatalog, providerSecurity] =
     await Promise.all([
-      pruneExpiredReviewSnapshots(db),
       pruneExpiredRateLimits(db),
-      pruneOrphanSourceBlobs(db),
+      pruneAllOrphanSourceBlobs(db),
       synchronizeOpenRouterCatalog(db),
       pruneExpiredProviderSecurityRecords(db),
     ]);
