@@ -81,7 +81,7 @@ describe("Sentry telemetry safety", () => {
   it("keeps the intended trace budgets", () => {
     expect(tracesSampler({ name: "GET /health" })).toBe(0);
     expect(tracesSampler({ name: "sync pull request" })).toBe(0.1);
-    expect(tracesSampler({ name: "GET /azure-devops/complete" })).toBe(0.1);
+    expect(tracesSampler({ name: "GET /gitlab/complete" })).toBe(0.1);
     expect(tracesSampler({ name: "GET /dashboard" })).toBe(0.01);
   });
 });

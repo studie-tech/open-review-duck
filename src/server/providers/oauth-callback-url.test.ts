@@ -10,7 +10,6 @@ describe("provider OAuth callback URLs", () => {
   it.each([
     ["github", "https://reviewduck.example/github/complete"],
     ["gitlab", "https://reviewduck.example/gitlab/complete"],
-    ["azure_devops", "https://reviewduck.example/azure-devops/complete"],
   ] as const)("uses the browser-safe path for %s", (provider, expected) => {
     expect(oauthCallbackUrl("https://reviewduck.example", provider)).toBe(
       expected,
@@ -19,6 +18,7 @@ describe("provider OAuth callback URLs", () => {
 
   it("accepts only hosted providers", () => {
     expect(hostedProvider("gitlab")).toBe(true);
+    expect(hostedProvider("azure_devops")).toBe(false);
     expect(hostedProvider("bitbucket")).toBe(false);
   });
 
@@ -43,9 +43,9 @@ describe("provider OAuth callback URLs", () => {
     expect(
       stateOAuthCallbackUrl(
         "https://reviewduck.example",
-        "azure_devops",
+        "gitlab",
         "https://attacker.example/callback",
       ),
-    ).toBe("https://reviewduck.example/api/integrations/azure_devops/callback");
+    ).toBe("https://reviewduck.example/api/integrations/gitlab/callback");
   });
 });

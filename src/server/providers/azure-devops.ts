@@ -104,12 +104,9 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   constructor(
     token: string,
     private readonly organizationUrl: string,
-    oauth = false,
   ) {
     this.headers = {
-      Authorization: oauth
-        ? `Bearer ${token}`
-        : `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
+      Authorization: `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
     };
   }
   /** Fetches the account identity associated with a provider token. */

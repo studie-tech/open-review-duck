@@ -141,6 +141,9 @@ async function oauthToken(
   db: Database,
   connection: typeof providerConnections.$inferSelect,
 ) {
+  if (connection.provider !== "gitlab") {
+    throw new Error("OAuth credentials are only supported for GitLab");
+  }
   let credential = await db.query.oauthCredentials.findFirst({
     where: eq(oauthCredentials.connectionId, connection.id),
   });
@@ -237,6 +240,9 @@ async function refreshOauthToken(db: Database, connectionId: string) {
       .where(eq(providerConnections.id, connectionId))
       .limit(1);
     if (!row) throw new Error("OAuth credential not found");
+    if (row.connection.provider !== "gitlab") {
+      throw new Error("OAuth credentials are only supported for GitLab");
+    }
     if (
       !row.credential.expiresAt ||
       row.credential.expiresAt.getTime() > Date.now() + 60_000
@@ -254,18 +260,9 @@ async function refreshOauthToken(db: Database, connectionId: string) {
       },
       row.credential.encryptedRefreshToken,
     );
-    const tokenUrl =
-      row.connection.provider === "gitlab"
-        ? "https://gitlab.com/oauth/token"
-        : `https://login.microsoftonline.com/${env.AZURE_ENTRA_TENANT_ID}/oauth2/v2.0/token`;
-    const clientId =
-      row.connection.provider === "gitlab"
-        ? env.GITLAB_CLIENT_ID
-        : env.AZURE_ENTRA_CLIENT_ID;
-    const clientSecret =
-      row.connection.provider === "gitlab"
-        ? env.GITLAB_CLIENT_SECRET
-        : env.AZURE_ENTRA_CLIENT_SECRET;
+    const tokenUrl = "https://gitlab.com/oauth/token";
+    const clientId = env.GITLAB_CLIENT_ID;
+    const clientSecret = env.GITLAB_CLIENT_SECRET;
     if (!clientId || !clientSecret) {
       throw new Error("OAuth client credentials are not configured");
     }
@@ -302,8 +299,7 @@ async function refreshOauthToken(db: Database, connectionId: string) {
         (typeof tokens.refresh_token !== "string" ||
           tokens.refresh_token.length === 0 ||
           tokens.refresh_token.length > 65_536)) ||
-      (row.connection.provider === "gitlab" &&
-        typeof tokens.refresh_token !== "string")
+      typeof tokens.refresh_token !== "string"
     ) {
       throw new Error("OAuth refresh response is invalid");
     }
@@ -359,9 +355,16 @@ export async function providerForConnection(
       `Provider authorization is ${connection.credentialStatus}; reconnect it before continuing`,
     );
   }
+  const local = isLocalDeployment();
+  if (
+    connection.provider === "azure_devops" &&
+    connection.credentialKind !== (local ? "local_pat" : "pat")
+  ) {
+    throw new Error("Azure DevOps connections require a personal access token");
+  }
   let token: string;
   if (
-    !isLocalDeployment() &&
+    !local &&
     connection.provider === "github" &&
     connection.credentialKind === "github_app"
   ) {
@@ -371,10 +374,10 @@ export async function providerForConnection(
     token = await githubInstallationToken(connection.installationId);
   } else if (connection.credentialKind === "oauth") {
     token = await oauthToken(db, connection);
-  } else if (!isLocalDeployment() && connection.credentialKind === "pat") {
+  } else if (!local && connection.credentialKind === "pat") {
     token = await hostedPatToken(db, connection);
   } else {
-    if (!isLocalDeployment()) {
+    if (!local) {
       throw new Error("Unsupported SaaS provider credential");
     }
     token = await localToken(db, connection);

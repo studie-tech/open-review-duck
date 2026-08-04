@@ -4,11 +4,11 @@ import { KeyRound, ShieldCheck } from "lucide-react";
 import type { CodeProvider } from "./provider-token-guide";
 
 export type ProviderConnectionMethod = "managed" | "pat";
+type ManagedCodeProvider = Exclude<CodeProvider, "azure_devops">;
 
-const managedLabels: Record<CodeProvider, string> = {
+const managedLabels: Record<ManagedCodeProvider, string> = {
   github: "GitHub App",
   gitlab: "GitLab OAuth",
-  azure_devops: "Microsoft Entra",
 };
 
 /** Lets a SaaS administrator choose managed authorization or an encrypted PAT. */
@@ -19,7 +19,7 @@ export function ProviderConnectionMethodPicker({
 }: {
   method: ProviderConnectionMethod;
   onChange: (method: ProviderConnectionMethod) => void;
-  provider: CodeProvider;
+  provider: ManagedCodeProvider;
 }) {
   return (
     <fieldset className="mt-6">
@@ -42,11 +42,9 @@ export function ProviderConnectionMethodPicker({
               <ShieldCheck className="text-cyan size-4" />
               {managedLabels[provider]}
             </span>
-            {provider !== "azure_devops" && (
-              <span className="border-cyan/20 bg-cyan/[.06] text-cyan rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-wide uppercase">
-                Recommended
-              </span>
-            )}
+            <span className="border-cyan/20 bg-cyan/[.06] text-cyan rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-wide uppercase">
+              Recommended
+            </span>
           </div>
           <p className="text-mist mt-2 text-[11px] leading-5">
             Authorize on the provider and revoke access there at any time.
@@ -67,9 +65,8 @@ export function ProviderConnectionMethodPicker({
             Personal access token
           </span>
           <p className="text-mist mt-2 text-[11px] leading-5">
-            {provider === "azure_devops"
-              ? "Use your existing Azure DevOps permissions without asking a tenant admin to approve an application."
-              : "Use this when organization policy prevents App or OAuth authorization."}
+            Use this when organization policy prevents App or OAuth
+            authorization.
           </p>
         </button>
       </div>

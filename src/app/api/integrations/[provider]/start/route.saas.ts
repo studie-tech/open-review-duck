@@ -6,7 +6,6 @@ import { oauthStates } from "@/drizzle/schema";
 import { env } from "~/env";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
-import { normalizeAzureOrganizationUrl } from "~/server/providers/azure-organization-url";
 import {
   hostedProvider,
   oauthCallbackUrl,
@@ -81,31 +80,8 @@ export async function POST(
     .sign(new TextEncoder().encode(env.OAUTH_STATE_SECRET));
   const verifier = randomBytes(64).toString("base64url");
   const body = (await request.json().catch(() => ({}))) as {
-    organizationUrl?: unknown;
     redirectPath?: unknown;
   };
-  let organizationUrl: string | undefined;
-  if (provider === "azure_devops" && typeof body.organizationUrl === "string") {
-    try {
-      organizationUrl = normalizeAzureOrganizationUrl(body.organizationUrl);
-    } catch (cause) {
-      return NextResponse.json(
-        {
-          error:
-            cause instanceof Error
-              ? cause.message
-              : "Azure DevOps organization URL is invalid",
-        },
-        { status: 400 },
-      );
-    }
-  }
-  if (provider === "azure_devops" && !organizationUrl) {
-    return NextResponse.json(
-      { error: "Azure DevOps organization URL is required" },
-      { status: 400 },
-    );
-  }
   const callback = oauthCallbackUrl(env.APP_URL, provider);
   await db.insert(oauthStates).values({
     id,
@@ -114,7 +90,7 @@ export async function POST(
     stateHash: createHash("sha256").update(state).digest("hex"),
     encryptedVerifier: await sealVaultSecret(
       { workspaceId: workspace.id, recordId: id, provider: "oauth-state" },
-      JSON.stringify({ verifier, organizationUrl, callback }),
+      JSON.stringify({ verifier, callback }),
     ),
     redirectPath: safeOAuthRedirectPath(body.redirectPath, env.APP_URL),
     expiresAt: new Date(Date.now() + 10 * 60_000),
@@ -125,7 +101,7 @@ export async function POST(
     authorizationUrl = new URL(
       `https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new`,
     );
-  } else if (provider === "gitlab") {
+  } else {
     if (!env.GITLAB_CLIENT_ID)
       throw new Error("GitLab OAuth is not configured");
     authorizationUrl = new URL("https://gitlab.com/oauth/authorize");
@@ -133,25 +109,6 @@ export async function POST(
     authorizationUrl.searchParams.set("redirect_uri", callback);
     authorizationUrl.searchParams.set("response_type", "code");
     authorizationUrl.searchParams.set("scope", "api");
-    authorizationUrl.searchParams.set(
-      "code_challenge",
-      createHash("sha256").update(verifier).digest("base64url"),
-    );
-    authorizationUrl.searchParams.set("code_challenge_method", "S256");
-  } else {
-    if (!env.AZURE_ENTRA_CLIENT_ID) {
-      throw new Error("Microsoft Entra OAuth is not configured");
-    }
-    authorizationUrl = new URL(
-      `https://login.microsoftonline.com/${env.AZURE_ENTRA_TENANT_ID}/oauth2/v2.0/authorize`,
-    );
-    authorizationUrl.searchParams.set("client_id", env.AZURE_ENTRA_CLIENT_ID);
-    authorizationUrl.searchParams.set("redirect_uri", callback);
-    authorizationUrl.searchParams.set("response_type", "code");
-    authorizationUrl.searchParams.set(
-      "scope",
-      "499b84ac-1321-427f-aa17-267ca6975798/user_impersonation offline_access",
-    );
     authorizationUrl.searchParams.set(
       "code_challenge",
       createHash("sha256").update(verifier).digest("base64url"),

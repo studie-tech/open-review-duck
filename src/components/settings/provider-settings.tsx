@@ -59,7 +59,7 @@ const providers: Array<{
     id: "azure_devops",
     label: "Azure DevOps",
     description: "PAT · Code (Read & write) permission",
-    hostedDescription: "Microsoft Entra or organization PAT",
+    hostedDescription: "Organization PAT · Code (Read & write) permission",
   },
 ];
 
@@ -379,18 +379,15 @@ export function ProviderSettings({
     return { label: "Saved", tone: "text-mist", dot: "bg-fog" };
   };
 
-  /** Redirects SaaS users into the provider-owned App/OAuth authorization. */
+  /** Redirects SaaS users into a supported provider authorization flow. */
   const startHostedAuthorization = async () => {
+    if (provider === "azure_devops") return;
     setAuthorizationPending(true);
     try {
       const response = await fetch(`/api/integrations/${provider}/start`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          organizationUrl:
-            provider === "azure_devops" ? baseUrl || undefined : undefined,
-          redirectPath: "/settings/providers",
-        }),
+        body: JSON.stringify({ redirectPath: "/settings/providers" }),
       });
       const result = (await response.json()) as {
         authorizationUrl?: string;
@@ -493,7 +490,9 @@ export function ProviderSettings({
                 onClick={() => {
                   setProvider(item.id);
                   setBaseUrl("");
-                  setConnectionMethod("managed");
+                  setConnectionMethod(
+                    localMode || item.id === "azure_devops" ? "pat" : "managed",
+                  );
                   connect.reset();
                 }}
                 className={`rounded-2xl border p-4 text-left transition ${
@@ -514,7 +513,7 @@ export function ProviderSettings({
               </button>
             ))}
           </div>
-          {!localMode && (
+          {!localMode && provider !== "azure_devops" && (
             <ProviderConnectionMethodPicker
               provider={provider}
               method={connectionMethod}
@@ -526,7 +525,9 @@ export function ProviderSettings({
               }}
             />
           )}
-          {localMode || connectionMethod === "pat" ? (
+          {localMode ||
+          provider === "azure_devops" ||
+          connectionMethod === "pat" ? (
             <div className="mt-6 grid gap-4">
               <ProviderTokenGuide
                 key={provider}
@@ -662,23 +663,9 @@ export function ProviderSettings({
                 resulting App or OAuth identity and never receives your
                 password.
               </p>
-              {provider === "azure_devops" && (
-                <label className="text-mist grid gap-2 text-xs">
-                  Azure DevOps organization URL
-                  <input
-                    value={baseUrl}
-                    onChange={(event) => setBaseUrl(event.target.value)}
-                    placeholder="https://dev.azure.com/acme"
-                    className="bg-surface text-cloud focus:border-lime/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
-                  />
-                </label>
-              )}
               <div className="flex justify-end">
                 <Button
-                  disabled={
-                    authorizationPending ||
-                    (provider === "azure_devops" && !baseUrl)
-                  }
+                  disabled={authorizationPending}
                   onClick={startHostedAuthorization}
                 >
                   {authorizationPending && (

@@ -1,20 +1,18 @@
-export type HostedProvider = "github" | "gitlab" | "azure_devops";
+export type HostedProvider = "github" | "gitlab";
 
 const completionPaths: Record<HostedProvider, string> = {
   github: "/github/complete",
   gitlab: "/gitlab/complete",
-  azure_devops: "/azure-devops/complete",
 };
 
 const legacyCallbackPaths: Record<HostedProvider, string> = {
   github: "/api/integrations/github/callback",
   gitlab: "/api/integrations/gitlab/callback",
-  azure_devops: "/api/integrations/azure_devops/callback",
 };
 
 /** Narrows an untrusted route segment to one supported SaaS provider. */
 export function hostedProvider(value: string): value is HostedProvider {
-  return ["github", "gitlab", "azure_devops"].includes(value);
+  return ["github", "gitlab"].includes(value);
 }
 
 /** Returns the stable, browser-safe OAuth callback registered with a provider. */
