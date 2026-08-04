@@ -32,6 +32,14 @@ const config = {
   ],
   productionBrowserSourceMaps: false,
   serverExternalPackages: ["web-tree-sitter"],
+  async rewrites() {
+    return [
+      {
+        source: "/github/callback",
+        destination: "/api/integrations/github/callback",
+      },
+    ];
+  },
   turbopack: {
     resolveAlias: {
       "reviewduck-deployment-proxy": `./src/server/request-proxy.${deploymentMode}.ts`,

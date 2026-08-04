@@ -80,7 +80,7 @@ async function githubUserAuthorization(input: {
     redirectPath: input.redirectPath,
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
-  const callback = `${env.APP_URL}/api/integrations/github/callback`;
+  const callback = `${env.APP_URL}/github/callback`;
   const authorization = new URL("https://github.com/login/oauth/authorize");
   authorization.searchParams.set("client_id", env.GITHUB_APP_CLIENT_ID);
   authorization.searchParams.set("redirect_uri", callback);
@@ -231,7 +231,7 @@ async function completeProviderAuthorization(
         ),
       );
     }
-    const callback = `${env.APP_URL}/api/integrations/github/callback`;
+    const callback = `${env.APP_URL}/github/callback`;
     const userToken = await exchangeGitHubUserCode({
       clientId: env.GITHUB_APP_CLIENT_ID,
       clientSecret: env.GITHUB_APP_CLIENT_SECRET,
