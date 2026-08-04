@@ -496,6 +496,10 @@ export const sourceBlobs = createTable(
       .default("application/octet-stream"),
     encoding: varchar({ length: 32 }).notNull().default("utf-8"),
     error: text(),
+    uploadLeaseToken: uuid(),
+    uploadLeaseExpiresAt: timestamp({ withTimezone: true }),
+    deletionLeaseToken: uuid(),
+    deletionLeaseExpiresAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp({ withTimezone: true })
       .notNull()
@@ -846,6 +850,22 @@ export const aiJobs = createTable(
   ],
 );
 
+export const aiStreamLeases = createTable(
+  "ai_stream_lease",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    jobId: uuid()
+      .notNull()
+      .references(() => aiJobs.id, { onDelete: "cascade" }),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ai_stream_lease_user_idx").on(t.userId, t.expiresAt)],
+);
+
 export const aiJobTurns = createTable(
   "ai_job_turn",
   {
@@ -1017,6 +1037,7 @@ export const reviewComments = createTable(
     line: integer().notNull(),
     status: reviewCommentStatusEnum().notNull().default("publishing"),
     providerExternalId: text(),
+    publicationLeaseToken: uuid(),
     error: text(),
     publishedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),

@@ -393,6 +393,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     line: number;
     side: "left" | "right";
     body: string;
+    idempotencyKey: string;
   }) {
     const thread = await providerFetch<AzureThread>(
       this.name,
@@ -402,6 +403,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         headers: {
           ...this.headers,
           "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey,
         },
         body: JSON.stringify({
           comments: [

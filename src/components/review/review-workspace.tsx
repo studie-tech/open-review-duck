@@ -4552,6 +4552,7 @@ export function ReviewWorkspace({
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
                     onClick={runPrimaryAction}
                     disabled={
+                      !canUsePrimaryAction ||
                       activeSignOffPending ||
                       undoSignOff.isPending ||
                       awaitResponse.isPending

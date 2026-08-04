@@ -328,6 +328,8 @@ async function completeProviderAuthorization(
           set: {
             credentialKind: "github_app",
             credentialStatus: "active",
+            externalAccountId: installationOwner.accountId,
+            displayName: installationOwner.accountLogin,
             installationId: pendingInstallationId,
           },
         })
