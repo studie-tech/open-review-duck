@@ -91,5 +91,9 @@ describe("hydratePrivateReviewSources", () => {
       expect.stringContaining("/api/source/blob"),
       expect.objectContaining({ signal: controller.signal }),
     );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://private.example/source",
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 });

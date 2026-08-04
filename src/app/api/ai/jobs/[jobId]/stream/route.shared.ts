@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import { and, asc, eq, gt, isNotNull, lt, lte, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { aiJobChunks, aiJobs, aiStreamLeases } from "@/drizzle/schema";
@@ -91,7 +92,10 @@ export async function GET(
       20,
       60_000,
     );
-  } catch {
+  } catch (cause) {
+    if (!(cause instanceof TRPCError) || cause.code !== "TOO_MANY_REQUESTS") {
+      throw cause;
+    }
     return Response.json(
       { error: "Too many AI stream connections" },
       { status: 429 },
