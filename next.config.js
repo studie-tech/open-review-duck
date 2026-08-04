@@ -2,10 +2,18 @@
  * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially useful
  * for compilation-only CI builds.
  */
-import "./src/env.js";
 import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
 import { withWorkflow } from "workflow/next";
+import { env } from "./src/env.js";
+import { validateDeploymentConfiguration } from "./src/server/deployment-validation.js";
+
+if (
+  !process.env.SKIP_ENV_VALIDATION &&
+  (process.env.NODE_ENV === "production" || process.env.VERCEL === "1")
+) {
+  validateDeploymentConfiguration(env);
+}
 
 const deploymentMode =
   process.env.DEPLOYMENT_MODE === "local" ? "local" : "saas";

@@ -4,7 +4,8 @@
  * Removing only this sentinel keeps `sslmode=verify-full` intact and lets
  * Node use its built-in system roots.
  */
-export function normalizeNodePostgresUrl(connectionString: string) {
+/** @param {string} connectionString */
+export function normalizeNodePostgresUrl(connectionString) {
   const url = new URL(connectionString);
   if (url.searchParams.get("sslrootcert") === "system") {
     url.searchParams.delete("sslrootcert");
