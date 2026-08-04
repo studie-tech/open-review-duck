@@ -25,7 +25,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 29;
+export const CURRENT_ANALYSIS_VERSION = 30;
 
 type RawUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
@@ -639,6 +639,29 @@ function markContextualImportChanges(
   }
 }
 
+/** Hashes changed import statements that are intentionally absorbed as unit context. */
+function contextualImportHash(
+  source: string,
+  language: SupportedLanguage,
+  changed: boolean[],
+) {
+  const statements = parseImportStatements(source, language).filter(
+    (statement) => {
+      for (
+        let index = Math.max(0, statement.startLine - 1);
+        index < Math.min(changed.length, statement.endLine);
+        index += 1
+      ) {
+        if (changed[index]) return true;
+      }
+      return false;
+    },
+  );
+  return statements.length > 0
+    ? sha256(statements.map(({ source: statement }) => statement).join("\n"))
+    : "";
+}
+
 /** Treats changed blank separators as layout belonging to nearby logical units. */
 function markContextualBlankChanges(
   lines: readonly string[],
@@ -808,6 +831,19 @@ function prScopedReviewUnits(
       previousCovered,
     );
     markContextualBlankChanges(previousLines, masks.previous, previousCovered);
+  }
+  const currentImportHash = hasCurrentLogicalUnit
+    ? contextualImportHash(file.content, language, masks.current)
+    : "";
+  const previousImportHash = hasPreviousLogicalUnit
+    ? contextualImportHash(file.previousContent, language, masks.previous)
+    : "";
+  if (currentImportHash || previousImportHash) {
+    for (const unit of [...changedCurrent, ...deletedUnits]) {
+      unit.semanticHash = sha256(
+        `${unit.semanticHash}:contextual-imports:${currentImportHash}:${previousImportHash}`,
+      );
+    }
   }
   const fragments = uncoveredChangeFragments(
     file,

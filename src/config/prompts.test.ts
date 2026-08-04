@@ -102,7 +102,7 @@ describe("ReviewDuck agent prompts", () => {
     expect(prompt).toContain("explicitly correct it");
     expect(prompt).toContain("Resolve the latest question first");
     expect(prompt).toContain("<reviewer>What changed?</reviewer>");
-    expect(prompt).toContain("call submit_review_result exactly once");
+    expect(prompt).toContain("call submit_answer exactly once");
     expect(prompt).toContain("complete selected unit");
   });
 

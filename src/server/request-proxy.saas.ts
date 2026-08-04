@@ -8,6 +8,7 @@ export const deploymentProxy = clerkMiddleware({
       "base-uri": ["'self'"],
       "frame-ancestors": ["'none'"],
       "object-src": ["'none'"],
+      "script-src": ["'wasm-unsafe-eval'"],
     },
   },
 });

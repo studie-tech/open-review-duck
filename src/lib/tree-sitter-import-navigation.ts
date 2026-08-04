@@ -34,9 +34,13 @@ function useParsedImports<T>(
   useEffect(() => {
     let current = true;
     setItems([]);
-    void parse(source, language).then((parsed) => {
-      if (current) setItems(parsed);
-    });
+    void parse(source, language)
+      .then((parsed) => {
+        if (current) setItems(parsed);
+      })
+      .catch(() => {
+        if (current) setItems([]);
+      });
     return () => {
       current = false;
     };

@@ -15,8 +15,9 @@ import { db } from "~/server/db";
 import { createProvider } from "~/server/providers";
 import {
   exchangeGitHubUserCode,
+  githubAppJwt,
   revokeGitHubUserToken,
-  verifyGitHubInstallationAccess,
+  verifyGitHubInstallationOwnership,
 } from "~/server/providers/github-app-authorization";
 import {
   hostedProvider,
@@ -246,8 +247,18 @@ async function completeProviderAuthorization(
       redirectUri: callback,
     });
     let verificationFailure: unknown;
+    let installationOwner:
+      | { accountId: string; accountLogin: string }
+      | undefined;
     try {
-      await verifyGitHubInstallationAccess(pendingInstallationId, userToken);
+      installationOwner = await verifyGitHubInstallationOwnership(
+        pendingInstallationId,
+        userToken,
+        await githubAppJwt({
+          appId: env.GITHUB_APP_ID,
+          privateKey: env.GITHUB_APP_PRIVATE_KEY,
+        }),
+      );
     } catch (cause) {
       verificationFailure = cause;
     }
@@ -261,7 +272,7 @@ async function completeProviderAuthorization(
     } catch (cause) {
       revocationFailure = cause;
     }
-    if (verificationFailure) {
+    if (verificationFailure || !installationOwner) {
       return securedCallbackResponse(
         NextResponse.json(
           { error: "The GitHub installation could not be verified" },
@@ -299,13 +310,13 @@ async function completeProviderAuthorization(
         .values({
           workspaceId: state.workspaceId,
           provider,
-          externalAccountId: pendingInstallationId,
+          externalAccountId: installationOwner.accountId,
           credentialKind: "github_app",
           credentialStatus: "active",
           credentialFingerprint: createHash("sha256")
             .update(`github\0${pendingInstallationId}`)
             .digest("hex"),
-          displayName: `GitHub App installation ${pendingInstallationId}`,
+          displayName: installationOwner.accountLogin,
           installationId: pendingInstallationId,
         })
         .onConflictDoUpdate({

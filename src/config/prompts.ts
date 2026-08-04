@@ -130,6 +130,6 @@ export function reviewDuckAgentPrompt(configuration: {
   return [
     ...shared,
     ...(configuration.jobKind === "review" ? review : explanation),
-    "When analysis is complete, call submit_review_result exactly once with the final structured result. Do not emit a separate answer before or after the tool call.",
+    "When analysis is complete, call submit_answer exactly once with the final structured result. Do not emit a separate answer before or after the tool call.",
   ].join("\n");
 }

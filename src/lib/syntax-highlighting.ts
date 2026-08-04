@@ -445,9 +445,13 @@ export function useHighlightedSource(source: string, language: string) {
   useEffect(() => {
     let current = true;
     setLines(plainLines(source));
-    void highlightedSourcePromise(source, language).then((highlighted) => {
-      if (current) setLines(highlighted);
-    });
+    void highlightedSourcePromise(source, language)
+      .then((highlighted) => {
+        if (current) setLines(highlighted);
+      })
+      .catch(() => {
+        if (current) setLines(plainLines(source));
+      });
     return () => {
       current = false;
     };

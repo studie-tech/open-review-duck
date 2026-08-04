@@ -1237,6 +1237,40 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     expect(reviewable.some(({ name }) => name === "kept")).toBe(false);
   });
 
+  it("invalidates a signed unit when its contextual import target changes", () => {
+    const base = [
+      'import { safeExec } from "./safe";',
+      "export function run(input: string) { return safeExec(input); }",
+    ].join("\n");
+    /** Builds a PR revision that keeps the body change while retargeting its import. */
+    const head = (specifier: string) =>
+      [
+        `import { safeExec } from "${specifier}";`,
+        "export function run(input: string) { return safeExec(input) + '!'; }",
+      ].join("\n");
+    const before = analyzeFiles([
+      {
+        path: "runner.ts",
+        content: head("./safe"),
+        previousContent: base,
+        changeType: "modified",
+      },
+    ]).units;
+    const after = analyzeFiles([
+      {
+        path: "runner.ts",
+        content: head("./unsafe"),
+        previousContent: base,
+        changeType: "modified",
+      },
+    ]).units;
+
+    expect(
+      reconcileSignOffs(before, after).find(({ unit }) => unit.name === "run")
+        ?.requiresReview,
+    ).toBe(true);
+  });
+
   it("keeps an added import-only file in the sign-off path", () => {
     const result = analyzeFiles([
       {

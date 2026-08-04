@@ -53,6 +53,7 @@ export function assertDeploymentConfigured() {
     ["GITLAB_CLIENT_SECRET", env.GITLAB_CLIENT_SECRET],
     ["SENTRY_DSN", env.SENTRY_DSN],
     ["NEXT_PUBLIC_SENTRY_DSN", env.NEXT_PUBLIC_SENTRY_DSN],
+    ["CRON_SECRET", env.CRON_SECRET],
   ]
     .filter(([, value]) => !value)
     .map(([name]) => name);

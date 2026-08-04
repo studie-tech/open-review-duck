@@ -1,7 +1,6 @@
 import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
-import { SignJWT } from "jose";
 import {
   credentialAuditEvents,
   localCredentials,
@@ -14,30 +13,18 @@ import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { createProvider } from ".";
-import { githubAppPrivateKey } from "./github-app-authorization";
+import { githubAppJwt } from "./github-app-authorization";
 import { openProviderPat } from "./pat-credential";
 import type { PullRequestProvider } from "./types";
 
 type Database = typeof database;
 
-/** Signs one short-lived JWT for GitHub App administrative operations. */
-async function githubAppJwt() {
-  if (!env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY) {
-    throw new Error("GitHub App credentials are not configured");
-  }
-  const key = githubAppPrivateKey(env.GITHUB_APP_PRIVATE_KEY);
-  const now = Math.floor(Date.now() / 1_000);
-  return new SignJWT({})
-    .setProtectedHeader({ alg: "RS256" })
-    .setIssuer(env.GITHUB_APP_ID)
-    .setIssuedAt(now - 60)
-    .setExpirationTime(now + 9 * 60)
-    .sign(key);
-}
-
 /** Mints a short-lived GitHub App installation token on demand. */
 async function githubInstallationToken(installationId: string) {
-  const jwt = await githubAppJwt();
+  const jwt = await githubAppJwt({
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_APP_PRIVATE_KEY,
+  });
   const response = await fetch(
     `https://api.github.com/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
     {
@@ -73,7 +60,7 @@ export async function revokeGitHubInstallation(installationId: string) {
       method: "DELETE",
       headers: {
         accept: "application/vnd.github+json",
-        authorization: `Bearer ${await githubAppJwt()}`,
+        authorization: `Bearer ${await githubAppJwt({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY })}`,
         "x-github-api-version": "2022-11-28",
       },
       redirect: "error",

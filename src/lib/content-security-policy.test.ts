@@ -10,6 +10,7 @@ describe("localContentSecurityPolicy", () => {
     expect(policy).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(policy).not.toContain("script-src 'self' https:");
     expect(policy).not.toContain("'unsafe-eval'");
+    expect(policy).toContain("'wasm-unsafe-eval'");
   });
 
   it("allows eval only for development tooling", () => {

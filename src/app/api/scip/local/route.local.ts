@@ -1,4 +1,3 @@
-import { verify } from "@node-rs/argon2";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import {
@@ -10,6 +9,7 @@ import {
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
 import { parseScipIndex } from "~/server/semantic/scip";
+import { authorizeSemanticUploadCredential } from "~/server/semantic/upload-credentials";
 import { persistSourceBlob, sourceDigest } from "~/server/storage/source-blobs";
 
 /** Stores an exact-revision SCIP artifact directly in the local appliance. */
@@ -48,23 +48,9 @@ export async function POST(request: Request) {
   const bearer = request.headers
     .get("authorization")
     ?.replace(/^Bearer\s+/i, "");
-  const uploadCredentials = bearer
-    ? await db.query.semanticUploadCredentials.findMany({
-        where: and(eq(semanticUploadCredentials.repositoryId, repository.id)),
-        limit: 20,
-      })
-    : [];
-  let usedCredential: (typeof uploadCredentials)[number] | undefined;
-  for (const candidate of uploadCredentials) {
-    if (
-      bearer &&
-      !candidate.revokedAt &&
-      (await verify(candidate.tokenHash, bearer))
-    ) {
-      usedCredential = candidate;
-      break;
-    }
-  }
+  const usedCredential = bearer
+    ? await authorizeSemanticUploadCredential(db, repository.id, bearer)
+    : undefined;
   if (!member && !usedCredential) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

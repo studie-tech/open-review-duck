@@ -96,6 +96,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
 ) {
   const hydrated = new Array<Unit>(units.length);
   const failures: Array<{ cause: unknown; path: string }> = [];
+  const successfulIndexes: number[] = [];
   let nextIndex = 0;
   /** Claims and hydrates units until the shared work list is exhausted. */
   const worker = async () => {
@@ -109,6 +110,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
           snapshotId,
           cache,
         );
+        successfulIndexes.push(index);
       } catch (cause) {
         hydrated[index] = unit;
         failures.push({ cause, path: unit.path });
@@ -121,5 +123,5 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
       worker,
     ),
   );
-  return { failures, units: hydrated };
+  return { failures, successfulIndexes, units: hydrated };
 }

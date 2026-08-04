@@ -508,3 +508,23 @@ export function sourceStartLine(
   if (offset < 0) return fallback;
   return fileSource.slice(0, offset).split("\n").length;
 }
+
+/** Converts an exact UTF-8 byte offset in a file blob to a one-based line. */
+export function sourceByteOffsetLine(
+  fileSource: string | undefined,
+  byteOffset: number | null | undefined,
+  fallback: number,
+) {
+  if (!fileSource || byteOffset === null || byteOffset === undefined) {
+    return fallback;
+  }
+  const bytes = new TextEncoder().encode(fileSource);
+  if (byteOffset < 0 || byteOffset > bytes.byteLength) return fallback;
+  try {
+    return new TextDecoder("utf-8", { fatal: true })
+      .decode(bytes.subarray(0, byteOffset))
+      .split("\n").length;
+  } catch {
+    return fallback;
+  }
+}

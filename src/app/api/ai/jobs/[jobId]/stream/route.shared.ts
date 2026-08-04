@@ -4,10 +4,11 @@ import { aiJobChunks, aiJobs } from "@/drizzle/schema";
 import type { AiQuestionStreamUpdate } from "~/lib/ai-question-stream";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
+import { enforceRateLimit } from "~/server/security/rate-limit";
 import { openVaultSecret } from "~/server/security/vault";
 
 export const runtime = "nodejs";
-export const maxDuration = 800;
+export const maxDuration = 70;
 
 const encoder = new TextEncoder();
 
@@ -34,6 +35,14 @@ export async function GET(
   const authentication = await applicationAuth();
   if (!authentication.userId) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  try {
+    await enforceRateLimit(db, `ai-stream:${authentication.userId}`, 4, 60_000);
+  } catch {
+    return Response.json(
+      { error: "Too many AI stream connections" },
+      { status: 429 },
+    );
   }
   const { jobId } = await params;
   const job = await db.query.aiJobs.findFirst({
@@ -71,6 +80,7 @@ export async function GET(
         );
       };
       void (async () => {
+        const streamDeadline = Date.now() + 60_000;
         if (cursor >= 0) {
           const precedingChunks = await db.query.aiJobChunks.findMany({
             where: and(
@@ -96,7 +106,11 @@ export async function GET(
           ).join("");
           cursor = precedingChunks.at(-1)?.sequence ?? -1;
         }
-        while (!closed && !request.signal.aborted) {
+        while (
+          !closed &&
+          !request.signal.aborted &&
+          Date.now() < streamDeadline
+        ) {
           const chunks = await db.query.aiJobChunks.findMany({
             where: and(
               eq(aiJobChunks.jobId, job.id),
@@ -179,6 +193,7 @@ export async function GET(
           }
           await delay(500, request.signal);
         }
+        close();
       })().catch((cause: unknown) => {
         if (closed || request.signal.aborted) return;
         send({

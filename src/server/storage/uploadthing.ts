@@ -33,6 +33,7 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
       type: "application/octet-stream",
     });
     const uploaded = await this.api.uploadFiles(file, {
+      acl: "private",
       contentDisposition: "inline",
     });
     if (uploaded.error || !uploaded.data) {

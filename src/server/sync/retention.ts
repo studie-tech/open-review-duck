@@ -1,4 +1,4 @@
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { pullRequests, repositories, reviewSnapshots } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 
@@ -16,7 +16,7 @@ export function expiredSnapshotIds(
   input: {
     retentionDays: number;
     retentionSnapshots: number;
-    retainedSnapshotId?: string;
+    retainedSnapshotId: string;
     now?: Date;
   },
 ) {
@@ -43,7 +43,7 @@ async function prunePullRequestSnapshots(
     pullRequestId: string;
     retentionDays: number;
     retentionSnapshots: number;
-    retainedSnapshotId?: string;
+    retainedSnapshotId: string;
   },
 ) {
   const snapshots = await tx.query.reviewSnapshots.findMany({
@@ -81,7 +81,16 @@ export async function pruneExpiredReviewSnapshots(
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${`${scope.repositoryId}:${scope.pullRequestNumber}`}))`,
       );
-      return prunePullRequestSnapshots(tx, scope);
+      const retainedSnapshot = await tx.query.reviewSnapshots.findFirst({
+        columns: { id: true },
+        where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
+        orderBy: [desc(reviewSnapshots.version)],
+      });
+      if (!retainedSnapshot) return 0;
+      return prunePullRequestSnapshots(tx, {
+        ...scope,
+        retainedSnapshotId: retainedSnapshot.id,
+      });
     });
   }
   return deleted;

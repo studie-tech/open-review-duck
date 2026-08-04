@@ -8,7 +8,13 @@ export function safeOAuthRedirectPath(
   try {
     const application = new URL(applicationUrl);
     const redirect = new URL(value, application);
-    if (redirect.origin !== application.origin) return fallback;
+    if (
+      redirect.origin !== application.origin ||
+      !redirect.pathname.startsWith("/") ||
+      redirect.pathname.startsWith("//")
+    ) {
+      return fallback;
+    }
     return `${redirect.pathname}${redirect.search}${redirect.hash}`;
   } catch {
     return fallback;
