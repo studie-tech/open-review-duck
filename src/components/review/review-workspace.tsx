@@ -264,7 +264,9 @@ export function ReviewWorkspace({
         new Set(
           hydratedUnits.successfulIndexes.flatMap((index) => {
             const unit = initialData.units[index];
-            return unit ? [unit.id] : [];
+            return unit && (unit.kind === "binary" || unit.currentBlobId)
+              ? [unit.id]
+              : [];
           }),
         ),
       );
