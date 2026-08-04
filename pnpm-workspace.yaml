@@ -5,12 +5,13 @@ packages:
 injectWorkspacePackages: true
 
 overrides:
-  brace-expansion: 5.0.8
+  brace-expansion: 5.0.9
   effect: 3.20.0
   esbuild: 0.25.0
-  fast-uri: 3.1.4
+  fast-uri: 3.1.5
   postcss: 8.5.25
   sharp: 0.35.0
+  "undici@>=7.0.0 <7.29.0": 7.29.0
 
 allowBuilds:
   "@google/genai": false
