@@ -24,6 +24,21 @@ export async function GET() {
         to_regclass('drizzle.__drizzle_migrations') is not null
         and to_regclass('public.open_review_duck_ai_preference') is not null
         and to_regclass('public.open_review_duck_review_queue_item') is not null
+        and to_regclass('public.open_review_duck_provider_pat_credential') is not null
+        and exists (
+          select 1
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'open_review_duck_provider_connection'
+            and column_name = 'credentialStatus'
+        )
+        and not exists (
+          select 1
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'open_review_duck_provider_connection'
+            and column_name = 'encryptedAccessToken'
+        )
         as ready`,
     );
     checks.migrations = result.rows[0]?.ready === true;
