@@ -35,7 +35,7 @@ const config = {
   async rewrites() {
     return [
       {
-        source: "/github/callback",
+        source: "/github/complete",
         destination: "/api/integrations/github/callback",
       },
     ];
