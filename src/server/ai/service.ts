@@ -17,6 +17,7 @@ import {
   workspaces,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import { escapePromptXml } from "~/config/prompts";
 import {
   constrainAnnotationToChangedLines,
   explanationChangedLineRanges,
@@ -61,9 +62,12 @@ function estimateAiReservation(
   kind: "explain" | "review",
   monthlyTokenLimit: number,
   priorConversationBytes: number,
+  question?: string,
 ) {
+  const questionBytes = Buffer.byteLength(escapePromptXml(question ?? ""));
   const requestBytes =
     priorConversationBytes +
+    questionBytes +
     units.reduce(
       (total, unit) =>
         total +
@@ -76,7 +80,7 @@ function estimateAiReservation(
     );
   return managedInvestigationReservation({
     requestBytes,
-    minimumInputBytes: priorConversationBytes + 12_000,
+    minimumInputBytes: priorConversationBytes + questionBytes + 12_000,
     kind,
     monthlyTokenLimit,
   });
@@ -338,6 +342,7 @@ export async function createAiJob(
     input.kind,
     scope.monthlyTokenLimit,
     priorConversation.promptBytes,
+    input.question,
   );
   const pricing = scope.useManagedQuota
     ? await managedReservationPricing(db, scope.model)
