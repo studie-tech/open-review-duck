@@ -42,7 +42,6 @@ describe("deployment configuration", () => {
       GITHUB_APP_CLIENT_ID: undefined,
       GITHUB_APP_CLIENT_SECRET: undefined,
       AZURE_ENTRA_CLIENT_SECRET: undefined,
-      CRON_SECRET: undefined,
     });
   });
 
