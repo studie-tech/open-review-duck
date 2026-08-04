@@ -27,8 +27,7 @@ describe("GitHub App user authorization", () => {
           clientSecret: "secret",
           code: "one-time-code",
           codeVerifier: "verifier",
-          redirectUri:
-            "https://reviewduck.example/api/integrations/github/callback",
+          redirectUri: "https://reviewduck.example/github/callback",
         },
         fetcher,
       ),
@@ -36,6 +35,9 @@ describe("GitHub App user authorization", () => {
     const [url, init] = fetcher.mock.calls[0] ?? [];
     expect(url).toBe("https://github.com/login/oauth/access_token");
     expect(String(init.body)).toContain("code_verifier=verifier");
+    expect(String(init.body)).toContain(
+      "redirect_uri=https%3A%2F%2Freviewduck.example%2Fgithub%2Fcallback",
+    );
     expect(String(url)).not.toContain("secret");
     expect(init.redirect).toBe("error");
   });
