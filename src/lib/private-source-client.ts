@@ -110,6 +110,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
   /** Claims and hydrates units until the shared work list is exhausted. */
   const worker = async () => {
     while (true) {
+      if (signal?.aborted) return;
       const index = nextIndex++;
       const unit = units[index];
       if (!unit) return;
@@ -123,6 +124,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
         successfulIndexes.push(index);
         onUnitHydrated?.(index, hydrated[index]);
       } catch (cause) {
+        if (signal?.aborted) return;
         hydrated[index] = unit;
         failures.push({ cause, path: unit.path });
       }
@@ -134,5 +136,10 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
       worker,
     ),
   );
+  if (signal?.aborted) {
+    for (const [index, unit] of units.entries()) {
+      hydrated[index] ??= unit;
+    }
+  }
   return { failures, successfulIndexes, units: hydrated };
 }
