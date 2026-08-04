@@ -257,8 +257,9 @@ export async function executeAiTurn(
     return { done: true, status: "completed" as const };
   }
   const reservedTokens = job.reservedInputTokens + job.reservedOutputTokens;
+  const consumedTokens = job.inputTokens + job.outputTokens;
   if (
-    (reservedTokens > 0 && job.totalTokens >= reservedTokens) ||
+    (reservedTokens > 0 && consumedTokens >= reservedTokens) ||
     (job.reservedMicroUsd > 0 && job.actualMicroUsd >= job.reservedMicroUsd)
   ) {
     await finishAtLimit(
@@ -635,7 +636,7 @@ export async function executeAiTurn(
         1,
         Math.min(
           8_000,
-          reservedTokens > 0 ? reservedTokens - job.totalTokens : 8_000,
+          reservedTokens > 0 ? reservedTokens - consumedTokens : 8_000,
         ),
       ),
       timeout: Math.min(120_000, env.AI_MAX_DURATION_MS),
