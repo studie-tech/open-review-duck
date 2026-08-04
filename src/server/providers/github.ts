@@ -424,6 +424,7 @@ export class GitHubProvider implements PullRequestProvider {
     line: number;
     side: "left" | "right";
     body: string;
+    idempotencyKey: string;
   }) {
     const comment = await providerFetch<GitHubReviewComment>(
       this.name,
@@ -433,6 +434,7 @@ export class GitHubProvider implements PullRequestProvider {
         headers: {
           ...this.headers,
           "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey,
         },
         body: JSON.stringify({
           body: input.body,

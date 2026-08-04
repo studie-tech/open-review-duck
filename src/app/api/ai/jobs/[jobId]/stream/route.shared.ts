@@ -1,6 +1,7 @@
-import { and, asc, eq, gt, isNotNull, lte } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, asc, eq, gt, isNotNull, lt, lte, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { aiJobChunks, aiJobs } from "@/drizzle/schema";
+import { aiJobChunks, aiJobs, aiStreamLeases } from "@/drizzle/schema";
 import type { AiQuestionStreamUpdate } from "~/lib/ai-question-stream";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
@@ -8,9 +9,41 @@ import { enforceRateLimit } from "~/server/security/rate-limit";
 import { openVaultSecret } from "~/server/security/vault";
 
 export const runtime = "nodejs";
-export const maxDuration = 70;
+export const maxDuration = 800;
 
 const encoder = new TextEncoder();
+const STREAM_LEASE_MILLISECONDS = 45_000;
+const MAX_CONCURRENT_STREAMS = 4;
+
+/** Acquires one renewable per-user stream slot under a transaction lock. */
+async function acquireStreamLease(userId: string, jobId: string) {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`ai-stream:${userId}`}, 0))`,
+    );
+    await tx
+      .delete(aiStreamLeases)
+      .where(
+        and(
+          eq(aiStreamLeases.userId, userId),
+          lt(aiStreamLeases.expiresAt, new Date()),
+        ),
+      );
+    const active = await tx.$count(
+      aiStreamLeases,
+      eq(aiStreamLeases.userId, userId),
+    );
+    if (active >= MAX_CONCURRENT_STREAMS) return undefined;
+    const id = randomUUID();
+    await tx.insert(aiStreamLeases).values({
+      id,
+      userId,
+      jobId,
+      expiresAt: new Date(Date.now() + STREAM_LEASE_MILLISECONDS),
+    });
+    return id;
+  });
+}
 
 /** Waits for the next chunk poll while remaining abortable. */
 function delay(milliseconds: number, signal: AbortSignal) {
@@ -53,6 +86,13 @@ export async function GET(
     ),
   });
   if (!job) return Response.json({ error: "Not found" }, { status: 404 });
+  const streamLeaseId = await acquireStreamLease(authentication.userId, job.id);
+  if (!streamLeaseId) {
+    return Response.json(
+      { error: "Too many concurrent AI stream connections" },
+      { status: 429 },
+    );
+  }
   const requestedCursor = Number(
     request.nextUrl.searchParams.get("cursor") ?? -1,
   );
@@ -64,12 +104,28 @@ export async function GET(
       let text = "";
       let closed = false;
       const keepAlive = setInterval(() => {
-        if (!closed) controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        if (closed) return;
+        controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        void db
+          .update(aiStreamLeases)
+          .set({
+            expiresAt: new Date(Date.now() + STREAM_LEASE_MILLISECONDS),
+          })
+          .where(eq(aiStreamLeases.id, streamLeaseId))
+          .returning({ id: aiStreamLeases.id })
+          .then(([renewed]) => {
+            if (!renewed) close();
+          })
+          .catch(close);
       }, 15_000);
       close = () => {
         if (closed) return;
         closed = true;
         clearInterval(keepAlive);
+        void db
+          .delete(aiStreamLeases)
+          .where(eq(aiStreamLeases.id, streamLeaseId))
+          .catch(() => undefined);
         controller.close();
       };
       request.signal.addEventListener("abort", close, { once: true });
@@ -80,7 +136,6 @@ export async function GET(
         );
       };
       void (async () => {
-        const streamDeadline = Date.now() + 60_000;
         if (cursor >= 0) {
           const precedingChunks = await db.query.aiJobChunks.findMany({
             where: and(
@@ -106,11 +161,7 @@ export async function GET(
           ).join("");
           cursor = precedingChunks.at(-1)?.sequence ?? -1;
         }
-        while (
-          !closed &&
-          !request.signal.aborted &&
-          Date.now() < streamDeadline
-        ) {
+        while (!closed && !request.signal.aborted) {
           const chunks = await db.query.aiJobChunks.findMany({
             where: and(
               eq(aiJobChunks.jobId, job.id),

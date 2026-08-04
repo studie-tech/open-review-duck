@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { sourceBlobs } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
@@ -8,6 +8,8 @@ import { observeOperation } from "~/server/observability/sentry";
 import { sourceObjectStore } from "./index";
 
 type Database = typeof database;
+const UPLOAD_LEASE_MILLISECONDS = 6 * 60 * 60_000;
+const DELETION_LEASE_MILLISECONDS = 15 * 60_000;
 
 /** Returns the SHA-256 content identity used for source object deduplication. */
 export function sourceDigest(bytes: Uint8Array) {
@@ -26,6 +28,7 @@ export async function persistSourceBlob(
 ) {
   const digest = sourceDigest(input.bytes);
   const store = await sourceObjectStore();
+  const uploadLeaseToken = randomUUID();
   const existing = await db.query.sourceBlobs.findFirst({
     where: and(
       eq(sourceBlobs.workspaceId, input.workspaceId),
@@ -44,6 +47,8 @@ export async function persistSourceBlob(
       byteLength: input.bytes.byteLength,
       encoding: input.encoding ?? "utf-8",
       mediaType: input.mediaType ?? "application/octet-stream",
+      uploadLeaseToken,
+      uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
     })
     .onConflictDoNothing({
       target: [sourceBlobs.workspaceId, sourceBlobs.digest],
@@ -79,10 +84,21 @@ export async function persistSourceBlob(
         objectKey: stored.objectKey,
         customId: stored.customId,
         error: null,
+        uploadLeaseToken: null,
+        uploadLeaseExpiresAt: null,
       })
-      .where(eq(sourceBlobs.id, claimed.id))
+      .where(
+        and(
+          eq(sourceBlobs.id, claimed.id),
+          eq(sourceBlobs.state, "uploading"),
+          eq(sourceBlobs.uploadLeaseToken, uploadLeaseToken),
+        ),
+      )
       .returning();
-    if (!ready) throw new Error("Source blob disappeared after upload");
+    if (!ready) {
+      await store.delete(stored.objectKey);
+      throw new Error("Source upload lease expired before completion");
+    }
     return ready;
   } catch (cause) {
     await db
@@ -90,8 +106,16 @@ export async function persistSourceBlob(
       .set({
         state: "failed",
         error: cause instanceof Error ? cause.message : "Source upload failed",
+        uploadLeaseToken: null,
+        uploadLeaseExpiresAt: null,
       })
-      .where(eq(sourceBlobs.id, claimed.id));
+      .where(
+        and(
+          eq(sourceBlobs.id, claimed.id),
+          eq(sourceBlobs.state, "uploading"),
+          eq(sourceBlobs.uploadLeaseToken, uploadLeaseToken),
+        ),
+      );
     throw cause;
   }
 }
@@ -119,16 +143,29 @@ export async function readSourceText(blob: typeof sourceBlobs.$inferSelect) {
 }
 
 /** Deletes only objects proven unreferenced in the same claiming transaction. */
-export async function pruneOrphanSourceBlobs(db: Database, maximum = 100) {
+export async function pruneOrphanSourceBlobs(
+  db: Database,
+  maximum = 100,
+  deadline = Number.POSITIVE_INFINITY,
+) {
+  if (Date.now() >= deadline) return 0;
+  const deletionLeaseToken = randomUUID();
   const claimed = await db.transaction(async (tx) => {
-    const candidates = await tx.execute<{ id: string }>(sql`
-      select blob.id
+    const candidates = await tx.execute<{
+      id: string;
+      state: typeof sourceBlobs.$inferSelect.state;
+    }>(sql`
+      select blob.id, blob.state
       from open_review_duck_source_blob blob
       where (
           blob.state in ('ready', 'failed')
           or (
-            blob.state in ('uploading', 'deleting')
-            and blob."updatedAt" < now() - interval '1 hour'
+            blob.state = 'uploading'
+            and blob."uploadLeaseExpiresAt" <= now()
+          )
+          or (
+            blob.state = 'deleting'
+            and blob."deletionLeaseExpiresAt" <= now()
           )
         )
         and not exists (
@@ -149,20 +186,75 @@ export async function pruneOrphanSourceBlobs(db: Database, maximum = 100) {
     `);
     if (candidates.rows.length === 0) return [];
     const ids = candidates.rows.map(({ id }) => id);
-    return tx
+    const previousStates = new Map(
+      candidates.rows.map(({ id, state }) => [id, state]),
+    );
+    const rows = await tx
       .update(sourceBlobs)
-      .set({ state: "deleting", error: null })
+      .set({
+        state: "deleting",
+        error: null,
+        uploadLeaseToken: null,
+        uploadLeaseExpiresAt: null,
+        deletionLeaseToken,
+        deletionLeaseExpiresAt: new Date(
+          Date.now() + DELETION_LEASE_MILLISECONDS,
+        ),
+      })
       .where(sql`${sourceBlobs.id} = any(${ids}::uuid[])`)
       .returning();
+    return rows.map((blob) => ({
+      ...blob,
+      previousState: previousStates.get(blob.id) ?? "failed",
+    }));
   });
+  /** Releases one unprocessed deletion claim without reviving an expired upload. */
+  const release = async (blob: (typeof claimed)[number]) => {
+    await db
+      .update(sourceBlobs)
+      .set({
+        state: blob.previousState === "ready" ? "ready" : ("failed" as const),
+        deletionLeaseToken: null,
+        deletionLeaseExpiresAt: null,
+      })
+      .where(
+        and(
+          eq(sourceBlobs.id, blob.id),
+          eq(sourceBlobs.state, "deleting"),
+          eq(sourceBlobs.deletionLeaseToken, deletionLeaseToken),
+        ),
+      );
+  };
   let deleted = 0;
-  for (const blob of claimed) {
+  for (const [index, blob] of claimed.entries()) {
+    if (Date.now() >= deadline) {
+      await Promise.all(claimed.slice(index).map(release));
+      break;
+    }
     try {
+      const owned = await db.query.sourceBlobs.findFirst({
+        columns: { id: true },
+        where: and(
+          eq(sourceBlobs.id, blob.id),
+          eq(sourceBlobs.state, "deleting"),
+          eq(sourceBlobs.deletionLeaseToken, deletionLeaseToken),
+        ),
+      });
+      if (!owned) continue;
       if (blob.objectKey) {
         await (await sourceObjectStore()).delete(blob.objectKey);
       }
-      await db.delete(sourceBlobs).where(eq(sourceBlobs.id, blob.id));
-      deleted += 1;
+      const [removed] = await db
+        .delete(sourceBlobs)
+        .where(
+          and(
+            eq(sourceBlobs.id, blob.id),
+            eq(sourceBlobs.state, "deleting"),
+            eq(sourceBlobs.deletionLeaseToken, deletionLeaseToken),
+          ),
+        )
+        .returning({ id: sourceBlobs.id });
+      if (removed) deleted += 1;
     } catch (cause) {
       await db
         .update(sourceBlobs)
@@ -170,8 +262,16 @@ export async function pruneOrphanSourceBlobs(db: Database, maximum = 100) {
           state: "failed",
           error:
             cause instanceof Error ? cause.message : "Source deletion failed",
+          deletionLeaseToken: null,
+          deletionLeaseExpiresAt: null,
         })
-        .where(eq(sourceBlobs.id, blob.id));
+        .where(
+          and(
+            eq(sourceBlobs.id, blob.id),
+            eq(sourceBlobs.state, "deleting"),
+            eq(sourceBlobs.deletionLeaseToken, deletionLeaseToken),
+          ),
+        );
     }
   }
   return deleted;
@@ -186,7 +286,7 @@ export async function pruneAllOrphanSourceBlobs(
   const deadline = Date.now() + wallClockMilliseconds;
   let deleted = 0;
   while (Date.now() < deadline) {
-    const batchDeleted = await pruneOrphanSourceBlobs(db, batchSize);
+    const batchDeleted = await pruneOrphanSourceBlobs(db, batchSize, deadline);
     deleted += batchDeleted;
     if (batchDeleted < batchSize) break;
   }

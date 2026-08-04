@@ -83,7 +83,21 @@ describe("GitHub App user authorization", () => {
     ).resolves.toEqual({ accountId: "7", accountLogin: "acme" });
     expect(allowed).toHaveBeenCalledWith(
       "https://api.github.com/app/installations/42",
-      expect.objectContaining({ redirect: "error" }),
+      expect.objectContaining({
+        redirect: "error",
+        headers: expect.objectContaining({
+          Authorization: "Bearer app-token",
+        }),
+      }),
+    );
+    expect(allowed).toHaveBeenCalledWith(
+      "https://api.github.com/user",
+      expect.objectContaining({
+        redirect: "error",
+        headers: expect.objectContaining({
+          Authorization: "Bearer ghu_token",
+        }),
+      }),
     );
 
     const denied = vi.fn(async (input: string | URL | Request) => {
@@ -99,6 +113,46 @@ describe("GitHub App user authorization", () => {
     await expect(
       verifyGitHubInstallationOwnership("43", "ghu_token", "app-token", denied),
     ).rejects.toThrow("not administered");
+  });
+
+  it("rejects a personal installation owned by another user", async () => {
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/app/installations/")) {
+        return Response.json({
+          account: { id: 7, login: "someone-else", type: "User" },
+        });
+      }
+      return Response.json({ id: 9 });
+    });
+    await expect(
+      verifyGitHubInstallationOwnership(
+        "44",
+        "ghu_token",
+        "app-token",
+        fetcher,
+      ),
+    ).rejects.toThrow("not owned by this user");
+  });
+
+  it("rejects unsupported installation account types", async () => {
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/app/installations/")) {
+        return Response.json({
+          account: { id: 7, login: "automation", type: "Bot" },
+        });
+      }
+      return Response.json({ id: 9 });
+    });
+    await expect(
+      verifyGitHubInstallationOwnership(
+        "45",
+        "ghu_token",
+        "app-token",
+        fetcher,
+      ),
+    ).rejects.toThrow("account type is unsupported");
   });
 
   it("revokes the verification token with GitHub App credentials", async () => {

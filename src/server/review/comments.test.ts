@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   providerCommentBody,
+  publicationAttemptKey,
   publishedThreadForComment,
   visibleProviderCommentBody,
 } from "./comments";
@@ -15,6 +16,20 @@ describe("provider comment idempotency", () => {
     expect(visibleProviderCommentBody(providerBody)).toBe(
       "Please rename this.",
     );
+  });
+
+  it("fences overlapping publication attempts with distinct keys", () => {
+    const first = publicationAttemptKey(
+      commentId,
+      "e7e68139-726e-486c-87da-89593e77ac38",
+    );
+    const retry = publicationAttemptKey(
+      commentId,
+      "86527c56-4dd4-4141-897c-e61445151827",
+    );
+
+    expect(first).not.toBe(retry);
+    expect(first).toContain(commentId);
   });
 
   it("reconciles a provider thread after an ambiguous publish response", () => {

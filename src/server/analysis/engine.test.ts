@@ -1271,6 +1271,42 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     ).toBe(true);
   });
 
+  it("keeps a sign-off when a contextual import is only reformatted", () => {
+    const previousContent = [
+      'import { safeExec } from "./safe";',
+      "export function run(input: string) { return safeExec(input); }",
+    ].join("\n");
+    const before = analyzeFiles([
+      {
+        path: "runner.ts",
+        previousContent,
+        content: [
+          'import { safeExec } from "./safe";',
+          "export function run(input: string) { return safeExec(input) + '!'; }",
+        ].join("\n"),
+        changeType: "modified",
+      },
+    ]).units;
+    const after = analyzeFiles([
+      {
+        path: "runner.ts",
+        previousContent,
+        content: [
+          "import {",
+          "  safeExec,",
+          '} from "./safe";',
+          "export function run(input: string) { return safeExec(input) + '!'; }",
+        ].join("\n"),
+        changeType: "modified",
+      },
+    ]).units;
+
+    expect(
+      reconcileSignOffs(before, after).find(({ unit }) => unit.name === "run")
+        ?.requiresReview,
+    ).toBe(false);
+  });
+
   it("keeps an added import-only file in the sign-off path", () => {
     const result = analyzeFiles([
       {

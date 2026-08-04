@@ -485,6 +485,7 @@ export async function acceptAiJobResult(
     const ranges = explanationChangedLineRanges(unit);
     scopedResult = {
       ...result,
+      findings: [],
       annotations: result.annotations.flatMap((annotation) => {
         if (annotation.path !== unit.path) return [];
         const constrained = constrainAnnotationToChangedLines(

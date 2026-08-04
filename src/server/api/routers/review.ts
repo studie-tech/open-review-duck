@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -34,6 +35,7 @@ import {
   claimCommentForPublicationRetry,
   findEquivalentUserComment,
   providerCommentBody,
+  publicationAttemptKey,
   publishedThreadForComment,
   visibleProviderCommentBody,
 } from "~/server/review/comments";
@@ -1772,6 +1774,7 @@ export const reviewRouter = createTRPCRouter({
         retryingPublication = comment !== undefined;
       }
       if (!comment && !equivalentUserCommentFound) {
+        const publicationLeaseToken = randomUUID();
         [comment] = await ctx.db
           .insert(reviewComments)
           .values({
@@ -1783,6 +1786,7 @@ export const reviewRouter = createTRPCRouter({
             body,
             line: input.line,
             status: "publishing",
+            publicationLeaseToken,
           })
           .onConflictDoNothing()
           .returning();
@@ -1809,6 +1813,13 @@ export const reviewRouter = createTRPCRouter({
           message: "This comment is already being published",
         });
       }
+      if (!comment.publicationLeaseToken) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This comment publication lease is unavailable",
+        });
+      }
+      const publicationLeaseToken = comment.publicationLeaseToken;
 
       try {
         const provider = await providerForScope(ctx.db, scope.connectionId);
@@ -1831,12 +1842,17 @@ export const reviewRouter = createTRPCRouter({
               line: input.line,
               side: scope.changeType === "deleted" ? "left" : "right",
               body: providerCommentBody(body, comment.id),
+              idempotencyKey: publicationAttemptKey(
+                comment.id,
+                publicationLeaseToken,
+              ),
             });
         const [updated] = await ctx.db
           .update(reviewComments)
           .set({
             status: "published",
             providerExternalId: published.externalId,
+            publicationLeaseToken: null,
             error: null,
             publishedAt: new Date(),
           })
@@ -1844,19 +1860,28 @@ export const reviewRouter = createTRPCRouter({
             and(
               eq(reviewComments.id, comment.id),
               eq(reviewComments.status, "publishing"),
+              eq(reviewComments.publicationLeaseToken, publicationLeaseToken),
             ),
           )
           .returning();
+        if (!updated) {
+          throw new Error("Comment publication lease was superseded");
+        }
         return updated;
       } catch (cause) {
         const message = providerSyncErrorMessage(scope.provider, cause);
         await ctx.db
           .update(reviewComments)
-          .set({ status: "failed", error: message })
+          .set({
+            status: "failed",
+            publicationLeaseToken: null,
+            error: message,
+          })
           .where(
             and(
               eq(reviewComments.id, comment.id),
               eq(reviewComments.status, "publishing"),
+              eq(reviewComments.publicationLeaseToken, publicationLeaseToken),
             ),
           );
         throw new TRPCError({

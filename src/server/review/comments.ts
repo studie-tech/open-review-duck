@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, desc, eq, lte, or } from "drizzle-orm";
 import { reviewComments } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
@@ -11,6 +12,11 @@ const COMMENT_MARKER_PATTERN =
 /** Appends an invisible provider-side identifier used to reconcile ambiguous publishes. */
 export function providerCommentBody(body: string, commentId: string) {
   return `${body}\n\n<!-- reviewduck-comment:${commentId} -->`;
+}
+
+/** Derives one provider idempotency key from a fenced publication attempt. */
+export function publicationAttemptKey(commentId: string, leaseToken: string) {
+  return `${commentId}:${leaseToken}`;
 }
 
 /** Removes ReviewDuck's invisible publication marker before rendering a conversation. */
@@ -57,9 +63,10 @@ export async function claimCommentForPublicationRetry(
   commentId: string,
 ) {
   const staleBefore = new Date(Date.now() - 5 * 60_000);
+  const publicationLeaseToken = randomUUID();
   const [claimed] = await db
     .update(reviewComments)
-    .set({ status: "publishing", error: null })
+    .set({ status: "publishing", error: null, publicationLeaseToken })
     .where(
       and(
         eq(reviewComments.id, commentId),

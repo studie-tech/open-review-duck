@@ -11,6 +11,7 @@ import {
   aiJobs,
   aiJobToolCalls,
   aiJobTurns,
+  managedAiModels,
   pullRequests,
   reviewUnits,
 } from "@/drizzle/schema";
@@ -33,6 +34,11 @@ import {
   bigPickleIgnoreMatcher,
   bigPickleSourceDecision,
 } from "./source-policy";
+import {
+  acceptFirstFinalSubmission,
+  boundedTurnOutput,
+  estimatePendingInputTokens,
+} from "./turn-guards";
 
 type Database = typeof database;
 
@@ -417,7 +423,9 @@ export async function executeAiTurn(
     .where(eq(aiJobEvidence.jobId, job.id))
     .then((rows) => Number(rows[0]?.bytes ?? 0));
   let newSourceBytes = 0;
-  let submitted: z.infer<typeof aiResultSchema> | undefined;
+  const submission: {
+    value: z.infer<typeof aiResultSchema> | undefined;
+  } = { value: undefined };
   const semaphore = new FourWaySemaphore();
   /** Enforces the persisted global tool-call limit around one invocation. */
   const execute = (
@@ -613,7 +621,12 @@ export async function executeAiTurn(
       inputSchema: aiResultSchema,
       execute: (input, options) =>
         execute("submit_answer", input, options.toolCallId, async () => {
-          submitted = input;
+          if (!acceptFirstFinalSubmission(submission, input)) {
+            return {
+              accepted: false,
+              error: "A final answer was already submitted for this turn",
+            };
+          }
           return { accepted: true };
         }),
     }),
@@ -624,6 +637,33 @@ export async function executeAiTurn(
     provider: job.provider ?? "",
     model: job.model ?? "",
   });
+  const pricing =
+    job.reservedMicroUsd > 0 && job.model
+      ? await db.query.managedAiModels.findFirst({
+          columns: {
+            promptNanoUsdPerToken: true,
+            completionNanoUsdPerToken: true,
+          },
+          where: eq(managedAiModels.modelId, job.model),
+        })
+      : undefined;
+  const turnBudget = boundedTurnOutput({
+    pendingInputTokens: estimatePendingInputTokens(messages, SYSTEM_PROMPT),
+    reservedTokens,
+    consumedTokens,
+    reservedMicroUsd: job.reservedMicroUsd,
+    consumedMicroUsd: job.actualMicroUsd,
+    pricing,
+  });
+  if (turnBudget.limit) {
+    await finishAtLimit(
+      db,
+      job,
+      "Investigation stopped before a turn exceeded its managed reservation.",
+      turnBudget.limit,
+    );
+    return { done: true, status: "completed" as const };
+  }
   const result = await observeOperation("ai.model-turn", "ai.model", () =>
     generateText({
       model: resolved.model,
@@ -632,13 +672,7 @@ export async function executeAiTurn(
       tools,
       stopWhen: stepCountIs(1),
       maxRetries: 0,
-      maxOutputTokens: Math.max(
-        1,
-        Math.min(
-          8_000,
-          reservedTokens > 0 ? reservedTokens - consumedTokens : 8_000,
-        ),
-      ),
+      maxOutputTokens: turnBudget.maxOutputTokens,
       timeout: Math.min(120_000, env.AI_MAX_DURATION_MS),
       providerOptions: resolved.providerOptions,
       telemetry: { isEnabled: false },
@@ -678,8 +712,8 @@ export async function executeAiTurn(
   }
   const usage = usageFromResult(result);
   await accumulateUsage(db, job.id, usage);
-  if (submitted) {
-    await acceptAiJobResult(db, job.id, submitted);
+  if (submission.value) {
+    await acceptAiJobResult(db, job.id, submission.value);
     await settleAiJobQuota(db, job.id, await totalUsage(db, job.id));
     return { done: true, status: "completed" as const };
   }

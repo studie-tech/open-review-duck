@@ -658,7 +658,24 @@ function contextualImportHash(
     },
   );
   return statements.length > 0
-    ? sha256(statements.map(({ source: statement }) => statement).join("\n"))
+    ? sha256(
+        statements
+          .map((statement) =>
+            statement.references.length > 0
+              ? JSON.stringify(
+                  statement.references.map(
+                    ({ specifier, imported, local, kind }) => ({
+                      specifier,
+                      imported,
+                      local,
+                      kind,
+                    }),
+                  ),
+                )
+              : semanticSource(statement.source, language),
+          )
+          .join("\n"),
+      )
     : "";
 }
 
@@ -838,7 +855,10 @@ function prScopedReviewUnits(
   const previousImportHash = hasPreviousLogicalUnit
     ? contextualImportHash(file.previousContent, language, masks.previous)
     : "";
-  if (currentImportHash || previousImportHash) {
+  if (
+    (currentImportHash || previousImportHash) &&
+    currentImportHash !== previousImportHash
+  ) {
     for (const unit of [...changedCurrent, ...deletedUnits]) {
       unit.semanticHash = sha256(
         `${unit.semanticHash}:contextual-imports:${currentImportHash}:${previousImportHash}`,

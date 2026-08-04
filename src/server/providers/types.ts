@@ -156,6 +156,7 @@ export interface PullRequestProvider {
     line: number;
     side: "left" | "right";
     body: string;
+    idempotencyKey: string;
   }): Promise<{ externalId: string }>;
   /** Publishes a reply inside an existing provider review thread. */
   replyToInlineThread(input: {

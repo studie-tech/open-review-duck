@@ -358,6 +358,7 @@ export class GitLabProvider implements PullRequestProvider {
     line: number;
     side: "left" | "right";
     body: string;
+    idempotencyKey: string;
   }) {
     const mergeRequest = await providerFetch<GitLabMergeRequest>(
       this.name,
@@ -372,6 +373,7 @@ export class GitLabProvider implements PullRequestProvider {
         headers: {
           ...this.headers,
           "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey,
         },
         body: JSON.stringify({
           body: input.body,

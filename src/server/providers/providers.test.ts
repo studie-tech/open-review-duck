@@ -584,12 +584,16 @@ describe("provider normalization", () => {
         line: 17,
         side: "right",
         body: "Could this retain the previous behavior?",
+        idempotencyKey: "github-attempt",
       }),
     ).resolves.toEqual({ externalId: "901" });
 
     const request = fetchMock.mock.calls[0];
     expect(request?.[0]).toBe(
       "https://api.github.com/repositories/42/pulls/8/comments",
+    );
+    expect(new Headers(request?.[1]?.headers).get("idempotency-key")).toBe(
+      "github-attempt",
     );
     expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
       commit_id: "head-sha",
@@ -868,6 +872,7 @@ describe("provider normalization", () => {
         line: 21,
         side: "right",
         body: "This condition looks inverted.",
+        idempotencyKey: "gitlab-attempt",
       }),
     ).resolves.toEqual({ externalId: "discussion-1" });
     expect(
@@ -881,6 +886,9 @@ describe("provider normalization", () => {
         new_line: 21,
       },
     });
+    expect(
+      new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("idempotency-key"),
+    ).toBe("gitlab-attempt");
   });
 
   it("replies inside an existing GitLab discussion", async () => {
@@ -1049,6 +1057,7 @@ describe("provider normalization", () => {
         line: 8,
         side: "right",
         body: "Should this be awaited?",
+        idempotencyKey: "azure-attempt",
       }),
     ).resolves.toEqual({ externalId: "71" });
     expect(
@@ -1059,6 +1068,9 @@ describe("provider normalization", () => {
         rightFileStart: { line: 8, offset: 1 },
       },
     });
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("idempotency-key"),
+    ).toBe("azure-attempt");
   });
 
   it("replies inside an existing Azure DevOps pull-request thread", async () => {
