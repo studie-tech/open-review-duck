@@ -106,6 +106,7 @@ export async function POST(
       { status: 400 },
     );
   }
+  const callback = oauthCallbackUrl(env.APP_URL, provider);
   await db.insert(oauthStates).values({
     id,
     workspaceId: workspace.id,
@@ -113,12 +114,11 @@ export async function POST(
     stateHash: createHash("sha256").update(state).digest("hex"),
     encryptedVerifier: await sealVaultSecret(
       { workspaceId: workspace.id, recordId: id, provider: "oauth-state" },
-      JSON.stringify({ verifier, organizationUrl }),
+      JSON.stringify({ verifier, organizationUrl, callback }),
     ),
     redirectPath: safeOAuthRedirectPath(body.redirectPath, env.APP_URL),
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
-  const callback = oauthCallbackUrl(env.APP_URL, provider);
   let authorizationUrl: URL;
   if (provider === "github") {
     if (!env.GITHUB_APP_SLUG) throw new Error("GitHub App is not configured");

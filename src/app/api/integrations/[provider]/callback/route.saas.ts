@@ -21,6 +21,7 @@ import {
 import {
   hostedProvider,
   oauthCallbackUrl,
+  stateOAuthCallbackUrl,
 } from "~/server/providers/oauth-callback-url";
 import { githubInstallationId } from "~/server/security/oauth-flow";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
@@ -49,6 +50,7 @@ async function githubUserAuthorization(input: {
   }
   const id = randomUUID();
   const verifier = randomBytes(64).toString("base64url");
+  const callback = oauthCallbackUrl(env.APP_URL, "github");
   const state = await new SignJWT({
     workspaceId: input.workspaceId,
     provider: "github",
@@ -72,12 +74,15 @@ async function githubUserAuthorization(input: {
         recordId: id,
         provider: "oauth-state",
       },
-      JSON.stringify({ verifier, installationId: input.installationId }),
+      JSON.stringify({
+        verifier,
+        installationId: input.installationId,
+        callback,
+      }),
     ),
     redirectPath: input.redirectPath,
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
-  const callback = oauthCallbackUrl(env.APP_URL, "github");
   const authorization = new URL("https://github.com/login/oauth/authorize");
   authorization.searchParams.set("client_id", env.GITHUB_APP_CLIENT_ID);
   authorization.searchParams.set("redirect_uri", callback);
@@ -185,7 +190,13 @@ async function completeProviderAuthorization(
     verifier?: unknown;
     organizationUrl?: unknown;
     installationId?: unknown;
+    callback?: unknown;
   };
+  const callback = stateOAuthCallbackUrl(
+    env.APP_URL,
+    provider,
+    stateSecret.callback,
+  );
   if (provider === "github") {
     const pendingInstallationId = githubInstallationId(
       stateSecret.installationId,
@@ -228,7 +239,6 @@ async function completeProviderAuthorization(
         ),
       );
     }
-    const callback = oauthCallbackUrl(env.APP_URL, "github");
     const userToken = await exchangeGitHubUserCode({
       clientId: env.GITHUB_APP_CLIENT_ID,
       clientSecret: env.GITHUB_APP_CLIENT_SECRET,
@@ -338,7 +348,6 @@ async function completeProviderAuthorization(
       NextResponse.json({ error: "OAuth code is missing" }, { status: 400 }),
     );
   }
-  const callback = oauthCallbackUrl(env.APP_URL, provider);
   const tokenUrl =
     provider === "gitlab"
       ? "https://gitlab.com/oauth/token"
