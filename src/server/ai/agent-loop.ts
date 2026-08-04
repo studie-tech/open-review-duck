@@ -352,6 +352,8 @@ export async function executeAiTurn(
           where: and(
             eq(aiJobs.threadId, job.threadId),
             eq(aiJobs.userId, job.userId),
+            eq(aiJobs.workspaceId, job.workspaceId),
+            eq(aiJobs.pullRequestId, job.pullRequestId),
             eq(aiJobs.status, "completed"),
             ne(aiJobs.id, job.id),
           ),
@@ -383,7 +385,8 @@ export async function executeAiTurn(
               changedLineRanges: explanationChangedLineRanges(selectedUnit),
               question: job.question ?? undefined,
               focusLine: job.focusLine ?? undefined,
-              focusSide: "current",
+              focusSide:
+                selectedUnit.changeType === "deleted" ? "previous" : "current",
               conversation: priorConversation.flatMap((prior) =>
                 prior.question && prior.result
                   ? [{ question: prior.question, answer: prior.result.summary }]
