@@ -18,6 +18,7 @@ ENV SKIP_ENV_VALIDATION=1
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL=postgresql://reviewduck:build-only@localhost/reviewduck
 RUN ENCRYPTION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
+    CRON_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
     pnpm build
 
 FROM dependencies AS workflow-runtime
