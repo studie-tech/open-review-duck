@@ -18,18 +18,12 @@ describe("provider comment idempotency", () => {
     );
   });
 
-  it("fences overlapping publication attempts with distinct keys", () => {
-    const first = publicationAttemptKey(
-      commentId,
-      "e7e68139-726e-486c-87da-89593e77ac38",
-    );
-    const retry = publicationAttemptKey(
-      commentId,
-      "86527c56-4dd4-4141-897c-e61445151827",
-    );
+  it("reuses one provider key across overlapping publication leases", () => {
+    const first = publicationAttemptKey(commentId);
+    const retry = publicationAttemptKey(commentId);
 
-    expect(first).not.toBe(retry);
-    expect(first).toContain(commentId);
+    expect(first).toBe(retry);
+    expect(first).toBe(commentId);
   });
 
   it("reconciles a provider thread after an ambiguous publish response", () => {

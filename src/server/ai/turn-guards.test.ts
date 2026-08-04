@@ -48,12 +48,34 @@ describe("AI turn guards", () => {
     ).toBe("cost_limit");
   });
 
-  it("accounts for the full serialized conversation and system prompt", () => {
+  it("rejects exhausted prompt cost when completion tokens are free", () => {
     expect(
-      estimatePendingInputTokens(
-        [{ role: "user", content: "investigate" }],
-        "system",
-      ),
-    ).toBeGreaterThan(1_500);
+      boundedTurnOutput({
+        pendingInputTokens: 2_000,
+        reservedTokens: 10_000,
+        consumedTokens: 0,
+        reservedMicroUsd: 100,
+        consumedMicroUsd: 50,
+        pricing: {
+          promptNanoUsdPerToken: 30,
+          completionNanoUsdPerToken: 0,
+        },
+      }).limit,
+    ).toBe("cost_limit");
+  });
+
+  it.each([
+    { name: "dense ASCII", value: "a".repeat(20_000) },
+    { name: "dense Unicode", value: "你好".repeat(10_000) },
+  ])("conservatively reserves long $name input", ({ value }) => {
+    const messages = [{ role: "user", content: value }];
+    const systemPrompt = value;
+    const contentBytes =
+      Buffer.byteLength(JSON.stringify(messages)) +
+      Buffer.byteLength(systemPrompt);
+
+    expect(estimatePendingInputTokens(messages, systemPrompt)).toBeGreaterThan(
+      contentBytes,
+    );
   });
 });

@@ -13,10 +13,13 @@ export function estimatePendingInputTokens(
   messages: unknown,
   systemPrompt: string,
 ) {
-  const bytes =
+  const contentBytes =
     Buffer.byteLength(JSON.stringify(messages)) +
     Buffer.byteLength(systemPrompt);
-  return Math.ceil(bytes / 3.2) + 1_500;
+  // Every content token consumes at least one UTF-8 byte for the supported
+  // provider tokenizers. The fixed allowance covers the current tool schemas,
+  // role markers, and provider request framing that are not present in content.
+  return contentBytes + 2_000;
 }
 
 /** Reserves pending input and cost before calculating a safe output cap. */
@@ -48,6 +51,9 @@ export function boundedTurnOutput(input: {
     const remainingNanoUsd =
       (input.reservedMicroUsd - input.consumedMicroUsd) * 1_000 -
       input.pendingInputTokens * input.pricing.promptNanoUsdPerToken;
+    if (remainingNanoUsd < 0) {
+      return { limit: "cost_limit" as const, maxOutputTokens: 0 };
+    }
     const affordableOutput =
       input.pricing.completionNanoUsdPerToken > 0
         ? Math.floor(remainingNanoUsd / input.pricing.completionNanoUsdPerToken)
