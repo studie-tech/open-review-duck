@@ -24,7 +24,11 @@ import {
   oauthCallbackUrl,
   stateOAuthCallbackUrl,
 } from "~/server/providers/oauth-callback-url";
-import { githubInstallationId } from "~/server/security/oauth-flow";
+import {
+  GITHUB_USER_AUTHORIZATION_STAGE,
+  githubAuthorizationInstallationId,
+  githubInstallationId,
+} from "~/server/security/oauth-flow";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { requireWorkspaceAdministrator } from "~/server/workspaces/service";
 
@@ -55,6 +59,8 @@ async function githubUserAuthorization(input: {
   const state = await new SignJWT({
     workspaceId: input.workspaceId,
     provider: "github",
+    stage: GITHUB_USER_AUTHORIZATION_STAGE,
+    installationId: input.installationId,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setJti(id)
@@ -119,6 +125,7 @@ async function completeProviderAuthorization(
     );
   }
   let stateId: string;
+  let stateClaims: { installationId?: unknown; stage?: unknown } = {};
   try {
     const verified = await jwtVerify(
       stateToken,
@@ -137,6 +144,10 @@ async function completeProviderAuthorization(
       throw new Error("OAuth state provider mismatch");
     }
     stateId = verified.payload.jti;
+    stateClaims = {
+      installationId: verified.payload.installationId,
+      stage: verified.payload.stage,
+    };
   } catch {
     return securedCallbackResponse(
       NextResponse.json({ error: "OAuth state is invalid" }, { status: 400 }),
@@ -198,7 +209,8 @@ async function completeProviderAuthorization(
     stateSecret.callback,
   );
   if (provider === "github") {
-    const pendingInstallationId = githubInstallationId(
+    const pendingInstallationId = githubAuthorizationInstallationId(
+      stateClaims,
       stateSecret.installationId,
     );
     if (!pendingInstallationId) {
