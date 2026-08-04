@@ -7,6 +7,10 @@ import { env } from "~/env";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
 import { normalizeAzureOrganizationUrl } from "~/server/providers/azure-organization-url";
+import {
+  hostedProvider,
+  oauthCallbackUrl,
+} from "~/server/providers/oauth-callback-url";
 import { safeOAuthRedirectPath } from "~/server/security/oauth-flow";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { sealVaultSecret } from "~/server/security/vault";
@@ -14,13 +18,6 @@ import {
   ensurePersonalWorkspace,
   requireWorkspaceAdministrator,
 } from "~/server/workspaces/service";
-
-type HostedProvider = "github" | "gitlab" | "azure_devops";
-
-/** Narrows an untrusted route segment to one supported SaaS provider. */
-function hostedProvider(value: string): value is HostedProvider {
-  return ["github", "gitlab", "azure_devops"].includes(value);
-}
 
 /** Starts one App/OAuth connection with signed, one-time, PKCE-bound state. */
 export async function POST(
@@ -121,7 +118,7 @@ export async function POST(
     redirectPath: safeOAuthRedirectPath(body.redirectPath, env.APP_URL),
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
-  const callback = `${env.APP_URL}/api/integrations/${provider}/callback`;
+  const callback = oauthCallbackUrl(env.APP_URL, provider);
   let authorizationUrl: URL;
   if (provider === "github") {
     if (!env.GITHUB_APP_SLUG) throw new Error("GitHub App is not configured");
