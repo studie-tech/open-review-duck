@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { env } from "~/env";
 import { synchronizeOpenRouterCatalog } from "~/server/ai/catalog";
+import { pruneExpiredAiStreamLeases } from "~/server/ai/stream-leases";
 import { db } from "~/server/db";
 import { pruneExpiredProviderSecurityRecords } from "~/server/providers/maintenance";
 import { hasBearerToken } from "~/server/security/bearer-token";
@@ -16,16 +17,23 @@ export async function POST(request: NextRequest) {
   );
   if (!authorized) return new NextResponse(null, { status: 404 });
   const snapshots = await pruneExpiredReviewSnapshots(db);
-  const [rateLimits, sourceObjects, modelCatalog, providerSecurity] =
-    await Promise.all([
-      pruneExpiredRateLimits(db),
-      pruneAllOrphanSourceBlobs(db),
-      synchronizeOpenRouterCatalog(db),
-      pruneExpiredProviderSecurityRecords(db),
-    ]);
+  const [
+    rateLimits,
+    streamLeases,
+    sourceObjects,
+    modelCatalog,
+    providerSecurity,
+  ] = await Promise.all([
+    pruneExpiredRateLimits(db),
+    pruneExpiredAiStreamLeases(db),
+    pruneAllOrphanSourceBlobs(db),
+    synchronizeOpenRouterCatalog(db),
+    pruneExpiredProviderSecurityRecords(db),
+  ]);
   return NextResponse.json({
     snapshots,
     rateLimits,
+    streamLeases,
     sourceObjects,
     modelCatalog,
     providerSecurity,

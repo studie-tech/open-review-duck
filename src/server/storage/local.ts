@@ -14,9 +14,14 @@ export class LocalSourceObjectStore implements SourceObjectStore {
   /** Creates a store rooted at one installation-owned directory. */
   constructor(private readonly root: string) {}
 
+  /** Derives the stable local key before a write starts. */
+  customId(input: PutSourceObject) {
+    return this.key(input.workspaceId, input.digest);
+  }
+
   /** Writes one immutable workspace-scoped object atomically. */
   async put(input: PutSourceObject): Promise<StoredObject> {
-    const objectKey = this.key(input.workspaceId, input.digest);
+    const objectKey = this.customId(input);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const disk = await statfs(this.root);
     const freeBytes = disk.bavail * disk.bsize;
@@ -54,6 +59,11 @@ export class LocalSourceObjectStore implements SourceObjectStore {
   /** Deletes one previously validated object key idempotently. */
   async delete(objectKey: string) {
     await rm(this.resolve(objectKey), { force: true });
+  }
+
+  /** Deletes a crashed write by the key persisted before storage began. */
+  async deleteByCustomId(customId: string) {
+    await this.delete(customId);
   }
 
   /** Returns local expiry metadata without exposing a transferable URL. */

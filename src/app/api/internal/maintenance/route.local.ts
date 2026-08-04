@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "~/env";
+import { pruneExpiredAiStreamLeases } from "~/server/ai/stream-leases";
 import { db } from "~/server/db";
 import { hasBearerToken } from "~/server/security/bearer-token";
 import { pruneExpiredRateLimits } from "~/server/security/rate-limit";
@@ -12,9 +13,15 @@ export async function POST(request: Request) {
     return new NextResponse(null, { status: 404 });
   }
   const snapshots = await pruneExpiredReviewSnapshots(db);
-  const [rateLimits, sourceObjects] = await Promise.all([
+  const [rateLimits, streamLeases, sourceObjects] = await Promise.all([
     pruneExpiredRateLimits(db),
+    pruneExpiredAiStreamLeases(db),
     pruneAllOrphanSourceBlobs(db),
   ]);
-  return NextResponse.json({ snapshots, rateLimits, sourceObjects });
+  return NextResponse.json({
+    snapshots,
+    rateLimits,
+    streamLeases,
+    sourceObjects,
+  });
 }

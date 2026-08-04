@@ -10,7 +10,10 @@ import {
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
 import { parseScipIndex } from "~/server/semantic/scip";
-import { authorizeSemanticUploadCredential } from "~/server/semantic/upload-credentials";
+import {
+  authorizeSemanticUploadCredential,
+  semanticUploadCallerKey,
+} from "~/server/semantic/upload-credentials";
 import { persistSourceBlob, sourceDigest } from "~/server/storage/source-blobs";
 
 /** Stores an exact-revision SCIP artifact directly in the local appliance. */
@@ -55,7 +58,12 @@ export async function POST(request: Request) {
   try {
     usedCredential =
       bearer && !member
-        ? await authorizeSemanticUploadCredential(db, repository.id, bearer)
+        ? await authorizeSemanticUploadCredential(
+            db,
+            repository.id,
+            bearer,
+            semanticUploadCallerKey(request.headers),
+          )
         : undefined;
   } catch (cause) {
     if (cause instanceof TRPCError && cause.code === "TOO_MANY_REQUESTS") {

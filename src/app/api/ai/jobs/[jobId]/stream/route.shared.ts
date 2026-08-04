@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, gt, isNotNull, lt, lte, sql } from "drizzle-orm";
-import type { NextRequest } from "next/server";
+import { after, type NextRequest } from "next/server";
 import { aiJobChunks, aiJobs, aiStreamLeases } from "@/drizzle/schema";
 import type { AiQuestionStreamUpdate } from "~/lib/ai-question-stream";
 import { applicationAuth } from "~/server/auth";
@@ -71,25 +71,18 @@ export async function GET(
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { jobId } = await params;
-  const job = await db.query.aiJobs.findFirst({
-    where: and(
-      eq(aiJobs.id, jobId),
-      eq(aiJobs.userId, authentication.userId),
-      isNotNull(aiJobs.question),
-    ),
-  });
-  if (!job) return Response.json({ error: "Not found" }, { status: 404 });
+  const targetKey = createHash("sha256").update(jobId).digest("hex");
   try {
-    await enforceRateLimit(
-      db,
-      `ai-stream:${authentication.userId}:${job.id}`,
-      8,
-      60_000,
-    );
     await enforceRateLimit(
       db,
       `ai-stream-user:${authentication.userId}`,
       20,
+      60_000,
+    );
+    await enforceRateLimit(
+      db,
+      `ai-stream:${authentication.userId}:${targetKey}`,
+      8,
       60_000,
     );
   } catch (cause) {
@@ -101,6 +94,14 @@ export async function GET(
       { status: 429 },
     );
   }
+  const job = await db.query.aiJobs.findFirst({
+    where: and(
+      eq(aiJobs.id, jobId),
+      eq(aiJobs.userId, authentication.userId),
+      isNotNull(aiJobs.question),
+    ),
+  });
+  if (!job) return Response.json({ error: "Not found" }, { status: 404 });
   const streamLeaseId = await acquireStreamLease(authentication.userId, job.id);
   if (!streamLeaseId) {
     return Response.json(
@@ -113,6 +114,21 @@ export async function GET(
   );
   /** Closes the current SSE response and is replaced after stream startup. */
   let close = () => undefined;
+  /** Signals post-response cleanup after every terminal stream path. */
+  let markClosed: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
+  after(async () => {
+    await Promise.race([
+      closed,
+      new Promise<void>((resolve) => setTimeout(resolve, 60_000)),
+    ]);
+    await db
+      .delete(aiStreamLeases)
+      .where(eq(aiStreamLeases.id, streamLeaseId))
+      .catch(() => undefined);
+  });
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let cursor = Number.isSafeInteger(requestedCursor) ? requestedCursor : -1;
@@ -139,10 +155,7 @@ export async function GET(
         if (closed) return;
         closed = true;
         clearInterval(keepAlive);
-        void db
-          .delete(aiStreamLeases)
-          .where(eq(aiStreamLeases.id, streamLeaseId))
-          .catch(() => undefined);
+        markClosed();
         controller.close();
       };
       request.signal.addEventListener("abort", close, { once: true });
@@ -264,17 +277,20 @@ export async function GET(
         close();
       })().catch((cause: unknown) => {
         if (closed || request.signal.aborted) return;
-        send({
-          error:
-            cause instanceof Error
-              ? cause.message
-              : "The live AI answer stream was interrupted.",
-          progress: "Answer interrupted",
-          status: "failed",
-          text,
-          cursor,
-        });
-        close();
+        try {
+          send({
+            error:
+              cause instanceof Error
+                ? cause.message
+                : "The live AI answer stream was interrupted.",
+            progress: "Answer interrupted",
+            status: "failed",
+            text,
+            cursor,
+          });
+        } finally {
+          close();
+        }
       });
     },
     cancel() {

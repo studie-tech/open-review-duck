@@ -1,0 +1,1 @@
+CREATE INDEX "ai_stream_lease_expiry_idx" ON "open_review_duck_ai_stream_lease" USING btree ("expiresAt");

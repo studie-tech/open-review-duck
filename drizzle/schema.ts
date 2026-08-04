@@ -863,7 +863,10 @@ export const aiStreamLeases = createTable(
     expiresAt: timestamp({ withTimezone: true }).notNull(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("ai_stream_lease_user_idx").on(t.userId, t.expiresAt)],
+  (t) => [
+    index("ai_stream_lease_user_idx").on(t.userId, t.expiresAt),
+    index("ai_stream_lease_expiry_idx").on(t.expiresAt),
+  ],
 );
 
 export const aiJobTurns = createTable(

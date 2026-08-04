@@ -49,12 +49,6 @@ export async function POST(request: Request) {
   }
   const label = body.label;
   const { id, token } = newSemanticUploadCredential();
-  const tokenHash = await hash(token, {
-    algorithm: 2,
-    memoryCost: 19_456,
-    timeCost: 2,
-    parallelism: 1,
-  });
   const credential = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`scip-credentials:${repository.id}`}))`,
@@ -67,6 +61,12 @@ export async function POST(request: Request) {
       ),
     );
     if (active >= 20) return undefined;
+    const tokenHash = await hash(token, {
+      algorithm: 2,
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+    });
     const [created] = await tx
       .insert(semanticUploadCredentials)
       .values({
