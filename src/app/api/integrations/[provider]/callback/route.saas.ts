@@ -18,19 +18,16 @@ import {
   revokeGitHubUserToken,
   verifyGitHubInstallationAccess,
 } from "~/server/providers/github-app-authorization";
+import {
+  hostedProvider,
+  oauthCallbackUrl,
+} from "~/server/providers/oauth-callback-url";
 import { githubInstallationId } from "~/server/security/oauth-flow";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { requireWorkspaceAdministrator } from "~/server/workspaces/service";
 
-type HostedProvider = "github" | "gitlab" | "azure_devops";
-
 class InstallationClaimedError extends Error {
   override name = "InstallationClaimedError";
-}
-
-/** Narrows an untrusted route segment to one supported SaaS provider. */
-function hostedProvider(value: string): value is HostedProvider {
-  return ["github", "gitlab", "azure_devops"].includes(value);
 }
 
 /** Prevents callback credentials from entering caches or subsequent Referer headers. */
@@ -80,7 +77,7 @@ async function githubUserAuthorization(input: {
     redirectPath: input.redirectPath,
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
-  const callback = `${env.APP_URL}/github/complete`;
+  const callback = oauthCallbackUrl(env.APP_URL, "github");
   const authorization = new URL("https://github.com/login/oauth/authorize");
   authorization.searchParams.set("client_id", env.GITHUB_APP_CLIENT_ID);
   authorization.searchParams.set("redirect_uri", callback);
@@ -231,7 +228,7 @@ async function completeProviderAuthorization(
         ),
       );
     }
-    const callback = `${env.APP_URL}/github/complete`;
+    const callback = oauthCallbackUrl(env.APP_URL, "github");
     const userToken = await exchangeGitHubUserCode({
       clientId: env.GITHUB_APP_CLIENT_ID,
       clientSecret: env.GITHUB_APP_CLIENT_SECRET,
@@ -341,7 +338,7 @@ async function completeProviderAuthorization(
       NextResponse.json({ error: "OAuth code is missing" }, { status: 400 }),
     );
   }
-  const callback = `${env.APP_URL}/api/integrations/${provider}/callback`;
+  const callback = oauthCallbackUrl(env.APP_URL, provider);
   const tokenUrl =
     provider === "gitlab"
       ? "https://gitlab.com/oauth/token"

@@ -51,6 +51,10 @@ describe("Sentry telemetry safety", () => {
             "https://reviewduck.example/api/integrations/gitlab/callback?code=secret",
           "url.query": "code=secret",
         },
+        publicCallback: {
+          url: "https://reviewduck.example/gitlab/complete?code=secret&state=signed",
+          query: "code=secret&state=signed",
+        },
       }),
     ).toEqual({
       request: {
@@ -67,12 +71,17 @@ describe("Sentry telemetry safety", () => {
           "https://reviewduck.example/api/integrations/gitlab/callback",
         "url.query": "[REDACTED]",
       },
+      publicCallback: {
+        url: "https://reviewduck.example/gitlab/complete",
+        query: "[REDACTED]",
+      },
     });
   });
 
   it("keeps the intended trace budgets", () => {
     expect(tracesSampler({ name: "GET /health" })).toBe(0);
     expect(tracesSampler({ name: "sync pull request" })).toBe(0.1);
+    expect(tracesSampler({ name: "GET /azure-devops/complete" })).toBe(0.1);
     expect(tracesSampler({ name: "GET /dashboard" })).toBe(0.01);
   });
 });

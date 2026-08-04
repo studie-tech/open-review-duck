@@ -1,6 +1,7 @@
 const SENSITIVE_FIELD =
   /authorization|cookie|token|secret|source|prompt|output|signed.?url|file.?key|custom.?id|oauth.?code|request.?body|repository.?path/i;
-const SENSITIVE_ROUTE = /\/api\/(?:integrations|webhooks)\//i;
+const SENSITIVE_ROUTE =
+  /(?:\/api\/(?:integrations|webhooks)\/|\/(?:github|gitlab|azure-devops)\/complete(?:[/?#]|$))/i;
 const ROUTE_PAYLOAD_FIELD =
   /(?:^|[._-])(?:body|data|query|query_string|querystring)(?:$|[._-])/i;
 
@@ -65,7 +66,7 @@ export function tracesSampler(context: { name?: string }) {
     return 0;
   }
   if (
-    /sync|workflow|\/api\/ai\/|\/api\/webhooks\/|\/api\/integrations\/|billing/i.test(
+    /sync|workflow|\/api\/ai\/|\/api\/webhooks\/|\/api\/integrations\/|\/(?:github|gitlab|azure-devops)\/complete|billing/i.test(
       name,
     )
   ) {
