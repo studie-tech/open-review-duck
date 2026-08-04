@@ -89,7 +89,7 @@
     "tree-sitter-powershell": "0.26.4",
     "tree-sitter-wasms": "0.1.13",
     "uploadthing": "7.7.4",
-    "web-tree-sitter": "0.25.10",
+    "web-tree-sitter": "0.26.11",
     "workflow": "4.8.0",
     "xstate": "5.32.5",
     "zod": "^4.4.3"
