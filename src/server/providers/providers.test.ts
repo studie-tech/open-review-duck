@@ -1048,6 +1048,61 @@ describe("provider normalization", () => {
     ]);
   });
 
+  it("stops downloading Azure source after the pull request budget", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/iterations?")) {
+        return jsonResponse({ value: [{ id: 3 }] });
+      }
+      if (url.includes("/iterations/3/changes?")) {
+        return jsonResponse({
+          changeEntries: ["one.ts", "two.ts", "three.ts"].map((path) => ({
+            item: { path: `/${path}`, gitObjectType: "blob" },
+            changeType: "add",
+          })),
+        });
+      }
+      if (url.includes("/items?")) return new Response("four");
+      return jsonResponse({
+        pullRequestId: 12,
+        title: "Large change",
+        status: "active",
+        isDraft: false,
+        sourceRefName: "refs/heads/large",
+        targetRefName: "refs/heads/main",
+        lastMergeSourceCommit: { commitId: "head-sha" },
+        lastMergeTargetCommit: { commitId: "base-sha" },
+        repository: { webUrl: "https://dev.azure.com/acme/repo" },
+        createdBy: { displayName: "Duck" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).getChangedFiles("repo", 12, { maximumSourceBytes: 4 });
+
+    expect(files).toEqual([
+      expect.objectContaining({ path: "one.ts", content: "four" }),
+      expect.objectContaining({
+        path: "two.ts",
+        content: "",
+        skipReason: "too_large",
+      }),
+      expect.objectContaining({
+        path: "three.ts",
+        content: "",
+        skipReason: "too_large",
+      }),
+    ]);
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        requestUrl(input).includes("/items?"),
+      ),
+    ).toHaveLength(1);
+  });
+
   it("publishes Azure DevOps threads on the selected line", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 71 }));
     vi.stubGlobal("fetch", fetchMock);

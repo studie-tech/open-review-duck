@@ -35,6 +35,7 @@ type Database = typeof database;
 const UNIT_INSERT_BATCH_SIZE = 100;
 const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
+const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
 
 /** Converts an inclusive line range to UTF-8 byte offsets. */
 function sourceRange(source: string, startLine: number, endLine: number) {
@@ -125,7 +126,9 @@ export async function syncPullRequest(
     () =>
       Promise.all([
         provider.getPullRequest(repository.externalId, number),
-        provider.getChangedFiles(repository.externalId, number),
+        provider.getChangedFiles(repository.externalId, number, {
+          maximumSourceBytes: PULL_REQUEST_SOURCE_BUDGET_BYTES,
+        }),
       ]),
   );
   const confirmedRemote = await observeOperation(
@@ -142,7 +145,10 @@ export async function syncPullRequest(
     );
   }
   assertCompleteChangedFileSet(confirmedRemote, files.length);
-  const budgetedFiles = applySourceBudget(files, 20_000_000);
+  const budgetedFiles = applySourceBudget(
+    files,
+    PULL_REQUEST_SOURCE_BUDGET_BYTES,
+  );
   const analysis = await observeOperation(
     "tree-sitter.analyze-pull-request",
     "analysis",
@@ -156,7 +162,7 @@ export async function syncPullRequest(
         () => analyzeFiles(budgetedFiles),
       ),
   );
-  const storedFiles = await mapWithLimit(files, 4, async (file) => {
+  const storedFiles = await mapWithLimit(budgetedFiles, 4, async (file) => {
     const [currentBlob, previousBlob] = await Promise.all([
       persistSourceBlob(db, {
         workspaceId: repository.workspaceId,
