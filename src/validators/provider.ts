@@ -4,6 +4,7 @@ const providerNameSchema = z.enum(["github", "gitlab", "azure_devops"]);
 
 export const connectProviderSchema = z
   .object({
+    connectionId: z.string().uuid().optional(),
     provider: providerNameSchema,
     displayName: z.string().trim().min(1).max(160).optional(),
     accessToken: z.string().trim().min(1),

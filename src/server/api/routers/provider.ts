@@ -89,6 +89,28 @@ export const providerRouter = createTRPCRouter({
         10,
         10 * 60_000,
       );
+      const existingConnection = input.connectionId
+        ? await ctx.db.query.providerConnections.findFirst({
+            where: and(
+              eq(providerConnections.id, input.connectionId),
+              eq(providerConnections.workspaceId, workspace.id),
+            ),
+          })
+        : undefined;
+      if (input.connectionId && !existingConnection) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      if (
+        existingConnection &&
+        (existingConnection.provider !== input.provider ||
+          !["pat", "local_pat"].includes(existingConnection.credentialKind))
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This connection must be reauthorized with its original method.",
+        });
+      }
       let baseUrl = input.baseUrl;
       if (!localMode) {
         try {
@@ -132,37 +154,41 @@ export const providerRouter = createTRPCRouter({
         });
       }
       if (!localMode) {
-        const connectionId = randomUUID();
+        const connectionId = existingConnection?.id ?? randomUUID();
         return ctx.db.transaction(async (tx) => {
-          const [connection] = await tx
-            .insert(providerConnections)
-            .values({
-              id: connectionId,
-              workspaceId: workspace.id,
-              provider: input.provider,
-              externalAccountId: identity.externalAccountId,
-              credentialKind: "pat",
-              credentialFingerprint: fingerprint,
-              displayName: input.displayName ?? identity.displayName,
-              baseUrl,
-            })
-            .onConflictDoUpdate({
-              target: [
-                providerConnections.workspaceId,
-                providerConnections.provider,
-                providerConnections.credentialFingerprint,
-              ],
-              set: {
-                externalAccountId: identity.externalAccountId,
-                credentialKind: "pat",
-                credentialStatus: "active",
-                displayName: input.displayName ?? identity.displayName,
-                installationId: null,
-                localCredentialId: null,
-                baseUrl,
-              },
-            })
-            .returning();
+          const connectionValues = {
+            externalAccountId: identity.externalAccountId,
+            credentialKind: "pat",
+            credentialStatus: "active",
+            credentialFingerprint: fingerprint,
+            displayName: input.displayName ?? identity.displayName,
+            installationId: null,
+            localCredentialId: null,
+            baseUrl,
+          } as const;
+          const [connection] = existingConnection
+            ? await tx
+                .update(providerConnections)
+                .set(connectionValues)
+                .where(eq(providerConnections.id, existingConnection.id))
+                .returning()
+            : await tx
+                .insert(providerConnections)
+                .values({
+                  id: connectionId,
+                  workspaceId: workspace.id,
+                  provider: input.provider,
+                  ...connectionValues,
+                })
+                .onConflictDoUpdate({
+                  target: [
+                    providerConnections.workspaceId,
+                    providerConnections.provider,
+                    providerConnections.credentialFingerprint,
+                  ],
+                  set: connectionValues,
+                })
+                .returning();
           if (!connection) throw new Error("Could not persist PAT connection");
           const encryptedToken = await sealProviderPat(
             {
@@ -183,10 +209,21 @@ export const providerRouter = createTRPCRouter({
             workspaceId: workspace.id,
             actorId: ctx.auth.userId,
             credentialId: connection.id,
-            action: "created",
+            action: existingConnection ? "rotated" : "created",
             provider: input.provider,
             metadata: { credentialKind: "pat" },
           });
+          if (
+            existingConnection?.localCredentialId &&
+            existingConnection.localCredentialId !==
+              connection.localCredentialId
+          ) {
+            await tx
+              .delete(localCredentials)
+              .where(
+                eq(localCredentials.id, existingConnection.localCredentialId),
+              );
+          }
           return {
             id: connection.id,
             provider: connection.provider,
@@ -198,7 +235,8 @@ export const providerRouter = createTRPCRouter({
           };
         });
       }
-      const credentialId = randomUUID();
+      const credentialId =
+        existingConnection?.localCredentialId ?? randomUUID();
       const initialEncryptedPayload = await sealVaultSecret(
         {
           workspaceId: workspace.id,
@@ -208,27 +246,38 @@ export const providerRouter = createTRPCRouter({
         JSON.stringify({ token: input.accessToken }),
       );
       return ctx.db.transaction(async (tx) => {
-        const [credential] = await tx
-          .insert(localCredentials)
-          .values({
-            id: credentialId,
-            workspaceId: workspace.id,
-            kind: `${input.provider}_pat`,
-            label: input.displayName ?? identity.displayName,
-            encryptedPayload: initialEncryptedPayload,
-            fingerprint,
-          })
-          .onConflictDoUpdate({
-            target: [
-              localCredentials.workspaceId,
-              localCredentials.kind,
-              localCredentials.fingerprint,
-            ],
-            set: {
-              label: input.displayName ?? identity.displayName,
-            },
-          })
-          .returning();
+        const credentialValues = {
+          kind: `${input.provider}_pat`,
+          label: input.displayName ?? identity.displayName,
+          encryptedPayload: initialEncryptedPayload,
+          fingerprint,
+        };
+        const [credential] = existingConnection?.localCredentialId
+          ? await tx
+              .update(localCredentials)
+              .set(credentialValues)
+              .where(
+                eq(localCredentials.id, existingConnection.localCredentialId),
+              )
+              .returning()
+          : await tx
+              .insert(localCredentials)
+              .values({
+                id: credentialId,
+                workspaceId: workspace.id,
+                ...credentialValues,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  localCredentials.workspaceId,
+                  localCredentials.kind,
+                  localCredentials.fingerprint,
+                ],
+                set: {
+                  label: input.displayName ?? identity.displayName,
+                },
+              })
+              .returning();
         if (!credential) throw new Error("Could not persist local credential");
         const encryptedPayload = await sealVaultSecret(
           {
@@ -242,50 +291,63 @@ export const providerRouter = createTRPCRouter({
           .update(localCredentials)
           .set({ encryptedPayload })
           .where(eq(localCredentials.id, credential.id));
-        const [connection] = await tx
-          .insert(providerConnections)
-          .values({
-            workspaceId: workspace.id,
-            provider: input.provider,
-            externalAccountId: identity.externalAccountId,
-            credentialKind: "local_pat",
-            credentialStatus: "active",
-            credentialFingerprint: fingerprint,
-            displayName: input.displayName ?? identity.displayName,
-            localCredentialId: credential.id,
-            baseUrl,
-          })
-          .onConflictDoUpdate({
-            target: [
-              providerConnections.workspaceId,
-              providerConnections.provider,
-              providerConnections.credentialFingerprint,
-            ],
-            set: {
-              externalAccountId: identity.externalAccountId,
-              displayName: input.displayName ?? identity.displayName,
-              credentialKind: "local_pat",
-              credentialStatus: "active",
-              localCredentialId: credential.id,
-              installationId: null,
-              baseUrl,
-            },
-          })
-          .returning({
-            id: providerConnections.id,
-            provider: providerConnections.provider,
-            displayName: providerConnections.displayName,
-            baseUrl: providerConnections.baseUrl,
-            credentialKind: providerConnections.credentialKind,
-            credentialStatus: providerConnections.credentialStatus,
-            createdAt: providerConnections.createdAt,
-          });
+        const connectionValues = {
+          externalAccountId: identity.externalAccountId,
+          credentialKind: "local_pat",
+          credentialStatus: "active",
+          credentialFingerprint: fingerprint,
+          displayName: input.displayName ?? identity.displayName,
+          localCredentialId: credential.id,
+          installationId: null,
+          baseUrl,
+        } as const;
+        const returningConnection = {
+          id: providerConnections.id,
+          provider: providerConnections.provider,
+          displayName: providerConnections.displayName,
+          baseUrl: providerConnections.baseUrl,
+          credentialKind: providerConnections.credentialKind,
+          credentialStatus: providerConnections.credentialStatus,
+          createdAt: providerConnections.createdAt,
+        };
+        const [connection] = existingConnection
+          ? await tx
+              .update(providerConnections)
+              .set(connectionValues)
+              .where(eq(providerConnections.id, existingConnection.id))
+              .returning(returningConnection)
+          : await tx
+              .insert(providerConnections)
+              .values({
+                workspaceId: workspace.id,
+                provider: input.provider,
+                ...connectionValues,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  providerConnections.workspaceId,
+                  providerConnections.provider,
+                  providerConnections.credentialFingerprint,
+                ],
+                set: connectionValues,
+              })
+              .returning(returningConnection);
+        if (!connection)
+          throw new Error("Could not persist provider connection");
+        if (existingConnection) {
+          await tx
+            .delete(providerPatCredentials)
+            .where(
+              eq(providerPatCredentials.connectionId, existingConnection.id),
+            );
+        }
         await tx.insert(credentialAuditEvents).values({
           workspaceId: workspace.id,
           actorId: ctx.auth.userId,
           credentialId: credential.id,
-          action: "created",
+          action: existingConnection ? "rotated" : "created",
           provider: input.provider,
+          metadata: { credentialKind: "local_pat" },
         });
         return connection;
       });

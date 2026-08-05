@@ -26,4 +26,25 @@ describe("provider connection validation", () => {
       });
     }
   });
+
+  it("accepts a connection ID when replacing an existing token", () => {
+    expect(
+      connectProviderSchema.safeParse({
+        connectionId: "0bf4a1f7-0f30-4f08-9439-577356ddbc13",
+        provider: "azure_devops",
+        accessToken: "replacement-token",
+        baseUrl: "https://dev.azure.com/acme",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a malformed replacement connection ID", () => {
+    expect(
+      connectProviderSchema.safeParse({
+        connectionId: "not-a-connection",
+        provider: "github",
+        accessToken: "replacement-token",
+      }).success,
+    ).toBe(false);
+  });
 });
