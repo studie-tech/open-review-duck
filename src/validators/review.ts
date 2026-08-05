@@ -43,6 +43,44 @@ export const unreviewSchema = reviewUnitSchema.extend({
   sessionId: z.string().uuid().optional(),
 });
 
+export const signOffConceptSchema = z.object({
+  conceptId: z.string().uuid(),
+  layoutId: z.string().uuid(),
+  layoutVersion: z.number().int().positive(),
+  sessionId: z.string().uuid().optional(),
+  note: z.string().trim().max(4_000).optional(),
+  durationSeconds: z.number().int().min(0).max(86_400),
+});
+
+export const unreviewConceptSchema = signOffConceptSchema.pick({
+  conceptId: true,
+  layoutId: true,
+  layoutVersion: true,
+  sessionId: true,
+});
+
+export const replacePersonalConceptLayoutSchema = z.object({
+  pullRequestId: z.string().uuid(),
+  snapshotId: z.string().uuid(),
+  expectedVersion: z.number().int().positive(),
+  source: z.enum(["manual", "ai"]),
+  concepts: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1).max(200),
+        rationale: z.string().trim().max(1_000).optional(),
+        memberUnitIds: z.array(z.string().uuid()).min(1),
+      }),
+    )
+    .min(1),
+});
+
+export const improveConceptGroupingSchema = z.object({
+  pullRequestId: z.string().uuid(),
+  layoutId: z.string().uuid(),
+  layoutVersion: z.number().int().positive(),
+});
+
 export const awaitResponseSchema = reviewUnitSchema;
 
 export const importTargetSchema = z.object({

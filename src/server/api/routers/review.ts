@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobs,
@@ -8,6 +8,10 @@ import {
   pullRequests,
   repositories,
   reviewComments,
+  reviewConceptDependencies,
+  reviewConceptLayouts,
+  reviewConceptMembers,
+  reviewConcepts,
   reviewQueueItems,
   reviewSessions,
   reviewSnapshots,
@@ -26,7 +30,14 @@ import {
   importPathCandidates,
 } from "~/lib/import-navigation";
 import { CURRENT_AI_AGENT_VERSION } from "~/server/ai/service";
+import { proposeSemanticConceptLayout } from "~/server/ai/semantic-clustering";
+import { PAID_AI_FEATURE } from "~/server/ai/plan";
 import { analyzeFiles } from "~/server/analysis/engine";
+import {
+  MAX_CONCEPT_CHANGED_LINES,
+  MAX_CONCEPT_FILES,
+} from "~/server/analysis/concepts";
+import { sha256 } from "~/server/analysis/hash";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
@@ -62,16 +73,20 @@ import {
 import {
   awaitResponseSchema,
   importTargetSchema,
+  improveConceptGroupingSchema,
   providerReviewDecisionSchema,
   publishReviewCommentSchema,
   replyToReviewThreadSchema,
   reviewUnitSchema,
   reviewWorkspaceSchema,
+  replacePersonalConceptLayoutSchema,
+  signOffConceptSchema,
   type SignOffInput,
   signOffBatchSchema,
   signOffSchema,
   syncPullRequestSchema,
   unreviewSchema,
+  unreviewConceptSchema,
 } from "~/validators/review";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
@@ -235,6 +250,208 @@ interface PersistedSignOff {
   pullRequestId: string;
   signOff: typeof signOffs.$inferSelect;
   snapshotId: string;
+}
+
+/** Resolves one concept only when it belongs to the reviewer's active layout. */
+async function conceptMembersForMutation(
+  tx: ReviewTransaction,
+  userId: string,
+  input: { conceptId: string; layoutId: string; layoutVersion: number },
+) {
+  const [candidate] = await tx
+    .select({
+      conceptId: reviewConcepts.id,
+      layoutId: reviewConceptLayouts.id,
+      layoutVersion: reviewConceptLayouts.version,
+      layoutUserId: reviewConceptLayouts.userId,
+      layoutSource: reviewConceptLayouts.source,
+      lockedAt: reviewConceptLayouts.lockedAt,
+      snapshotId: reviewConceptLayouts.snapshotId,
+      pullRequestId: pullRequests.id,
+    })
+    .from(reviewConcepts)
+    .innerJoin(
+      reviewConceptLayouts,
+      eq(reviewConcepts.layoutId, reviewConceptLayouts.id),
+    )
+    .innerJoin(
+      reviewSnapshots,
+      eq(reviewConceptLayouts.snapshotId, reviewSnapshots.id),
+    )
+    .innerJoin(pullRequests, eq(reviewSnapshots.pullRequestId, pullRequests.id))
+    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+    .innerJoin(
+      workspaceMembers,
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
+    )
+    .where(
+      and(
+        eq(reviewConcepts.id, input.conceptId),
+        eq(reviewConceptLayouts.id, input.layoutId),
+        eq(workspaceMembers.userId, userId),
+        eq(reviewSnapshots.headSha, pullRequests.headSha),
+        eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+      ),
+    )
+    .limit(1);
+  if (!candidate) throw new TRPCError({ code: "NOT_FOUND" });
+  if (candidate.layoutVersion !== input.layoutVersion) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "The review concept layout changed. Reload before continuing.",
+    });
+  }
+  const activeLayouts = await tx
+    .select({
+      id: reviewConceptLayouts.id,
+      userId: reviewConceptLayouts.userId,
+    })
+    .from(reviewConceptLayouts)
+    .where(
+      and(
+        eq(reviewConceptLayouts.snapshotId, candidate.snapshotId),
+        or(
+          eq(reviewConceptLayouts.userId, userId),
+          isNull(reviewConceptLayouts.userId),
+        ),
+      ),
+    );
+  const active =
+    activeLayouts.find((layout) => layout.userId === userId) ??
+    activeLayouts.find((layout) => layout.userId === null);
+  if (active?.id !== candidate.layoutId) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "A newer personal review concept layout is active.",
+    });
+  }
+  const members = await tx
+    .select({
+      id: reviewUnits.id,
+      complexity: reviewUnits.complexity,
+      semanticHash: reviewUnits.semanticHash,
+      stableKey: reviewUnits.stableKey,
+      memberOrder: reviewConceptMembers.memberOrder,
+    })
+    .from(reviewConceptMembers)
+    .innerJoin(reviewUnits, eq(reviewConceptMembers.unitId, reviewUnits.id))
+    .where(eq(reviewConceptMembers.conceptId, candidate.conceptId))
+    .orderBy(reviewConceptMembers.memberOrder);
+  if (members.length === 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "This review concept no longer has any members.",
+    });
+  }
+  return { ...candidate, members };
+}
+
+/** Permanently locks a reviewer's active layout at their first new sign-off. */
+async function lockConceptLayoutForReviewer(
+  tx: ReviewTransaction,
+  userId: string,
+  concept: Awaited<ReturnType<typeof conceptMembersForMutation>>,
+) {
+  const lockedAt = new Date();
+  if (concept.layoutUserId === userId) {
+    if (!concept.lockedAt) {
+      await tx
+        .update(reviewConceptLayouts)
+        .set({ lockedAt })
+        .where(eq(reviewConceptLayouts.id, concept.layoutId));
+    }
+    return;
+  }
+
+  // A shared baseline cannot carry per-reviewer lock state. Clone it once so
+  // undoing a sign-off never makes grouping editable again for this reviewer.
+  const baselineConcepts = await tx.query.reviewConcepts.findMany({
+    where: eq(reviewConcepts.layoutId, concept.layoutId),
+    orderBy: [reviewConcepts.reviewOrder],
+  });
+  const baselineConceptIds = baselineConcepts.map(({ id }) => id);
+  const [baselineMembers, baselineDependencies] = baselineConceptIds.length
+    ? await Promise.all([
+        tx
+          .select()
+          .from(reviewConceptMembers)
+          .where(inArray(reviewConceptMembers.conceptId, baselineConceptIds)),
+        tx
+          .select()
+          .from(reviewConceptDependencies)
+          .where(
+            inArray(reviewConceptDependencies.conceptId, baselineConceptIds),
+          ),
+      ])
+    : [[], []];
+  const [personal] = await tx
+    .insert(reviewConceptLayouts)
+    .values({
+      snapshotId: concept.snapshotId,
+      userId,
+      source: concept.layoutSource,
+      version: concept.layoutVersion,
+      lockedAt,
+    })
+    .returning({ id: reviewConceptLayouts.id });
+  if (!personal)
+    throw new Error("The review concept layout could not be locked");
+  const copiedConcepts = await tx
+    .insert(reviewConcepts)
+    .values(
+      baselineConcepts.map((item) => ({
+        layoutId: personal.id,
+        stableKey: item.stableKey,
+        title: item.title,
+        rationale: item.rationale,
+        reviewOrder: item.reviewOrder,
+        changedLineCount: item.changedLineCount,
+        fileCount: item.fileCount,
+        oversized: item.oversized,
+      })),
+    )
+    .returning({ id: reviewConcepts.id, stableKey: reviewConcepts.stableKey });
+  const copiedIdByStableKey = new Map(
+    copiedConcepts.map((item) => [item.stableKey, item.id]),
+  );
+  const baselineById = new Map(baselineConcepts.map((item) => [item.id, item]));
+  const copiedIdByBaselineId = new Map(
+    baselineConcepts.flatMap((item) => {
+      const copiedId = copiedIdByStableKey.get(item.stableKey);
+      return copiedId ? [[item.id, copiedId] as const] : [];
+    }),
+  );
+  if (baselineMembers.length > 0) {
+    await tx.insert(reviewConceptMembers).values(
+      baselineMembers.flatMap((member) => {
+        const conceptId = copiedIdByBaselineId.get(member.conceptId);
+        return conceptId
+          ? [
+              {
+                layoutId: personal.id,
+                conceptId,
+                unitId: member.unitId,
+                memberOrder: member.memberOrder,
+              },
+            ]
+          : [];
+      }),
+    );
+  }
+  if (baselineDependencies.length > 0) {
+    await tx.insert(reviewConceptDependencies).values(
+      baselineDependencies.flatMap((dependency) => {
+        const conceptId = copiedIdByBaselineId.get(dependency.conceptId);
+        const dependencyId = copiedIdByBaselineId.get(dependency.dependencyId);
+        return conceptId && dependencyId ? [{ conceptId, dependencyId }] : [];
+      }),
+    );
+  }
+  // Retain this check as an internal invariant and keep the copied map useful
+  // when a malformed baseline is encountered inside the transaction.
+  if (baselineById.size !== copiedIdByBaselineId.size) {
+    throw new Error("The review concept layout could not be copied completely");
+  }
 }
 
 /** Persists one authorized sign-off without recomputing aggregate statistics. */
@@ -634,6 +851,8 @@ export const reviewRouter = createTRPCRouter({
           previousSnapshot: null,
           units: [],
           fileContexts: [],
+          conceptLayout: null,
+          concepts: [],
           sourceDelivery: isLocalDeployment()
             ? ("inline" as const)
             : ("direct" as const),
@@ -675,7 +894,10 @@ export const reviewRouter = createTRPCRouter({
       const [userSignOffs, userWaits] = units.length
         ? await Promise.all([
             ctx.db
-              .select({ unitId: signOffs.unitId })
+              .select({
+                unitId: signOffs.unitId,
+                signedOffAt: signOffs.signedOffAt,
+              })
               .from(signOffs)
               .where(
                 and(
@@ -707,6 +929,9 @@ export const reviewRouter = createTRPCRouter({
       const signedUnitIds = new Set(
         userSignOffs.map((signOff) => signOff.unitId),
       );
+      const layoutLockedByNewSignOff = userSignOffs.some(
+        ({ signedOffAt }) => signedOffAt >= snapshot.createdAt,
+      );
       const waitByUnitId = new Map(
         userWaits.map((wait) => [wait.unitId, wait]),
       );
@@ -732,6 +957,150 @@ export const reviewRouter = createTRPCRouter({
       const previouslySignedStableKeys = new Set(
         priorSignedUnits.map(({ stableKey }) => stableKey),
       );
+      const workspaceUnits = units.map((unit) => {
+        const wait = waitByUnitId.get(unit.id);
+        return {
+          ...unit,
+          dependencies: dependenciesByUnit.get(unit.id) ?? [],
+          status: wait
+            ? ("waiting" as const)
+            : signedUnitIds.has(unit.id)
+              ? ("signed_off" as const)
+              : unit.requiresReReview &&
+                  previouslySignedStableKeys.has(unit.stableKey)
+                ? ("changed" as const)
+                : ("pending" as const),
+          waitingSince: wait?.waitingSince ?? null,
+          changedSinceSignOff:
+            unit.requiresReReview &&
+            previouslySignedStableKeys.has(unit.stableKey),
+        };
+      });
+      const layouts = await ctx.db
+        .select()
+        .from(reviewConceptLayouts)
+        .where(
+          and(
+            eq(reviewConceptLayouts.snapshotId, snapshot.id),
+            or(
+              eq(reviewConceptLayouts.userId, ctx.auth.userId),
+              isNull(reviewConceptLayouts.userId),
+            ),
+          ),
+        );
+      const activeLayout =
+        layouts.find(({ userId }) => userId === ctx.auth.userId) ??
+        layouts.find(({ userId }) => userId === null);
+      let conceptLayout: {
+        id: string;
+        version: number;
+        source: "deterministic" | "manual" | "ai";
+        locked: boolean;
+        personal: boolean;
+      } | null = null;
+      let concepts: Array<{
+        id: string;
+        stableKey: string;
+        title: string;
+        rationale: string | null;
+        reviewOrder: number;
+        changedLineCount: number;
+        fileCount: number;
+        oversized: boolean;
+        dependencies: string[];
+        memberIds: string[];
+        status: "pending" | "partial" | "waiting" | "signed_off" | "changed";
+        signedMemberCount: number;
+      }> = [];
+      if (activeLayout) {
+        conceptLayout = {
+          id: activeLayout.id,
+          version: activeLayout.version,
+          source: activeLayout.source,
+          locked: Boolean(activeLayout.lockedAt) || layoutLockedByNewSignOff,
+          personal: Boolean(activeLayout.userId),
+        };
+        const storedConcepts = await ctx.db.query.reviewConcepts.findMany({
+          where: eq(reviewConcepts.layoutId, activeLayout.id),
+          orderBy: [reviewConcepts.reviewOrder],
+        });
+        const conceptIds = storedConcepts.map(({ id }) => id);
+        const [memberRows, conceptDependencyRows] = conceptIds.length
+          ? await Promise.all([
+              ctx.db
+                .select()
+                .from(reviewConceptMembers)
+                .where(inArray(reviewConceptMembers.conceptId, conceptIds)),
+              ctx.db
+                .select()
+                .from(reviewConceptDependencies)
+                .where(
+                  inArray(reviewConceptDependencies.conceptId, conceptIds),
+                ),
+            ])
+          : [[], []];
+        const membersByConcept = new Map<string, typeof memberRows>();
+        for (const member of memberRows) {
+          membersByConcept.set(member.conceptId, [
+            ...(membersByConcept.get(member.conceptId) ?? []),
+            member,
+          ]);
+        }
+        const dependenciesByConcept = new Map<string, string[]>();
+        for (const dependency of conceptDependencyRows) {
+          dependenciesByConcept.set(dependency.conceptId, [
+            ...(dependenciesByConcept.get(dependency.conceptId) ?? []),
+            dependency.dependencyId,
+          ]);
+        }
+        const unitById = new Map(workspaceUnits.map((unit) => [unit.id, unit]));
+        concepts = storedConcepts.map((concept) => {
+          const memberIds = (membersByConcept.get(concept.id) ?? [])
+            .sort((left, right) => left.memberOrder - right.memberOrder)
+            .map(({ unitId }) => unitId);
+          const members = memberIds
+            .map((id) => unitById.get(id))
+            .filter((unit): unit is (typeof workspaceUnits)[number] =>
+              Boolean(unit),
+            );
+          const signedMemberCount = members.filter(
+            ({ status }) => status === "signed_off",
+          ).length;
+          const status = members.some(({ status }) => status === "waiting")
+            ? ("waiting" as const)
+            : signedMemberCount === members.length && members.length > 0
+              ? ("signed_off" as const)
+              : signedMemberCount > 0
+                ? ("partial" as const)
+                : members.some(({ status }) => status === "changed")
+                  ? ("changed" as const)
+                  : ("pending" as const);
+          return {
+            ...concept,
+            dependencies: dependenciesByConcept.get(concept.id) ?? [],
+            memberIds,
+            status,
+            signedMemberCount,
+          };
+        });
+      } else {
+        // Snapshots produced before concept analysis remain fully reviewable and
+        // fail safe as one-unit concepts until their next synchronization.
+        concepts = workspaceUnits.map((unit, reviewOrder) => ({
+          id: unit.id,
+          stableKey: `singleton:${unit.stableKey}`,
+          title: unit.name,
+          rationale: "This snapshot predates concept grouping.",
+          reviewOrder,
+          changedLineCount: unit.changedLineCount,
+          fileCount: 1,
+          oversized: unit.changedLineCount > MAX_CONCEPT_CHANGED_LINES,
+          dependencies: [],
+          memberIds: [unit.id],
+          status: unit.status,
+          signedMemberCount: unit.status === "signed_off" ? 1 : 0,
+        }));
+      }
       return {
         pullRequest,
         snapshot,
@@ -746,25 +1115,9 @@ export const reviewRouter = createTRPCRouter({
             }
           : null,
         fileContexts,
-        units: units.map((unit) => {
-          const wait = waitByUnitId.get(unit.id);
-          return {
-            ...unit,
-            dependencies: dependenciesByUnit.get(unit.id) ?? [],
-            status: wait
-              ? ("waiting" as const)
-              : signedUnitIds.has(unit.id)
-                ? ("signed_off" as const)
-                : unit.requiresReReview &&
-                    previouslySignedStableKeys.has(unit.stableKey)
-                  ? ("changed" as const)
-                  : ("pending" as const),
-            waitingSince: wait?.waitingSince ?? null,
-            changedSinceSignOff:
-              unit.requiresReReview &&
-              previouslySignedStableKeys.has(unit.stableKey),
-          };
-        }),
+        conceptLayout,
+        concepts,
+        units: workspaceUnits,
       };
     }),
 
@@ -2185,6 +2538,478 @@ export const reviewRouter = createTRPCRouter({
         .where(eq(syncRuns.id, input.syncId));
       return { status: "cancelled" as const };
     }),
+
+  improveConceptGrouping: protectedProcedure
+    .input(improveConceptGroupingSchema)
+    .mutation(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `semantic-clustering:${ctx.auth.userId}`,
+        5,
+        60 * 60_000,
+      );
+      try {
+        return await proposeSemanticConceptLayout(ctx.db, {
+          ...input,
+          userId: ctx.auth.userId,
+          subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
+        });
+      } catch (cause) {
+        console.error("Semantic review grouping failed", cause);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            cause instanceof Error &&
+            [
+              "The review concept layout changed or is locked",
+              "A newer personal review concept layout is active",
+              "AI grouping did not return a complete review partition",
+            ].includes(cause.message)
+              ? cause.message
+              : "AI could not improve this grouping. The current layout was not changed.",
+        });
+      }
+    }),
+
+  replacePersonalConceptLayout: protectedProcedure
+    .input(replacePersonalConceptLayoutSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`review-concept-layout:${input.snapshotId}:${ctx.auth.userId}`}))`,
+        );
+        const [snapshot] = await tx
+          .select({
+            id: reviewSnapshots.id,
+            createdAt: reviewSnapshots.createdAt,
+          })
+          .from(reviewSnapshots)
+          .innerJoin(
+            pullRequests,
+            eq(reviewSnapshots.pullRequestId, pullRequests.id),
+          )
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(
+            and(
+              eq(reviewSnapshots.id, input.snapshotId),
+              eq(pullRequests.id, input.pullRequestId),
+              eq(reviewSnapshots.headSha, pullRequests.headSha),
+              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+              eq(workspaceMembers.userId, ctx.auth.userId),
+            ),
+          )
+          .limit(1);
+        if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+        const newSignOff = await tx
+          .select({ id: signOffs.id })
+          .from(signOffs)
+          .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
+          .where(
+            and(
+              eq(reviewUnits.snapshotId, snapshot.id),
+              eq(signOffs.userId, ctx.auth.userId),
+              isNull(signOffs.invalidatedAt),
+              gte(signOffs.signedOffAt, snapshot.createdAt),
+            ),
+          )
+          .limit(1);
+        if (newSignOff.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Concept grouping is locked after the first sign-off on this revision.",
+          });
+        }
+        const layouts = await tx
+          .select()
+          .from(reviewConceptLayouts)
+          .where(
+            and(
+              eq(reviewConceptLayouts.snapshotId, snapshot.id),
+              or(
+                eq(reviewConceptLayouts.userId, ctx.auth.userId),
+                isNull(reviewConceptLayouts.userId),
+              ),
+            ),
+          );
+        const personal = layouts.find(
+          ({ userId }) => userId === ctx.auth.userId,
+        );
+        const baseline = layouts.find(({ userId }) => userId === null);
+        const active = personal ?? baseline;
+        if (!active || active.version !== input.expectedVersion) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "The review concept layout changed. Reload and try again.",
+          });
+        }
+        if (personal?.lockedAt) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Concept grouping is locked after the first sign-off on this revision.",
+          });
+        }
+        const units = await tx
+          .select({
+            id: reviewUnits.id,
+            stableKey: reviewUnits.stableKey,
+            path: reviewUnits.path,
+            changedLineCount: reviewUnits.changedLineCount,
+            reviewOrder: reviewUnits.reviewOrder,
+          })
+          .from(reviewUnits)
+          .where(
+            and(
+              eq(reviewUnits.snapshotId, snapshot.id),
+              sql`${reviewUnits.kind} <> 'file'`,
+            ),
+          );
+        const byId = new Map(units.map((unit) => [unit.id, unit]));
+        const seen = new Set<string>();
+        for (const concept of input.concepts) {
+          const members = concept.memberUnitIds.map((id) => {
+            const unit = byId.get(id);
+            if (!unit) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Unknown review unit ${id}`,
+              });
+            }
+            if (seen.has(id)) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "A review unit can appear in only one concept.",
+              });
+            }
+            seen.add(id);
+            return unit;
+          });
+          const files = new Set(members.map(({ path }) => path)).size;
+          const changedLines = members.reduce(
+            (total, unit) => total + unit.changedLineCount,
+            0,
+          );
+          if (
+            members.length > 1 &&
+            (files > MAX_CONCEPT_FILES ||
+              changedLines > MAX_CONCEPT_CHANGED_LINES)
+          ) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Concepts are limited to ${MAX_CONCEPT_FILES} files and ${MAX_CONCEPT_CHANGED_LINES} changed lines.`,
+            });
+          }
+        }
+        if (seen.size !== units.length) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Every atomic review unit must belong to exactly one concept.",
+          });
+        }
+        const nextVersion = active.version + 1;
+        let layoutId: string;
+        if (personal) {
+          const [updated] = await tx
+            .update(reviewConceptLayouts)
+            .set({ source: input.source, version: nextVersion })
+            .where(
+              and(
+                eq(reviewConceptLayouts.id, personal.id),
+                eq(reviewConceptLayouts.version, input.expectedVersion),
+                isNull(reviewConceptLayouts.lockedAt),
+              ),
+            )
+            .returning({ id: reviewConceptLayouts.id });
+          if (!updated) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message:
+                "The review concept layout changed. Reload and try again.",
+            });
+          }
+          layoutId = updated.id;
+          await tx
+            .delete(reviewConcepts)
+            .where(eq(reviewConcepts.layoutId, layoutId));
+        } else {
+          const [created] = await tx
+            .insert(reviewConceptLayouts)
+            .values({
+              snapshotId: snapshot.id,
+              userId: ctx.auth.userId,
+              source: input.source,
+              version: nextVersion,
+            })
+            .returning({ id: reviewConceptLayouts.id });
+          if (!created)
+            throw new Error("Personal concept layout was not saved");
+          layoutId = created.id;
+        }
+        const definitions = input.concepts
+          .map((concept) => {
+            const members = concept.memberUnitIds
+              .map((id) => byId.get(id))
+              .filter((unit): unit is (typeof units)[number] => Boolean(unit))
+              .sort(
+                (left, right) =>
+                  left.reviewOrder - right.reviewOrder ||
+                  left.stableKey.localeCompare(right.stableKey),
+              );
+            const changedLineCount = members.reduce(
+              (total, unit) => total + unit.changedLineCount,
+              0,
+            );
+            return {
+              stableKey: `concept:${sha256(
+                members
+                  .map(({ stableKey }) => stableKey)
+                  .sort()
+                  .join("\0"),
+              )}`,
+              title: concept.title,
+              rationale: concept.rationale,
+              reviewOrder: Math.min(
+                ...members.map(({ reviewOrder }) => reviewOrder),
+              ),
+              changedLineCount,
+              fileCount: new Set(members.map(({ path }) => path)).size,
+              oversized:
+                members.length === 1 &&
+                changedLineCount > MAX_CONCEPT_CHANGED_LINES,
+              memberUnitIds: members.map(({ id }) => id),
+            };
+          })
+          .sort(
+            (left, right) =>
+              left.reviewOrder - right.reviewOrder ||
+              left.stableKey.localeCompare(right.stableKey),
+          );
+        const createdConcepts = await tx
+          .insert(reviewConcepts)
+          .values(
+            definitions.map((concept, reviewOrder) => ({
+              layoutId,
+              stableKey: concept.stableKey,
+              title: concept.title,
+              rationale: concept.rationale,
+              reviewOrder,
+              changedLineCount: concept.changedLineCount,
+              fileCount: concept.fileCount,
+              oversized: concept.oversized,
+            })),
+          )
+          .returning({
+            id: reviewConcepts.id,
+            stableKey: reviewConcepts.stableKey,
+          });
+        const conceptByKey = new Map(
+          createdConcepts.map((concept) => [concept.stableKey, concept]),
+        );
+        await tx.insert(reviewConceptMembers).values(
+          definitions.flatMap((definition) => {
+            const concept = conceptByKey.get(definition.stableKey);
+            if (!concept) return [];
+            return definition.memberUnitIds.map((unitId, memberOrder) => ({
+              layoutId,
+              conceptId: concept.id,
+              unitId,
+              memberOrder,
+            }));
+          }),
+        );
+        const conceptIdByUnit = new Map<string, string>();
+        for (const definition of definitions) {
+          const concept = conceptByKey.get(definition.stableKey);
+          if (!concept) continue;
+          for (const unitId of definition.memberUnitIds) {
+            conceptIdByUnit.set(unitId, concept.id);
+          }
+        }
+        const atomicDependencies = await tx
+          .select()
+          .from(reviewUnitDependencies)
+          .where(
+            inArray(
+              reviewUnitDependencies.unitId,
+              units.map(({ id }) => id),
+            ),
+          );
+        const collapsedDependencies = [
+          ...new Map(
+            atomicDependencies.flatMap((dependency) => {
+              const conceptId = conceptIdByUnit.get(dependency.unitId);
+              const dependencyId = conceptIdByUnit.get(dependency.dependencyId);
+              return conceptId && dependencyId && conceptId !== dependencyId
+                ? [
+                    [
+                      `${conceptId}:${dependencyId}`,
+                      { conceptId, dependencyId },
+                    ] as const,
+                  ]
+                : [];
+            }),
+          ).values(),
+        ];
+        if (collapsedDependencies.length > 0) {
+          await tx
+            .insert(reviewConceptDependencies)
+            .values(collapsedDependencies);
+        }
+        return { layoutId, version: nextVersion, source: input.source };
+      }),
+    ),
+
+  signOffConcept: protectedProcedure
+    .input(signOffConceptSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`review-concept-layout:${input.layoutId}:${ctx.auth.userId}`}))`,
+        );
+        const concept = await conceptMembersForMutation(
+          tx,
+          ctx.auth.userId,
+          input,
+        );
+        const waiting = await tx
+          .select({ unitId: reviewWaits.unitId })
+          .from(reviewWaits)
+          .where(
+            and(
+              eq(reviewWaits.userId, ctx.auth.userId),
+              inArray(
+                reviewWaits.unitId,
+                concept.members.map(({ id }) => id),
+              ),
+            ),
+          )
+          .limit(1);
+        if (waiting.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "This concept is waiting for a provider response and cannot be signed off yet.",
+          });
+        }
+        const complexity = concept.members.reduce(
+          (total, member) => total + Math.max(1, member.complexity),
+          0,
+        );
+        let allocated = 0;
+        const writes: PersistedSignOff[] = [];
+        for (const [index, member] of concept.members.entries()) {
+          const durationSeconds =
+            index === concept.members.length - 1
+              ? input.durationSeconds - allocated
+              : Math.floor(
+                  (input.durationSeconds * Math.max(1, member.complexity)) /
+                    complexity,
+                );
+          allocated += durationSeconds;
+          writes.push(
+            await persistSignOff(tx, ctx.auth.userId, {
+              unitId: member.id,
+              sessionId: input.sessionId,
+              note: input.note,
+              durationSeconds,
+            }),
+          );
+        }
+        await finalizeSignOffs(tx, ctx.auth.userId, writes);
+        await lockConceptLayoutForReviewer(tx, ctx.auth.userId, concept);
+        return {
+          conceptId: concept.conceptId,
+          signedUnitIds: writes.map(({ signOff }) => signOff.unitId),
+        };
+      }),
+    ),
+
+  unreviewConcept: protectedProcedure
+    .input(unreviewConceptSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        const concept = await conceptMembersForMutation(
+          tx,
+          ctx.auth.userId,
+          input,
+        );
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${concept.pullRequestId}:${ctx.auth.userId}`}))`,
+        );
+        const active = await tx
+          .select({
+            id: signOffs.id,
+            unitId: signOffs.unitId,
+            signedOffAt: signOffs.signedOffAt,
+            durationSeconds: signOffs.durationSeconds,
+            complexity: reviewUnits.complexity,
+          })
+          .from(signOffs)
+          .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
+          .where(
+            and(
+              eq(signOffs.userId, ctx.auth.userId),
+              isNull(signOffs.invalidatedAt),
+              inArray(
+                signOffs.unitId,
+                concept.members.map(({ id }) => id),
+              ),
+            ),
+          );
+        if (active.length === 0) return { unreviewed: false, unitIds: [] };
+        await tx
+          .update(signOffs)
+          .set({ invalidatedAt: new Date() })
+          .where(
+            inArray(
+              signOffs.id,
+              active.map(({ id }) => id),
+            ),
+          );
+        if (input.sessionId) {
+          const session = await tx.query.reviewSessions.findFirst({
+            where: and(
+              eq(reviewSessions.id, input.sessionId),
+              eq(reviewSessions.userId, ctx.auth.userId),
+              eq(reviewSessions.snapshotId, concept.snapshotId),
+            ),
+          });
+          if (session) {
+            const inSession = active.filter(
+              ({ signedOffAt }) => signedOffAt >= session.startedAt,
+            );
+            const experience = inSession.reduce(
+              (total, signOff) =>
+                total +
+                reviewExperience(signOff.complexity, signOff.durationSeconds),
+              0,
+            );
+            await tx
+              .update(reviewSessions)
+              .set({
+                reviewedUnits: sql`greatest(${reviewSessions.reviewedUnits} - ${inSession.length}, 0)`,
+                experienceAwarded: sql`greatest(${reviewSessions.experienceAwarded} - ${experience}, 0)`,
+                completedAt: null,
+              })
+              .where(eq(reviewSessions.id, session.id));
+          }
+        }
+        await recomputeReviewStats(tx, ctx.auth.userId);
+        return {
+          unreviewed: true,
+          unitIds: active.map(({ unitId }) => unitId),
+        };
+      }),
+    ),
 
   signOff: protectedProcedure
     .input(signOffSchema)

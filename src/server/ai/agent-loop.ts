@@ -382,7 +382,7 @@ export async function executeAiTurn(
     const prompt: ModelMessage = {
       role: "user",
       content: reviewDuckAgentPrompt({
-        jobKind: job.kind,
+        jobKind: job.kind === "semantic_cluster" ? "review" : job.kind,
         pullRequest: {
           title: pullRequest.title,
           description: pullRequest.description ?? undefined,

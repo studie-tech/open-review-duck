@@ -119,9 +119,28 @@ import { findNextReview, ReviewCompletion } from "./review-completion";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
+type ReviewConcept = WorkspaceData["concepts"][number];
 type ImportTarget = RouterOutputs["review"]["importTarget"];
 type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
+
+/** Derives live concept progress from the canonical atomic-unit ledger. */
+function liveConceptStatus(concept: ReviewConcept, units: ReviewUnit[]) {
+  const members = concept.memberIds
+    .map((id) => units.find((unit) => unit.id === id))
+    .filter((unit): unit is ReviewUnit => Boolean(unit));
+  const signed = members.filter(({ status }) => status === "signed_off").length;
+  const status = members.some(({ status }) => status === "waiting")
+    ? ("waiting" as const)
+    : signed === members.length && members.length > 0
+      ? ("signed_off" as const)
+      : signed > 0
+        ? ("partial" as const)
+        : members.some(({ status }) => status === "changed")
+          ? ("changed" as const)
+          : ("pending" as const);
+  return { members, signed, status };
+}
 
 /** Extracts the stored disjoint ranges for one side of a review concept. */
 function relatedReviewRanges(
@@ -441,6 +460,18 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
+  const activeConcept = activeUnit
+    ? initialData.concepts.find(({ memberIds }) =>
+        memberIds.includes(activeUnit.id),
+      )
+    : undefined;
+  const activeConceptProgress = activeConcept
+    ? liveConceptStatus(activeConcept, units)
+    : undefined;
+  const activeConceptMembers = activeConceptProgress?.members ?? [];
+  const activeConceptMemberIndex = activeUnit
+    ? activeConceptMembers.findIndex(({ id }) => id === activeUnit.id)
+    : -1;
   const deletedFilePaths = useMemo(
     () =>
       new Set(
@@ -538,9 +569,36 @@ export function ReviewWorkspace({
       persistentInsights.removeEventListener("change", settlePersistentPanels);
     };
   }, []);
+  const conceptPathUnits = useMemo(
+    () =>
+      initialData.concepts.flatMap((concept): ReviewUnit[] => {
+        const progress = liveConceptStatus(concept, units);
+        const anchor = progress.members[0];
+        if (!anchor) return [];
+        return [
+          {
+            ...anchor,
+            name: concept.title,
+            status:
+              progress.status === "signed_off" ||
+              progress.status === "waiting" ||
+              progress.status === "changed"
+                ? progress.status
+                : ("pending" as const),
+            waitingSince:
+              progress.members.find(({ waitingSince }) => waitingSince)
+                ?.waitingSince ?? null,
+          },
+        ];
+      }),
+    [initialData.concepts, units],
+  );
+  const activeConceptPathIndex = activeConcept
+    ? initialData.concepts.findIndex(({ id }) => id === activeConcept.id)
+    : 0;
   const pathSections = useMemo(
-    () => reviewPathSections(units, activeIndex),
-    [activeIndex, units],
+    () => reviewPathSections(conceptPathUnits, activeConceptPathIndex),
+    [activeConceptPathIndex, conceptPathUnits],
   );
   const nextUnitToPreload = pathSearch.trim()
     ? (pathSections.upcoming.find(({ unit }) =>
@@ -582,8 +640,23 @@ export function ReviewWorkspace({
   const signedCount = units.filter(
     (unit) => unit.status === "signed_off",
   ).length;
+  const conceptProgress = initialData.concepts.map((concept) => ({
+    concept,
+    ...liveConceptStatus(concept, units),
+  }));
+  const signedConceptCount = conceptProgress.filter(
+    ({ status }) => status === "signed_off",
+  ).length;
+  const conceptChangedLineTotal = units.reduce(
+    (total, unit) => total + unit.changedLineCount,
+    0,
+  );
+  const reviewedChangedLines = units.reduce(
+    (total, unit) =>
+      total + (unit.status === "signed_off" ? unit.changedLineCount : 0),
+    0,
+  );
   const waitingCount = units.filter((unit) => unit.status === "waiting").length;
-  const remainingCount = units.length - signedCount;
   const reviewComplete = signedCount === units.length;
   const [completionOpen, setCompletionOpen] = useState(reviewComplete);
   const previousReviewComplete = useRef(reviewComplete);
@@ -870,6 +943,14 @@ export function ReviewWorkspace({
     setImportPreview(undefined);
     setPathPanelOpen(false);
     setInsightsPanelOpen(false);
+  }
+
+  /** Opens the anchor unit for one concept-first path entry. */
+  function selectConceptPath(index: number) {
+    const concept = initialData.concepts[index];
+    const memberId = concept?.memberIds[0];
+    const unitIndex = units.findIndex(({ id }) => id === memberId);
+    if (unitIndex >= 0) selectUnit(unitIndex);
   }
 
   /** Moves through visited units before falling back to canonical adjacency. */
@@ -1307,6 +1388,101 @@ export function ReviewWorkspace({
       setStartedAt(Date.now());
       toast.success("Marked as not reviewed", {
         description: `${activeUnit.name} is back in your review queue.`,
+      });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const signOffConcept = api.review.signOffConcept.useMutation({
+    onMutate: ({ conceptId }) => {
+      const concept = initialData.concepts.find(({ id }) => id === conceptId);
+      const previousUnits = units;
+      if (concept) {
+        const memberIds = new Set(concept.memberIds);
+        setUnits((current) =>
+          current.map((unit) =>
+            memberIds.has(unit.id) && unit.status !== "waiting"
+              ? {
+                  ...unit,
+                  status: "signed_off" as const,
+                  changedSinceSignOff: false,
+                }
+              : unit,
+          ),
+        );
+      }
+      return { previousUnits };
+    },
+    onSuccess: ({ signedUnitIds }) => {
+      void Promise.all([
+        utils.workspace.guidance.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+      ]);
+      setStartedAt(Date.now());
+      router.refresh();
+      toast.success("Review concept signed off", {
+        description: `${signedUnitIds.length} atomic ${signedUnitIds.length === 1 ? "unit" : "units"} recorded together.`,
+      });
+      window.requestAnimationFrame(() => {
+        const next = units.findIndex(
+          (unit) =>
+            !signedUnitIds.includes(unit.id) &&
+            unit.status !== "signed_off" &&
+            unit.status !== "waiting",
+        );
+        if (next >= 0) selectUnit(next);
+      });
+    },
+    onError: (error, _variables, context) => {
+      if (context?.previousUnits) setUnits(context.previousUnits);
+      toast.error(error.message);
+    },
+  });
+  const undoConcept = api.review.unreviewConcept.useMutation({
+    onSuccess: ({ unreviewed, unitIds }) => {
+      if (!unreviewed) return;
+      const affected = new Set(unitIds);
+      setUnits((current) =>
+        current.map((unit) =>
+          affected.has(unit.id)
+            ? {
+                ...unit,
+                status: "pending" as const,
+                changedSinceSignOff: false,
+              }
+            : unit,
+        ),
+      );
+      void Promise.all([
+        utils.workspace.guidance.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+      ]);
+      setStartedAt(Date.now());
+      toast.success("Concept returned to the review path");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const replaceConceptLayout =
+    api.review.replacePersonalConceptLayout.useMutation({
+      onSuccess: () => {
+        toast.success("Semantic grouping applied", {
+          description:
+            "Your personal concept layout is ready. Atomic coverage is unchanged.",
+        });
+        router.refresh();
+      },
+      onError: (error) => toast.error(error.message),
+    });
+  const improveConceptGrouping = api.review.improveConceptGrouping.useMutation({
+    onSuccess: ({ concepts }) => {
+      if (!initialData.snapshot || !initialData.conceptLayout) return;
+      replaceConceptLayout.mutate({
+        pullRequestId: initialData.pullRequest.id,
+        snapshotId: initialData.snapshot.id,
+        expectedVersion: initialData.conceptLayout.version,
+        source: "ai",
+        concepts,
       });
     },
     onError: (error) => toast.error(error.message),
@@ -2280,8 +2456,13 @@ export function ReviewWorkspace({
   );
   const nextQueueEntry = pathSections.upcoming[0];
   const activeSignOffPending = activeUnit
-    ? signOffQueue.ids.has(activeUnit.id)
+    ? signOffQueue.ids.has(activeUnit.id) || signOffConcept.isPending
     : false;
+  const activeConceptSourcesAvailable = activeConceptMembers.every((unit) =>
+    initialData.sourceDelivery === "direct"
+      ? unit.kind === "binary" || hydratedUnitIds.has(unit.id)
+      : true,
+  );
   const deletedUnitsToSignOff = useMemo(
     () => deletedFileSignOffUnits(units, fileContexts),
     [fileContexts, units],
@@ -2335,12 +2516,13 @@ export function ReviewWorkspace({
     activeUnit.kind !== "binary";
   const canUsePrimaryAction =
     !!activeUnit &&
-    (activeSourceAvailable ||
-      activeUnit.status === "signed_off" ||
-      activeUnit.status === "waiting") &&
+    (activeConceptSourcesAvailable ||
+      activeConceptProgress?.status === "signed_off" ||
+      activeConceptProgress?.status === "waiting") &&
     !reviewComplete &&
     !activeSignOffPending &&
     !undoSignOff.isPending &&
+    !undoConcept.isPending &&
     !awaitResponse.isPending &&
     !resetReview.isPending &&
     (activeUnit.status !== "waiting" || hasNextActionableUnit);
@@ -2706,15 +2888,120 @@ export function ReviewWorkspace({
     });
   }
 
+  /** Splits the active concept into atomic personal-layout concepts. */
+  function splitActiveConcept() {
+    if (
+      !activeConcept ||
+      activeConcept.memberIds.length < 2 ||
+      !initialData.snapshot ||
+      !initialData.conceptLayout ||
+      initialData.conceptLayout.locked
+    ) {
+      return;
+    }
+    replaceConceptLayout.mutate({
+      pullRequestId: initialData.pullRequest.id,
+      snapshotId: initialData.snapshot.id,
+      expectedVersion: initialData.conceptLayout.version,
+      source: "manual",
+      concepts: initialData.concepts.flatMap((concept) =>
+        concept.id === activeConcept.id
+          ? concept.memberIds.map((memberId) => {
+              const member = units.find(({ id }) => id === memberId);
+              return {
+                title: member?.name ?? "Review change",
+                rationale: `Manually split from ${activeConcept.title}.`,
+                memberUnitIds: [memberId],
+              };
+            })
+          : [
+              {
+                title: concept.title,
+                rationale: concept.rationale ?? undefined,
+                memberUnitIds: concept.memberIds,
+              },
+            ],
+      ),
+    });
+  }
+
+  /** Moves the active atomic member into the next concept in review order. */
+  function moveActiveMemberToNextConcept() {
+    if (
+      !activeUnit ||
+      !activeConcept ||
+      initialData.concepts.length < 2 ||
+      !initialData.snapshot ||
+      !initialData.conceptLayout ||
+      initialData.conceptLayout.locked
+    ) {
+      return;
+    }
+    const sourceIndex = initialData.concepts.findIndex(
+      ({ id }) => id === activeConcept.id,
+    );
+    const target =
+      initialData.concepts[(sourceIndex + 1) % initialData.concepts.length];
+    if (!target || target.id === activeConcept.id) return;
+    replaceConceptLayout.mutate({
+      pullRequestId: initialData.pullRequest.id,
+      snapshotId: initialData.snapshot.id,
+      expectedVersion: initialData.conceptLayout.version,
+      source: "manual",
+      concepts: initialData.concepts.flatMap((concept) => {
+        if (concept.id === activeConcept.id) {
+          const remaining = concept.memberIds.filter(
+            (id) => id !== activeUnit.id,
+          );
+          return remaining.length > 0
+            ? [
+                {
+                  title: concept.title,
+                  rationale: concept.rationale ?? undefined,
+                  memberUnitIds: remaining,
+                },
+              ]
+            : [];
+        }
+        return [
+          {
+            title: concept.title,
+            rationale:
+              concept.id === target.id
+                ? `Manually includes ${activeUnit.name}.`
+                : (concept.rationale ?? undefined),
+            memberUnitIds:
+              concept.id === target.id
+                ? [...concept.memberIds, activeUnit.id]
+                : concept.memberIds,
+          },
+        ];
+      }),
+    });
+  }
+
   /** Runs the status-appropriate action for the active review unit. */
   function runPrimaryAction() {
     if (!activeUnit || !canUsePrimaryAction) return;
-    if (activeUnit.status === "signed_off" || activeUnit.status === "waiting") {
+    if (
+      activeConceptProgress?.status === "signed_off" ||
+      activeConceptProgress?.status === "waiting"
+    ) {
       continueReview();
       return;
     }
-    optimisticallyQueueSignOff({
-      unitId: activeUnit.id,
+    if (!activeConcept || !initialData.conceptLayout) {
+      optimisticallyQueueSignOff({
+        unitId: activeUnit.id,
+        sessionId,
+        durationSeconds: Math.round((Date.now() - startedAt) / 1000),
+      });
+      return;
+    }
+    signOffConcept.mutate({
+      conceptId: activeConcept.id,
+      layoutId: initialData.conceptLayout.id,
+      layoutVersion: initialData.conceptLayout.version,
       sessionId,
       durationSeconds: Math.round((Date.now() - startedAt) / 1000),
     });
@@ -2736,6 +3023,19 @@ export function ReviewWorkspace({
 
   /** Returns the active signed-off unit to the pending review queue. */
   function unreviewActiveUnit() {
+    if (
+      activeConcept &&
+      initialData.conceptLayout &&
+      activeConceptProgress?.status === "signed_off"
+    ) {
+      undoConcept.mutate({
+        conceptId: activeConcept.id,
+        layoutId: initialData.conceptLayout.id,
+        layoutVersion: initialData.conceptLayout.version,
+        sessionId,
+      });
+      return;
+    }
     if (activeUnit?.status !== "signed_off") return;
     undoSignOff.mutate({
       unitId: activeUnit.id,
@@ -3019,7 +3319,7 @@ export function ReviewWorkspace({
       shortcut: reviewShortcuts.nextPending,
       disabled: !nextQueueEntry,
       onSelect: () => {
-        if (nextQueueEntry) selectUnit(nextQueueEntry.index);
+        if (nextQueueEntry) selectConceptPath(nextQueueEntry.index);
       },
     },
     {
@@ -3301,7 +3601,10 @@ export function ReviewWorkspace({
           </p>
         </div>
         <div className="hidden items-center gap-3 sm:flex">
-          <span className="text-mist text-xs">{progress}% reviewed</span>
+          <span className="text-mist text-xs">
+            {signedConceptCount}/{initialData.concepts.length} concepts ·{" "}
+            {progress}%
+          </span>
           <div className="h-1.5 w-28 overflow-hidden rounded-full bg-surface-hover">
             <div
               role="progressbar"
@@ -3514,16 +3817,22 @@ export function ReviewWorkspace({
           <div className="shrink-0 border-b border-line px-4 py-4">
             <div className="flex items-center justify-between">
               <span className="text-fog text-[10px] font-semibold tracking-[.16em] uppercase">
-                Review path
+                Review concepts
               </span>
-              <Badge>{units.length} units</Badge>
+              <Badge>{initialData.concepts.length} concepts</Badge>
             </div>
             <div className="mt-3 flex items-center gap-2 text-[9px]">
-              <span className="text-cloud">{remainingCount} remaining</span>
+              <span className="text-cloud">
+                {initialData.concepts.length - signedConceptCount} concepts
+                remaining
+              </span>
               <span aria-hidden="true" className="text-line-strong">
                 ·
               </span>
-              <span className="text-fog">{signedCount} reviewed</span>
+              <span className="text-fog">
+                {signedCount}/{units.length} units · {reviewedChangedLines}/
+                {conceptChangedLineTotal} lines
+              </span>
             </div>
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-hover">
               <div
@@ -3597,7 +3906,7 @@ export function ReviewWorkspace({
                         key={entry.unit.id}
                         entry={entry}
                         active={false}
-                        onSelect={selectUnit}
+                        onSelect={selectConceptPath}
                       />
                     ))}
                   {pathSections.reviewed.length > reviewedLimit && (
@@ -3662,7 +3971,7 @@ export function ReviewWorkspace({
                       key={entry.unit.id}
                       entry={entry}
                       active={false}
-                      onSelect={selectUnit}
+                      onSelect={selectConceptPath}
                     />
                   ))}
                   {pathSections.waiting.length > waitingLimit && (
@@ -3697,16 +4006,16 @@ export function ReviewWorkspace({
               </span>
               <span
                 className="text-fog text-[9px]"
-                title={`Canonical path position ${activeIndex + 1} of ${units.length}`}
+                title={`Canonical concept position ${activeConceptPathIndex + 1} of ${conceptPathUnits.length}`}
               >
-                1
+                {activeConceptPathIndex + 1}
               </span>
             </div>
             {pathSections.current && (
               <ReviewPathUnit
                 entry={pathSections.current}
                 active
-                onSelect={selectUnit}
+                onSelect={selectConceptPath}
               />
             )}
           </div>
@@ -3782,13 +4091,13 @@ export function ReviewWorkspace({
                         key={entry.unit.id}
                         entry={entry}
                         active={false}
-                        onSelect={selectUnit}
+                        onSelect={selectConceptPath}
                       />
                     ))}
                   </div>
                 ) : (
                   <p className="text-mist rounded-xl border border-dashed border-line px-3 py-4 text-center text-[10px]">
-                    No units left in the queue.
+                    No concepts left in the queue.
                   </p>
                 )}
                 <div className="mt-2 flex items-center gap-1">
@@ -3900,12 +4209,12 @@ export function ReviewWorkspace({
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
                 <h1
-                  className="truncate font-mono text-sm font-medium"
+                  className="truncate text-sm font-medium"
                   title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
                 >
-                  {activeUnit.path}
+                  {activeConcept?.title ?? activeUnit.name}
                 </h1>
-                {activeUnit.status === "waiting" && (
+                {activeConceptProgress?.status === "waiting" && (
                   <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
                     <Clock3 className="size-3" />
                     Waiting for response
@@ -3929,14 +4238,85 @@ export function ReviewWorkspace({
                 )}
               </div>
               <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
-                <span className="text-mist font-mono">{activeUnit.name}</span>
+                <span className="text-mist font-mono">{activeUnit.path}</span>
                 <span aria-hidden="true">·</span>
                 <span className="shrink-0">
-                  Lines {activeUnit.startLine}–{activeUnit.endLine}
+                  {activeConceptMembers.length > 1
+                    ? `Member ${activeConceptMemberIndex + 1}/${activeConceptMembers.length}`
+                    : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
                 </span>
+                {activeConcept && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="shrink-0">
+                      {activeConcept.changedLineCount} changed lines in{" "}
+                      {activeConcept.fileCount}{" "}
+                      {activeConcept.fileCount === 1 ? "file" : "files"}
+                    </span>
+                  </>
+                )}
               </p>
             </div>
             <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              {initialData.conceptLayout &&
+                !initialData.conceptLayout.locked && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      improveConceptGrouping.mutate({
+                        pullRequestId: initialData.pullRequest.id,
+                        layoutId: initialData.conceptLayout?.id ?? "",
+                        layoutVersion: initialData.conceptLayout?.version ?? 1,
+                      })
+                    }
+                    disabled={
+                      improveConceptGrouping.isPending ||
+                      replaceConceptLayout.isPending
+                    }
+                    className="text-violet hover:bg-violet/[.06] flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-violet/20 px-2.5 text-[10px] transition disabled:cursor-wait disabled:opacity-60"
+                    title="Use the configured AI provider to create a personal intent-based grouping"
+                  >
+                    {improveConceptGrouping.isPending ||
+                    replaceConceptLayout.isPending ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-3.5" />
+                    )}
+                    <span className="hidden lg:inline">
+                      {improveConceptGrouping.isPending
+                        ? "Improving grouping…"
+                        : replaceConceptLayout.isPending
+                          ? "Applying grouping…"
+                          : "Improve grouping with AI"}
+                    </span>
+                  </button>
+                )}
+              {initialData.conceptLayout &&
+                !initialData.conceptLayout.locked &&
+                activeConceptMembers.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={splitActiveConcept}
+                    disabled={replaceConceptLayout.isPending}
+                    className="text-mist hover:text-cyan h-8 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
+                    title="Split this concept into atomic units"
+                  >
+                    Split
+                  </button>
+                )}
+              {initialData.conceptLayout &&
+                !initialData.conceptLayout.locked &&
+                initialData.concepts.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={moveActiveMemberToNextConcept}
+                    disabled={replaceConceptLayout.isPending}
+                    className="text-mist hover:text-cyan h-8 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
+                    title="Move this member to the next review concept"
+                  >
+                    Move member
+                  </button>
+                )}
               <button
                 type="button"
                 aria-label="Open review hierarchy"
@@ -4389,6 +4769,70 @@ export function ReviewWorkspace({
                   <span className="h-px flex-1 bg-line" />
                 </div>
               )}
+            {activeConceptMembers.length > 1 && (
+              <section className="mx-4 mt-8 space-y-4 border-t border-line pt-6 pb-4 font-sans">
+                <div>
+                  <p className="text-cloud text-xs font-medium">
+                    Other changes in this concept
+                  </p>
+                  <p className="text-fog mt-1 text-[10px] leading-4">
+                    All members are loaded and signed atomically. Open a member
+                    for its diff, comments, and AI assistance.
+                  </p>
+                </div>
+                {activeConceptMembers
+                  .filter(({ id }) => id !== activeUnit.id)
+                  .map((member) => {
+                    const memberIndex = units.findIndex(
+                      ({ id }) => id === member.id,
+                    );
+                    const sourceAvailable =
+                      initialData.sourceDelivery !== "direct" ||
+                      member.kind === "binary" ||
+                      hydratedUnitIds.has(member.id);
+                    return (
+                      <article
+                        key={member.id}
+                        className="overflow-hidden rounded-xl border border-line bg-surface/30"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectUnit(memberIndex)}
+                          className="hover:bg-surface-subtle flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left transition"
+                        >
+                          <span className="min-w-0">
+                            <span className="text-cloud block truncate font-mono text-[10px]">
+                              {member.path}
+                            </span>
+                            <span className="text-fog mt-0.5 block truncate text-[9px]">
+                              {member.name} · {member.changedLineCount} changed
+                              lines
+                            </span>
+                          </span>
+                          <span className="text-cyan shrink-0 text-[9px]">
+                            Open diff
+                          </span>
+                        </button>
+                        {sourceAvailable ? (
+                          member.kind === "binary" ? (
+                            <p className="text-mist px-3 py-4 text-[10px]">
+                              Binary change · explicit acknowledgement required
+                            </p>
+                          ) : (
+                            <pre className="text-cloud/80 max-h-64 overflow-auto px-3 py-3 font-mono text-[10px] leading-4">
+                              {member.source}
+                            </pre>
+                          )
+                        ) : (
+                          <p className="px-3 py-4 text-[10px] text-amber-700 dark:text-amber-200">
+                            Source unavailable. Concept sign-off is blocked.
+                          </p>
+                        )}
+                      </article>
+                    );
+                  })}
+              </section>
+            )}
           </div>
           {aiStatus.data?.status === "completed" && aiStatus.data.result && (
             <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">
@@ -4472,25 +4916,29 @@ export function ReviewWorkspace({
               </Button>
             ) : reviewComplete ? (
               <div className="flex min-w-0 items-center justify-end gap-2">
-                {activeUnit.status === "signed_off" && (
+                {activeConceptProgress?.status === "signed_off" && (
                   <Button
                     variant="secondary"
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
                     onClick={unreviewActiveUnit}
-                    disabled={undoSignOff.isPending}
+                    disabled={undoSignOff.isPending || undoConcept.isPending}
                   >
-                    {undoSignOff.isPending ? (
+                    {undoSignOff.isPending || undoConcept.isPending ? (
                       <LoaderCircle className="size-4 animate-spin" />
                     ) : (
                       <Undo2 className="size-4" />
                     )}
                     <span className="hidden sm:inline">
-                      {undoSignOff.isPending ? "Undoing…" : "Undo review"}
+                      {undoSignOff.isPending || undoConcept.isPending
+                        ? "Undoing…"
+                        : "Undo concept"}
                     </span>
                     <span className="sm:hidden">
-                      {undoSignOff.isPending ? "Undoing…" : "Undo"}
+                      {undoSignOff.isPending || undoConcept.isPending
+                        ? "Undoing…"
+                        : "Undo"}
                     </span>
-                    {!undoSignOff.isPending && (
+                    {!undoSignOff.isPending && !undoConcept.isPending && (
                       <ShortcutHint
                         shortcut={reviewShortcuts.undoReview}
                         className="hidden sm:inline-flex"
@@ -4631,7 +5079,8 @@ export function ReviewWorkspace({
                     </Button>
                   )
                 )}
-                {(activeUnit.status !== "waiting" || hasNextActionableUnit) && (
+                {(activeConceptProgress?.status !== "waiting" ||
+                  hasNextActionableUnit) && (
                   <Button
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
                     onClick={runPrimaryAction}
@@ -4639,18 +5088,23 @@ export function ReviewWorkspace({
                       !canUsePrimaryAction ||
                       activeSignOffPending ||
                       undoSignOff.isPending ||
+                      undoConcept.isPending ||
                       awaitResponse.isPending
                     }
                   >
                     <Check className="size-4" />
-                    {activeSignOffPending
-                      ? `Saving ${signOffQueueProgress}…`
-                      : activeUnit.status === "signed_off" ||
-                          activeUnit.status === "waiting"
-                        ? filteredReviewActive
-                          ? "Next match"
-                          : "Continue"
-                        : "Sign off"}
+                    {signOffConcept.isPending
+                      ? "Saving concept…"
+                      : activeSignOffPending
+                        ? `Saving ${signOffQueueProgress}…`
+                        : activeConceptProgress?.status === "signed_off" ||
+                            activeConceptProgress?.status === "waiting"
+                          ? filteredReviewActive
+                            ? "Next match"
+                            : "Continue"
+                          : activeConceptMembers.length > 1
+                            ? `Sign off concept (${activeConceptMembers.length})`
+                            : "Sign off concept"}
                     {!activeSignOffPending && (
                       <ShortcutHint
                         shortcut={reviewShortcuts.signOff}

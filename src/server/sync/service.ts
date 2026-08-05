@@ -3,6 +3,10 @@ import {
   providerConnections,
   pullRequests,
   repositories,
+  reviewConceptDependencies,
+  reviewConceptLayouts,
+  reviewConceptMembers,
+  reviewConcepts,
   reviewSnapshots,
   reviewUnitDependencies,
   reviewUnits,
@@ -10,6 +14,10 @@ import {
   signOffs,
   snapshotFiles,
 } from "@/drizzle/schema";
+import {
+  clusterReviewConcepts,
+  validateConceptPartition,
+} from "~/server/analysis/concepts";
 import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
@@ -35,6 +43,7 @@ type Database = typeof database;
 
 const UNIT_INSERT_BATCH_SIZE = 100;
 const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
+const CONCEPT_MEMBER_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
 
@@ -333,6 +342,7 @@ export async function syncPullRequest(
         semanticHash: unit.semanticHash,
         changeType: unit.changeType,
         complexity: unit.complexity,
+        changedLineCount: unit.changedLineCount,
         dependencies: previousDependenciesByUnitId.get(unit.id) ?? [],
         depth: unit.depth,
         reviewOrder: unit.reviewOrder,
@@ -466,6 +476,7 @@ export async function syncPullRequest(
         depth: unit.depth,
         reviewOrder: unit.reviewOrder,
         complexity: unit.complexity,
+        changedLineCount: unit.changedLineCount,
         requiresReReview: Boolean(prior && !unchanged),
       };
     });
@@ -506,6 +517,84 @@ export async function syncPullRequest(
         .values(
           dependencyRows.slice(offset, offset + DEPENDENCY_INSERT_BATCH_SIZE),
         );
+    }
+
+    const reviewableAnalysisUnits = analysis.units.filter(
+      ({ kind }) => kind !== "file",
+    );
+    const conceptDefinitions = clusterReviewConcepts(reviewableAnalysisUnits);
+    validateConceptPartition(reviewableAnalysisUnits, conceptDefinitions);
+    const [baselineLayout] = await tx
+      .insert(reviewConceptLayouts)
+      .values({
+        snapshotId: snapshot.id,
+        source: "deterministic",
+        version: 1,
+      })
+      .returning();
+    if (!baselineLayout) {
+      throw new Error("The deterministic review concept layout was not saved");
+    }
+    const insertedConcepts = await tx
+      .insert(reviewConcepts)
+      .values(
+        conceptDefinitions.map((concept) => ({
+          layoutId: baselineLayout.id,
+          stableKey: concept.stableKey,
+          title: concept.title,
+          rationale: concept.rationale,
+          reviewOrder: concept.reviewOrder,
+          changedLineCount: concept.changedLineCount,
+          fileCount: concept.fileCount,
+          oversized: concept.oversized,
+        })),
+      )
+      .returning();
+    const insertedConceptByKey = new Map(
+      insertedConcepts.map((concept) => [concept.stableKey, concept]),
+    );
+    const conceptMemberRows = conceptDefinitions.flatMap((concept) => {
+      const insertedConcept = insertedConceptByKey.get(concept.stableKey);
+      if (!insertedConcept) return [];
+      return concept.memberStableKeys.map((stableKey, memberOrder) => {
+        const unit = insertedByKey.get(stableKey);
+        if (!unit) {
+          throw new Error(`Review concept member ${stableKey} was not saved`);
+        }
+        return {
+          layoutId: baselineLayout.id,
+          conceptId: insertedConcept.id,
+          unitId: unit.id,
+          memberOrder,
+        };
+      });
+    });
+    for (
+      let offset = 0;
+      offset < conceptMemberRows.length;
+      offset += CONCEPT_MEMBER_INSERT_BATCH_SIZE
+    ) {
+      await tx
+        .insert(reviewConceptMembers)
+        .values(
+          conceptMemberRows.slice(
+            offset,
+            offset + CONCEPT_MEMBER_INSERT_BATCH_SIZE,
+          ),
+        );
+    }
+    const conceptDependencyRows = conceptDefinitions.flatMap((concept) => {
+      const insertedConcept = insertedConceptByKey.get(concept.stableKey);
+      if (!insertedConcept) return [];
+      return concept.dependencies.flatMap((dependencyKey) => {
+        const dependency = insertedConceptByKey.get(dependencyKey);
+        return dependency
+          ? [{ conceptId: insertedConcept.id, dependencyId: dependency.id }]
+          : [];
+      });
+    });
+    if (conceptDependencyRows.length > 0) {
+      await tx.insert(reviewConceptDependencies).values(conceptDependencyRows);
     }
 
     const carriedSignOffs = insertedUnits.flatMap((unit) => {

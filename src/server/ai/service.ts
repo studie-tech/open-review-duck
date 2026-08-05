@@ -59,7 +59,7 @@ function estimateAiReservation(
     name: string;
     kind: string;
   }>,
-  kind: "explain" | "review",
+  kind: "explain" | "review" | "semantic_cluster",
   monthlyTokenLimit: number,
   priorConversationBytes: number,
   question?: string,
@@ -81,7 +81,7 @@ function estimateAiReservation(
   return managedInvestigationReservation({
     requestBytes,
     minimumInputBytes: priorConversationBytes + questionBytes + 12_000,
-    kind,
+    kind: kind === "semantic_cluster" ? "review" : kind,
     monthlyTokenLimit,
   });
 }
@@ -310,7 +310,7 @@ export async function createAiJob(
   input: {
     pullRequestId: string;
     unitId?: string;
-    kind: "explain" | "review";
+    kind: "explain" | "review" | "semantic_cluster";
     question?: string;
     focusLine?: number;
     threadId?: string;

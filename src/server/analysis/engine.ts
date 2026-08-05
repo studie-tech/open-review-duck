@@ -25,9 +25,10 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 30;
+export const CURRENT_ANALYSIS_VERSION = 31;
 
-type RawUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
+type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
+type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
 interface LineChangeMasks {
   previous: boolean[];
@@ -61,6 +62,145 @@ function changedLineMasks(previousSource: string, currentSource: string) {
     }
   }
   return masks;
+}
+
+/** Returns the changed base/head line total used by coverage accounting. */
+export function changedLineCount(
+  previousSource: string,
+  currentSource: string,
+) {
+  const masks = changedLineMasks(previousSource, currentSource);
+  return (
+    masks.previous.filter(Boolean).length + masks.current.filter(Boolean).length
+  );
+}
+
+/** Lists the side-specific source ranges through which a unit owns lines. */
+function unitOwnershipRanges(unit: RawUnit, side: "previous" | "current") {
+  const related = unit.relatedRanges?.flatMap((range) => {
+    const startLine =
+      side === "previous" ? range.previousStartLine : range.startLine;
+    const endLine = side === "previous" ? range.previousEndLine : range.endLine;
+    return startLine !== undefined && endLine !== undefined
+      ? [{ startLine, endLine }]
+      : [];
+  });
+  if (related?.length) return related;
+  if (side === "previous") {
+    const startLine =
+      unit.previousStartLine ??
+      (unit.changeType === "deleted" ? unit.startLine : undefined);
+    const endLine =
+      unit.previousEndLine ??
+      (unit.changeType === "deleted" ? unit.endLine : undefined);
+    return startLine !== undefined && endLine !== undefined
+      ? [{ startLine, endLine }]
+      : [];
+  }
+  return unit.changeType === "deleted"
+    ? []
+    : [{ startLine: unit.startLine, endLine: unit.endLine }];
+}
+
+/** Assigns every changed base/head line to exactly one atomic review unit. */
+function assignChangedLineCounts(file: SourceFile, units: RawUnit[]) {
+  if (units.length === 0) return [];
+  if (file.isBinary || file.skipReason) {
+    return units.map(
+      (unit, index): CountedUnit => ({
+        ...unit,
+        changedLineCount: index === 0 ? 1 : 0,
+      }),
+    );
+  }
+  const previousSource =
+    file.changeType === "added" ? "" : (file.previousContent ?? file.content);
+  const currentSource = file.changeType === "deleted" ? "" : file.content;
+  const masks = changedLineMasks(previousSource, currentSource);
+  if (file.changeType === "added") masks.previous = [];
+  if (file.changeType === "deleted") masks.current = [];
+  const counts = new Map(units.map((unit) => [unit.stableKey, 0]));
+
+  for (const side of ["previous", "current"] as const) {
+    const changed = masks[side];
+    const candidates = units.map((unit) => ({
+      unit,
+      ranges: unitOwnershipRanges(unit, side),
+    }));
+    for (let lineIndex = 0; lineIndex < changed.length; lineIndex += 1) {
+      if (!changed[lineIndex]) continue;
+      const line = lineIndex + 1;
+      const containing = candidates
+        .filter(({ ranges }) =>
+          ranges.some(
+            ({ startLine, endLine }) => line >= startLine && line <= endLine,
+          ),
+        )
+        .sort((left, right) => {
+          const leftSize = Math.min(
+            ...left.ranges.map(({ startLine, endLine }) => endLine - startLine),
+          );
+          const rightSize = Math.min(
+            ...right.ranges.map(
+              ({ startLine, endLine }) => endLine - startLine,
+            ),
+          );
+          return (
+            leftSize - rightSize ||
+            left.unit.stableKey.localeCompare(right.unit.stableKey)
+          );
+        });
+      const owner =
+        containing[0]?.unit ??
+        candidates
+          .filter(({ ranges }) => ranges.length > 0)
+          .sort((left, right) => {
+            /** Measures one changed line's distance from candidate ownership. */
+            const distance = (ranges: typeof left.ranges) =>
+              Math.min(
+                ...ranges.map(({ startLine, endLine }) =>
+                  line < startLine
+                    ? startLine - line
+                    : line > endLine
+                      ? line - endLine
+                      : 0,
+                ),
+              );
+            return (
+              distance(left.ranges) - distance(right.ranges) ||
+              left.unit.stableKey.localeCompare(right.unit.stableKey)
+            );
+          })[0]?.unit ??
+        [...units].sort((left, right) =>
+          left.stableKey.localeCompare(right.stableKey),
+        )[0];
+      if (!owner) {
+        throw new Error(
+          `Changed ${side} line ${line} in ${file.path} has no atomic owner`,
+        );
+      }
+      counts.set(owner.stableKey, (counts.get(owner.stableKey) ?? 0) + 1);
+    }
+  }
+  const result = units.map(
+    (unit): CountedUnit => ({
+      ...unit,
+      changedLineCount: counts.get(unit.stableKey) ?? 0,
+    }),
+  );
+  const assigned = result.reduce(
+    (total, unit) => total + unit.changedLineCount,
+    0,
+  );
+  const expected =
+    masks.previous.filter(Boolean).length +
+    masks.current.filter(Boolean).length;
+  if (assigned !== expected) {
+    throw new Error(
+      `Changed-line ownership mismatch for ${file.path}: ${assigned}/${expected}`,
+    );
+  }
+  return result;
 }
 
 /** Groups adjacent base/head operations so renamed declarations can be paired. */
@@ -213,7 +353,7 @@ function fallbackDeclaration(file: SourceFile) {
     changeType,
     complexity: 1,
     dependencies: [],
-  } satisfies Omit<AnalyzedUnit, "depth" | "reviewOrder">;
+  } satisfies RawUnit;
 }
 
 /** Extracts reviewable module-level source not owned by a declaration unit. */
@@ -1420,16 +1560,19 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
       adapter?.language ?? "text",
       unscopedReviewUnits,
     );
-    const reviewUnitsForPr = clusterRelatedChangeUnits(
+    // Preserve the analyzer's existing high-confidence atomic units. Broader
+    // multi-file concepts are built as a separate presentation layer.
+    const atomicReviewUnits = clusterRelatedChangeUnits(
       file,
       adapter?.language ?? "text",
       scopedReviewUnits,
     );
+    const reviewUnitsForPr = assignChangedLineCounts(file, atomicReviewUnits);
     const fileContextSource =
       file.isBinary || file.skipReason
         ? fallbackDeclaration(file).source
         : file.content;
-    const fileContext: RawUnit = {
+    const fileContext: CountedUnit = {
       stableKey: stableReviewKey(file.path, "file", "<file-context>"),
       path: file.path,
       language: adapter?.language ?? "text",
@@ -1458,6 +1601,7 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
       complexity:
         1 +
         reviewUnitsForPr.reduce((total, unit) => total + unit.complexity, 0),
+      changedLineCount: 0,
       dependencies: reviewUnitsForPr.map((unit) => unit.stableKey),
     };
     return [...reviewUnitsForPr, fileContext];

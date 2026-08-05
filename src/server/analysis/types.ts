@@ -179,6 +179,8 @@ export interface AnalyzedUnit {
   semanticHash: string;
   changeType: SourceChangeType;
   complexity: number;
+  /** Added and deleted lines owned exclusively by this atomic review unit. */
+  changedLineCount: number;
   dependencies: string[];
   relatedRanges?: ReviewUnitRange[];
   depth: number;
@@ -199,5 +201,7 @@ export interface LanguageAdapter {
   /** Recognizes language-specific imports, package headers, and inert preamble. */
   isContextOnly?(source: string): boolean;
   /** Extracts reviewable declarations and dependencies from one source file. */
-  analyze(file: SourceFile): Omit<AnalyzedUnit, "depth" | "reviewOrder">[];
+  analyze(
+    file: SourceFile,
+  ): Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">[];
 }

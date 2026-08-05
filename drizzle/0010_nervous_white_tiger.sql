@@ -1,0 +1,1 @@
+ALTER TYPE "public"."ai_job_kind" ADD VALUE 'semantic_cluster';
