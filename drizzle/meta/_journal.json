@@ -64,6 +64,20 @@
       "when": 1785861521287,
       "tag": "0008_repair_legacy_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785933696313,
+      "tag": "0009_absent_firedrake",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785939324968,
+      "tag": "0010_nervous_white_tiger",
+      "breakpoints": true
     }
   ]
 }

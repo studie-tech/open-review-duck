@@ -15,7 +15,7 @@ import {
   type UnitKind,
 } from "../types";
 
-type RawUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
+type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 
 interface LanguageShape {
   containers: ReadonlySet<string>;

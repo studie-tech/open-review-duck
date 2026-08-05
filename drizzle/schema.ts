@@ -87,7 +87,15 @@ export const sourceChangeTypeEnum = pgEnum("source_change_type", [
   "renamed",
 ]);
 export const aiModeEnum = pgEnum("ai_mode", ["off", "on_demand", "automatic"]);
-export const aiJobKindEnum = pgEnum("ai_job_kind", ["explain", "review"]);
+export const aiJobKindEnum = pgEnum("ai_job_kind", [
+  "explain",
+  "review",
+  "semantic_cluster",
+]);
+export const reviewConceptLayoutSourceEnum = pgEnum(
+  "review_concept_layout_source",
+  ["deterministic", "manual", "ai"],
+);
 export const aiJobStatusEnum = pgEnum("ai_job_status", [
   "queued",
   "running",
@@ -584,6 +592,7 @@ export const reviewUnits = createTable(
     depth: integer().notNull().default(0),
     reviewOrder: integer().notNull(),
     complexity: integer().notNull().default(1),
+    changedLineCount: integer().notNull().default(1),
     requiresReReview: boolean().notNull().default(false),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
@@ -591,6 +600,89 @@ export const reviewUnits = createTable(
     uniqueIndex("review_unit_key_idx").on(t.snapshotId, t.stableKey),
     index("review_order_idx").on(t.snapshotId, t.reviewOrder),
   ],
+);
+
+export const reviewConceptLayouts = createTable(
+  "review_concept_layout",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    snapshotId: uuid()
+      .notNull()
+      .references(() => reviewSnapshots.id, { onDelete: "cascade" }),
+    userId: text().references(() => users.id, { onDelete: "cascade" }),
+    source: reviewConceptLayoutSourceEnum().notNull(),
+    version: integer().notNull().default(1),
+    lockedAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("review_concept_baseline_idx")
+      .on(t.snapshotId)
+      .where(sql`${t.userId} is null`),
+    uniqueIndex("review_concept_personal_idx")
+      .on(t.snapshotId, t.userId)
+      .where(sql`${t.userId} is not null`),
+  ],
+);
+
+export const reviewConcepts = createTable(
+  "review_concept",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    layoutId: uuid()
+      .notNull()
+      .references(() => reviewConceptLayouts.id, { onDelete: "cascade" }),
+    stableKey: text().notNull(),
+    title: text().notNull(),
+    rationale: text(),
+    reviewOrder: integer().notNull(),
+    changedLineCount: integer().notNull(),
+    fileCount: integer().notNull(),
+    oversized: boolean().notNull().default(false),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("review_concept_key_idx").on(t.layoutId, t.stableKey),
+    uniqueIndex("review_concept_order_idx").on(t.layoutId, t.reviewOrder),
+  ],
+);
+
+export const reviewConceptMembers = createTable(
+  "review_concept_member",
+  {
+    layoutId: uuid()
+      .notNull()
+      .references(() => reviewConceptLayouts.id, { onDelete: "cascade" }),
+    conceptId: uuid()
+      .notNull()
+      .references(() => reviewConcepts.id, { onDelete: "cascade" }),
+    unitId: uuid()
+      .notNull()
+      .references(() => reviewUnits.id, { onDelete: "cascade" }),
+    memberOrder: integer().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.conceptId, t.unitId] }),
+    uniqueIndex("review_concept_membership_idx").on(t.layoutId, t.unitId),
+    index("review_concept_member_order_idx").on(t.conceptId, t.memberOrder),
+  ],
+);
+
+export const reviewConceptDependencies = createTable(
+  "review_concept_dependency",
+  {
+    conceptId: uuid()
+      .notNull()
+      .references(() => reviewConcepts.id, { onDelete: "cascade" }),
+    dependencyId: uuid()
+      .notNull()
+      .references(() => reviewConcepts.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.conceptId, t.dependencyId] })],
 );
 
 export const reviewUnitDependencies = createTable(
@@ -813,6 +905,11 @@ export const aiJobs = createTable(
         body: string;
         path?: string;
         line?: number;
+      }>;
+      concepts?: Array<{
+        title: string;
+        rationale: string;
+        memberUnitIds: string[];
       }>;
     }>(),
     error: text(),
@@ -1173,6 +1270,7 @@ export const snapshotRelations = relations(
       references: [pullRequests.id],
     }),
     units: many(reviewUnits),
+    conceptLayouts: many(reviewConceptLayouts),
   }),
 );
 export const unitRelations = relations(reviewUnits, ({ one, many }) => ({
@@ -1182,7 +1280,71 @@ export const unitRelations = relations(reviewUnits, ({ one, many }) => ({
   }),
   signOffs: many(signOffs),
   waits: many(reviewWaits),
+  conceptMemberships: many(reviewConceptMembers),
 }));
+
+export const conceptLayoutRelations = relations(
+  reviewConceptLayouts,
+  ({ one, many }) => ({
+    snapshot: one(reviewSnapshots, {
+      fields: [reviewConceptLayouts.snapshotId],
+      references: [reviewSnapshots.id],
+    }),
+    user: one(users, {
+      fields: [reviewConceptLayouts.userId],
+      references: [users.id],
+    }),
+    concepts: many(reviewConcepts),
+  }),
+);
+
+export const conceptRelations = relations(reviewConcepts, ({ one, many }) => ({
+  layout: one(reviewConceptLayouts, {
+    fields: [reviewConcepts.layoutId],
+    references: [reviewConceptLayouts.id],
+  }),
+  members: many(reviewConceptMembers),
+  dependencies: many(reviewConceptDependencies, {
+    relationName: "concept_dependencies",
+  }),
+  dependents: many(reviewConceptDependencies, {
+    relationName: "concept_dependents",
+  }),
+}));
+
+export const conceptDependencyRelations = relations(
+  reviewConceptDependencies,
+  ({ one }) => ({
+    concept: one(reviewConcepts, {
+      fields: [reviewConceptDependencies.conceptId],
+      references: [reviewConcepts.id],
+      relationName: "concept_dependencies",
+    }),
+    dependency: one(reviewConcepts, {
+      fields: [reviewConceptDependencies.dependencyId],
+      references: [reviewConcepts.id],
+      relationName: "concept_dependents",
+    }),
+  }),
+);
+
+export const conceptMemberRelations = relations(
+  reviewConceptMembers,
+  ({ one }) => ({
+    layout: one(reviewConceptLayouts, {
+      fields: [reviewConceptMembers.layoutId],
+      references: [reviewConceptLayouts.id],
+    }),
+    concept: one(reviewConcepts, {
+      fields: [reviewConceptMembers.conceptId],
+      references: [reviewConcepts.id],
+    }),
+    unit: one(reviewUnits, {
+      fields: [reviewConceptMembers.unitId],
+      references: [reviewUnits.id],
+    }),
+  }),
+);
 
 /** Creates a SQL expression used to atomically increment a numeric column. */
 export const increment = (value: number) => sql`${value}`;
