@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobs,
@@ -51,7 +51,10 @@ import {
 } from "~/server/review/waiting";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
-import { providerSyncErrorMessage } from "~/server/sync/error";
+import {
+  persistedSyncErrorMessage,
+  providerSyncErrorMessage,
+} from "~/server/sync/error";
 import {
   cancelWorkflowRun,
   startPullRequestSync,
@@ -2097,6 +2100,64 @@ export const reviewRouter = createTRPCRouter({
       )
       .orderBy(desc(syncRuns.createdAt)),
   ),
+
+  recentSyncFailures: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        id: syncRuns.id,
+        repositoryId: syncRuns.repositoryId,
+        pullRequestNumber: syncRuns.pullRequestNumber,
+        status: syncRuns.status,
+        progress: syncRuns.progress,
+        completedAt: syncRuns.completedAt,
+        repositoryOwner: repositories.owner,
+        repositoryName: repositories.name,
+        provider: providerConnections.provider,
+        title: pullRequests.title,
+        error: syncRuns.error,
+      })
+      .from(syncRuns)
+      .innerJoin(repositories, eq(syncRuns.repositoryId, repositories.id))
+      .innerJoin(
+        providerConnections,
+        eq(repositories.connectionId, providerConnections.id),
+      )
+      .leftJoin(
+        pullRequests,
+        and(
+          eq(pullRequests.repositoryId, syncRuns.repositoryId),
+          eq(pullRequests.number, syncRuns.pullRequestNumber),
+        ),
+      )
+      .innerJoin(
+        workspaceMembers,
+        eq(syncRuns.workspaceId, workspaceMembers.workspaceId),
+      )
+      .where(
+        and(
+          eq(workspaceMembers.userId, ctx.auth.userId),
+          gte(syncRuns.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1_000)),
+        ),
+      )
+      .orderBy(desc(syncRuns.createdAt))
+      .limit(100);
+
+    const seenPullRequests = new Set<string>();
+    const failures = [];
+    for (const row of rows) {
+      const key = `${row.repositoryId}:${row.pullRequestNumber}`;
+      if (seenPullRequests.has(key)) continue;
+      seenPullRequests.add(key);
+      if (row.status !== "failed") continue;
+      const { error, ...failure } = row;
+      failures.push({
+        ...failure,
+        message: persistedSyncErrorMessage(row.provider, error),
+      });
+      if (failures.length === 3) break;
+    }
+    return failures;
+  }),
 
   cancelSync: protectedProcedure
     .input(z.object({ syncId: z.string().uuid() }))

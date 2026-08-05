@@ -88,3 +88,36 @@ export function providerSyncErrorMessage(
 
   return `ReviewDuck could not reach ${label}. Check your network and provider connection, then try again.`;
 }
+
+/** Converts a persisted provider failure into safe, actionable guidance. */
+export function persistedSyncErrorMessage(
+  provider: ProviderName,
+  error: string | null,
+) {
+  const message = error?.toLowerCase() ?? "";
+  const label = providerLabels[provider];
+
+  if (/\b401\b|unauthori[sz]ed|invalid token/.test(message)) {
+    return `${label} rejected the connected token. Reconnect the provider with a valid token.`;
+  }
+  if (/\b403\b|forbidden|not allowed/.test(message)) {
+    if (message.includes("rate limit")) {
+      return `${label} rate-limited this sync. Wait a moment and try again.`;
+    }
+    if (provider === "azure_devops") {
+      return "Azure DevOps denied access while loading this pull request. Reconnect a token with Code: Read & write access to this repository.";
+    }
+    return `${label} denied access while loading this pull request. Check that the connection includes this repository and can read its code and pull requests.`;
+  }
+  if (/\b404\b|not found/.test(message)) {
+    return `${label} could not find this pull request or one of its changed files. Check that the connected token can access the repository.`;
+  }
+  if (/\b429\b|rate limit|too many requests/.test(message)) {
+    return `${label} rate-limited this sync. Wait a moment and try again.`;
+  }
+  if (/timeout|timed out/.test(message)) {
+    return `${label} did not respond in time. Try the synchronization again.`;
+  }
+
+  return `${label} synchronization failed. Check the provider connection and try again.`;
+}
