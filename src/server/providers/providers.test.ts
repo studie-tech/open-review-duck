@@ -571,6 +571,56 @@ describe("provider normalization", () => {
     });
   });
 
+  it("keeps smaller GitHub sources when the pull request exceeds its budget", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/files?")) {
+        return jsonResponse(
+          ["one.ts", "two.ts", "three.ts"].map((filename) => ({
+            filename,
+            status: "added",
+            sha: `sha-${filename}`,
+          })),
+        );
+      }
+      if (url.includes("/contents/")) {
+        return new Response(
+          url.includes("/one.ts?")
+            ? "1234"
+            : url.includes("/two.ts?")
+              ? "12"
+              : "1",
+        );
+      }
+      return jsonResponse({
+        id: 13,
+        number: 9,
+        title: "Large change",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/9",
+        user: { login: "reviewer", avatar_url: "" },
+        head: { ref: "large", sha: "head-sha" },
+        base: { ref: "main", sha: "base-sha" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitHubProvider("token").getChangedFiles("42", 9, {
+      maximumSourceBytes: 4,
+    });
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "one.ts",
+        content: "",
+        skipReason: "too_large",
+      }),
+      expect.objectContaining({ path: "two.ts", content: "12" }),
+      expect.objectContaining({ path: "three.ts", content: "1" }),
+    ]);
+  });
+
   it("publishes GitHub comments on the selected current-revision line", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 901 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -830,6 +880,61 @@ describe("provider normalization", () => {
         content: "",
         changeType: "modified",
       }),
+    ]);
+  });
+
+  it("keeps smaller GitLab sources when the merge request exceeds its budget", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/diffs?")) {
+        return jsonResponse(
+          ["one.ts", "two.ts", "three.ts"].map((path) => ({
+            old_path: path,
+            new_path: path,
+            deleted_file: false,
+            new_file: true,
+          })),
+        );
+      }
+      if (url.includes("/repository/files/")) {
+        return new Response(
+          url.includes("/one.ts/")
+            ? "1234"
+            : url.includes("/two.ts/")
+              ? "12"
+              : "1",
+        );
+      }
+      return jsonResponse({
+        id: 82,
+        iid: 10,
+        title: "Large change",
+        description: null,
+        state: "opened",
+        draft: false,
+        web_url: "https://gitlab.example/review/10",
+        source_branch: "large",
+        target_branch: "main",
+        sha: "head",
+        diff_refs: { base_sha: "base", head_sha: "head" },
+        author: { username: "duck", avatar_url: null },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitLabProvider(
+      "token",
+      "https://gitlab.example/api/v4",
+    ).getChangedFiles("group%2Freview", 10, { maximumSourceBytes: 4 });
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "one.ts",
+        content: "",
+        skipReason: "too_large",
+      }),
+      expect.objectContaining({ path: "two.ts", content: "12" }),
+      expect.objectContaining({ path: "three.ts", content: "1" }),
     ]);
   });
 

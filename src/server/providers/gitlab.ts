@@ -1,12 +1,13 @@
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
-  mapWithConcurrency,
   providerFetch,
   providerResponse,
   providerText,
   providerVoid,
 } from "./http";
+import { collectProviderSourceFiles } from "./source-budget";
 import type {
+  ChangedFilesOptions,
   ProviderPullRequestReviewState,
   ProviderReviewAction,
   PullRequestListOptions,
@@ -294,50 +295,89 @@ export class GitLabProvider implements PullRequestProvider {
     });
   }
   /** Fetches the changed source files required for static analysis. */
-  async getChangedFiles(repositoryExternalId: string, number: number) {
+  async getChangedFiles(
+    repositoryExternalId: string,
+    number: number,
+    options?: ChangedFilesOptions,
+  ) {
     const changes = await this.getAllPages<GitLabChange>(
       `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests/${number}/diffs?per_page=100`,
     );
     const pull = await this.getPullRequest(repositoryExternalId, number);
-    return mapWithConcurrency(changes, 8, async (change) => {
-      const path = change.deleted_file ? change.old_path : change.new_path;
-      const ref = change.deleted_file ? pull.baseSha : pull.headSha;
-      const knownBinary = isLikelyBinaryFile(path);
-      const [content, previousContent] = !knownBinary
-        ? await Promise.all([
-            this.getFileContent(repositoryExternalId, path, ref),
-            !change.new_file && !change.deleted_file
-              ? this.getFileContent(
-                  repositoryExternalId,
-                  change.old_path,
-                  pull.baseSha,
-                )
-              : undefined,
-          ])
-        : ["", undefined];
-      const isBinary = knownBinary || isLikelyBinaryFile(path, content);
-      return {
-        path,
-        content: isBinary ? "" : (content ?? ""),
-        previousContent: isBinary ? undefined : previousContent,
-        skipReason:
-          !knownBinary && content === undefined
-            ? ("too_large" as const)
-            : undefined,
-        isBinary,
-        binaryHash:
-          isBinary || content === undefined
-            ? `${ref}:${path}:${content ?? ""}`
-            : undefined,
-        changeType: change.deleted_file
+    return collectProviderSourceFiles(
+      changes,
+      options?.maximumSourceBytes,
+      async (change) => {
+        const path = change.deleted_file ? change.old_path : change.new_path;
+        const ref = change.deleted_file ? pull.baseSha : pull.headSha;
+        const knownBinary = isLikelyBinaryFile(path);
+        const changeType = change.deleted_file
           ? ("deleted" as const)
           : change.new_file
             ? ("added" as const)
             : change.renamed_file
               ? ("renamed" as const)
-              : ("modified" as const),
-      };
-    });
+              : ("modified" as const);
+        const oversizedHash = `${ref}:${path}`;
+        const skippedFile = {
+          path,
+          content: "",
+          skipReason: "too_large" as const,
+          isBinary: false,
+          binaryHash: oversizedHash,
+          changeType,
+        };
+        if (knownBinary) {
+          return {
+            file: {
+              path,
+              content: "",
+              isBinary: true,
+              binaryHash: oversizedHash,
+              changeType,
+            },
+          };
+        }
+        const content = await this.getFileContent(
+          repositoryExternalId,
+          path,
+          ref,
+        );
+        if (content === undefined) return { file: skippedFile };
+        if (isLikelyBinaryFile(path, content)) {
+          return {
+            file: {
+              path,
+              content: "",
+              isBinary: true,
+              binaryHash: oversizedHash,
+              changeType,
+            },
+          };
+        }
+        const needsPrevious = !change.new_file && !change.deleted_file;
+        const previousContent = needsPrevious
+          ? await this.getFileContent(
+              repositoryExternalId,
+              change.old_path,
+              pull.baseSha,
+            )
+          : undefined;
+        if (needsPrevious && previousContent === undefined) {
+          return { file: skippedFile };
+        }
+        return {
+          file: {
+            path,
+            content,
+            previousContent,
+            isBinary: false,
+            changeType,
+          },
+          oversizedHash,
+        };
+      },
+    );
   }
 
   /** Lists regular files from one exact Git commit tree. */

@@ -1,10 +1,11 @@
-import { isLikelyBinaryFile, type SourceFile } from "~/server/analysis/types";
+import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   providerFetch,
   providerResponse,
   providerText,
   providerVoid,
 } from "./http";
+import { collectProviderSourceFiles } from "./source-budget";
 import type {
   ChangedFilesOptions,
   ProviderPullRequestReviewState,
@@ -58,11 +59,6 @@ interface AzureChange {
   changeType: string;
   sourceServerItem?: string;
 }
-interface RetainedAzureSource {
-  index: number;
-  bytes: number;
-  skippedFile: SourceFile;
-}
 interface AzureItem {
   path: string;
   gitObjectType?: "blob" | "tree";
@@ -105,47 +101,6 @@ const AZURE_PULL_REQUEST_EVENTS = [
   "git.pullrequest.updated",
   "git.pullrequest.merged",
 ] as const;
-
-/** Adds one retained source to a max-heap ordered by combined source bytes. */
-function retainAzureSource(
-  heap: RetainedAzureSource[],
-  source: RetainedAzureSource,
-) {
-  heap.push(source);
-  let index = heap.length - 1;
-  while (index > 0) {
-    const parent = Math.floor((index - 1) / 2);
-    const parentSource = heap[parent];
-    if (!parentSource || parentSource.bytes >= source.bytes) break;
-    heap[index] = parentSource;
-    index = parent;
-  }
-  heap[index] = source;
-}
-
-/** Removes and returns the largest retained Azure source from a max-heap. */
-function removeLargestAzureSource(heap: RetainedAzureSource[]) {
-  const largest = heap[0];
-  const last = heap.pop();
-  if (!largest || !last || heap.length === 0) return largest;
-  let index = 0;
-  while (true) {
-    const left = index * 2 + 1;
-    const right = left + 1;
-    if (left >= heap.length) break;
-    const leftSource = heap[left];
-    const rightSource = heap[right];
-    if (!leftSource) break;
-    const child =
-      rightSource && rightSource.bytes > leftSource.bytes ? right : left;
-    const childSource = heap[child];
-    if (!childSource || childSource.bytes <= last.bytes) break;
-    heap[index] = childSource;
-    index = child;
-  }
-  heap[index] = last;
-  return largest;
-}
 
 export class AzureDevOpsProvider implements PullRequestProvider {
   readonly name = "azure_devops" as const;
@@ -386,105 +341,85 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         change.item.path.length > 0 &&
         change.item.gitObjectType !== "tree",
     );
-    const files: SourceFile[] = [];
-    const retainedSources: RetainedAzureSource[] = [];
-    let usedSourceBytes = 0;
-    const maximumSourceBytes =
-      options?.maximumSourceBytes === undefined
-        ? undefined
-        : Math.max(0, options.maximumSourceBytes);
-    for (const change of sourceChanges) {
-      const normalizedChangeType = change.changeType.toLowerCase();
-      const deleted = normalizedChangeType.includes("delete");
-      const added = normalizedChangeType.includes("add");
-      const ref = deleted ? pull.baseSha : pull.headSha;
-      const path = change.item.path.replace(/^\//, "");
-      const knownBinary = isLikelyBinaryFile(path);
-      const changeType = deleted
-        ? ("deleted" as const)
-        : added
-          ? ("added" as const)
-          : normalizedChangeType.includes("rename")
-            ? ("renamed" as const)
-            : ("modified" as const);
-      const skippedFile = {
-        path,
-        content: "",
-        skipReason: "too_large" as const,
-        isBinary: false,
-        binaryHash: change.item.objectId ?? `${ref}:${path}`,
-        changeType,
-      };
-      if (knownBinary) {
-        files.push({
+    return collectProviderSourceFiles(
+      sourceChanges,
+      options?.maximumSourceBytes,
+      async (change) => {
+        const normalizedChangeType = change.changeType.toLowerCase();
+        const deleted = normalizedChangeType.includes("delete");
+        const added = normalizedChangeType.includes("add");
+        const ref = deleted ? pull.baseSha : pull.headSha;
+        const path = change.item.path.replace(/^\//, "");
+        const knownBinary = isLikelyBinaryFile(path);
+        const changeType = deleted
+          ? ("deleted" as const)
+          : added
+            ? ("added" as const)
+            : normalizedChangeType.includes("rename")
+              ? ("renamed" as const)
+              : ("modified" as const);
+        const skippedFile = {
           path,
           content: "",
-          isBinary: true,
+          skipReason: "too_large" as const,
+          isBinary: false,
           binaryHash: change.item.objectId ?? `${ref}:${path}`,
           changeType,
-        });
-        continue;
-      }
-      const content = await this.getFileContent(
-        repositoryExternalId,
-        change.item.path,
-        ref,
-      );
-      if (content === undefined) {
-        files.push(skippedFile);
-        continue;
-      }
-      if (isLikelyBinaryFile(path, content)) {
-        files.push({
-          path,
-          content: "",
-          isBinary: true,
-          binaryHash:
-            change.item.objectId ?? `${ref}:${path}:${content.length}`,
-          changeType,
-        });
-        continue;
-      }
-      const contentBytes = Buffer.byteLength(content);
-      const previousContent =
-        !added && !deleted
-          ? await this.getFileContent(
-              repositoryExternalId,
-              change.sourceServerItem ?? change.item.path,
-              pull.baseSha,
-            )
-          : undefined;
-      if (!added && !deleted && previousContent === undefined) {
-        files.push(skippedFile);
-        continue;
-      }
-      const sourceBytes =
-        contentBytes + Buffer.byteLength(previousContent ?? "");
-      const index =
-        files.push({
-          path,
-          content,
-          previousContent,
-          isBinary: false,
-          changeType,
-        }) - 1;
-      usedSourceBytes += sourceBytes;
-      retainAzureSource(retainedSources, {
-        index,
-        bytes: sourceBytes,
-        skippedFile,
-      });
-      while (
-        maximumSourceBytes !== undefined &&
-        usedSourceBytes > maximumSourceBytes
-      ) {
-        const removed = removeLargestAzureSource(retainedSources);
-        if (!removed) break;
-        files[removed.index] = removed.skippedFile;
-        usedSourceBytes -= removed.bytes;
-      }
-    }
-    return files;
+        };
+        if (knownBinary) {
+          return {
+            file: {
+              path,
+              content: "",
+              isBinary: true,
+              binaryHash: change.item.objectId ?? `${ref}:${path}`,
+              changeType,
+            },
+          };
+        }
+        const content = await this.getFileContent(
+          repositoryExternalId,
+          change.item.path,
+          ref,
+        );
+        if (content === undefined) {
+          return { file: skippedFile };
+        }
+        if (isLikelyBinaryFile(path, content)) {
+          return {
+            file: {
+              path,
+              content: "",
+              isBinary: true,
+              binaryHash:
+                change.item.objectId ?? `${ref}:${path}:${content.length}`,
+              changeType,
+            },
+          };
+        }
+        const previousContent =
+          !added && !deleted
+            ? await this.getFileContent(
+                repositoryExternalId,
+                change.sourceServerItem ?? change.item.path,
+                pull.baseSha,
+              )
+            : undefined;
+        if (!added && !deleted && previousContent === undefined) {
+          return { file: skippedFile };
+        }
+        return {
+          file: {
+            path,
+            content,
+            previousContent,
+            isBinary: false,
+            changeType,
+          },
+          oversizedHash: change.item.objectId ?? `${ref}:${path}`,
+        };
+      },
+    );
   }
 
   /** Lists regular files from one exact Git commit tree. */
