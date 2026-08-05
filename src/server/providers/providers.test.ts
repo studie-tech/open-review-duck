@@ -168,7 +168,11 @@ describe("provider normalization", () => {
       targetRefName: "refs/heads/main",
       lastMergeSourceCommit: { commitId: "head" },
       lastMergeTargetCommit: { commitId: "base" },
-      repository: { webUrl: "https://dev.azure.com/acme/repo" },
+      repository: {
+        id: "repo",
+        name: "reviewduck",
+        project: { name: "platform" },
+      },
       createdBy: { displayName: "Alex Reviewer" },
     });
     const pull = await new AzureDevOpsProvider(
@@ -180,6 +184,8 @@ describe("provider normalization", () => {
       sourceBranch: "feature",
       targetBranch: "main",
       authorLogin: "Alex Reviewer",
+      webUrl:
+        "https://dev.azure.com/acme/platform/_git/reviewduck/pullrequest/12",
     });
   });
 

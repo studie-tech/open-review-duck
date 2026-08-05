@@ -17,6 +17,7 @@ import { PullRequestList } from "~/components/dashboard/pull-request-list";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import { partitionReviewQueue } from "~/lib/review-queue";
+import { syncProgressLabel } from "~/lib/sync-progress";
 import { formatTokenCount } from "~/lib/token-usage";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -235,20 +236,73 @@ export function DashboardContent({
       {synchronizing.length > 0 && (
         <section
           aria-live="polite"
-          className="border-cyan/20 bg-cyan/[.045] mt-6 flex items-center gap-3 rounded-2xl border px-4 py-3"
+          className="border-cyan/20 bg-cyan/[.045] mt-6 rounded-2xl border px-4 py-3"
         >
-          <Loader2 className="text-cyan size-4 shrink-0 animate-spin" />
-          <div className="min-w-0">
-            <p className="text-cloud text-sm font-medium">
-              {synchronizing.length === 1
-                ? "Preparing a review"
-                : `Preparing ${synchronizing.length} reviews`}
-            </p>
-            <p className="text-mist mt-0.5 text-xs">
-              The review queue will update automatically when analysis
-              completes.
-            </p>
+          <div className="flex items-center gap-3">
+            <Loader2 className="text-cyan size-4 shrink-0 animate-spin" />
+            <div className="min-w-0">
+              <p className="text-cloud text-sm font-medium">
+                {synchronizing.length === 1
+                  ? "Preparing a review"
+                  : `Preparing ${synchronizing.length} reviews`}
+              </p>
+              <p className="text-mist mt-0.5 text-xs">
+                The review queue updates automatically as each pull request is
+                ready.
+              </p>
+            </div>
           </div>
+          <ul className="mt-3 space-y-2 border-t border-cyan/10 pt-3">
+            {synchronizing.map((sync) => {
+              const progress = Math.min(99, Math.max(0, sync.progress));
+              const provider =
+                sync.provider === "azure_devops"
+                  ? "Azure DevOps"
+                  : sync.provider === "gitlab"
+                    ? "GitLab"
+                    : "GitHub";
+              return (
+                <li key={sync.id} className="min-w-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-cloud truncate text-xs font-medium">
+                        <span className="text-mist">{provider}</span>
+                        {" · "}
+                        {sync.repositoryOwner}/{sync.repositoryName} #
+                        {sync.pullRequestNumber}
+                      </p>
+                      {sync.title && (
+                        <p className="text-mist mt-0.5 truncate text-[11px]">
+                          {sync.title}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-cyan shrink-0 text-[11px] tabular-nums">
+                      {progress}%
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-3">
+                    <div
+                      className="bg-surface-subtle h-1.5 min-w-16 flex-1 overflow-hidden rounded-full"
+                      role="progressbar"
+                      aria-label={`${sync.repositoryOwner}/${sync.repositoryName} #${sync.pullRequestNumber} synchronization progress`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={progress}
+                    >
+                      <div
+                        className="bg-cyan h-full rounded-full transition-[width] duration-500"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                    <p className="text-fog w-48 shrink-0 truncate text-right text-[11px] sm:w-56">
+                      {syncProgressLabel(sync.status, progress)}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         </section>
       )}
 

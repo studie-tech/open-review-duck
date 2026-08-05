@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { getWorkflowMetadata } from "workflow";
 import { syncQueueRequests, syncRuns, workflowRuns } from "@/drizzle/schema";
+import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import { db } from "~/server/db";
 import { assignPullRequestToQueue } from "~/server/review/queue";
 import { syncPullRequest } from "~/server/sync/service";
@@ -61,7 +62,11 @@ async function executeSynchronization(syncId: string, providerRunId: string) {
   if (!sync) throw new Error("Synchronization run not found");
   await db
     .update(syncRuns)
-    .set({ status: "running", progress: 5, startedAt: new Date() })
+    .set({
+      status: "running",
+      progress: SYNC_PROGRESS.fetching,
+      startedAt: new Date(),
+    })
     .where(eq(syncRuns.id, sync.id));
   await db
     .update(workflowRuns)
@@ -72,7 +77,19 @@ async function executeSynchronization(syncId: string, providerRunId: string) {
       db,
       sync.repositoryId,
       sync.pullRequestNumber,
+      {
+        onProgress: async (progress) => {
+          await db
+            .update(syncRuns)
+            .set({ progress })
+            .where(eq(syncRuns.id, sync.id));
+        },
+      },
     );
+    await db
+      .update(syncRuns)
+      .set({ progress: SYNC_PROGRESS.addingToQueue })
+      .where(eq(syncRuns.id, sync.id));
     const queueRequests = await db.query.syncQueueRequests.findMany({
       where: eq(syncQueueRequests.syncRunId, sync.id),
     });
@@ -87,7 +104,11 @@ async function executeSynchronization(syncId: string, providerRunId: string) {
     }
     await db
       .update(syncRuns)
-      .set({ status: "completed", progress: 100, completedAt: new Date() })
+      .set({
+        status: "completed",
+        progress: SYNC_PROGRESS.completed,
+        completedAt: new Date(),
+      })
       .where(eq(syncRuns.id, sync.id));
     await db
       .update(workflowRuns)

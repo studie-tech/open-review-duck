@@ -15,6 +15,11 @@ const queryState = vi.hoisted(() => ({
       status: "running",
       progress: 25,
       createdAt: new Date(),
+      startedAt: new Date(),
+      repositoryOwner: "reviewduck",
+      repositoryName: "app",
+      provider: "azure_devops",
+      title: "Make synchronization visible",
     },
   ] as Array<Record<string, unknown>>,
   dashboardRefetch: vi.fn(),
@@ -79,6 +84,11 @@ afterEach(() => {
       status: "running",
       progress: 25,
       createdAt: new Date(),
+      startedAt: new Date(),
+      repositoryOwner: "reviewduck",
+      repositoryName: "app",
+      provider: "azure_devops",
+      title: "Make synchronization visible",
     },
   ];
   queryState.dashboardRefetch.mockReset();
@@ -109,6 +119,18 @@ describe("DashboardContent", () => {
     const view = render(<DashboardContent {...properties} />);
 
     expect(screen.getByText("Preparing a review")).toBeVisible();
+    expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
+      "Azure DevOps · reviewduck/app #42",
+    );
+    expect(screen.getByText("Make synchronization visible")).toBeVisible();
+    expect(
+      screen.getByText("Fetching pull request and changed files"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("progressbar", {
+        name: "reviewduck/app #42 synchronization progress",
+      }),
+    ).toHaveAttribute("aria-valuenow", "25");
     expect(
       screen.getByRole("heading", {
         name: "Your review is being prepared",

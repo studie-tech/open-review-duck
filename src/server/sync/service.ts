@@ -21,6 +21,7 @@ import {
   withPreparedTreeSitterLanguages,
 } from "~/server/analysis/tree-sitter";
 import { type AnalyzedUnit, applySourceBudget } from "~/server/analysis/types";
+import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { providerForConnection } from "~/server/providers/credentials";
@@ -104,6 +105,7 @@ export async function syncPullRequest(
   db: Database,
   repositoryId: string,
   number: number,
+  options?: { onProgress?: (progress: number) => Promise<void> },
 ) {
   const repository = await db.query.repositories.findFirst({
     where: eq(repositories.id, repositoryId),
@@ -120,6 +122,7 @@ export async function syncPullRequest(
   });
   if (!connection) throw new Error("Provider connection not found");
   const provider = await providerForConnection(db, connection);
+  await options?.onProgress?.(SYNC_PROGRESS.fetching);
   const [remote, files] = await observeOperation(
     "provider.fetch-pull-request",
     "provider",
@@ -149,6 +152,7 @@ export async function syncPullRequest(
     files,
     PULL_REQUEST_SOURCE_BUDGET_BYTES,
   );
+  await options?.onProgress?.(SYNC_PROGRESS.analyzing);
   const analysis = await observeOperation(
     "tree-sitter.analyze-pull-request",
     "analysis",
@@ -162,6 +166,7 @@ export async function syncPullRequest(
         () => analyzeFiles(budgetedFiles),
       ),
   );
+  await options?.onProgress?.(SYNC_PROGRESS.storingSources);
   const storedFiles = await mapWithLimit(budgetedFiles, 4, async (file) => {
     const [currentBlob, previousBlob] = await Promise.all([
       persistSourceBlob(db, {
@@ -193,6 +198,7 @@ export async function syncPullRequest(
       )
     : [];
 
+  await options?.onProgress?.(SYNC_PROGRESS.savingSnapshot);
   const result = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`${repositoryId}:${number}`}))`,
