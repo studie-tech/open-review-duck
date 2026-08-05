@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ProviderError } from "~/server/providers/types";
-import { providerSyncErrorMessage, reviewSyncFailureDetails } from "./error";
+import {
+  persistedSyncErrorMessage,
+  providerSyncErrorMessage,
+  reviewSyncFailureDetails,
+} from "./error";
 
 describe("review sync error diagnostics", () => {
   it("reports the bounded database cause without the failed query", () => {
@@ -82,6 +86,27 @@ describe("provider sync errors", () => {
       providerSyncErrorMessage("azure_devops", new TypeError("fetch failed")),
     ).toBe(
       "ReviewDuck could not reach Azure DevOps. Check your network and provider connection, then try again.",
+    );
+  });
+});
+
+describe("persisted sync errors", () => {
+  it("turns a stored Azure DevOps 403 into permission guidance", () => {
+    expect(
+      persistedSyncErrorMessage(
+        "azure_devops",
+        "ProviderError: 403 The requested operation is not allowed. secret diagnostic details",
+      ),
+    ).toBe(
+      "Azure DevOps denied access while loading this pull request. Reconnect a token with Code: Read & write access to this repository.",
+    );
+  });
+
+  it("does not expose an unknown persisted error", () => {
+    expect(
+      persistedSyncErrorMessage("gitlab", "database-password=do-not-expose"),
+    ).toBe(
+      "GitLab synchronization failed. Check the provider connection and try again.",
     );
   });
 });

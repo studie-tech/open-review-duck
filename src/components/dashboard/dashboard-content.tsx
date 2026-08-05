@@ -3,6 +3,7 @@
 import {
   CheckCheck,
   ChevronDown,
+  CircleAlert,
   GitMerge,
   GitPullRequest,
   Loader2,
@@ -45,6 +46,10 @@ export function DashboardContent({
     refetchInterval: (query) =>
       (query.state.data?.length ?? 0) > 0 ? 1_500 : false,
   });
+  const recentSyncFailures = api.review.recentSyncFailures.useQuery(undefined, {
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
   const pullRequests = api.review.dashboard.useQuery(undefined, {
     enabled: activeSyncs.isFetched,
     initialData: initialPullRequests,
@@ -65,6 +70,7 @@ export function DashboardContent({
   const hadActiveSync = useRef(false);
   const reviews = pullRequests.data ?? initialPullRequests;
   const synchronizing = activeSyncs.data ?? [];
+  const failedSyncs = recentSyncFailures.data ?? [];
   const configuration = aiConfiguration.data ?? initialAiConfiguration;
   const planUsage = aiPlanUsage.data ?? initialAiPlanUsage;
 
@@ -126,9 +132,10 @@ export function DashboardContent({
     const hasActiveSync = synchronizing.length > 0;
     if (hadActiveSync.current && !hasActiveSync) {
       void pullRequests.refetch();
+      void recentSyncFailures.refetch();
     }
     hadActiveSync.current = hasActiveSync;
-  }, [pullRequests, synchronizing.length]);
+  }, [pullRequests, recentSyncFailures, synchronizing.length]);
 
   const { needsReview, reviewed, closed, removed } =
     partitionReviewQueue(reviews);
@@ -303,6 +310,66 @@ export function DashboardContent({
               );
             })}
           </ul>
+        </section>
+      )}
+
+      {failedSyncs.length > 0 && (
+        <section
+          aria-live="polite"
+          className="border-coral/25 bg-coral/[.045] mt-6 rounded-2xl border px-4 py-3"
+        >
+          <div className="flex items-start gap-3">
+            <CircleAlert className="text-coral mt-0.5 size-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-cloud text-sm font-medium">
+                {failedSyncs.length === 1
+                  ? "A review could not be prepared"
+                  : `${failedSyncs.length} reviews could not be prepared`}
+              </p>
+              <p className="text-mist mt-0.5 text-xs">
+                Recent synchronization failures remain visible for 24 hours.
+              </p>
+              <ul className="mt-3 space-y-3 border-t border-coral/10 pt-3">
+                {failedSyncs.map((sync) => {
+                  const provider =
+                    sync.provider === "azure_devops"
+                      ? "Azure DevOps"
+                      : sync.provider === "gitlab"
+                        ? "GitLab"
+                        : "GitHub";
+                  return (
+                    <li key={sync.id} className="min-w-0 text-xs">
+                      <p className="text-cloud font-medium">
+                        <span className="text-mist">{provider}</span>
+                        {" · "}
+                        {sync.repositoryOwner}/{sync.repositoryName} #
+                        {sync.pullRequestNumber}
+                      </p>
+                      {sync.title && (
+                        <p className="text-mist mt-0.5 truncate text-[11px]">
+                          {sync.title}
+                        </p>
+                      )}
+                      <p className="text-fog mt-1 text-[11px] leading-5">
+                        Failed at {sync.progress}% while{" "}
+                        {syncProgressLabel(
+                          "running",
+                          sync.progress,
+                        ).toLowerCase()}
+                        . {sync.message}{" "}
+                        <Link
+                          href="/settings/providers"
+                          className="text-coral font-medium hover:underline"
+                        >
+                          Review connection
+                        </Link>
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
         </section>
       )}
 

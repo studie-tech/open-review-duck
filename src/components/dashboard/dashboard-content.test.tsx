@@ -22,6 +22,8 @@ const queryState = vi.hoisted(() => ({
       title: "Make synchronization visible",
     },
   ] as Array<Record<string, unknown>>,
+  recentSyncFailures: [] as Array<Record<string, unknown>>,
+  failuresRefetch: vi.fn(),
   dashboardRefetch: vi.fn(),
   dashboardSetData: vi.fn(),
   dashboardInvalidate: vi.fn(),
@@ -64,6 +66,12 @@ vi.mock("~/trpc/react", () => ({
           isFetched: true,
         })),
       },
+      recentSyncFailures: {
+        useQuery: vi.fn(() => ({
+          data: queryState.recentSyncFailures,
+          refetch: queryState.failuresRefetch,
+        })),
+      },
       dashboard: {
         useQuery: vi.fn((_input, options) => ({
           data: options.initialData,
@@ -91,6 +99,8 @@ afterEach(() => {
       title: "Make synchronization visible",
     },
   ];
+  queryState.recentSyncFailures = [];
+  queryState.failuresRefetch.mockReset();
   queryState.dashboardRefetch.mockReset();
   queryState.dashboardSetData.mockReset();
   queryState.dashboardInvalidate.mockReset();
@@ -143,6 +153,54 @@ describe("DashboardContent", () => {
     await waitFor(() =>
       expect(queryState.dashboardRefetch).toHaveBeenCalledTimes(1),
     );
+    expect(queryState.failuresRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a recent synchronization failure visible with safe guidance", () => {
+    queryState.activeSyncs = [];
+    queryState.recentSyncFailures = [
+      {
+        id: "sync-failed",
+        pullRequestNumber: 18_622,
+        progress: 10,
+        completedAt: new Date(),
+        repositoryOwner: "DSAIE",
+        repositoryName: "hub-app",
+        provider: "azure_devops",
+        title: "Track Chat AI token usage per user and model",
+        message:
+          "Azure DevOps denied access while loading this pull request. Reconnect a token with Code: Read & write access to this repository.",
+      },
+    ];
+
+    render(
+      <DashboardContent
+        initialPullRequests={[]}
+        initialAiConfiguration={{
+          mode: "off",
+          managedModel: "big-pickle",
+          managedModels: ["big-pickle"],
+          reviewPullRequests: false,
+          configuration: null,
+          disclosure: { accepted: false, version: "test" },
+        }}
+        initialAiPlanUsage={null}
+        localMode={true}
+      />,
+    );
+
+    expect(screen.getByText("A review could not be prepared")).toBeVisible();
+    expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
+      "Azure DevOps · DSAIE/hub-app #18622",
+    );
+    expect(
+      screen.getByText(/Failed at 10% while fetching pull request/),
+    ).toHaveTextContent(
+      "Reconnect a token with Code: Read & write access to this repository.",
+    );
+    expect(
+      screen.getByRole("link", { name: "Review connection" }),
+    ).toHaveAttribute("href", "/settings/providers");
   });
 
   const statusCases = [
