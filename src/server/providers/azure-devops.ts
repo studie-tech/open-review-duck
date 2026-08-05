@@ -1,6 +1,5 @@
 import { isLikelyBinaryFile, type SourceFile } from "~/server/analysis/types";
 import {
-  PROVIDER_TEXT_MAXIMUM_BYTES,
   providerFetch,
   providerResponse,
   providerText,
@@ -59,6 +58,11 @@ interface AzureChange {
   changeType: string;
   sourceServerItem?: string;
 }
+interface RetainedAzureSource {
+  index: number;
+  bytes: number;
+  skippedFile: SourceFile;
+}
 interface AzureItem {
   path: string;
   gitObjectType?: "blob" | "tree";
@@ -101,6 +105,47 @@ const AZURE_PULL_REQUEST_EVENTS = [
   "git.pullrequest.updated",
   "git.pullrequest.merged",
 ] as const;
+
+/** Adds one retained source to a max-heap ordered by combined source bytes. */
+function retainAzureSource(
+  heap: RetainedAzureSource[],
+  source: RetainedAzureSource,
+) {
+  heap.push(source);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    const parentSource = heap[parent];
+    if (!parentSource || parentSource.bytes >= source.bytes) break;
+    heap[index] = parentSource;
+    index = parent;
+  }
+  heap[index] = source;
+}
+
+/** Removes and returns the largest retained Azure source from a max-heap. */
+function removeLargestAzureSource(heap: RetainedAzureSource[]) {
+  const largest = heap[0];
+  const last = heap.pop();
+  if (!largest || !last || heap.length === 0) return largest;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    if (left >= heap.length) break;
+    const leftSource = heap[left];
+    const rightSource = heap[right];
+    if (!leftSource) break;
+    const child =
+      rightSource && rightSource.bytes > leftSource.bytes ? right : left;
+    const childSource = heap[child];
+    if (!childSource || childSource.bytes <= last.bytes) break;
+    heap[index] = childSource;
+    index = child;
+  }
+  heap[index] = last;
+  return largest;
+}
 
 export class AzureDevOpsProvider implements PullRequestProvider {
   readonly name = "azure_devops" as const;
@@ -342,8 +387,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         change.item.gitObjectType !== "tree",
     );
     const files: SourceFile[] = [];
+    const retainedSources: RetainedAzureSource[] = [];
     let usedSourceBytes = 0;
-    let sourceBudgetExhausted = options?.maximumSourceBytes === 0;
+    const maximumSourceBytes =
+      options?.maximumSourceBytes === undefined
+        ? undefined
+        : Math.max(0, options.maximumSourceBytes);
     for (const change of sourceChanges) {
       const normalizedChangeType = change.changeType.toLowerCase();
       const deleted = normalizedChangeType.includes("delete");
@@ -376,28 +425,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         });
         continue;
       }
-      if (sourceBudgetExhausted) {
-        files.push(skippedFile);
-        continue;
-      }
-      const remainingBytes =
-        options?.maximumSourceBytes === undefined
-          ? undefined
-          : Math.max(0, options.maximumSourceBytes - usedSourceBytes);
-      const currentMaximumBytes =
-        remainingBytes === undefined
-          ? undefined
-          : Math.min(PROVIDER_TEXT_MAXIMUM_BYTES, remainingBytes);
       const content = await this.getFileContent(
         repositoryExternalId,
         change.item.path,
         ref,
-        currentMaximumBytes,
       );
       if (content === undefined) {
-        sourceBudgetExhausted =
-          remainingBytes !== undefined &&
-          remainingBytes <= PROVIDER_TEXT_MAXIMUM_BYTES;
         files.push(skippedFile);
         continue;
       }
@@ -413,40 +446,43 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         continue;
       }
       const contentBytes = Buffer.byteLength(content);
-      const remainingPreviousBytes =
-        remainingBytes === undefined
-          ? undefined
-          : Math.max(0, remainingBytes - contentBytes);
       const previousContent =
         !added && !deleted
           ? await this.getFileContent(
               repositoryExternalId,
               change.sourceServerItem ?? change.item.path,
               pull.baseSha,
-              remainingPreviousBytes === undefined
-                ? undefined
-                : Math.min(PROVIDER_TEXT_MAXIMUM_BYTES, remainingPreviousBytes),
             )
           : undefined;
       if (!added && !deleted && previousContent === undefined) {
-        sourceBudgetExhausted =
-          remainingPreviousBytes !== undefined &&
-          remainingPreviousBytes <= PROVIDER_TEXT_MAXIMUM_BYTES;
         files.push(skippedFile);
         continue;
       }
-      usedSourceBytes +=
+      const sourceBytes =
         contentBytes + Buffer.byteLength(previousContent ?? "");
-      sourceBudgetExhausted =
-        options?.maximumSourceBytes !== undefined &&
-        usedSourceBytes >= options.maximumSourceBytes;
-      files.push({
-        path,
-        content,
-        previousContent,
-        isBinary: false,
-        changeType,
+      const index =
+        files.push({
+          path,
+          content,
+          previousContent,
+          isBinary: false,
+          changeType,
+        }) - 1;
+      usedSourceBytes += sourceBytes;
+      retainAzureSource(retainedSources, {
+        index,
+        bytes: sourceBytes,
+        skippedFile,
       });
+      while (
+        maximumSourceBytes !== undefined &&
+        usedSourceBytes > maximumSourceBytes
+      ) {
+        const removed = removeLargestAzureSource(retainedSources);
+        if (!removed) break;
+        files[removed.index] = removed.skippedFile;
+        usedSourceBytes -= removed.bytes;
+      }
     }
     return files;
   }

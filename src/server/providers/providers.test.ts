@@ -1048,7 +1048,7 @@ describe("provider normalization", () => {
     ]);
   });
 
-  it("stops downloading Azure source after the pull request budget", async () => {
+  it("keeps smaller Azure sources when the pull request exceeds its budget", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url.includes("/iterations?")) {
@@ -1062,7 +1062,12 @@ describe("provider normalization", () => {
           })),
         });
       }
-      if (url.includes("/items?")) return new Response("four");
+      if (url.includes("/items?")) {
+        const path = new URL(url).searchParams.get("path");
+        return new Response(
+          path === "/one.ts" ? "1234" : path === "/two.ts" ? "12" : "1",
+        );
+      }
       return jsonResponse({
         pullRequestId: 12,
         title: "Large change",
@@ -1084,23 +1089,19 @@ describe("provider normalization", () => {
     ).getChangedFiles("repo", 12, { maximumSourceBytes: 4 });
 
     expect(files).toEqual([
-      expect.objectContaining({ path: "one.ts", content: "four" }),
       expect.objectContaining({
-        path: "two.ts",
+        path: "one.ts",
         content: "",
         skipReason: "too_large",
       }),
-      expect.objectContaining({
-        path: "three.ts",
-        content: "",
-        skipReason: "too_large",
-      }),
+      expect.objectContaining({ path: "two.ts", content: "12" }),
+      expect.objectContaining({ path: "three.ts", content: "1" }),
     ]);
     expect(
       fetchMock.mock.calls.filter(([input]) =>
         requestUrl(input).includes("/items?"),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(3);
   });
 
   it("publishes Azure DevOps threads on the selected line", async () => {
