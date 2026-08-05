@@ -3,7 +3,7 @@ import { ProviderError, type ProviderName } from "./types";
 
 const PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
 const PROVIDER_JSON_MAXIMUM_BYTES = 10_000_000;
-export const PROVIDER_TEXT_MAXIMUM_BYTES = 2_000_000;
+const PROVIDER_TEXT_MAXIMUM_BYTES = 2_000_000;
 const PROVIDER_USER_AGENT =
   "ReviewDuck.ai (+https://github.com/studie-tech/open-review-duck)";
 
