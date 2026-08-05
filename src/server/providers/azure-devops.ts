@@ -1,12 +1,13 @@
-import { isLikelyBinaryFile } from "~/server/analysis/types";
+import { isLikelyBinaryFile, type SourceFile } from "~/server/analysis/types";
 import {
-  mapWithConcurrency,
+  PROVIDER_TEXT_MAXIMUM_BYTES,
   providerFetch,
   providerResponse,
   providerText,
   providerVoid,
 } from "./http";
 import type {
+  ChangedFilesOptions,
   ProviderPullRequestReviewState,
   ProviderReviewAction,
   PullRequestListOptions,
@@ -318,7 +319,11 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     );
   }
   /** Fetches the changed source files required for static analysis. */
-  async getChangedFiles(repositoryExternalId: string, number: number) {
+  async getChangedFiles(
+    repositoryExternalId: string,
+    number: number,
+    options?: ChangedFilesOptions,
+  ) {
     const iterations = await providerFetch<{ value: Array<{ id: number }> }>(
       this.name,
       `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}/iterations?api-version=7.1`,
@@ -330,57 +335,120 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}/iterations/${latest.id}/changes?api-version=7.1`,
     );
     const pull = await this.getPullRequest(repositoryExternalId, number);
-    return mapWithConcurrency(
-      changes.filter(
-        (change): change is AzureChange & { item: { path: string } } =>
-          typeof change.item?.path === "string" &&
-          change.item.path.length > 0 &&
-          change.item.gitObjectType !== "tree",
-      ),
-      8,
-      async (change) => {
-        const normalizedChangeType = change.changeType.toLowerCase();
-        const deleted = normalizedChangeType.includes("delete");
-        const added = normalizedChangeType.includes("add");
-        const ref = deleted ? pull.baseSha : pull.headSha;
-        const path = change.item.path.replace(/^\//, "");
-        const knownBinary = isLikelyBinaryFile(path);
-        const [content, previousContent] = !knownBinary
-          ? await Promise.all([
-              this.getFileContent(repositoryExternalId, change.item.path, ref),
-              !added && !deleted
-                ? this.getFileContent(
-                    repositoryExternalId,
-                    change.sourceServerItem ?? change.item.path,
-                    pull.baseSha,
-                  )
-                : undefined,
-            ])
-          : ["", undefined];
-        const isBinary = knownBinary || isLikelyBinaryFile(path, content);
-        return {
-          path,
-          content: isBinary ? "" : (content ?? ""),
-          previousContent: isBinary ? undefined : previousContent,
-          skipReason:
-            !knownBinary && content === undefined
-              ? ("too_large" as const)
-              : undefined,
-          isBinary,
-          binaryHash:
-            isBinary || content === undefined
-              ? (change.item.objectId ?? `${ref}:${path}:${content ?? ""}`)
-              : undefined,
-          changeType: deleted
-            ? ("deleted" as const)
-            : added
-              ? ("added" as const)
-              : normalizedChangeType.includes("rename")
-                ? ("renamed" as const)
-                : ("modified" as const),
-        };
-      },
+    const sourceChanges = changes.filter(
+      (change): change is AzureChange & { item: { path: string } } =>
+        typeof change.item?.path === "string" &&
+        change.item.path.length > 0 &&
+        change.item.gitObjectType !== "tree",
     );
+    const files: SourceFile[] = [];
+    let usedSourceBytes = 0;
+    let sourceBudgetExhausted = options?.maximumSourceBytes === 0;
+    for (const change of sourceChanges) {
+      const normalizedChangeType = change.changeType.toLowerCase();
+      const deleted = normalizedChangeType.includes("delete");
+      const added = normalizedChangeType.includes("add");
+      const ref = deleted ? pull.baseSha : pull.headSha;
+      const path = change.item.path.replace(/^\//, "");
+      const knownBinary = isLikelyBinaryFile(path);
+      const changeType = deleted
+        ? ("deleted" as const)
+        : added
+          ? ("added" as const)
+          : normalizedChangeType.includes("rename")
+            ? ("renamed" as const)
+            : ("modified" as const);
+      const skippedFile = {
+        path,
+        content: "",
+        skipReason: "too_large" as const,
+        isBinary: false,
+        binaryHash: change.item.objectId ?? `${ref}:${path}`,
+        changeType,
+      };
+      if (knownBinary) {
+        files.push({
+          path,
+          content: "",
+          isBinary: true,
+          binaryHash: change.item.objectId ?? `${ref}:${path}`,
+          changeType,
+        });
+        continue;
+      }
+      if (sourceBudgetExhausted) {
+        files.push(skippedFile);
+        continue;
+      }
+      const remainingBytes =
+        options?.maximumSourceBytes === undefined
+          ? undefined
+          : Math.max(0, options.maximumSourceBytes - usedSourceBytes);
+      const currentMaximumBytes =
+        remainingBytes === undefined
+          ? undefined
+          : Math.min(PROVIDER_TEXT_MAXIMUM_BYTES, remainingBytes);
+      const content = await this.getFileContent(
+        repositoryExternalId,
+        change.item.path,
+        ref,
+        currentMaximumBytes,
+      );
+      if (content === undefined) {
+        sourceBudgetExhausted =
+          remainingBytes !== undefined &&
+          remainingBytes <= PROVIDER_TEXT_MAXIMUM_BYTES;
+        files.push(skippedFile);
+        continue;
+      }
+      if (isLikelyBinaryFile(path, content)) {
+        files.push({
+          path,
+          content: "",
+          isBinary: true,
+          binaryHash:
+            change.item.objectId ?? `${ref}:${path}:${content.length}`,
+          changeType,
+        });
+        continue;
+      }
+      const contentBytes = Buffer.byteLength(content);
+      const remainingPreviousBytes =
+        remainingBytes === undefined
+          ? undefined
+          : Math.max(0, remainingBytes - contentBytes);
+      const previousContent =
+        !added && !deleted
+          ? await this.getFileContent(
+              repositoryExternalId,
+              change.sourceServerItem ?? change.item.path,
+              pull.baseSha,
+              remainingPreviousBytes === undefined
+                ? undefined
+                : Math.min(PROVIDER_TEXT_MAXIMUM_BYTES, remainingPreviousBytes),
+            )
+          : undefined;
+      if (!added && !deleted && previousContent === undefined) {
+        sourceBudgetExhausted =
+          remainingPreviousBytes !== undefined &&
+          remainingPreviousBytes <= PROVIDER_TEXT_MAXIMUM_BYTES;
+        files.push(skippedFile);
+        continue;
+      }
+      usedSourceBytes +=
+        contentBytes + Buffer.byteLength(previousContent ?? "");
+      sourceBudgetExhausted =
+        options?.maximumSourceBytes !== undefined &&
+        usedSourceBytes >= options.maximumSourceBytes;
+      files.push({
+        path,
+        content,
+        previousContent,
+        isBinary: false,
+        changeType,
+      });
+    }
+    return files;
   }
 
   /** Lists regular files from one exact Git commit tree. */

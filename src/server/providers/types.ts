@@ -39,6 +39,11 @@ export interface PullRequestListOptions {
   reviewerExternalAccountId?: string;
 }
 
+export interface ChangedFilesOptions {
+  /** Maximum combined UTF-8 bytes retained across current and previous source. */
+  maximumSourceBytes?: number;
+}
+
 export interface ProviderReviewComment {
   externalId: string;
   body: string;
@@ -129,6 +134,7 @@ export interface PullRequestProvider {
   getChangedFiles(
     repositoryExternalId: string,
     number: number,
+    options?: ChangedFilesOptions,
   ): Promise<SourceFile[]>;
   /** Lists regular files in an immutable repository revision. */
   listRepositoryFiles(
