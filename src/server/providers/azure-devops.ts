@@ -36,7 +36,13 @@ interface AzurePull {
   targetRefName: string;
   lastMergeSourceCommit: { commitId: string };
   lastMergeTargetCommit: { commitId: string };
-  repository: { webUrl: string };
+  repository: {
+    id?: string;
+    name?: string;
+    webUrl?: string;
+    project?: { name?: string };
+  };
+  _links?: { web?: { href?: string } };
   createdBy: {
     id: string;
     displayName: string;
@@ -577,6 +583,13 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   }
   /** Converts a provider-specific pull request into ReviewDuck's normalized model. */
   private normalize(item: AzurePull): PullRequestSummary {
+    const projectName = item.repository.project?.name;
+    const repositoryName = item.repository.name;
+    const repositoryWebUrl =
+      item.repository.webUrl ??
+      (projectName && repositoryName
+        ? `${this.organizationUrl}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(repositoryName)}`
+        : `${this.organizationUrl}/_git/${encodeURIComponent(item.repository.id ?? repositoryName ?? "repository")}`);
     return {
       externalId: String(item.pullRequestId),
       number: item.pullRequestId,
@@ -596,7 +609,9 @@ export class AzureDevOpsProvider implements PullRequestProvider {
           : item.status === "completed"
             ? "merged"
             : "closed",
-      webUrl: `${item.repository.webUrl}/pullrequest/${item.pullRequestId}`,
+      webUrl:
+        item._links?.web?.href ??
+        `${repositoryWebUrl}/pullrequest/${item.pullRequestId}`,
       additions: 0,
       deletions: 0,
       changedFiles: 0,

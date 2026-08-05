@@ -2066,8 +2066,25 @@ export const reviewRouter = createTRPCRouter({
         status: syncRuns.status,
         progress: syncRuns.progress,
         createdAt: syncRuns.createdAt,
+        startedAt: syncRuns.startedAt,
+        repositoryOwner: repositories.owner,
+        repositoryName: repositories.name,
+        provider: providerConnections.provider,
+        title: pullRequests.title,
       })
       .from(syncRuns)
+      .innerJoin(repositories, eq(syncRuns.repositoryId, repositories.id))
+      .innerJoin(
+        providerConnections,
+        eq(repositories.connectionId, providerConnections.id),
+      )
+      .leftJoin(
+        pullRequests,
+        and(
+          eq(pullRequests.repositoryId, syncRuns.repositoryId),
+          eq(pullRequests.number, syncRuns.pullRequestNumber),
+        ),
+      )
       .innerJoin(
         workspaceMembers,
         eq(syncRuns.workspaceId, workspaceMembers.workspaceId),

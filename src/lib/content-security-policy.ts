@@ -1,3 +1,5 @@
+export const PRIVATE_SOURCE_CONNECT_ORIGIN = "https://*.ufs.sh";
+
 /** Builds the nonce-based policy used by trusted local deployments. */
 export function localContentSecurityPolicy(
   nonce: string,

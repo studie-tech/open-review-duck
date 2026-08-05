@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { localContentSecurityPolicy } from "./content-security-policy";
+import {
+  localContentSecurityPolicy,
+  PRIVATE_SOURCE_CONNECT_ORIGIN,
+} from "./content-security-policy";
 
 describe("localContentSecurityPolicy", () => {
   it("uses a nonce without allowing arbitrary inline or remote scripts", () => {
@@ -17,5 +20,9 @@ describe("localContentSecurityPolicy", () => {
     expect(localContentSecurityPolicy("nonce", true)).toContain(
       "'unsafe-eval'",
     );
+  });
+
+  it("limits private source downloads to UploadThing's object host", () => {
+    expect(PRIVATE_SOURCE_CONNECT_ORIGIN).toBe("https://*.ufs.sh");
   });
 });
