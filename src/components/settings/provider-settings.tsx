@@ -7,6 +7,7 @@ import {
   ExternalLink,
   GitPullRequest,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -97,6 +98,7 @@ export function ProviderSettings({
   const [repositorySearch, setRepositorySearch] = useState("");
   const [connectionToDisconnect, setConnectionToDisconnect] =
     useState<Connection>();
+  const [editingConnection, setEditingConnection] = useState<Connection>();
   const [selectedConnectionId, setSelectedConnectionId] = useState(
     initialConnections[0]?.id ?? "",
   );
@@ -149,6 +151,7 @@ export function ProviderSettings({
     return Promise.all([
       utils.provider.listConnections.invalidate(),
       utils.provider.listImportedRepositories.invalidate(),
+      utils.provider.listAvailableRepositories.invalidate(),
       utils.workspace.guidance.invalidate(),
     ]);
   }
@@ -164,11 +167,15 @@ export function ProviderSettings({
       }
       setToken("");
       setAccount("");
+      setBaseUrl("");
+      setEditingConnection(undefined);
       setConnectionMethod("managed");
       setShowForm(false);
       void invalidateProviderState();
       router.refresh();
-      toast.success("Provider connected");
+      toast.success(
+        editingConnection ? "Provider token replaced" : "Provider connected",
+      );
     },
     onError: (error) =>
       toast.error("Could not connect provider", {
@@ -379,6 +386,56 @@ export function ProviderSettings({
     return { label: "Saved", tone: "text-mist", dot: "bg-fog" };
   };
 
+  /** Returns whether this connection can be recovered by replacing its token. */
+  const canReplaceToken = (connection: Connection) =>
+    connection.credentialKind === "pat" ||
+    connection.credentialKind === "local_pat";
+
+  /** Opens the provider form in create mode. */
+  const openNewConnectionForm = (nextProvider: Provider = provider) => {
+    setEditingConnection(undefined);
+    setProvider(nextProvider);
+    setToken("");
+    setAccount("");
+    setBaseUrl("");
+    setConnectionMethod(
+      localMode || nextProvider === "azure_devops" ? "pat" : "managed",
+    );
+    connect.reset();
+    setShowForm(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("provider-connection-form")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  };
+
+  /** Opens the token form with an existing connection's editable settings. */
+  const openConnectionEditor = (connection: Connection) => {
+    setEditingConnection(connection);
+    setSelectedConnectionId(connection.id);
+    setProvider(connection.provider);
+    setToken("");
+    setAccount(connection.displayName);
+    setBaseUrl(connection.baseUrl ?? "");
+    setConnectionMethod("pat");
+    connect.reset();
+    setShowForm(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("provider-connection-form")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  };
+
+  /** Closes and clears either connection form mode. */
+  const closeConnectionForm = () => {
+    setShowForm(false);
+    setEditingConnection(undefined);
+    setToken("");
+    connect.reset();
+  };
+
   /** Redirects SaaS users into a supported provider authorization flow. */
   const startHostedAuthorization = async () => {
     if (provider === "azure_devops") return;
@@ -407,18 +464,7 @@ export function ProviderSettings({
 
   /** Opens and resets the GitHub connection form for a new token. */
   const showGitHubConnectionForm = () => {
-    setProvider("github");
-    setToken("");
-    setAccount("");
-    setBaseUrl("");
-    setConnectionMethod(localMode ? "pat" : "managed");
-    connect.reset();
-    setShowForm(true);
-    requestAnimationFrame(() =>
-      document
-        .getElementById("provider-connection-form")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
+    openNewConnectionForm("github");
   };
 
   return (
@@ -440,7 +486,9 @@ export function ProviderSettings({
         {(connections.length > 0 || localMode) && (
           <Button
             variant="secondary"
-            onClick={() => setShowForm((value) => !value)}
+            onClick={() =>
+              showForm ? closeConnectionForm() : openNewConnectionForm()
+            }
             className="w-full sm:w-auto"
           >
             {showForm ? (
@@ -482,38 +530,52 @@ export function ProviderSettings({
           id="provider-connection-form"
           className="bg-surface mt-8 scroll-mt-6 rounded-3xl border border-line p-5 sm:p-7"
         >
-          <div className="grid gap-3 sm:grid-cols-3">
-            {providers.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                onClick={() => {
-                  setProvider(item.id);
-                  setBaseUrl("");
-                  setConnectionMethod(
-                    localMode || item.id === "azure_devops" ? "pat" : "managed",
-                  );
-                  connect.reset();
-                }}
-                className={`rounded-2xl border p-4 text-left transition ${
-                  provider === item.id
-                    ? "border-lime/35 bg-lime/[.055]"
-                    : "border-line bg-surface/70 hover:bg-surface-hover"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{item.label}</span>
-                  {provider === item.id && (
-                    <Check className="text-lime size-4" />
-                  )}
-                </div>
-                <p className="text-mist mt-2 text-[11px] leading-5">
-                  {localMode ? item.description : item.hostedDescription}
-                </p>
-              </button>
-            ))}
-          </div>
-          {!localMode && provider !== "azure_devops" && (
+          {editingConnection ? (
+            <div className="border-line bg-surface-subtle rounded-2xl border p-4">
+              <p className="text-sm font-medium">
+                Replace token for {editingConnection.displayName}
+              </p>
+              <p className="text-mist mt-1 text-xs leading-5">
+                The saved token is never displayed. Paste a replacement below;
+                repositories and review history will stay connected.
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-3">
+              {providers.map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  onClick={() => {
+                    setProvider(item.id);
+                    setBaseUrl("");
+                    setConnectionMethod(
+                      localMode || item.id === "azure_devops"
+                        ? "pat"
+                        : "managed",
+                    );
+                    connect.reset();
+                  }}
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    provider === item.id
+                      ? "border-lime/35 bg-lime/[.055]"
+                      : "border-line bg-surface/70 hover:bg-surface-hover"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{item.label}</span>
+                    {provider === item.id && (
+                      <Check className="text-lime size-4" />
+                    )}
+                  </div>
+                  <p className="text-mist mt-2 text-[11px] leading-5">
+                    {localMode ? item.description : item.hostedDescription}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+          {!editingConnection && !localMode && provider !== "azure_devops" && (
             <ProviderConnectionMethodPicker
               provider={provider}
               method={connectionMethod}
@@ -642,6 +704,7 @@ export function ProviderSettings({
                   }
                   onClick={() =>
                     connect.mutate({
+                      connectionId: editingConnection?.id,
                       provider,
                       displayName: account || undefined,
                       accessToken: token,
@@ -652,7 +715,7 @@ export function ProviderSettings({
                   {connect.isPending && (
                     <Loader2 className="size-4 animate-spin" />
                   )}
-                  Verify & connect
+                  {editingConnection ? "Verify & replace" : "Verify & connect"}
                 </Button>
               </div>
             </div>
@@ -692,61 +755,104 @@ export function ProviderSettings({
         <div className="space-y-3">
           {connections.map((connection) => {
             const status = connectionStatus(connection);
+            const connectionError =
+              connection.credentialStatus !== "active"
+                ? `${connection.displayName}'s authorization is ${connection.credentialStatus}. Reconnect it to restore access.`
+                : connection.id === selectedConnectionId &&
+                    availableRepositories.isError
+                  ? availableRepositories.error.message
+                  : undefined;
             return (
               <div
                 key={connection.id}
-                className={`bg-surface/70 flex w-full items-center gap-1 rounded-2xl border p-2 text-left transition ${
+                className={`bg-surface/70 w-full overflow-hidden rounded-2xl border text-left transition ${
                   connection.id === selectedConnectionId
                     ? "border-lime/30"
                     : "border-line hover:border-line-strong"
                 }`}
               >
-                <button
-                  type="button"
-                  aria-label={`Use ${connection.displayName}`}
-                  onClick={() => setSelectedConnectionId(connection.id)}
-                  className="flex min-w-0 flex-1 items-center gap-4 rounded-xl p-3 text-left"
-                >
-                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-subtle">
-                    <GitPullRequest className="text-mist size-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
-                      {connection.displayName}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <p className="text-fog text-xs capitalize">
-                        {connection.provider.replace("_", " ")}
-                      </p>
-                      <span className="border-line bg-surface-subtle text-fog rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase">
-                        {credentialLabel(connection.credentialKind)}
-                      </span>
-                      <span
-                        className={`${status.tone} flex items-center gap-1.5 text-xs sm:hidden`}
-                      >
-                        <span
-                          className={`${status.dot} size-1.5 rounded-full`}
-                        />
-                        {status.label}
-                      </span>
-                    </div>
-                  </div>
-                  <span
-                    className={`${status.tone} hidden shrink-0 items-center gap-1.5 text-xs sm:flex`}
+                <div className="flex items-center gap-1 p-2">
+                  <button
+                    type="button"
+                    aria-label={`Use ${connection.displayName}`}
+                    onClick={() => setSelectedConnectionId(connection.id)}
+                    className="flex min-w-0 flex-1 items-center gap-4 rounded-xl p-3 text-left"
                   >
-                    <span className={`${status.dot} size-1.5 rounded-full`} />
-                    {status.label}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Disconnect ${connection.displayName}`}
-                  disabled={disconnect.isPending}
-                  onClick={() => setConnectionToDisconnect(connection)}
-                  className="text-fog grid size-9 shrink-0 place-items-center rounded-full transition hover:bg-red-400/10 hover:text-red-700 dark:hover:text-red-200"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-subtle">
+                      <GitPullRequest className="text-mist size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {connection.displayName}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <p className="text-fog text-xs capitalize">
+                          {connection.provider.replace("_", " ")}
+                        </p>
+                        <span className="border-line bg-surface-subtle text-fog rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase">
+                          {credentialLabel(connection.credentialKind)}
+                        </span>
+                        <span
+                          className={`${status.tone} flex items-center gap-1.5 text-xs sm:hidden`}
+                        >
+                          <span
+                            className={`${status.dot} size-1.5 rounded-full`}
+                          />
+                          {status.label}
+                        </span>
+                      </div>
+                    </div>
+                    <span
+                      className={`${status.tone} hidden shrink-0 items-center gap-1.5 text-xs sm:flex`}
+                    >
+                      <span className={`${status.dot} size-1.5 rounded-full`} />
+                      {status.label}
+                    </span>
+                  </button>
+                  {canReplaceToken(connection) && (
+                    <button
+                      type="button"
+                      aria-label={`Edit ${connection.displayName}`}
+                      onClick={() => openConnectionEditor(connection)}
+                      className="text-fog hover:text-cloud grid size-9 shrink-0 place-items-center rounded-full transition hover:bg-white/[.04]"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`Disconnect ${connection.displayName}`}
+                    disabled={disconnect.isPending}
+                    onClick={() => setConnectionToDisconnect(connection)}
+                    className="text-fog grid size-9 shrink-0 place-items-center rounded-full transition hover:bg-red-400/10 hover:text-red-700 dark:hover:text-red-200"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+                {connectionError && (
+                  <div className="border-coral/20 bg-coral/[.045] flex flex-col gap-3 border-t px-5 py-3 sm:flex-row sm:items-center">
+                    <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                      <CircleAlert className="text-coral mt-0.5 size-4 shrink-0" />
+                      <div>
+                        <p className="text-cloud text-xs font-medium">
+                          Connection check failed
+                        </p>
+                        <p className="text-mist mt-1 text-[11px] leading-5">
+                          {connectionError}
+                        </p>
+                      </div>
+                    </div>
+                    {canReplaceToken(connection) && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => openConnectionEditor(connection)}
+                      >
+                        <Pencil className="size-3.5" /> Replace token
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -867,19 +973,35 @@ export function ProviderSettings({
                         {availableRepositories.error.message}
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={availableRepositories.isFetching}
-                      onClick={() => void availableRepositories.refetch()}
-                    >
-                      <RefreshCw
-                        className={`size-3.5 ${
-                          availableRepositories.isFetching ? "animate-spin" : ""
-                        }`}
-                      />
-                      Retry
-                    </Button>
+                    <div className="flex shrink-0 gap-2">
+                      {selectedConnection &&
+                        canReplaceToken(selectedConnection) && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              openConnectionEditor(selectedConnection)
+                            }
+                          >
+                            <Pencil className="size-3.5" /> Edit connection
+                          </Button>
+                        )}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={availableRepositories.isFetching}
+                        onClick={() => void availableRepositories.refetch()}
+                      >
+                        <RefreshCw
+                          className={`size-3.5 ${
+                            availableRepositories.isFetching
+                              ? "animate-spin"
+                              : ""
+                          }`}
+                        />
+                        Retry
+                      </Button>
+                    </div>
                   </div>
                 )}
                 {filteredRepositories?.map((repository) => {

@@ -42,4 +42,39 @@ describe("providerConnectionErrorMessage", () => {
       ),
     ).toContain("leave it empty for github.com");
   });
+
+  it("explains credentials that cannot be used by this deployment", () => {
+    expect(
+      providerConnectionErrorMessage(
+        "azure_devops",
+        new Error("Azure DevOps connections require a personal access token"),
+      ),
+    ).toBe(
+      "Azure DevOps cannot use the saved token in this deployment. Replace the token to store a compatible credential here.",
+    );
+  });
+
+  it("explains inactive provider authorization", () => {
+    expect(
+      providerConnectionErrorMessage(
+        "gitlab",
+        new Error(
+          "Provider authorization is revoked; reconnect it before continuing",
+        ),
+      ),
+    ).toBe(
+      "GitLab authorization is no longer active. Reconnect the account before retrying.",
+    );
+  });
+
+  it("explains unavailable encrypted credentials", () => {
+    expect(
+      providerConnectionErrorMessage(
+        "github",
+        new Error("Provider encrypted token could not be decrypted"),
+      ),
+    ).toBe(
+      "GitHub's saved token is unavailable or could not be decrypted. Replace the token to restore access.",
+    );
+  });
 });

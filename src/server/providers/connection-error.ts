@@ -51,5 +51,26 @@ export function providerConnectionErrorMessage(
     return `${label} did not respond in time. Check the provider URL and try again.`;
   }
 
+  if (cause instanceof Error) {
+    const message = cause.message.toLowerCase();
+    if (
+      message.includes("require a personal access token") ||
+      message.includes("local provider credential") ||
+      message.includes("local credential")
+    ) {
+      return `${label} cannot use the saved token in this deployment. Replace the token to store a compatible credential here.`;
+    }
+    if (message.includes("provider authorization is")) {
+      return `${label} authorization is no longer active. Reconnect the account before retrying.`;
+    }
+    if (
+      message.includes("decrypt") ||
+      message.includes("encrypted token") ||
+      message.includes("credential is missing")
+    ) {
+      return `${label}'s saved token is unavailable or could not be decrypted. Replace the token to restore access.`;
+    }
+  }
+
   return `ReviewDuck could not reach ${label}. Check your network and provider URL, then try again.`;
 }
