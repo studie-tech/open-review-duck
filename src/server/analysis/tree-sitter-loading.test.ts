@@ -77,4 +77,16 @@ describe("production Tree-sitter grammar loading", () => {
     await first;
     expect(runtime.loadedTreeSitterLanguages()).toHaveLength(8);
   });
+
+  it("loads transitive grammars used while analyzing Make recipes", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.resetModules();
+    const runtime = await import("./tree-sitter");
+
+    await runtime.withPreparedTreeSitterLanguages(["makefile"], () => {
+      expect(runtime.loadedTreeSitterLanguages()).toEqual(
+        expect.arrayContaining(["makefile", "shell"]),
+      );
+    });
+  });
 });
