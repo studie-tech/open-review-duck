@@ -327,7 +327,8 @@ export function DashboardContent({
                   : `${failedSyncs.length} reviews could not be prepared`}
               </p>
               <p className="text-mist mt-0.5 text-xs">
-                Recent synchronization failures remain visible for 24 hours.
+                Unresolved synchronization failures remain visible for up to 24
+                hours.
               </p>
               <ul className="mt-3 space-y-3 border-t border-coral/10 pt-3">
                 {failedSyncs.map((sync) => {

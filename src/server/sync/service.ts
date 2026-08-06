@@ -38,6 +38,7 @@ import { hydrateReviewUnits } from "~/server/storage/review-units";
 import { persistSourceBlob } from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "./retention";
 import { assertCompleteChangedFileSet } from "./revision";
+import { persistedUnitSourceRange, previousSourceRange } from "./source-range";
 
 type Database = typeof database;
 
@@ -46,47 +47,6 @@ const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const CONCEPT_MEMBER_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
-
-/** Converts an inclusive line range to UTF-8 byte offsets. */
-function sourceRange(source: string, startLine: number, endLine: number) {
-  const lineCount = source.split("\n").length;
-  if (
-    !Number.isInteger(startLine) ||
-    !Number.isInteger(endLine) ||
-    startLine < 1 ||
-    endLine < startLine ||
-    endLine > lineCount
-  ) {
-    throw new Error(
-      `Source range ${startLine}-${endLine} is outside a ${lineCount}-line object`,
-    );
-  }
-  const lines = source.match(/[^\n]*(?:\n|$)/g) ?? [];
-  const before = lines.slice(0, Math.max(0, startLine - 1)).join("");
-  const selected = lines.slice(Math.max(0, startLine - 1), endLine).join("");
-  const startByte = Buffer.byteLength(before);
-  return { startByte, endByte: startByte + Buffer.byteLength(selected) };
-}
-
-/** Converts an analyzed base-side line range to immutable object byte offsets. */
-function previousSourceRange(source: string, unit: AnalyzedUnit) {
-  if (unit.previousSource === undefined) return {};
-  if (
-    unit.previousStartLine === undefined ||
-    unit.previousEndLine === undefined
-  ) {
-    throw new Error(`Previous source range is missing for ${unit.stableKey}`);
-  }
-  const range = sourceRange(
-    source,
-    unit.previousStartLine,
-    unit.previousEndLine,
-  );
-  return {
-    previousStartByte: range.startByte,
-    previousEndByte: range.endByte,
-  };
-}
 
 /** Maps values with bounded ingestion concurrency and stable result order. */
 async function mapWithLimit<T, R>(
@@ -453,11 +413,14 @@ export async function syncPullRequest(
       if (!snapshotFile || !storedFile) {
         throw new Error(`Source object is missing for ${unit.path}`);
       }
+      const persistedSource = persistedUnitSourceRange(storedFile.file, unit);
       return {
         snapshotId: snapshot.id,
         snapshotFileId: snapshotFile.id,
         currentBlobId:
-          storedFile.currentBlob?.id ?? storedFile.previousBlob?.id,
+          persistedSource.objectSide === "previous"
+            ? (storedFile.previousBlob?.id ?? storedFile.currentBlob?.id)
+            : (storedFile.currentBlob?.id ?? storedFile.previousBlob?.id),
         previousBlobId: storedFile.previousBlob?.id,
         stableKey: unit.stableKey,
         path: unit.path,
@@ -467,7 +430,8 @@ export async function syncPullRequest(
         signature: unit.signature,
         startLine: unit.startLine,
         endLine: unit.endLine,
-        ...sourceRange(storedFile.file.content, unit.startLine, unit.endLine),
+        startByte: persistedSource.startByte,
+        endByte: persistedSource.endByte,
         ...previousSourceRange(storedFile.file.previousContent ?? "", unit),
         relatedRanges: unit.relatedRanges,
         contentHash: unit.contentHash,

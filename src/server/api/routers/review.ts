@@ -63,6 +63,7 @@ import {
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
 import {
+  connectionUpdateResolvesSyncFailure,
   persistedSyncErrorMessage,
   providerSyncErrorMessage,
 } from "~/server/sync/error";
@@ -2462,10 +2463,12 @@ export const reviewRouter = createTRPCRouter({
         pullRequestNumber: syncRuns.pullRequestNumber,
         status: syncRuns.status,
         progress: syncRuns.progress,
+        createdAt: syncRuns.createdAt,
         completedAt: syncRuns.completedAt,
         repositoryOwner: repositories.owner,
         repositoryName: repositories.name,
         provider: providerConnections.provider,
+        connectionUpdatedAt: providerConnections.updatedAt,
         title: pullRequests.title,
         error: syncRuns.error,
       })
@@ -2502,10 +2505,26 @@ export const reviewRouter = createTRPCRouter({
       if (seenPullRequests.has(key)) continue;
       seenPullRequests.add(key);
       if (row.status !== "failed") continue;
-      const { error, ...failure } = row;
+      if (
+        connectionUpdateResolvesSyncFailure(
+          row.createdAt,
+          row.connectionUpdatedAt,
+        )
+      ) {
+        continue;
+      }
       failures.push({
-        ...failure,
-        message: persistedSyncErrorMessage(row.provider, error),
+        id: row.id,
+        repositoryId: row.repositoryId,
+        pullRequestNumber: row.pullRequestNumber,
+        status: row.status,
+        progress: row.progress,
+        completedAt: row.completedAt,
+        repositoryOwner: row.repositoryOwner,
+        repositoryName: row.repositoryName,
+        provider: row.provider,
+        title: row.title,
+        message: persistedSyncErrorMessage(row.provider, row.error),
       });
       if (failures.length === 3) break;
     }
