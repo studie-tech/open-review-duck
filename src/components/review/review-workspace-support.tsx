@@ -1395,9 +1395,6 @@ export const SideBySideUnitDiff = forwardRef<
         aria-label="Added code diff"
         className="overflow-hidden rounded-b-xl border border-line"
       >
-        <div className="text-fog sticky top-0 z-10 border-b border-line bg-panel/95 px-4 py-2 font-sans text-[9px] font-semibold tracking-[.12em] uppercase backdrop-blur">
-          Pull request
-        </div>
         {visibleRowStart > 0 || leadingCollapsedRemaining > 0 ? (
           <DiffEdgeRevealButton
             direction={-1}

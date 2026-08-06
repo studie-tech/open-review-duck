@@ -4462,17 +4462,7 @@ export function ReviewWorkspace({
               />
             </div>
             {sideBySideVisible && (
-              <div className="px-4">
-                <div className="border-line bg-surface/35 text-fog flex items-center justify-between gap-3 rounded-t-xl border border-b-0 px-3 py-2 font-sans text-[10px]">
-                  <span>
-                    {activeUnit.changeType === "added"
-                      ? "Added code · select a line to comment"
-                      : activeUnit.changeType === "deleted"
-                        ? "Deleted code · select a base line to comment"
-                        : "Side-by-side diff · select either changed side to comment"}
-                  </span>
-                  <span className="text-addition shrink-0">PR changes</span>
-                </div>
+              <div className="-mt-px px-4">
                 <SideBySideUnitDiff
                   key={activeUnit.id}
                   ref={diffContextRef}
