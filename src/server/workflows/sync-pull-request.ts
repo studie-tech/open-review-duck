@@ -114,6 +114,7 @@ async function executeSynchronization(syncId: string, providerRunId: string) {
       .update(workflowRuns)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(workflowRuns.id, workflow.id));
+    await continueAutomaticIntake(sync);
     return {
       snapshotCreated: result.snapshotCreated,
       snapshotId: result.snapshot.id,
@@ -131,6 +132,28 @@ async function executeSynchronization(syncId: string, providerRunId: string) {
       .update(workflowRuns)
       .set({ status: "failed", error, completedAt: new Date() })
       .where(eq(workflowRuns.id, workflow.id));
+    await continueAutomaticIntake(sync);
     throw cause;
+  }
+}
+
+/** Starts the next eligible automatic review without retrying the failed head of a backlog. */
+async function continueAutomaticIntake(sync: {
+  workspaceId: string;
+  repositoryId: string;
+}) {
+  try {
+    const { reconcileRepositoryIntake } = await import(
+      "~/server/providers/intake"
+    );
+    await reconcileRepositoryIntake(db, {
+      workspaceId: sync.workspaceId,
+      repositoryId: sync.repositoryId,
+      force: true,
+      retryFailed: false,
+    });
+  } catch {
+    // Intake stores a safe diagnostic on the repository. A follow-up failure
+    // must not change the terminal result of the synchronization just handled.
   }
 }

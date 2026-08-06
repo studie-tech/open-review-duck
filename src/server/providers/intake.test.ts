@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { automaticSyncSlots, supportsAssignedIntake } from "./intake-policy";
+import {
+  automaticSyncSlots,
+  shouldRetryFailedAutomaticSync,
+  supportsAssignedIntake,
+} from "./intake-policy";
 
 describe("repository pull-request intake", () => {
   it("rejects assigned mode for GitHub App installations", () => {
@@ -36,5 +40,13 @@ describe("repository pull-request intake", () => {
     expect(automaticSyncSlots(0)).toBe(1);
     expect(automaticSyncSlots(1)).toBe(0);
     expect(automaticSyncSlots(4)).toBe(0);
+  });
+
+  it("defers failed heads during background handoff but retries on Check now", () => {
+    expect(shouldRetryFailedAutomaticSync({})).toBe(false);
+    expect(shouldRetryFailedAutomaticSync({ force: true })).toBe(true);
+    expect(
+      shouldRetryFailedAutomaticSync({ force: true, retryFailed: false }),
+    ).toBe(false);
   });
 });

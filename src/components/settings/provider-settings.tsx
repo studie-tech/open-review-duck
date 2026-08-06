@@ -292,8 +292,16 @@ export function ProviderSettings({
       ]);
       toast.success(
         result.queued > 0
-          ? `${result.queued} review${result.queued === 1 ? "" : "s"} queued`
+          ? result.deferred > 0
+            ? `${result.queued} review${result.queued === 1 ? "" : "s"} preparing · ${result.deferred} waiting`
+            : `${result.queued} review${result.queued === 1 ? "" : "s"} queued`
           : "Pull-request intake is current",
+        result.deferred > 0
+          ? {
+              description:
+                "Waiting reviews will start automatically as each analysis finishes.",
+            }
+          : undefined,
       );
     },
     onError: (error) => {

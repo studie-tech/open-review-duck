@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import {
   providerConnections,
   pullRequests,
@@ -13,7 +13,11 @@ import { assignPullRequestToQueue } from "~/server/review/queue";
 import { startPullRequestSync } from "../workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
 import { providerForConnection } from "./credentials";
-import { automaticSyncSlots, supportsAssignedIntake } from "./intake-policy";
+import {
+  automaticSyncSlots,
+  shouldRetryFailedAutomaticSync,
+  supportsAssignedIntake,
+} from "./intake-policy";
 import { refreshRepositoryPullRequestStates } from "./pull-request-state";
 
 type Database = typeof database;
@@ -28,6 +32,7 @@ export async function reconcileRepositoryIntake(
     workspaceId: string;
     repositoryId: string;
     force?: boolean;
+    retryFailed?: boolean;
   },
 ) {
   const repository = await db.query.repositories.findFirst({
@@ -44,6 +49,7 @@ export async function reconcileRepositoryIntake(
       queued: 0,
       alreadyCurrent: 0,
       deferred: 0,
+      failed: 0,
       skipped: true,
     };
   }
@@ -74,6 +80,7 @@ export async function reconcileRepositoryIntake(
         queued: 0,
         alreadyCurrent: 0,
         deferred: 0,
+        failed: 0,
         skipped: true,
       };
     }
@@ -108,51 +115,63 @@ export async function reconcileRepositoryIntake(
         ? { reviewerExternalAccountId: connection.externalAccountId }
         : undefined,
     );
-    const [knownPullRequests, activeSyncs, queueItems] = await Promise.all([
-      db
-        .select({
-          id: pullRequests.id,
-          number: pullRequests.number,
-          headSha: pullRequests.headSha,
-          baseSha: pullRequests.baseSha,
-          state: pullRequests.state,
-        })
-        .from(pullRequests)
-        .where(eq(pullRequests.repositoryId, repository.id)),
-      db
-        .select({ number: syncRuns.pullRequestNumber })
-        .from(syncRuns)
-        .where(
-          and(
-            eq(syncRuns.repositoryId, repository.id),
-            inArray(syncRuns.status, ["queued", "running"]),
+    const [knownPullRequests, activeSyncs, latestSyncs, queueItems] =
+      await Promise.all([
+        db
+          .select({
+            id: pullRequests.id,
+            number: pullRequests.number,
+            headSha: pullRequests.headSha,
+            baseSha: pullRequests.baseSha,
+            state: pullRequests.state,
+          })
+          .from(pullRequests)
+          .where(eq(pullRequests.repositoryId, repository.id)),
+        db
+          .select({ number: syncRuns.pullRequestNumber })
+          .from(syncRuns)
+          .where(
+            and(
+              eq(syncRuns.repositoryId, repository.id),
+              inArray(syncRuns.status, ["queued", "running"]),
+            ),
           ),
-        ),
-      db
-        .select({
-          number: pullRequests.number,
-          state: reviewQueueItems.state,
-        })
-        .from(reviewQueueItems)
-        .innerJoin(
-          pullRequests,
-          eq(reviewQueueItems.pullRequestId, pullRequests.id),
-        )
-        .where(
-          and(
-            eq(reviewQueueItems.userId, repository.intakeOwnerId),
-            eq(pullRequests.repositoryId, repository.id),
+        db
+          .selectDistinctOn([syncRuns.pullRequestNumber], {
+            number: syncRuns.pullRequestNumber,
+            status: syncRuns.status,
+          })
+          .from(syncRuns)
+          .where(eq(syncRuns.repositoryId, repository.id))
+          .orderBy(syncRuns.pullRequestNumber, desc(syncRuns.createdAt)),
+        db
+          .select({
+            number: pullRequests.number,
+            state: reviewQueueItems.state,
+          })
+          .from(reviewQueueItems)
+          .innerJoin(
+            pullRequests,
+            eq(reviewQueueItems.pullRequestId, pullRequests.id),
+          )
+          .where(
+            and(
+              eq(reviewQueueItems.userId, repository.intakeOwnerId),
+              eq(pullRequests.repositoryId, repository.id),
+            ),
           ),
-        ),
-    ]);
+      ]);
     const knownByNumber = new Map(
       knownPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]),
     );
     const activeNumbers = new Set(activeSyncs.map((sync) => sync.number));
+    const latestStatusByNumber = new Map(
+      latestSyncs.map((sync) => [sync.number, sync.status]),
+    );
     const queueStateByNumber = new Map(
       queueItems.map((item) => [item.number, item.state]),
     );
-    const eligible = candidates.filter((candidate) => {
+    const changedCandidates = candidates.filter((candidate) => {
       if (activeNumbers.has(candidate.number)) return false;
       const known = knownByNumber.get(candidate.number);
       return (
@@ -162,6 +181,13 @@ export async function reconcileRepositoryIntake(
         known.state !== candidate.state
       );
     });
+    const retryFailed = shouldRetryFailedAutomaticSync(input);
+    const eligible = retryFailed
+      ? changedCandidates
+      : changedCandidates.filter(
+          (candidate) =>
+            latestStatusByNumber.get(candidate.number) !== "failed",
+        );
     const toQueue = eligible.slice(0, automaticSyncSlots(activeNumbers.size));
 
     for (const candidate of toQueue) {
@@ -207,8 +233,10 @@ export async function reconcileRepositoryIntake(
       mode: repository.reviewIntakeMode,
       considered: candidates.length,
       queued: toQueue.length + directlyAssigned,
-      alreadyCurrent: candidates.length - eligible.length - directlyAssigned,
+      alreadyCurrent:
+        candidates.length - changedCandidates.length - directlyAssigned,
       deferred: eligible.length - toQueue.length,
+      failed: changedCandidates.length - eligible.length,
       skipped: false,
     };
   } catch (cause) {
@@ -225,7 +253,23 @@ export async function reconcileRepositoryIntake(
 export async function reconcileWorkspaceIntake(
   db: Database,
   workspaceId: string,
+  options?: { intakeOwnerId?: string },
 ) {
+  if (options?.intakeOwnerId) {
+    await db
+      .update(repositories)
+      .set({ intakeOwnerId: options.intakeOwnerId })
+      .where(
+        and(
+          eq(repositories.workspaceId, workspaceId),
+          ne(repositories.reviewIntakeMode, "manual"),
+          or(
+            isNull(repositories.intakeOwnerId),
+            ne(repositories.intakeOwnerId, options.intakeOwnerId),
+          ),
+        ),
+      );
+  }
   const workspaceRepositories = await db.query.repositories.findMany({
     where: eq(repositories.workspaceId, workspaceId),
     limit: MAX_REPOSITORIES_PER_PASS,
