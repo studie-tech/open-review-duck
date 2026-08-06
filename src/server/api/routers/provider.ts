@@ -4,6 +4,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   credentialAuditEvents,
   localCredentials,
+  oauthCredentials,
   providerConnections,
   providerPatCredentials,
   pullRequests,
@@ -11,6 +12,7 @@ import {
   reviewQueueItems,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
 import { isLocalDeployment } from "~/server/deployment";
 import { createProvider } from "~/server/providers";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
@@ -103,7 +105,10 @@ export const providerRouter = createTRPCRouter({
       if (
         existingConnection &&
         (existingConnection.provider !== input.provider ||
-          !["pat", "local_pat"].includes(existingConnection.credentialKind))
+          !supportsTokenReplacement(
+            localMode,
+            existingConnection.credentialKind,
+          ))
       ) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -340,6 +345,9 @@ export const providerRouter = createTRPCRouter({
             .where(
               eq(providerPatCredentials.connectionId, existingConnection.id),
             );
+          await tx
+            .delete(oauthCredentials)
+            .where(eq(oauthCredentials.connectionId, existingConnection.id));
         }
         await tx.insert(credentialAuditEvents).values({
           workspaceId: workspace.id,
