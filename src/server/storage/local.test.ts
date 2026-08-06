@@ -17,6 +17,7 @@ describe("LocalSourceObjectStore", () => {
     };
     const stored = await store.put(input);
     expect(stored.objectKey).toBe(store.customId(input));
+    expect(await store.exists(stored.objectKey)).toBe(true);
     expect(new TextDecoder().decode(await store.read(stored.objectKey))).toBe(
       "select 1",
     );
@@ -24,6 +25,7 @@ describe("LocalSourceObjectStore", () => {
       "select 1",
     );
     await store.deleteByCustomId(store.customId(input));
+    expect(await store.exists(stored.objectKey)).toBe(false);
     await expect(store.read(stored.objectKey)).rejects.toThrow();
   });
 

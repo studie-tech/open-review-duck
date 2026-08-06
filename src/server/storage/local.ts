@@ -1,6 +1,14 @@
 import "server-only";
 
-import { mkdir, open, readFile, rename, rm, statfs } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  statfs,
+} from "node:fs/promises";
 import path from "node:path";
 import type { PutSourceObject, SourceObjectStore, StoredObject } from "./types";
 
@@ -54,6 +62,16 @@ export class LocalSourceObjectStore implements SourceObjectStore {
   /** Reads one previously validated object key. */
   async read(objectKey: string) {
     return new Uint8Array(await readFile(this.resolve(objectKey)));
+  }
+
+  /** Checks one validated object key without reading its contents. */
+  async exists(objectKey: string) {
+    try {
+      await access(this.resolve(objectKey));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Deletes one previously validated object key idempotently. */

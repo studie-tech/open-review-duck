@@ -34,41 +34,75 @@ export async function persistSourceBlob(
     workspaceId: input.workspaceId,
   };
   const uploadLeaseToken = randomUUID();
+  const uploadClaim = {
+    state: "uploading" as const,
+    storage: store.kind,
+    objectKey: null,
+    byteLength: input.bytes.byteLength,
+    encoding: input.encoding ?? "utf-8",
+    mediaType: input.mediaType ?? "application/octet-stream",
+    customId: store.customId?.(putInput),
+    error: null,
+    uploadLeaseToken,
+    uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
+  };
+  /** Reuses a ready row only when its object still exists and verifies. */
+  const reuseReadyBlob = async (blob: typeof sourceBlobs.$inferSelect) => {
+    if (blob.storage !== store.kind || !blob.objectKey) return undefined;
+    try {
+      await readSourceBlob(blob);
+    } catch {
+      return undefined;
+    }
+    const [reused] = await db
+      .update(sourceBlobs)
+      .set({ updatedAt: new Date() })
+      .where(and(eq(sourceBlobs.id, blob.id), eq(sourceBlobs.state, "ready")))
+      .returning();
+    return reused;
+  };
+  /** Claims a stale ready row so its immutable object can be restored. */
+  const claimReadyBlob = async (id: string) => {
+    const [claimed] = await db
+      .update(sourceBlobs)
+      .set(uploadClaim)
+      .where(and(eq(sourceBlobs.id, id), eq(sourceBlobs.state, "ready")))
+      .returning();
+    return claimed;
+  };
   const existing = await db.query.sourceBlobs.findFirst({
     where: and(
       eq(sourceBlobs.workspaceId, input.workspaceId),
       eq(sourceBlobs.digest, digest),
     ),
   });
+  let claimed: typeof sourceBlobs.$inferSelect | undefined;
   if (existing?.state === "ready") {
-    const [reused] = await db
-      .update(sourceBlobs)
-      .set({ updatedAt: new Date() })
-      .where(
-        and(eq(sourceBlobs.id, existing.id), eq(sourceBlobs.state, "ready")),
-      )
-      .returning();
+    const reused = await reuseReadyBlob(existing);
     if (reused) return reused;
+    claimed = await claimReadyBlob(existing.id);
   }
 
-  let [claimed] = await db
-    .insert(sourceBlobs)
-    .values({
-      workspaceId: input.workspaceId,
-      digest,
-      storage: store.kind,
-      state: "uploading",
-      byteLength: input.bytes.byteLength,
-      encoding: input.encoding ?? "utf-8",
-      mediaType: input.mediaType ?? "application/octet-stream",
-      customId: store.customId?.(putInput),
-      uploadLeaseToken,
-      uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
-    })
-    .onConflictDoNothing({
-      target: [sourceBlobs.workspaceId, sourceBlobs.digest],
-    })
-    .returning();
+  if (!claimed) {
+    [claimed] = await db
+      .insert(sourceBlobs)
+      .values({
+        workspaceId: input.workspaceId,
+        digest,
+        storage: store.kind,
+        state: "uploading",
+        byteLength: input.bytes.byteLength,
+        encoding: input.encoding ?? "utf-8",
+        mediaType: input.mediaType ?? "application/octet-stream",
+        customId: store.customId?.(putInput),
+        uploadLeaseToken,
+        uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
+      })
+      .onConflictDoNothing({
+        target: [sourceBlobs.workspaceId, sourceBlobs.digest],
+      })
+      .returning();
+  }
   if (!claimed) {
     const raced = await db.query.sourceBlobs.findFirst({
       where: and(
@@ -76,37 +110,30 @@ export async function persistSourceBlob(
         eq(sourceBlobs.digest, digest),
       ),
     });
-    if (raced?.state === "ready") return raced;
+    if (raced?.state === "ready") {
+      const reused = await reuseReadyBlob(raced);
+      if (reused) return reused;
+      claimed = await claimReadyBlob(raced.id);
+    }
     if (raced) {
-      [claimed] = await db
-        .update(sourceBlobs)
-        .set({
-          state: "uploading",
-          storage: store.kind,
-          objectKey: null,
-          byteLength: input.bytes.byteLength,
-          encoding: input.encoding ?? "utf-8",
-          mediaType: input.mediaType ?? "application/octet-stream",
-          customId: store.customId?.(putInput),
-          error: null,
-          uploadLeaseToken,
-          uploadLeaseExpiresAt: new Date(
-            Date.now() + UPLOAD_LEASE_MILLISECONDS,
-          ),
-        })
-        .where(
-          and(
-            eq(sourceBlobs.id, raced.id),
-            or(
-              eq(sourceBlobs.state, "failed"),
-              and(
-                eq(sourceBlobs.state, "uploading"),
-                lt(sourceBlobs.uploadLeaseExpiresAt, new Date()),
+      if (!claimed) {
+        [claimed] = await db
+          .update(sourceBlobs)
+          .set(uploadClaim)
+          .where(
+            and(
+              eq(sourceBlobs.id, raced.id),
+              or(
+                eq(sourceBlobs.state, "failed"),
+                and(
+                  eq(sourceBlobs.state, "uploading"),
+                  lt(sourceBlobs.uploadLeaseExpiresAt, new Date()),
+                ),
               ),
             ),
-          ),
-        )
-        .returning();
+          )
+          .returning();
+      }
     }
     if (!claimed) {
       throw new Error("A concurrent source upload is still in progress");

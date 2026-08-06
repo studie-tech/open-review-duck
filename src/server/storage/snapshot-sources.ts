@@ -1,0 +1,67 @@
+import "server-only";
+
+import { desc, eq, inArray } from "drizzle-orm";
+import { reviewSnapshots, reviewUnits, sourceBlobs } from "@/drizzle/schema";
+import type { db as database } from "~/server/db";
+import { sourceObjectStore } from "./index";
+
+type Database = typeof database;
+
+/** Checks that every source object needed to render a snapshot is still present. */
+export async function reviewSnapshotSourcesAvailable(
+  db: Database,
+  snapshotId: string,
+) {
+  const units = await db.query.reviewUnits.findMany({
+    where: eq(reviewUnits.snapshotId, snapshotId),
+    columns: { currentBlobId: true, previousBlobId: true },
+  });
+  const blobIds = [
+    ...new Set(
+      units.flatMap((unit) =>
+        [unit.currentBlobId, unit.previousBlobId].filter((id): id is string =>
+          Boolean(id),
+        ),
+      ),
+    ),
+  ];
+  if (blobIds.length === 0) return units.length === 0;
+
+  const blobs = await db.query.sourceBlobs.findMany({
+    where: inArray(sourceBlobs.id, blobIds),
+  });
+  if (blobs.length !== blobIds.length) return false;
+  const store = await sourceObjectStore();
+  return (
+    await Promise.all(
+      blobs.map(async (blob) => {
+        if (
+          blob.state !== "ready" ||
+          blob.storage !== store.kind ||
+          !blob.objectKey
+        ) {
+          return false;
+        }
+        if (!store.exists) return true;
+        try {
+          return await store.exists(blob.objectKey);
+        } catch {
+          return false;
+        }
+      }),
+    )
+  ).every(Boolean);
+}
+
+/** Checks the newest snapshot for one pull request before queue assignment. */
+export async function pullRequestSnapshotSourcesAvailable(
+  db: Database,
+  pullRequestId: string,
+) {
+  const snapshot = await db.query.reviewSnapshots.findFirst({
+    where: eq(reviewSnapshots.pullRequestId, pullRequestId),
+    orderBy: [desc(reviewSnapshots.version)],
+    columns: { id: true },
+  });
+  return snapshot ? reviewSnapshotSourcesAvailable(db, snapshot.id) : false;
+}
