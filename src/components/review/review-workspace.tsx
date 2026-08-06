@@ -69,14 +69,11 @@ import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
 import { hydratePrivateReviewSources } from "~/lib/private-source-client";
 import {
   buildReviewHierarchy,
-  createReviewNavigationHistory,
   deletedFileSignOffUnits,
   nextPendingReviewIndex,
   nextPendingReviewIndexPreferring,
   optimisticallySignOffReviewUnits,
-  pushReviewNavigationHistory,
   restoreReviewUnitAfterFailedSignOff,
-  reviewNavigationHistoryTarget,
   reviewPathSearchMatches,
   reviewPathSections,
 } from "~/lib/review-navigation";
@@ -235,6 +232,8 @@ import {
   PATH_PAGE_SIZE,
   ProviderConversation,
   providerLabel,
+  ReviewConceptMemberHeader,
+  ReviewConceptMemberPreview,
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewScopeMarker,
@@ -389,9 +388,6 @@ export function ReviewWorkspace({
     ),
   );
   const [activeIndex, setActiveIndex] = useState(firstPending);
-  const [navigationHistory, setNavigationHistory] = useState(() =>
-    createReviewNavigationHistory(units[firstPending]?.id),
-  );
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [showDiff, setShowDiff] = useState(true);
   const [pathSearch, setPathSearch] = useState("");
@@ -923,16 +919,11 @@ export function ReviewWorkspace({
     importPreview?.source ?? "",
     importPreview?.language ?? "text",
   );
-  /** Opens a review unit and optionally records it in visited-unit history. */
-  function selectUnit(index: number, recordHistory = true) {
+  /** Opens one atomic review unit and selects its concept card. */
+  function selectUnit(index: number) {
     const target = units[index];
     if (!target) return;
     setActiveIndex(index);
-    if (recordHistory) {
-      setNavigationHistory((current) =>
-        pushReviewNavigationHistory(current, target.id),
-      );
-    }
     setShowDiff(true);
     setStartedAt(Date.now());
     setQueueLimit(INITIAL_PATH_ITEMS);
@@ -953,23 +944,19 @@ export function ReviewWorkspace({
     if (unitIndex >= 0) selectUnit(unitIndex);
   }
 
-  /** Moves through visited units before falling back to canonical adjacency. */
-  function navigateUnit(direction: -1 | 1) {
-    const visitedTarget = reviewNavigationHistoryTarget(
-      navigationHistory,
-      direction,
-    );
-    if (visitedTarget) {
-      const index = units.findIndex((unit) => unit.id === visitedTarget.unitId);
-      if (index >= 0) {
-        setNavigationHistory(visitedTarget.history);
-        selectUnit(index, false);
-        return;
-      }
-    }
-    const adjacentIndex = activeIndex + direction;
-    if (adjacentIndex >= 0 && adjacentIndex < units.length) {
-      selectUnit(adjacentIndex);
+  /** Selects an adjacent atomic member inside the current review concept. */
+  function navigateConceptMember(direction: -1 | 1) {
+    const member = activeConceptMembers[activeConceptMemberIndex + direction];
+    if (!member) return;
+    const index = units.findIndex(({ id }) => id === member.id);
+    if (index >= 0) selectUnit(index);
+  }
+
+  /** Opens the adjacent concept while preserving concept-first navigation. */
+  function navigateConcept(direction: -1 | 1) {
+    const index = activeConceptPathIndex + direction;
+    if (index >= 0 && index < initialData.concepts.length) {
+      selectConceptPath(index);
     }
   }
 
@@ -1196,12 +1183,6 @@ export function ReviewWorkspace({
     setUnits(updated);
     if (nextIndex >= 0) {
       setActiveIndex(nextIndex);
-      const nextUnit = updated[nextIndex];
-      if (nextUnit) {
-        setNavigationHistory((history) =>
-          pushReviewNavigationHistory(history, nextUnit.id),
-        );
-      }
     }
     setQueueLimit(INITIAL_PATH_ITEMS);
     setShowDiff(true);
@@ -1236,9 +1217,6 @@ export function ReviewWorkspace({
     );
     const rollback = first.queued.rollback;
     setActiveIndex(rollback.unitIndex);
-    setNavigationHistory((history) =>
-      pushReviewNavigationHistory(history, rollback.unit.id),
-    );
     if (rollback.pathSearch.trim()) {
       setPathSearch((current) =>
         current.trim() ? current : rollback.pathSearch,
@@ -1884,12 +1862,6 @@ export function ReviewWorkspace({
         const nextIndex = nextReviewIndexAfterAction(updated);
         if (nextIndex >= 0) {
           setActiveIndex(nextIndex);
-          const nextUnit = updated[nextIndex];
-          if (nextUnit) {
-            setNavigationHistory((history) =>
-              pushReviewNavigationHistory(history, nextUnit.id),
-            );
-          }
         }
         setQueueLimit(INITIAL_PATH_ITEMS);
         setWaitingLimit(INITIAL_PATH_ITEMS);
@@ -3278,35 +3250,43 @@ export function ReviewWorkspace({
     },
     {
       id: "next-unit",
-      label: "Go forward",
-      description:
-        reviewNavigationHistoryTarget(navigationHistory, 1) !== undefined
-          ? "Return to the next unit in your review history"
-          : "Move one step forward in the original review path",
+      label: "Select next unit",
+      description: "Select the next atomic unit in this concept",
       group: "Review navigation",
       icon: <ChevronDown className="size-4" />,
       shortcut: reviewShortcuts.nextUnit,
-      alternateShortcut: reviewShortcuts.nextUnitArrow,
-      disabled:
-        reviewNavigationHistoryTarget(navigationHistory, 1) === undefined &&
-        activeIndex >= units.length - 1,
-      onSelect: () => navigateUnit(1),
+      disabled: activeConceptMemberIndex >= activeConceptMembers.length - 1,
+      onSelect: () => navigateConceptMember(1),
     },
     {
       id: "previous-unit",
-      label: "Go back",
-      description:
-        reviewNavigationHistoryTarget(navigationHistory, -1) !== undefined
-          ? "Return to the unit you visited immediately before this one"
-          : "Move one step back in the original review path",
+      label: "Select previous unit",
+      description: "Select the previous atomic unit in this concept",
       group: "Review navigation",
       icon: <ChevronRight className="size-4 -rotate-90" />,
       shortcut: reviewShortcuts.previousUnit,
-      alternateShortcut: reviewShortcuts.previousUnitArrow,
-      disabled:
-        reviewNavigationHistoryTarget(navigationHistory, -1) === undefined &&
-        activeIndex <= 0,
-      onSelect: () => navigateUnit(-1),
+      disabled: activeConceptMemberIndex <= 0,
+      onSelect: () => navigateConceptMember(-1),
+    },
+    {
+      id: "next-concept",
+      label: "Open next concept",
+      description: "Move to the next concept in the review path",
+      group: "Review navigation",
+      icon: <ChevronRight className="size-4" />,
+      shortcut: reviewShortcuts.nextConcept,
+      disabled: activeConceptPathIndex >= initialData.concepts.length - 1,
+      onSelect: () => navigateConcept(1),
+    },
+    {
+      id: "previous-concept",
+      label: "Open previous concept",
+      description: "Move to the previous concept in the review path",
+      group: "Review navigation",
+      icon: <ChevronRight className="size-4 rotate-180" />,
+      shortcut: reviewShortcuts.previousConcept,
+      disabled: activeConceptPathIndex <= 0,
+      onSelect: () => navigateConcept(-1),
     },
     {
       id: "next-pending-unit",
@@ -3540,12 +3520,12 @@ export function ReviewWorkspace({
       if (event.key === "Escape") {
         event.preventDefault();
         setKeyboardLine(undefined);
-      } else if (event.key === "ArrowDown" || event.key === "j") {
+      } else if (event.key === "ArrowDown") {
         event.preventDefault();
         setKeyboardLine((current) =>
           Math.min((current ?? startLine) + 1, endLine),
         );
-      } else if (event.key === "ArrowUp" || event.key === "k") {
+      } else if (event.key === "ArrowUp") {
         event.preventDefault();
         setKeyboardLine((current) =>
           Math.max((current ?? startLine) - 1, startLine),
@@ -4446,6 +4426,41 @@ export function ReviewWorkspace({
                 </span>
               </div>
             )}
+            {activeConceptMembers
+              .slice(0, activeConceptMemberIndex)
+              .map((member, memberIndex) => {
+                const memberUnitIndex = units.findIndex(
+                  ({ id }) => id === member.id,
+                );
+                return (
+                  <div key={member.id} className="mb-4">
+                    <ReviewConceptMemberPreview
+                      unit={member}
+                      index={memberIndex}
+                      count={activeConceptMembers.length}
+                      sourceAvailable={
+                        initialData.sourceDelivery !== "direct" ||
+                        member.kind === "binary" ||
+                        hydratedUnitIds.has(member.id)
+                      }
+                      onSelect={() => selectUnit(memberUnitIndex)}
+                    />
+                  </div>
+                );
+              })}
+            <div
+              ref={reviewUnitStartRef}
+              data-review-member-id={activeUnit.id}
+              data-selected="true"
+              className="mx-4 overflow-hidden rounded-t-xl border border-cyan/35 bg-surface/20 shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]"
+            >
+              <ReviewConceptMemberHeader
+                unit={activeUnit}
+                index={activeConceptMemberIndex}
+                count={activeConceptMembers.length}
+                selected
+              />
+            </div>
             {sideBySideVisible && (
               <div className="px-4">
                 <div className="border-line bg-surface/35 text-fog flex items-center justify-between gap-3 rounded-t-xl border border-b-0 px-3 py-2 font-sans text-[10px]">
@@ -4638,11 +4653,6 @@ export function ReviewWorkspace({
                         );
                       })}
                     <div
-                      ref={
-                        lineNumber === activeUnit.startLine
-                          ? reviewUnitStartRef
-                          : undefined
-                      }
                       id={`review-line-${lineNumber}`}
                       className={cn(
                         "group grid grid-cols-[55px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
@@ -4769,70 +4779,28 @@ export function ReviewWorkspace({
                   <span className="h-px flex-1 bg-line" />
                 </div>
               )}
-            {activeConceptMembers.length > 1 && (
-              <section className="mx-4 mt-8 space-y-4 border-t border-line pt-6 pb-4 font-sans">
-                <div>
-                  <p className="text-cloud text-xs font-medium">
-                    Other changes in this concept
-                  </p>
-                  <p className="text-fog mt-1 text-[10px] leading-4">
-                    All members are loaded and signed atomically. Open a member
-                    for its diff, comments, and AI assistance.
-                  </p>
-                </div>
-                {activeConceptMembers
-                  .filter(({ id }) => id !== activeUnit.id)
-                  .map((member) => {
-                    const memberIndex = units.findIndex(
-                      ({ id }) => id === member.id,
-                    );
-                    const sourceAvailable =
-                      initialData.sourceDelivery !== "direct" ||
-                      member.kind === "binary" ||
-                      hydratedUnitIds.has(member.id);
-                    return (
-                      <article
-                        key={member.id}
-                        className="overflow-hidden rounded-xl border border-line bg-surface/30"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => selectUnit(memberIndex)}
-                          className="hover:bg-surface-subtle flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left transition"
-                        >
-                          <span className="min-w-0">
-                            <span className="text-cloud block truncate font-mono text-[10px]">
-                              {member.path}
-                            </span>
-                            <span className="text-fog mt-0.5 block truncate text-[9px]">
-                              {member.name} · {member.changedLineCount} changed
-                              lines
-                            </span>
-                          </span>
-                          <span className="text-cyan shrink-0 text-[9px]">
-                            Open diff
-                          </span>
-                        </button>
-                        {sourceAvailable ? (
-                          member.kind === "binary" ? (
-                            <p className="text-mist px-3 py-4 text-[10px]">
-                              Binary change · explicit acknowledgement required
-                            </p>
-                          ) : (
-                            <pre className="text-cloud/80 max-h-64 overflow-auto px-3 py-3 font-mono text-[10px] leading-4">
-                              {member.source}
-                            </pre>
-                          )
-                        ) : (
-                          <p className="px-3 py-4 text-[10px] text-amber-700 dark:text-amber-200">
-                            Source unavailable. Concept sign-off is blocked.
-                          </p>
-                        )}
-                      </article>
-                    );
-                  })}
-              </section>
-            )}
+            {activeConceptMembers
+              .slice(activeConceptMemberIndex + 1)
+              .map((member, memberOffset) => {
+                const memberUnitIndex = units.findIndex(
+                  ({ id }) => id === member.id,
+                );
+                return (
+                  <div key={member.id} className="mt-4">
+                    <ReviewConceptMemberPreview
+                      unit={member}
+                      index={activeConceptMemberIndex + memberOffset + 1}
+                      count={activeConceptMembers.length}
+                      sourceAvailable={
+                        initialData.sourceDelivery !== "direct" ||
+                        member.kind === "binary" ||
+                        hydratedUnitIds.has(member.id)
+                      }
+                      onSelect={() => selectUnit(memberUnitIndex)}
+                    />
+                  </div>
+                );
+              })}
           </div>
           {aiStatus.data?.status === "completed" && aiStatus.data.result && (
             <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">
@@ -4878,16 +4846,16 @@ export function ReviewWorkspace({
                   <span className="flex items-center gap-1.5 whitespace-nowrap">
                     <ShortcutAlternatives
                       shortcut={reviewShortcuts.previousUnit}
-                      alternateShortcut={reviewShortcuts.previousUnitArrow}
+                      alternateShortcut={reviewShortcuts.nextUnit}
                     />
-                    Previous
+                    Unit
                   </span>
                   <span className="flex items-center gap-1.5 whitespace-nowrap">
                     <ShortcutAlternatives
-                      shortcut={reviewShortcuts.nextUnit}
-                      alternateShortcut={reviewShortcuts.nextUnitArrow}
+                      shortcut={reviewShortcuts.previousConcept}
+                      alternateShortcut={reviewShortcuts.nextConcept}
                     />
-                    Next
+                    Concept
                   </span>
                 </span>
               )}
