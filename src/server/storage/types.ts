@@ -15,6 +15,7 @@ export interface SourceObjectStore {
   customId?(input: PutSourceObject): string;
   put(input: PutSourceObject): Promise<StoredObject>;
   read(objectKey: string): Promise<Uint8Array>;
+  exists?(objectKey: string): Promise<boolean>;
   delete(objectKey: string): Promise<void>;
   deleteByCustomId?(customId: string): Promise<void>;
   createReadAccess(

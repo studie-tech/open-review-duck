@@ -14,6 +14,7 @@ import {
   signOffs,
   snapshotFiles,
 } from "@/drizzle/schema";
+import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import {
   clusterReviewConcepts,
   validateConceptPartition,
@@ -29,12 +30,11 @@ import {
   withPreparedTreeSitterLanguages,
 } from "~/server/analysis/tree-sitter";
 import { type AnalyzedUnit, applySourceBudget } from "~/server/analysis/types";
-import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { providerForConnection } from "~/server/providers/credentials";
 import { canCarryReviewWait } from "~/server/review/waiting";
-import { hydrateReviewUnits } from "~/server/storage/review-units";
+import { reviewSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
 import { persistSourceBlob } from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "./retention";
 import { assertCompleteChangedFileSet } from "./revision";
@@ -158,14 +158,14 @@ export async function syncPullRequest(
         orderBy: [desc(reviewSnapshots.version)],
       })
     : undefined;
-  const preexistingUnits = preexistingSnapshot
-    ? await hydrateReviewUnits(
-        db,
-        await db.query.reviewUnits.findMany({
+  const [preexistingUnits, preexistingSourcesAvailable] = preexistingSnapshot
+    ? await Promise.all([
+        db.query.reviewUnits.findMany({
           where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
         }),
-      )
-    : [];
+        reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id),
+      ])
+    : [[], false];
 
   await options?.onProgress?.(SYNC_PROGRESS.savingSnapshot);
   const result = await db.transaction(async (tx) => {
@@ -244,7 +244,8 @@ export async function syncPullRequest(
       currentSnapshot?.headSha === confirmedRemote.headSha &&
       currentSnapshot.baseSha === confirmedRemote.baseSha &&
       currentSnapshot.analysisVersion === CURRENT_ANALYSIS_VERSION &&
-      currentSnapshot.createdAt >= retentionCutoff
+      currentSnapshot.createdAt >= retentionCutoff &&
+      preexistingSourcesAvailable
     ) {
       return {
         pullRequest,
@@ -295,8 +296,8 @@ export async function syncPullRequest(
         signature: unit.signature ?? undefined,
         startLine: unit.startLine,
         endLine: unit.endLine,
-        source: unit.source,
-        previousSource: unit.previousSource ?? undefined,
+        source: "",
+        previousSource: undefined,
         relatedRanges: unit.relatedRanges ?? undefined,
         contentHash: unit.contentHash,
         semanticHash: unit.semanticHash,

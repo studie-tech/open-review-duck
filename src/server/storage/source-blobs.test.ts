@@ -2,12 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   put: vi.fn(),
-  sourceObjectStore: vi.fn(async () => ({ kind: "local", put: mocks.put })),
+  read: vi.fn(),
+  sourceObjectStore: vi.fn(async () => ({
+    kind: "local",
+    put: mocks.put,
+    read: mocks.read,
+  })),
 }));
 
 vi.mock("./index", () => ({ sourceObjectStore: mocks.sourceObjectStore }));
 
-import { persistSourceBlob, pruneOrphanSourceBlobs } from "./source-blobs";
+import {
+  persistSourceBlob,
+  pruneOrphanSourceBlobs,
+  sourceDigest,
+} from "./source-blobs";
 
 describe("source blob pruning", () => {
   it("keeps newly-created unreferenced blobs inside the ingestion grace period", async () => {
@@ -30,7 +39,17 @@ describe("source blob pruning", () => {
   });
 
   it("refreshes the reuse timestamp before returning a deduplicated blob", async () => {
-    const existing = { id: "blob-id", state: "ready" };
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    const bytes = new TextEncoder().encode("reused");
+    mocks.read.mockResolvedValue(bytes);
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/reused",
+      digest: sourceDigest(bytes),
+    };
     const returning = vi.fn(async () => [
       { ...existing, updatedAt: new Date() },
     ]);
@@ -45,15 +64,72 @@ describe("source blob pruning", () => {
 
     await persistSourceBlob(database as never, {
       workspaceId: "workspace",
-      bytes: new TextEncoder().encode("reused"),
+      bytes,
     });
 
     expect(set).toHaveBeenCalledWith({ updatedAt: expect.any(Date) });
     expect(mocks.put).not.toHaveBeenCalled();
   });
 
+  it("restores a ready database row whose local object is missing", async () => {
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    mocks.read.mockRejectedValue(
+      Object.assign(new Error("missing"), { code: "ENOENT" }),
+    );
+    mocks.put.mockResolvedValue({
+      storage: "local",
+      objectKey: "objects/restored",
+    });
+    const bytes = new TextEncoder().encode("restore me");
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/missing",
+      digest: sourceDigest(bytes),
+    };
+    const claimed = {
+      ...existing,
+      state: "uploading",
+      objectKey: null,
+      uploadLeaseToken: "lease",
+    };
+    const ready = {
+      ...claimed,
+      state: "ready",
+      objectKey: "objects/restored",
+    };
+    const returning = vi
+      .fn()
+      .mockResolvedValueOnce([claimed])
+      .mockResolvedValueOnce([ready]);
+    const database = {
+      query: {
+        sourceBlobs: { findFirst: vi.fn(async () => existing) },
+      },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning })),
+        })),
+      })),
+    };
+
+    await expect(
+      persistSourceBlob(database as never, {
+        workspaceId: "workspace",
+        bytes,
+      }),
+    ).resolves.toMatchObject({
+      state: "ready",
+      objectKey: "objects/restored",
+    });
+    expect(mocks.put).toHaveBeenCalledOnce();
+  });
+
   it("reclaims a failed upload on the next synchronization attempt", async () => {
     mocks.put.mockReset();
+    mocks.read.mockReset();
     mocks.put.mockResolvedValue({
       storage: "local",
       objectKey: "objects/recovered",

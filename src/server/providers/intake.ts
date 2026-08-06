@@ -9,7 +9,9 @@ import {
   syncRuns,
 } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
+import { isLocalDeployment } from "~/server/deployment";
 import { assignPullRequestToQueue } from "~/server/review/queue";
+import { pullRequestSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
 import { startPullRequestSync } from "../workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
 import { providerForConnection } from "./credentials";
@@ -171,11 +173,26 @@ export async function reconcileRepositoryIntake(
     const queueStateByNumber = new Map(
       queueItems.map((item) => [item.number, item.state]),
     );
+    const sourceRepairNumbers = new Set<number>();
+    if (isLocalDeployment()) {
+      await Promise.all(
+        candidates.map(async (candidate) => {
+          const known = knownByNumber.get(candidate.number);
+          if (
+            known &&
+            !(await pullRequestSnapshotSourcesAvailable(db, known.id))
+          ) {
+            sourceRepairNumbers.add(candidate.number);
+          }
+        }),
+      );
+    }
     const changedCandidates = candidates.filter((candidate) => {
       if (activeNumbers.has(candidate.number)) return false;
       const known = knownByNumber.get(candidate.number);
       return (
         !known ||
+        sourceRepairNumbers.has(candidate.number) ||
         known.headSha !== candidate.headSha ||
         known.baseSha !== candidate.baseSha ||
         known.state !== candidate.state
@@ -186,6 +203,7 @@ export async function reconcileRepositoryIntake(
       ? changedCandidates
       : changedCandidates.filter(
           (candidate) =>
+            sourceRepairNumbers.has(candidate.number) ||
             latestStatusByNumber.get(candidate.number) !== "failed",
         );
     const toQueue = eligible.slice(0, automaticSyncSlots(activeNumbers.size));
@@ -207,6 +225,7 @@ export async function reconcileRepositoryIntake(
       const known = knownByNumber.get(candidate.number);
       if (
         !known ||
+        sourceRepairNumbers.has(candidate.number) ||
         known.headSha !== candidate.headSha ||
         known.baseSha !== candidate.baseSha ||
         queueStateByNumber.get(candidate.number) === "active"
