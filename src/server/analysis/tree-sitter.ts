@@ -25,6 +25,27 @@ const MAXIMUM_CACHED_LANGUAGES =
 const languages = new Map<TreeSitterLanguage, Language>();
 const pendingLanguages = new Map<TreeSitterLanguage, Promise<Language>>();
 const activeLanguageCounts = new Map<TreeSitterLanguage, number>();
+const grammarDependencies: Partial<
+  Record<TreeSitterLanguage, readonly TreeSitterLanguage[]>
+> = {
+  makefile: ["shell"],
+};
+
+/** Expands requested grammars with parsers used transitively during analysis. */
+function requiredLanguages(requested: Iterable<TreeSitterLanguage>) {
+  const required = new Set(requested);
+  const pending = [...required];
+  while (pending.length > 0) {
+    const language = pending.shift();
+    if (!language) continue;
+    for (const dependency of grammarDependencies[language] ?? []) {
+      if (required.has(dependency)) continue;
+      required.add(dependency);
+      pending.push(dependency);
+    }
+  }
+  return required;
+}
 
 /** Returns every grammar protected by an active analysis operation. */
 function activeLanguages() {
@@ -55,7 +76,7 @@ export async function prepareTreeSitterLanguages(
   requested: Iterable<TreeSitterLanguage>,
 ) {
   await initializeParser();
-  const requestedSet = new Set(requested);
+  const requestedSet = requiredLanguages(requested);
   for (const language of requestedSet) {
     const cached = languages.get(language);
     if (cached) {
@@ -88,7 +109,7 @@ export async function withPreparedTreeSitterLanguages<T>(
   requested: Iterable<TreeSitterLanguage>,
   operation: () => T | Promise<T>,
 ) {
-  const requestedSet = new Set(requested);
+  const requestedSet = requiredLanguages(requested);
   acquireLanguages(requestedSet);
   try {
     await prepareTreeSitterLanguages(requestedSet);
