@@ -845,7 +845,11 @@ export const providerRouter = createTRPCRouter({
 
   reconcileWorkspaceIntake: protectedProcedure.mutation(async ({ ctx }) => {
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-    return reconcileWorkspaceIntake(ctx.db, workspace.id);
+    return reconcileWorkspaceIntake(
+      ctx.db,
+      workspace.id,
+      isLocalDeployment() ? { intakeOwnerId: ctx.auth.userId } : undefined,
+    );
   }),
 
   exportRepositoryData: protectedProcedure
