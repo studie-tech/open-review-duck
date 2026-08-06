@@ -30,6 +30,10 @@ import {
 } from "~/components/settings/provider-token-guide";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import {
+  supportsManagedReauthorization,
+  supportsTokenReplacement,
+} from "~/lib/provider-credential-recovery";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Connection = RouterOutputs["provider"]["listConnections"][number];
@@ -396,8 +400,11 @@ export function ProviderSettings({
 
   /** Returns whether this connection can be recovered by replacing its token. */
   const canReplaceToken = (connection: Connection) =>
-    connection.credentialKind === "pat" ||
-    connection.credentialKind === "local_pat";
+    supportsTokenReplacement(localMode, connection.credentialKind);
+
+  /** Returns whether this connection can repeat its managed authorization. */
+  const canReauthorize = (connection: Connection) =>
+    supportsManagedReauthorization(localMode, connection.credentialKind);
 
   /** Opens the provider form in create mode. */
   const openNewConnectionForm = (nextProvider: Provider = provider) => {
@@ -445,15 +452,18 @@ export function ProviderSettings({
   };
 
   /** Redirects SaaS users into a supported provider authorization flow. */
-  const startHostedAuthorization = async () => {
-    if (provider === "azure_devops") return;
+  const startHostedAuthorization = async (authorizationProvider: Provider) => {
+    if (authorizationProvider === "azure_devops") return;
     setAuthorizationPending(true);
     try {
-      const response = await fetch(`/api/integrations/${provider}/start`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ redirectPath: "/settings/providers" }),
-      });
+      const response = await fetch(
+        `/api/integrations/${authorizationProvider}/start`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ redirectPath: "/settings/providers" }),
+        },
+      );
       const result = (await response.json()) as {
         authorizationUrl?: string;
         error?: string;
@@ -737,7 +747,7 @@ export function ProviderSettings({
               <div className="flex justify-end">
                 <Button
                   disabled={authorizationPending}
-                  onClick={startHostedAuthorization}
+                  onClick={() => startHostedAuthorization(provider)}
                 >
                   {authorizationPending && (
                     <Loader2 className="size-4 animate-spin" />
@@ -827,6 +837,23 @@ export function ProviderSettings({
                       <Pencil className="size-3.5" />
                     </button>
                   )}
+                  {canReauthorize(connection) && (
+                    <button
+                      type="button"
+                      aria-label={`Reconnect ${connection.displayName}`}
+                      disabled={authorizationPending}
+                      onClick={() =>
+                        startHostedAuthorization(connection.provider)
+                      }
+                      className="text-fog hover:text-cloud grid size-9 shrink-0 place-items-center rounded-full transition hover:bg-white/[.04]"
+                    >
+                      {authorizationPending ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-3.5" />
+                      )}
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-label={`Disconnect ${connection.displayName}`}
@@ -857,6 +884,24 @@ export function ProviderSettings({
                         onClick={() => openConnectionEditor(connection)}
                       >
                         <Pencil className="size-3.5" /> Replace token
+                      </Button>
+                    )}
+                    {canReauthorize(connection) && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={authorizationPending}
+                        onClick={() =>
+                          startHostedAuthorization(connection.provider)
+                        }
+                      >
+                        {authorizationPending ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-3.5" />
+                        )}
+                        Reconnect{" "}
+                        {connection.provider === "github" ? "GitHub" : "GitLab"}
                       </Button>
                     )}
                   </div>
