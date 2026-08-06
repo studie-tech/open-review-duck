@@ -70,10 +70,10 @@ export const PATH_PAGE_SIZE = 20;
 export const CONTEXT_PAGE_LINES = 20;
 const DIFF_CONTEXT_PAGE_LINES = 20;
 export const reviewShortcuts = {
-  nextUnit: [{ key: "j" }],
-  nextUnitArrow: [{ key: "ArrowRight" }],
-  previousUnit: [{ key: "k" }],
-  previousUnitArrow: [{ key: "ArrowLeft" }],
+  nextUnit: [{ key: "ArrowDown", mod: true }],
+  previousUnit: [{ key: "ArrowUp", mod: true }],
+  nextConcept: [{ key: "ArrowRight" }],
+  previousConcept: [{ key: "ArrowLeft" }],
   scrollUp: [{ key: "ArrowUp" }],
   scrollDown: [{ key: "ArrowDown" }],
   togglePathPanel: [{ key: "b", mod: true }],
@@ -96,6 +96,127 @@ export const reviewShortcuts = {
   aiSettings: [{ key: "g" }, { key: "a" }],
   postComment: [{ key: "Enter", mod: true }],
 } satisfies Record<string, KeyboardShortcut>;
+
+/** Renders the shared identity and selection treatment for one concept member. */
+export function ReviewConceptMemberHeader({
+  unit,
+  index,
+  count,
+  selected,
+  onSelect,
+}: {
+  unit: ReviewUnit;
+  index: number;
+  count: number;
+  selected: boolean;
+  onSelect?: () => void;
+}) {
+  const content = (
+    <>
+      <span className="min-w-0">
+        <span className="text-cloud block truncate font-mono text-[10px]">
+          {unit.path}
+        </span>
+        <span className="text-fog mt-0.5 block truncate text-[9px]">
+          {unit.name} · {unit.changedLineCount} changed lines
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-2 text-[9px]">
+        <span className="text-fog">
+          Unit {index + 1}/{count}
+        </span>
+        {selected && (
+          <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+            Selected
+          </span>
+        )}
+      </span>
+    </>
+  );
+  return selected ? (
+    <div className="bg-cyan/[.035] flex items-center justify-between gap-3 border-b border-cyan/20 px-3 py-2 text-left">
+      {content}
+    </div>
+  ) : (
+    <button
+      type="button"
+      aria-label={`Select ${unit.name}`}
+      onClick={onSelect}
+      className="hover:bg-surface-subtle flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left transition"
+    >
+      {content}
+    </button>
+  );
+}
+
+/** Renders a selectable, syntax-highlighted atomic member without hiding its code. */
+export function ReviewConceptMemberPreview({
+  unit,
+  index,
+  count,
+  sourceAvailable,
+  onSelect,
+}: {
+  unit: ReviewUnit;
+  index: number;
+  count: number;
+  sourceAvailable: boolean;
+  onSelect: () => void;
+}) {
+  const source =
+    unit.changeType === "deleted"
+      ? (unit.previousSource ?? unit.source)
+      : unit.source;
+  const lines = useHighlightedSource(source, unit.language);
+  return (
+    <article
+      data-review-member-id={unit.id}
+      className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30"
+    >
+      <ReviewConceptMemberHeader
+        unit={unit}
+        index={index}
+        count={count}
+        selected={false}
+        onSelect={onSelect}
+      />
+      {!sourceAvailable ? (
+        <p className="px-3 py-4 font-sans text-[10px] text-amber-700 dark:text-amber-200">
+          Source unavailable. Concept sign-off is blocked.
+        </p>
+      ) : unit.kind === "binary" ? (
+        <p className="text-mist px-3 py-4 font-sans text-[10px]">
+          Binary change · explicit acknowledgement required
+        </p>
+      ) : (
+        <div className="max-h-[32rem] overflow-auto py-2">
+          {lines.map((line, lineIndex) => (
+            <div
+              key={`${unit.id}-${lineIndex}`}
+              className="grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
+            >
+              <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                {unit.startLine + lineIndex}
+              </span>
+              <pre className="syntax-code overflow-visible text-cloud/80">
+                {line.tokens.length
+                  ? line.tokens.map((token, tokenIndex) => (
+                      <span
+                        key={`${tokenIndex}-${token.text.length}`}
+                        className={token.className || undefined}
+                      >
+                        {token.text}
+                      </span>
+                    ))
+                  : " "}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
 
 export interface AiQuestionEntry {
   error: string | null;

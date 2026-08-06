@@ -18,6 +18,7 @@ import {
   InlineAiQuestion,
   ProviderConversation,
   ProviderConversationHistory,
+  ReviewConceptMemberPreview,
   rememberAiConversationVisibility,
   reviewShortcuts,
   SideBySideUnitDiff,
@@ -38,6 +39,49 @@ describe("review shortcuts", () => {
       { key: "d", shift: true },
     ]);
     expect(reviewShortcuts.undoReview).toEqual([{ key: "u" }]);
+    expect(reviewShortcuts.nextUnit).toEqual([{ key: "ArrowDown", mod: true }]);
+    expect(reviewShortcuts.previousUnit).toEqual([
+      { key: "ArrowUp", mod: true },
+    ]);
+    expect(reviewShortcuts.nextConcept).toEqual([{ key: "ArrowRight" }]);
+    expect(reviewShortcuts.previousConcept).toEqual([{ key: "ArrowLeft" }]);
+    expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[jk]"/);
+  });
+});
+
+describe("ReviewConceptMemberPreview", () => {
+  it("shows highlighted source without an open-diff gate", async () => {
+    const onSelect = vi.fn();
+    render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: "unit-1",
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "const answer = 42;\nreturn answer;",
+            startLine: 10,
+            language: "typescript",
+            kind: "function",
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable
+        onSelect={onSelect}
+      />,
+    );
+
+    expect(screen.queryByText("Open diff")).not.toBeInTheDocument();
+    expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
+    expect(screen.getByRole("article")).toHaveTextContent("return answer;");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Select example" }),
+    );
+    expect(onSelect).toHaveBeenCalledOnce();
   });
 });
 
