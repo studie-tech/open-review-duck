@@ -18,6 +18,14 @@ interface ErrorDetails {
 const diagnosticValue = (value: unknown) =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
+/** Returns whether a later credential update resolved an earlier sync failure. */
+export function connectionUpdateResolvesSyncFailure(
+  syncCreatedAt: Date,
+  connectionUpdatedAt: Date,
+) {
+  return connectionUpdatedAt > syncCreatedAt;
+}
+
 /** Converts a sync failure into actionable user-facing details. */
 export function reviewSyncFailureDetails(cause: unknown): ErrorDetails {
   let current = cause;

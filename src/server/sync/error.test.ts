@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { ProviderError } from "~/server/providers/types";
 import {
+  connectionUpdateResolvesSyncFailure,
   persistedSyncErrorMessage,
   providerSyncErrorMessage,
   reviewSyncFailureDetails,
 } from "./error";
+
+describe("resolved sync failures", () => {
+  it("clears failures that predate a provider credential update", () => {
+    const failedAt = new Date("2026-08-05T15:03:03Z");
+
+    expect(
+      connectionUpdateResolvesSyncFailure(
+        failedAt,
+        new Date("2026-08-06T07:27:51Z"),
+      ),
+    ).toBe(true);
+    expect(connectionUpdateResolvesSyncFailure(failedAt, failedAt)).toBe(false);
+  });
+});
 
 describe("review sync error diagnostics", () => {
   it("reports the bounded database cause without the failed query", () => {
