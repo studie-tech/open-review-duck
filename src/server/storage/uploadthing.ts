@@ -69,6 +69,23 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
     return new Uint8Array(await response.arrayBuffer());
   }
 
+  /** Checks one private object without transferring its contents. */
+  async exists(objectKey: string) {
+    const { ufsUrl } = await this.api.generateSignedURL(objectKey, {
+      expiresIn: 60,
+    });
+    const response = await fetch(ufsUrl, {
+      cache: "no-store",
+      redirect: "error",
+      headers: { range: "bytes=0-0" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    // A store that ignores Range answers 200 with the full body, so release it
+    // rather than letting the response buffer behind an unread stream.
+    await response.body?.cancel();
+    return response.ok;
+  }
+
   /** Permanently deletes one private UploadThing object. */
   async delete(objectKey: string) {
     await this.api.deleteFiles(objectKey);

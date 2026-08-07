@@ -46,11 +46,17 @@ export async function persistSourceBlob(
     uploadLeaseToken,
     uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
   };
-  /** Reuses a ready row only when its object still exists and verifies. */
+  /** Reuses a ready row only when its immutable object still exists. */
   const reuseReadyBlob = async (blob: typeof sourceBlobs.$inferSelect) => {
     if (blob.storage !== store.kind || !blob.objectKey) return undefined;
     try {
-      await readSourceBlob(blob);
+      // Presence is the only thing in doubt here, and this runs for every
+      // deduplicated file of every sync. readSourceBlob would transfer and
+      // rehash the whole object; it still verifies the digest on real reads.
+      const present = store.exists
+        ? await store.exists(blob.objectKey)
+        : Boolean(await readSourceBlob(blob));
+      if (!present) return undefined;
     } catch {
       return undefined;
     }

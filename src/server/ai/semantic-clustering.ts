@@ -25,6 +25,18 @@ import { createAiJob, settleAiJobQuota, type TokenUsage } from "./service";
 
 type Database = typeof database;
 
+// One request may be retried once for repair, so each component can cost two
+// provider calls. Keep the worst case comfortably inside the route's 800s
+// ceiling: exceeding it kills the process before the quota reservation is
+// settled, which would permanently consume the reviewer's monthly allowance.
+const MAX_SEMANTIC_COMPONENT_REQUESTS = 6;
+const SEMANTIC_CLUSTER_BUDGET_MILLISECONDS = 9 * 60_000;
+
+export const SEMANTIC_CLUSTER_TOO_LARGE =
+  "This pull request is too large for AI grouping";
+export const SEMANTIC_CLUSTER_TIMED_OUT =
+  "AI grouping ran out of time before it produced a complete layout";
+
 /** Normalizes provider usage into the shared AI quota ledger. */
 function tokenUsage(result: {
   usage: {
@@ -258,6 +270,10 @@ export async function proposeSemanticConceptLayout(
                 .map((unit) => ({ ...unit, excerpt: "" })),
             };
           });
+    if (manifests.length > MAX_SEMANTIC_COMPONENT_REQUESTS) {
+      throw new Error(SEMANTIC_CLUSTER_TOO_LARGE);
+    }
+    const deadline = Date.now() + SEMANTIC_CLUSTER_BUDGET_MILLISECONDS;
     let accumulatedUsage: TokenUsage = {
       input: 0,
       output: 0,
@@ -272,6 +288,9 @@ export async function proposeSemanticConceptLayout(
     for (const [componentIndex, component] of manifests.entries()) {
       const componentJson = JSON.stringify(component);
       const unitIds = component.units.map(({ id }) => id);
+      // Fail inside the request so the catch below marks the job failed and
+      // releases its reservation, rather than being killed mid-flight.
+      if (Date.now() >= deadline) throw new Error(SEMANTIC_CLUSTER_TIMED_OUT);
       const result = await run(
         `Create a semantic review-concept partition for this JSON manifest:\n${componentJson}`,
       );
