@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import {
   credentialAuditEvents,
   localCredentials,
@@ -142,6 +142,26 @@ export const providerRouter = createTRPCRouter({
           `${workspace.id}\0${input.provider}\0${baseUrl ?? ""}\0${input.accessToken}`,
         )
         .digest("hex");
+      if (existingConnection) {
+        // The create path merges duplicates through onConflictDoUpdate, but
+        // recovery updates one row by id. Reject a token already bound to a
+        // sibling connection instead of failing on the unique index.
+        const conflicting = await ctx.db.query.providerConnections.findFirst({
+          where: and(
+            eq(providerConnections.workspaceId, workspace.id),
+            eq(providerConnections.provider, input.provider),
+            eq(providerConnections.credentialFingerprint, fingerprint),
+            ne(providerConnections.id, existingConnection.id),
+          ),
+        });
+        if (conflicting) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Another connection in this workspace already uses this token. Remove that connection first, or supply a different token.",
+          });
+        }
+      }
       const provider = createProvider(
         input.provider,
         input.accessToken,

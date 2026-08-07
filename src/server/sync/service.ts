@@ -44,7 +44,9 @@ type Database = typeof database;
 
 const UNIT_INSERT_BATCH_SIZE = 100;
 const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
+const CONCEPT_INSERT_BATCH_SIZE = 500;
 const CONCEPT_MEMBER_INSERT_BATCH_SIZE = 1_000;
+const CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
 
@@ -500,21 +502,29 @@ export async function syncPullRequest(
     if (!baselineLayout) {
       throw new Error("The deterministic review concept layout was not saved");
     }
-    const insertedConcepts = await tx
-      .insert(reviewConcepts)
-      .values(
-        conceptDefinitions.map((concept) => ({
-          layoutId: baselineLayout.id,
-          stableKey: concept.stableKey,
-          title: concept.title,
-          rationale: concept.rationale,
-          reviewOrder: concept.reviewOrder,
-          changedLineCount: concept.changedLineCount,
-          fileCount: concept.fileCount,
-          oversized: concept.oversized,
-        })),
-      )
-      .returning();
+    const conceptRows = conceptDefinitions.map((concept) => ({
+      layoutId: baselineLayout.id,
+      stableKey: concept.stableKey,
+      title: concept.title,
+      rationale: concept.rationale,
+      reviewOrder: concept.reviewOrder,
+      changedLineCount: concept.changedLineCount,
+      fileCount: concept.fileCount,
+      oversized: concept.oversized,
+    }));
+    const insertedConcepts: (typeof reviewConcepts.$inferSelect)[] = [];
+    for (
+      let offset = 0;
+      offset < conceptRows.length;
+      offset += CONCEPT_INSERT_BATCH_SIZE
+    ) {
+      insertedConcepts.push(
+        ...(await tx
+          .insert(reviewConcepts)
+          .values(conceptRows.slice(offset, offset + CONCEPT_INSERT_BATCH_SIZE))
+          .returning()),
+      );
+    }
     const insertedConceptByKey = new Map(
       insertedConcepts.map((concept) => [concept.stableKey, concept]),
     );
@@ -558,8 +568,19 @@ export async function syncPullRequest(
           : [];
       });
     });
-    if (conceptDependencyRows.length > 0) {
-      await tx.insert(reviewConceptDependencies).values(conceptDependencyRows);
+    for (
+      let offset = 0;
+      offset < conceptDependencyRows.length;
+      offset += CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE
+    ) {
+      await tx
+        .insert(reviewConceptDependencies)
+        .values(
+          conceptDependencyRows.slice(
+            offset,
+            offset + CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE,
+          ),
+        );
     }
 
     const carriedSignOffs = insertedUnits.flatMap((unit) => {

@@ -4,15 +4,26 @@ import {
   MAX_CONCEPT_FILES,
 } from "~/server/analysis/concepts";
 
+export const MAX_CONCEPT_TITLE_LENGTH = 200;
+export const MAX_CONCEPT_RATIONALE_LENGTH = 1_000;
+
 export const semanticPartitionSchema = z.object({
   concepts: z.array(
     z.object({
-      title: z.string().min(1).max(200),
-      rationale: z.string().min(1).max(1_000),
+      title: z.string().min(1).max(MAX_CONCEPT_TITLE_LENGTH),
+      rationale: z.string().min(1).max(MAX_CONCEPT_RATIONALE_LENGTH),
       memberUnitIds: z.array(z.string().uuid()).min(1),
     }),
   ),
 });
+
+/** Appends a suffix while keeping the result within its persisted column cap. */
+function withSuffixWithinCap(base: string, suffix: string, cap: number) {
+  const trimmed = base.slice(0, Math.max(0, cap - suffix.length)).trimEnd();
+  return trimmed.length > 0
+    ? `${trimmed}${suffix}`
+    : suffix.trim().slice(0, cap);
+}
 
 /** Reports exact-membership violations without accepting partial AI output. */
 export function semanticPartitionErrors(
@@ -74,14 +85,25 @@ export function enforceSemanticConceptCaps(
     }
     if (current.length > 0) chunks.push(current);
     return chunks.map((chunk, index) => ({
+      // A model may return a title or rationale already at its cap. Truncate
+      // before appending so the split suffix cannot overflow the same limit
+      // that the persisting mutation revalidates.
       title:
         chunks.length === 1
           ? concept.title
-          : `${concept.title} · part ${index + 1}/${chunks.length}`,
+          : withSuffixWithinCap(
+              concept.title,
+              ` · part ${index + 1}/${chunks.length}`,
+              MAX_CONCEPT_TITLE_LENGTH,
+            ),
       rationale:
         chunks.length === 1
           ? concept.rationale
-          : `${concept.rationale} Split deterministically to respect review size limits.`,
+          : withSuffixWithinCap(
+              concept.rationale,
+              " Split deterministically to respect review size limits.",
+              MAX_CONCEPT_RATIONALE_LENGTH,
+            ),
       memberUnitIds: chunk.map(({ id }) => id),
     }));
   });

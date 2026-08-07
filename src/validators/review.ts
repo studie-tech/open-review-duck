@@ -69,10 +69,11 @@ export const replacePersonalConceptLayoutSchema = z.object({
       z.object({
         title: z.string().trim().min(1).max(200),
         rationale: z.string().trim().max(1_000).optional(),
-        memberUnitIds: z.array(z.string().uuid()).min(1),
+        memberUnitIds: z.array(z.string().uuid()).min(1).max(5_000),
       }),
     )
-    .min(1),
+    .min(1)
+    .max(5_000),
 });
 
 export const improveConceptGroupingSchema = z.object({
