@@ -91,6 +91,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
       "lexical_declaration",
       "variable_declaration",
       "public_field_definition",
+      "field_definition",
       "required_parameter",
       "optional_parameter",
     ),
@@ -1148,19 +1149,25 @@ function declarationNameNode(node: SyntaxNode): SyntaxNode | undefined {
   );
 }
 
-/** Normalizes a declaration token for same-file dependency matching. */
+/**
+ * Normalizes a declaration token for same-file dependency matching.
+ *
+ * Operator suffixes belong to names such as Ruby's `fetch!` or `<=>`. A bracket
+ * never does: a name matched here always begins with a word character, so a
+ * bracket can only trail one, where it closes the enclosing table or index.
+ */
 function normalizeName(value: string | undefined) {
   return value
     ?.trim()
     .replace(/^[$@]+/, "")
-    .match(/[A-Za-z_][\w$!?=<>+\-*/%[\]]*/)?.[0];
+    .match(/[A-Za-z_][\w$!?=<>+\-*/%]*/)?.[0];
 }
 
 /** Extracts the semantic name owned by a declaration node. */
 function ownName(source: string, node: SyntaxNode) {
   if (node.type.startsWith("create_")) {
     const name =
-      /^\s*create\s+(?:or\s+replace\s+)?(?:unique\s+)?(?:table|view|index|schema|type|function|procedure|trigger)\s+(?:if\s+not\s+exists\s+)?([^\s(;]+)/i.exec(
+      /^\s*create\s+(?:or\s+replace\s+)?(?:unique\s+)?(?:table|view|index|schema|type|function|procedure|trigger)\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([^\s(;]+)/i.exec(
         nodeText(source, node),
       )?.[1];
     if (name) return name.replace(/^(?:["'`]|\[)|(?:["'`]|\])$/g, "");
@@ -5614,21 +5621,17 @@ function retainWholeChildlessDeclarations<
       continue;
     }
     const extentEnd = declarationWrapper(node).endIndex;
-    const enclosingEndLine = lineAt(file.content, extentEnd);
-    if (enclosingEndLine <= unit.endLine) continue;
+    if (lineAt(file.content, extentEnd) <= unit.endLine) continue;
     const reviewedByMember = candidates.some(
       (other) =>
         other !== candidate &&
         other.node.startIndex >= node.startIndex &&
         other.node.endIndex <= node.endIndex,
     );
-    if (reviewedByMember) {
-      unit.enclosingEndLine = enclosingEndLine;
-      continue;
-    }
+    if (reviewedByMember) continue;
     const source = file.content.slice(start, extentEnd);
     unit.source = source;
-    unit.endLine = enclosingEndLine;
+    unit.endLine = lineAt(file.content, extentEnd);
     unit.contentHash = sha256(source);
   }
   return candidates;

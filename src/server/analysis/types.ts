@@ -183,13 +183,6 @@ export interface AnalyzedUnit {
   changedLineCount: number;
   dependencies: string[];
   relatedRanges?: ReviewUnitRange[];
-  /**
-   * Last line of the declaration this unit was truncated from, when its members
-   * are reviewed as units of their own. Module extraction attributes the lines
-   * between those members — closing delimiters and blank lines — to the
-   * declaration instead of surfacing them as statements. Analysis-only.
-   */
-  enclosingEndLine?: number;
   depth: number;
   reviewOrder: number;
 }
