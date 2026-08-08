@@ -1066,6 +1066,143 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     );
   });
 
+  it("folds a changed brace terminator into the construct it closes", () => {
+    /** Builds a spec whose suite terminator keeps or drops its semicolon. */
+    const spec = (semicolon: boolean, expected: number) =>
+      [
+        'describe("cart totals", () => {',
+        '  it("adds line items", () => {',
+        `    expect(total(seed)).toBe(${expected});`,
+        "  });",
+        semicolon ? "});" : "})",
+      ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "cart.test.ts",
+        content: spec(false, 6),
+        previousContent: spec(true, 5),
+        changeType: "modified",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toMatchObject([
+      { name: "cart totals › adds line items", kind: "test" },
+    ]);
+    expect(reviewable.some(({ source }) => source.trim() === "})")).toBe(false);
+  });
+
+  it("folds a changed keyword terminator into the construct it closes", () => {
+    /** Builds a spec whose outer terminator is indented or flush. */
+    const spec = (indented: boolean, expected: number) =>
+      [
+        "RSpec.describe Basket do",
+        '  it "adds items" do',
+        `    expect(basket.total).to eq(${expected})`,
+        "  end",
+        indented ? "  end" : "end",
+      ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "basket_spec.rb",
+        content: spec(false, 6),
+        previousContent: spec(true, 5),
+        changeType: "modified",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toMatchObject([
+      { name: "Basket › adds items", kind: "test" },
+    ]);
+    expect(reviewable.some(({ source }) => source.trim() === "end")).toBe(
+      false,
+    );
+  });
+
+  it("never leads a file with a changed composite literal terminator", () => {
+    /** Builds a table test whose literal terminator keeps or drops a semicolon. */
+    const table = (semicolon: boolean, expected: number) =>
+      [
+        "package cart",
+        "",
+        "var cases = []int{",
+        "\t1,",
+        semicolon ? "};" : "}",
+        "",
+        "func TestAdd(t *testing.T) {",
+        `\tif add(1, 2) != ${expected} {`,
+        '\t\tt.Fatal("bad")',
+        "\t}",
+        "}",
+      ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "cart_test.go",
+        content: table(false, 4),
+        previousContent: table(true, 3),
+        changeType: "modified",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toMatchObject([{ name: "TestAdd", reviewOrder: 0 }]);
+  });
+
+  it("titles a mixed terminator hunk by the statement it changed", () => {
+    /** Builds a spec whose terminator and trailing statement change together. */
+    const spec = (semicolon: boolean, expected: number, format: string) =>
+      [
+        'describe("cart totals", () => {',
+        '  it("adds line items", () => {',
+        `    expect(total(seed)).toBe(${expected});`,
+        "  });",
+        semicolon ? "});" : "})",
+        `configureReporter("${format}");`,
+      ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "reporter.test.ts",
+        content: spec(false, 6, "xml"),
+        previousContent: spec(true, 5, "json"),
+        changeType: "modified",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    // The statement stands on its own card: whichever extractor claims it, the
+    // terminator that preceded it must not be glued to the change under review.
+    expect(reviewable).toMatchObject([
+      { name: "cart totals › adds line items" },
+      { source: 'configureReporter("xml");' },
+    ]);
+  });
+
+  it("keeps a terminator-only diff reviewable when nothing can absorb it", () => {
+    /** Builds a spec whose only revision is the suite terminator itself. */
+    const spec = (semicolon: boolean) =>
+      [
+        'describe("cart totals", () => {',
+        '  it("adds line items", () => {',
+        "    expect(total(seed)).toBe(5);",
+        "  });",
+        semicolon ? "});" : "})",
+      ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "terminator.test.ts",
+        content: spec(false),
+        previousContent: spec(true),
+        changeType: "modified",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toMatchObject([
+      { name: "Changed line 5", source: "})" },
+    ]);
+  });
+
   it("pairs a rewritten import as one modified change unit", () => {
     const previous = [
       'import NotFoundPage from "@/app/[...not-found]/page";',

@@ -189,3 +189,50 @@ export function syntaxDescendants(root: SyntaxNode) {
 export function nodeText(source: string, node: SyntaxNode) {
   return source.slice(node.startIndex, node.endIndex);
 }
+
+/**
+ * Reports the one-based lines that only terminate constructs opened earlier,
+ * such as a lone `});`, `}`, `end`, or `fi`.
+ *
+ * A line qualifies when every token starting on it is an anonymous grammar
+ * token — punctuation or a keyword, never an identifier, literal, or comment —
+ * whose parent construct started on an earlier line. That makes the test purely
+ * structural and therefore identical for all grammars: the line closes syntax
+ * without introducing any, so it belongs to the construct it terminates rather
+ * than standing alone. Lines that open a construct (`} else {`) keep a token
+ * whose parent starts on the same line and are excluded, as are lines carrying
+ * no token at all, such as the interior of a multi-line literal.
+ */
+export function blockCloserLines(language: TreeSitterLanguage, source: string) {
+  return withSyntaxTree(language, source, (tree) => {
+    const rows = new Map<number, boolean>();
+    const cursor = tree.rootNode.walk();
+    let reachedRoot = false;
+    while (!reachedRoot) {
+      const node = cursor.currentNode;
+      if (node.childCount === 0) {
+        const row = node.startPosition.row;
+        const closesEnclosing =
+          !node.isNamed &&
+          node.parent !== null &&
+          node.parent.startPosition.row < row;
+        rows.set(row, (rows.get(row) ?? true) && closesEnclosing);
+      }
+      if (cursor.gotoFirstChild()) continue;
+      if (cursor.gotoNextSibling()) continue;
+      while (true) {
+        if (!cursor.gotoParent()) {
+          reachedRoot = true;
+          break;
+        }
+        if (cursor.gotoNextSibling()) break;
+      }
+    }
+    cursor.delete();
+    return new Set(
+      [...rows].flatMap(([row, closesEnclosing]) =>
+        closesEnclosing ? [row + 1] : [],
+      ),
+    );
+  });
+}

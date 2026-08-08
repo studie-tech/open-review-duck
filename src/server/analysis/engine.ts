@@ -17,7 +17,7 @@ import {
   type SemanticSymbolOccurrence,
   semanticSymbolOccurrences,
 } from "./parsers/tree-sitter-adapter";
-import type { TreeSitterLanguage } from "./tree-sitter";
+import { blockCloserLines, type TreeSitterLanguage } from "./tree-sitter";
 import type {
   AnalysisResult,
   AnalyzedUnit,
@@ -26,7 +26,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 33;
+export const CURRENT_ANALYSIS_VERSION = 34;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -963,6 +963,24 @@ function markContextualBlankChanges(
   }
 }
 
+/**
+ * Treats a changed block-closing line as punctuation owned by the construct it
+ * terminates, so a reflowed `});` never becomes a line-numbered review card of
+ * its own. The source is only parsed once an uncovered changed line remains.
+ */
+function markContextualBlockCloserChanges(
+  source: string,
+  language: SupportedLanguage,
+  changed: boolean[],
+  covered: boolean[],
+) {
+  if (language === "text") return;
+  if (!changed.some((isChanged, index) => isChanged && !covered[index])) return;
+  for (const line of blockCloserLines(language, source)) {
+    if (changed[line - 1]) covered[line - 1] = true;
+  }
+}
+
 /** Scopes parsed units to the actual base-to-head changes in one modified file. */
 function prScopedReviewUnits(
   file: SourceFile,
@@ -1125,6 +1143,12 @@ function prScopedReviewUnits(
       : [];
   if (currentLogicalUnits.length > 0) {
     markContextualBlankChanges(currentLines, masks.current, currentCovered);
+    markContextualBlockCloserChanges(
+      file.content,
+      language,
+      masks.current,
+      currentCovered,
+    );
   }
   const absorbedPreviousImports =
     previousLogicalUnits.length > 0
@@ -1139,6 +1163,12 @@ function prScopedReviewUnits(
       : [];
   if (previousLogicalUnits.length > 0) {
     markContextualBlankChanges(previousLines, masks.previous, previousCovered);
+    markContextualBlockCloserChanges(
+      file.previousContent,
+      language,
+      masks.previous,
+      previousCovered,
+    );
   }
   const currentImportHash = contextualImportHash(
     absorbedCurrentImports,
@@ -1206,6 +1236,25 @@ const conceptSymbolStopWords = new Set([
   "value",
 ]);
 
+/**
+ * Bounds the material a merge may add on top of the largest change it already
+ * holds. A concept is one card and one sign-off: the engine cannot split an
+ * oversized declaration, but it must not manufacture one either. Roughly half a
+ * screen of extra code — the other members plus the untouched lines the merged
+ * span drags in — is what a reviewer absorbs in the same pass as the change the
+ * card is named after. Past that the members read better as their own named
+ * cards, which dependency ordering already keeps adjacent.
+ */
+const conceptMergeLineBudget = 40;
+
+/**
+ * Bounds how many atomic cards one concept may replace. The merged title names a
+ * single member and counts the rest, so it can only honestly stand for a
+ * handful; beyond that the swallowed declarations lose the titles a reviewer
+ * navigates and signs off by.
+ */
+const conceptMemberBudget = 4;
+
 /** Indexes semantic occurrences whose source coordinates overlap one range. */
 function symbolsWithinRange(
   occurrences: SemanticSymbolOccurrence[],
@@ -1262,6 +1311,64 @@ function scopesResolve(
   });
 }
 
+/** Pairs members with their range on one diff side, skipping absent sides. */
+function conceptSideRanges(
+  members: readonly UnitSymbolProfile[],
+  side: "currentRange" | "previousRange",
+) {
+  return members.flatMap((member) => {
+    const range = member[side];
+    return range ? [{ member, range }] : [];
+  });
+}
+
+/**
+ * Returns the member whose declaration opens the merged card.
+ *
+ * A concept renders its head-side source whenever any member survives into the
+ * head revision, so the card literally starts on the earliest range of that
+ * side; naming the concept after any other member would title the card with a
+ * symbol a reviewer never reads at its first line.
+ */
+function conceptOpeningMember(members: readonly UnitSymbolProfile[]) {
+  const current = conceptSideRanges(members, "currentRange");
+  const rendered =
+    current.length > 0 ? current : conceptSideRanges(members, "previousRange");
+  return rendered
+    .sort(
+      (left, right) =>
+        left.range.startLine - right.range.startLine ||
+        right.range.endLine - left.range.endLine ||
+        left.member.unit.stableKey.localeCompare(right.member.unit.stableKey),
+    )
+    .at(0)?.member;
+}
+
+/**
+ * Checks that related changes still read as a single reviewable card.
+ *
+ * Merging is discretionary, so it has to earn the atomic cards it consumes:
+ * the concept stays within its member and line budgets, and it opens on a
+ * declaration whose own name can title it. Module units are named after a line
+ * range or the file itself, which names nothing a reviewer can sign off.
+ */
+function conceptRemainsAtomic(members: readonly UnitSymbolProfile[]) {
+  if (members.length > conceptMemberBudget) return false;
+  const opening = conceptOpeningMember(members);
+  if (!opening || opening.unit.kind === "module") return false;
+  return (["currentRange", "previousRange"] as const).every((side) => {
+    const ranges = conceptSideRanges(members, side).map(({ range }) => range);
+    if (ranges.length === 0) return true;
+    const span =
+      Math.max(...ranges.map(({ endLine }) => endLine)) -
+      Math.min(...ranges.map(({ startLine }) => startLine));
+    const largestMember = Math.max(
+      ...ranges.map(({ startLine, endLine }) => endLine - startLine),
+    );
+    return span - largestMember <= conceptMergeLineBudget;
+  });
+}
+
 /** Creates one deterministic multi-range concept from related atomic units. */
 function mergeConceptUnits(file: SourceFile, members: UnitSymbolProfile[]) {
   const currentRanges = members.flatMap(({ currentRange }) =>
@@ -1312,25 +1419,7 @@ function mergeConceptUnits(file: SourceFile, members: UnitSymbolProfile[]) {
           .slice(previousStart - 1, previousEnd)
           .join("\n")
       : undefined;
-  const anchor = [...members]
-    .sort(
-      (left, right) =>
-        Number(
-          !["constant", "variable", "function", "method", "class"].includes(
-            left.unit.kind,
-          ),
-        ) -
-          Number(
-            !["constant", "variable", "function", "method", "class"].includes(
-              right.unit.kind,
-            ),
-          ) ||
-        left.unit.endLine -
-          left.unit.startLine -
-          (right.unit.endLine - right.unit.startLine) ||
-        left.unit.startLine - right.unit.startLine,
-    )
-    .at(0)?.unit;
+  const anchor = conceptOpeningMember(members)?.unit;
   if (!anchor) throw new Error("A review concept must contain an anchor");
   const memberKeys = members
     .map(({ unit }) => unit.stableKey)
@@ -1507,12 +1596,14 @@ function clusterRelatedChangeUnits(
     grouped.set(root, [...(grouped.get(root) ?? []), profile]);
   });
   const aliases = new Map<string, string>();
-  const merged = [...grouped.values()].map((members) => {
-    if (members.length === 1) return members[0]?.unit as RawUnit;
+  const merged = [...grouped.values()].flatMap((members) => {
+    if (members.length === 1 || !conceptRemainsAtomic(members)) {
+      return members.map(({ unit }) => unit);
+    }
     const concept = mergeConceptUnits(file, members);
     for (const { unit } of members)
       aliases.set(unit.stableKey, concept.stableKey);
-    return concept;
+    return [concept];
   });
   return merged.map((unit) => ({
     ...unit,
