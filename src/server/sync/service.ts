@@ -490,7 +490,11 @@ export async function syncPullRequest(
       ({ kind }) => kind !== "file",
     );
     const conceptDefinitions = clusterReviewConcepts(reviewableAnalysisUnits);
-    validateConceptPartition(reviewableAnalysisUnits, conceptDefinitions);
+    validateConceptPartition(
+      reviewableAnalysisUnits,
+      conceptDefinitions,
+      budgetedFiles,
+    );
     const [baselineLayout] = await tx
       .insert(reviewConceptLayouts)
       .values({
