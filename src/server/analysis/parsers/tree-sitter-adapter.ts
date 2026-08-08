@@ -719,7 +719,10 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     imports: set(),
     comments: set("comment"),
     identifierTypes: commonIdentifiers,
-    bodyTypes: set("column_definitions", "block"),
+    // A table's column list is never extracted as its own unit, so treating it
+    // as a body would truncate the statement to its opening line and orphan the
+    // columns into an anonymous module unit. Only routine bodies nest units.
+    bodyTypes: set("block"),
   },
   markdown: {
     containers: set(),
