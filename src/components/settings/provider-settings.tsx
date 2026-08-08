@@ -16,6 +16,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -1479,7 +1480,7 @@ export function ProviderSettings({
                 </p>
               </div>
               <Button asChild size="sm" variant="secondary">
-                <a href="/dashboard">Open review queue</a>
+                <Link href="/dashboard">Open review queue</Link>
               </Button>
             </div>
           )}
