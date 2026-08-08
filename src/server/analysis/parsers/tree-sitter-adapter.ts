@@ -1096,6 +1096,7 @@ const hookCalls = new Set([
   "beforetest",
   "dataset",
   "setup",
+  "setup_all",
   "teardown",
   "aftertest",
 ]);
@@ -1646,6 +1647,7 @@ function leadingDocumentationStart(
     const text = nodeText(source, sibling).trim();
     const documentation =
       sibling.type.includes("attribute") ||
+      language === "clojure" ||
       language === "go" ||
       language === "hcl" ||
       language === "lua" ||
@@ -4474,6 +4476,357 @@ function hclReviewCandidates(
   return candidates;
 }
 
+/** Returns the macro name invoked by an Elixir call form. */
+function elixirCallForm(source: string, node: SyntaxNode) {
+  if (node.type !== "call") return undefined;
+  const target = node.namedChildren[0];
+  return target?.type === "identifier" ? nodeText(source, target) : undefined;
+}
+
+/** Returns the argument nodes written on an Elixir call form. */
+function elixirArgumentNodes(node: SyntaxNode) {
+  const argumentList = node.namedChildren.find(
+    (child): child is SyntaxNode =>
+      child !== null && child.type === "arguments",
+  );
+  return (
+    argumentList?.namedChildren.filter(
+      (child): child is SyntaxNode => child !== null,
+    ) ?? []
+  );
+}
+
+/** Returns the name and arity declared by an Elixir definition head. */
+function elixirDefinitionHead(source: string, node: SyntaxNode) {
+  let head: SyntaxNode | null | undefined = elixirArgumentNodes(node)[0];
+  // `def fetch(id) when is_integer(id)` wraps the head in the guard operator.
+  while (head?.type === "binary_operator") head = head.namedChildren[0];
+  if (head?.type === "identifier") {
+    return { name: nodeText(source, head), arity: 0 };
+  }
+  if (head?.type !== "call") return undefined;
+  const name = elixirCallForm(source, head);
+  return name ? { name, arity: elixirArgumentNodes(head).length } : undefined;
+}
+
+/** Returns the module path declared by an Elixir container form. */
+function elixirContainerLabel(source: string, node: SyntaxNode, form: string) {
+  const alias = elixirArgumentNodes(node)[0];
+  if (!alias) return undefined;
+  const declared = nodeText(source, alias);
+  if (form !== "defimpl") return declared;
+  const keywords = elixirArgumentNodes(node).find(
+    (argument) => argument.type === "keywords",
+  );
+  for (const pair of keywords?.namedChildren ?? []) {
+    if (pair?.type !== "pair") continue;
+    const [keyword, target] = pair.namedChildren;
+    if (!keyword || !target) continue;
+    if (nodeText(source, keyword).replace(/[:\s]+$/, "") !== "for") continue;
+    // `defimpl Sizeable, for: List` compiles to the module `Sizeable.List`, and
+    // both halves are needed or every implementation of one protocol collides.
+    return `${declared}.${nodeText(source, target)}`;
+  }
+  return declared;
+}
+
+/**
+ * Elixir annotations describe the definition written under them, unlike module
+ * attributes such as `@timeout 5_000` that hold module-level values, so only
+ * these may be absorbed into the following definition's review range.
+ */
+const elixirAnnotationAttributes = set(
+  "deprecated",
+  "describetag",
+  "doc",
+  "impl",
+  "since",
+  "spec",
+  "tag",
+  "typedoc",
+);
+
+/** Includes contiguous Elixir comments and annotations before a definition. */
+function elixirDocumentationStart(source: string, node: SyntaxNode) {
+  let start = node.startIndex;
+  for (
+    let sibling = node.previousNamedSibling;
+    sibling;
+    sibling = sibling.previousNamedSibling
+  ) {
+    if (source.slice(sibling.endIndex, start).trim() !== "") break;
+    const annotation =
+      sibling.type === "unary_operator" &&
+      elixirAnnotationAttributes.has(
+        /^@(\w+)/.exec(nodeText(source, sibling))?.[1] ?? "",
+      );
+    if (!annotation && !shapes.elixir.comments.has(sibling.type)) break;
+    start = sibling.startIndex;
+  }
+  return start;
+}
+
+const elixirContainerForms = set("defimpl", "defmodule", "defprotocol");
+
+const elixirFunctionForms = set(
+  "def",
+  "defdelegate",
+  "defguard",
+  "defguardp",
+  "defmacro",
+  "defmacrop",
+  "defp",
+);
+
+const elixirPrivateForms = set("defguardp", "defmacrop", "defp");
+
+const elixirStructForms = set("defexception", "defstruct");
+
+/** Extracts Elixir modules, definitions, struct shapes, and ExUnit tests. */
+function elixirReviewCandidates(
+  file: SourceFile,
+  root: SyntaxNode,
+): Array<{ node: SyntaxNode; unit: RawUnit; ownName: string }> {
+  const source = file.content;
+  const candidates: Array<{
+    node: SyntaxNode;
+    unit: RawUnit;
+    ownName: string;
+  }> = [];
+  /** Adds an Elixir candidate with an explicit semantic range. */
+  const add = (
+    node: SyntaxNode,
+    kind: UnitKind,
+    name: string,
+    ownName: string,
+    start = elixirDocumentationStart(source, node),
+    end = node.endIndex,
+  ) => {
+    candidates.push({
+      node,
+      ownName,
+      unit: makeRawRangeUnit(file, "elixir", kind, name, start, end),
+    });
+  };
+
+  /** Collects every definition written directly inside one `do` block. */
+  const visit = (block: SyntaxNode, scopes: string[], suites: string[]) => {
+    let clauses:
+      | {
+          node: SyntaxNode;
+          name: string;
+          ownName: string;
+          start: number;
+          end: number;
+        }
+      | undefined;
+    /** Emits the pending function clauses as one reviewable definition. */
+    const flush = () => {
+      if (!clauses) return;
+      const { node, name, ownName, start, end } = clauses;
+      add(node, "function", name, ownName, start, end);
+      clauses = undefined;
+    };
+
+    for (const node of block.namedChildren) {
+      const form = node ? elixirCallForm(source, node) : undefined;
+      if (!node || !form) continue;
+      if (elixirFunctionForms.has(form)) {
+        const head = elixirDefinitionHead(source, node);
+        if (!head) continue;
+        const name = `${[...scopes, `${head.name}/${head.arity}`].join(".")}${
+          elixirPrivateForms.has(form) ? " (private)" : ""
+        }`;
+        // Pattern-matched clauses share one name and arity, so they are a
+        // single definition rather than several identically titled cards.
+        if (clauses?.name === name) {
+          clauses.end = node.endIndex;
+          continue;
+        }
+        flush();
+        clauses = {
+          node,
+          name,
+          ownName: head.name,
+          start: elixirDocumentationStart(source, node),
+          end: node.endIndex,
+        };
+        continue;
+      }
+      const declaration =
+        elixirContainerForms.has(form) || elixirStructForms.has(form);
+      const role = declaration ? undefined : callRole(source, node);
+      if (!declaration && !role) continue;
+      flush();
+      const body = node.namedChildren.find(
+        (child): child is SyntaxNode =>
+          child !== null && child.type === "do_block",
+      );
+      if (role) {
+        add(node, role.kind, [...suites, role.name].join(" › "), role.name);
+        if (body && role.kind === "test_suite") {
+          visit(body, scopes, [...suites, role.name]);
+        }
+        continue;
+      }
+      if (elixirStructForms.has(form)) {
+        const owner = scopes.join(".");
+        if (owner) add(node, "class", `%${owner}{}`, `%${owner}{}`);
+        continue;
+      }
+      const label = elixirContainerLabel(source, node, form);
+      if (!label) continue;
+      const nested = [...scopes, label];
+      const qualified = nested.join(".");
+      const suite =
+        form === "defmodule" &&
+        ((/Test$/.test(label) && file.path.toLowerCase().includes("test")) ||
+          (body?.namedChildren.some(
+            (child) =>
+              child !== null &&
+              elixirCallForm(source, child) === "use" &&
+              /\bExUnit\.Case\b/.test(nodeText(source, child)),
+          ) ??
+            false));
+      add(
+        node,
+        suite ? "test_suite" : form === "defmodule" ? "module" : "class",
+        qualified,
+        label,
+      );
+      if (body) visit(body, nested, [...suites, qualified]);
+    }
+    flush();
+  };
+
+  visit(root, [], []);
+  return candidates;
+}
+
+/** Returns the significant forms of a Clojure list, ignoring comments. */
+function clojureListForms(node: SyntaxNode) {
+  return node.namedChildren.filter(
+    (child): child is SyntaxNode =>
+      child !== null && !shapes.clojure.comments.has(child.type),
+  );
+}
+
+/** Returns the name declared by a Clojure symbol or keyword literal. */
+function clojureDeclaredName(source: string, node: SyntaxNode) {
+  if (node.type === "kwd_lit") return nodeText(source, node);
+  if (node.type !== "sym_lit") return undefined;
+  const name = node.namedChildren.find(
+    (child): child is SyntaxNode => child !== null && child.type === "sym_name",
+  );
+  return name ? nodeText(source, name) : undefined;
+}
+
+/** Reports whether a Clojure definition is private by form or by metadata. */
+function clojurePrivateDefinition(
+  source: string,
+  form: string,
+  name: SyntaxNode,
+) {
+  return (
+    form.endsWith("-") ||
+    name.namedChildren.some(
+      (child) =>
+        child !== null &&
+        child.type === "meta_lit" &&
+        /:private\b/.test(nodeText(source, child)),
+    )
+  );
+}
+
+const clojureContainerForms = set(
+  "definterface",
+  "defprotocol",
+  "defrecord",
+  "defstruct",
+  "deftype",
+);
+
+const clojureConstantForms = set("def", "defonce");
+
+const clojureFunctionForms = set("defmacro", "defmulti", "defn", "defn-");
+
+/** Maps a Clojure definition form to the review kind it declares. */
+function clojureFormKind(form: string): UnitKind {
+  if (clojureContainerForms.has(form)) return "class";
+  if (clojureConstantForms.has(form)) return "constant";
+  if (form === "deftest") return "test";
+  if (form === "defmethod") return "method";
+  if (clojureFunctionForms.has(form)) return "function";
+  // Projects define their own `def*` macros freely; an unknown one still binds
+  // a namespace-level var, so it stays reviewable under its declared name.
+  return "variable";
+}
+
+/** Extracts Clojure namespaces, definitions, protocol members, and tests. */
+function clojureReviewCandidates(
+  file: SourceFile,
+  root: SyntaxNode,
+): Array<{ node: SyntaxNode; unit: RawUnit; ownName: string }> {
+  const source = file.content;
+  const candidates: Array<{
+    node: SyntaxNode;
+    unit: RawUnit;
+    ownName: string;
+  }> = [];
+  /** Adds a Clojure candidate with an explicit semantic range. */
+  const add = (node: SyntaxNode, kind: UnitKind, name: string, own: string) => {
+    candidates.push({
+      node,
+      ownName: own,
+      unit: makeRawRangeUnit(
+        file,
+        "clojure",
+        kind,
+        name,
+        leadingDocumentationStart(source, node, shapes.clojure, "clojure"),
+        node.endIndex,
+      ),
+    });
+  };
+
+  for (const node of root.namedChildren) {
+    if (node?.type !== "list_lit") continue;
+    const forms = clojureListForms(node);
+    const head = forms[0];
+    const form = head ? clojureDeclaredName(source, head) : undefined;
+    const target = forms[1];
+    const declared = target ? clojureDeclaredName(source, target) : undefined;
+    if (!form || !declared) continue;
+    if (form === "ns") {
+      add(node, "module", `Namespace ${declared}`, declared);
+      continue;
+    }
+    if (!form.startsWith("def")) continue;
+    // A multimethod contributes one implementation per dispatch value, so the
+    // dispatch value belongs in the title to keep the cards distinguishable.
+    const dispatch =
+      form === "defmethod" && forms[2]
+        ? ` ${nodeText(source, forms[2]).replace(/\s+/g, " ")}`
+        : "";
+    const visibility =
+      target && clojurePrivateDefinition(source, form, target)
+        ? " (private)"
+        : "";
+    const kind = clojureFormKind(form);
+    add(node, kind, `${declared}${dispatch}${visibility}`, declared);
+    if (kind !== "class") continue;
+    for (const member of forms.slice(2)) {
+      if (member.type !== "list_lit") continue;
+      const memberHead = clojureListForms(member)[0];
+      const method = memberHead
+        ? clojureDeclaredName(source, memberHead)
+        : undefined;
+      if (method) add(member, "method", `${declared}.${method}`, method);
+    }
+  }
+  return candidates;
+}
+
 /** Extracts language-aware declaration candidates from one syntax tree. */
 function declarationCandidates(
   file: SourceFile,
@@ -4486,6 +4839,8 @@ function declarationCandidates(
   if (language === "makefile") return makeReviewCandidates(file, root);
   if (language === "lua") return luaReviewCandidates(file, root);
   if (language === "hcl") return hclReviewCandidates(file, root);
+  if (language === "elixir") return elixirReviewCandidates(file, root);
+  if (language === "clojure") return clojureReviewCandidates(file, root);
   const candidates: Array<{
     node: SyntaxNode;
     unit: RawUnit;
