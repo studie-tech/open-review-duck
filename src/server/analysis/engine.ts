@@ -25,7 +25,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 32;
+export const CURRENT_ANALYSIS_VERSION = 33;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -357,17 +357,53 @@ function fallbackDeclaration(file: SourceFile) {
 }
 
 /**
- * Reports source that only closes an enclosing block.
- *
- * Nothing in such a range can be reviewed on its own, so it must never become a
- * unit. The test stays deliberately narrow — any remaining word, operator, or
- * literal makes the range reviewable content that has to stay visible.
+ * Matches the reserved words languages use to end a block instead of a brace:
+ * the `end` family (`end`, `endif`, `endmodule`, `endfunction`, …) and the
+ * three POSIX shell loop and branch terminators.
  */
-function isBlockDelimiterOnly(source: string) {
-  return (
-    source.trim().length > 0 &&
-    /^(?:[\s)\]};,]|\b(?:end|fi|esac|done)\b)*$/.test(source)
-  );
+const blockCloseWord = /^(?:end[a-z]*|fi|done|esac)$/;
+
+/**
+ * Detects a line that only closes a block a reviewed declaration already owns.
+ *
+ * A block ends either in punctuation (`}`, `});`, `];`) or in a reserved word,
+ * and neither is reviewable work once the declaration it belongs to is its own
+ * card. The test is lexical because a syntax tree cannot classify these tokens
+ * once they are detached from their opening construct: a lone Ruby `end` parses
+ * as an ordinary identifier and a lone brace parses as an error node. One
+ * shared vocabulary therefore serves every language rather than a per-grammar
+ * rule, and anything it does not recognize stays visible as a review unit.
+ */
+function isBlockDelimiterOnly(line: string | undefined) {
+  if (!line?.trim()) return false;
+  return line
+    .replace(/[)\]};,]/g, " ")
+    .split(/\s+/)
+    .every((token) => !token || blockCloseWord.test(token.toLowerCase()));
+}
+
+/** Measures a line's indentation, treating a blank line as absent. */
+function lineIndent(line: string | undefined) {
+  return line?.trim() ? line.length - line.trimStart().length : undefined;
+}
+
+/**
+ * Detects a line that only opens a block whose body a declaration already owns.
+ *
+ * A sweep range stops as soon as a covered line begins, so a range that ends on
+ * a construct header means everything that header introduces is already its own
+ * review card and the header is chrome around reviewed work. Indentation
+ * decides the nesting, which keeps the rule free of a per-language list of
+ * opening tokens (`{`, `:`, `do`, `then`, …).
+ */
+function opensReviewedBlock(lines: readonly string[], index: number) {
+  const indent = lineIndent(lines[index]);
+  if (indent === undefined) return false;
+  for (let next = index + 1; next < lines.length; next += 1) {
+    const nextIndent = lineIndent(lines[next]);
+    if (nextIndent !== undefined) return nextIndent > indent;
+  }
+  return false;
 }
 
 /** Extracts reviewable module-level source not owned by a declaration unit. */
@@ -375,10 +411,8 @@ function moduleReviewUnits(
   file: SourceFile,
   language: SupportedLanguage,
   declarations: RawUnit[],
-  containsTests: boolean,
   isContextOnly: (source: string) => boolean,
 ) {
-  if (containsTests) return [];
   const changeType = file.changeType ?? "modified";
   if (declarations.length === 0) {
     if (isContextOnly(file.content)) return [];
@@ -437,10 +471,16 @@ function moduleReviewUnits(
     ...declarations.map(({ startLine }) => startLine),
   );
   return ranges.flatMap((range, rangeIndex) => {
-    while (range.start <= range.end && !lines[range.start]?.trim()) {
+    while (
+      range.start <= range.end &&
+      (!lines[range.start]?.trim() || isBlockDelimiterOnly(lines[range.start]))
+    ) {
       range.start += 1;
     }
-    while (range.end >= range.start && !lines[range.end]?.trim()) {
+    while (
+      range.end >= range.start &&
+      (!lines[range.end]?.trim() || opensReviewedBlock(lines, range.end))
+    ) {
       range.end -= 1;
     }
     if (range.start > range.end) return [];
@@ -523,15 +563,10 @@ function rawFileReviewUnits(file: SourceFile) {
       ? analyzed.filter(({ source }) => !isContextOnly(source))
       : analyzed,
   );
-  const containsTests = declarations.some(
-    ({ kind }) =>
-      kind === "test" || kind === "test_suite" || kind === "test_hook",
-  );
   const moduleUnits = moduleReviewUnits(
     file,
     adapter?.language ?? "text",
     declarations,
-    containsTests,
     isContextOnly,
   );
   return {

@@ -460,6 +460,144 @@ describe("test unit extraction", () => {
     expect(result.units.some(({ kind }) => kind === "file")).toBe(true);
   });
 
+  it("keeps module-level work in a test file reviewable", () => {
+    const result = analyzeFiles([
+      {
+        path: "src/orders.test.ts",
+        content: [
+          'import { describe, expect, it } from "vitest";',
+          'import { total } from "./orders";',
+          "",
+          "const FIXTURE = buildFixture({ currency: 'EUR' });",
+          "",
+          "process.env.TZ = 'UTC';",
+          "",
+          'describe("orders", () => {',
+          '  it("totals", () => expect(total(FIXTURE)).toBe(3));',
+          "});",
+        ].join("\n"),
+      },
+    ]);
+
+    // A process-wide side effect changes how every test in the file behaves, so
+    // a reviewer has to see it even though the file is mostly scaffolding.
+    expect(result.units.find(({ kind }) => kind === "module")).toMatchObject({
+      name: "Module statements",
+      startLine: 6,
+      endLine: 6,
+      source: "process.env.TZ = 'UTC';",
+    });
+    expect(result.units.find(({ name }) => name === "FIXTURE")).toMatchObject({
+      kind: "constant",
+    });
+  });
+
+  it("keeps a suite-level fixture reviewable without its suite chrome", () => {
+    const result = analyzeFiles([
+      {
+        path: "src/pricing.test.ts",
+        content: [
+          'import { describe, expect, it } from "vitest";',
+          "",
+          'describe("discounts", () => {',
+          '  it("applies", () => expect(price()).toBe(1));',
+          "});",
+          "",
+          'describe("totals", () => {',
+          "  const CART = [{ price: 2 }];",
+          "",
+          '  it("sums", () => expect(total(CART)).toBe(2));',
+          "});",
+        ].join("\n"),
+      },
+    ]);
+    const modules = result.units.filter(({ kind }) => kind === "module");
+
+    // The shared cart decides what every test in its suite asserts, so it earns
+    // a card; the surrounding suite boundary lines are chrome and must not add
+    // cards of their own, which would leave a reviewer with untitled noise.
+    expect(modules.map(({ name }) => name)).toEqual([
+      "Test setup",
+      "Module statements",
+    ]);
+    expect(modules.at(-1)).toMatchObject({
+      startLine: 7,
+      endLine: 8,
+      source: 'describe("totals", () => {\n  const CART = [{ price: 2 }];',
+    });
+  });
+
+  it("adds no review units for a test file that is only scaffolding", () => {
+    const result = analyzeFiles([
+      {
+        path: "src/scaffold.test.ts",
+        content: [
+          'import { describe, expect, it } from "vitest";',
+          'import { total } from "./orders";',
+          "",
+          'describe("orders", () => {',
+          '  it("totals", () => expect(total()).toBe(3));',
+          '  it("empties", () => expect(total()).toBe(0));',
+          "});",
+          "",
+        ].join("\n"),
+      },
+    ]);
+
+    // Imports, the suite header, and the closing `});` are already represented
+    // by the setup card and the test cards, so nothing else may reach review.
+    expect(
+      result.units
+        .filter(({ kind }) => kind !== "file")
+        .map(({ kind, name }) => `${kind}:${name}`),
+    ).toEqual([
+      "module:Test setup",
+      "test:orders › totals",
+      "test:orders › empties",
+    ]);
+  });
+
+  it("surfaces module-level work left beside a language's inline test module", () => {
+    const result = analyzeFiles([
+      {
+        path: "src/lib.rs",
+        content: [
+          "pub fn add(left: u8, right: u8) -> u8 {",
+          "    left + right",
+          "}",
+          "",
+          "pub static LIMIT: u8 = 10;",
+          "",
+          "#[cfg(test)]",
+          "mod tests {",
+          "    use super::*;",
+          "",
+          "    #[test]",
+          "    fn adds() {",
+          "        assert_eq!(add(1, 2), 3);",
+          "    }",
+          "}",
+        ].join("\n"),
+      },
+    ]);
+
+    // Rust keeps tests inside the file they cover, so production declarations
+    // must stay reviewable there; only the module's imports and its closing
+    // brace are context a reviewer never has to sign off separately.
+    expect(result.units.find(({ name }) => name === "LIMIT")).toMatchObject({
+      kind: "variable",
+      startLine: 5,
+    });
+    expect(
+      result.units
+        .filter(({ kind }) => kind !== "file")
+        .some(({ source }) => source.includes("use super::*;")),
+    ).toBe(false);
+    expect(
+      result.units.filter(({ name }) => name === "Module statements"),
+    ).toHaveLength(0);
+  });
+
   it("invalidates only the changed test and its aggregate file context", () => {
     const before = analyzeFiles([
       {
