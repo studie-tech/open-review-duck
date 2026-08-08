@@ -27,9 +27,9 @@ The Docker image includes ReviewDuck, PostgreSQL 18, migrations, durable
 workflows, Tree-sitter grammars, and private file storage. You do not need an
 account, an `.env` file, or a separate database.
 
-The supported image generates the authenticated maintenance secret itself. If
-you run local mode directly from source instead, set `CRON_SECRET`; startup now
-fails closed without it so retention cannot silently stop.
+The supported image generates the authenticated maintenance secret itself, and
+`make start` generates one for local development. Startup fails closed without
+it so retention cannot silently stop.
 
 ```bash
 export REVIEWDUCK_IMAGE=ghcr.io/studie-tech/open-review-duck:latest

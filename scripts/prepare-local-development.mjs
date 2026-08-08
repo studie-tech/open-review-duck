@@ -35,10 +35,14 @@ await chmod(secretsDirectory, 0o700);
 
 const encryptionKey = await persistentSecret("encryption-key");
 const storageIdKey = await persistentSecret("storage-id-key");
+// Local mode fails closed without this, so generate it here the way the
+// supported image does rather than making every contributor supply one.
+const cronSecret = await persistentSecret("cron-secret");
 const environment = {
   ALLOW_PRIVATE_AI_HOSTS: "true",
   ALLOW_PRIVATE_PROVIDER_HOSTS: "true",
   APP_URL: applicationUrl,
+  CRON_SECRET: cronSecret,
   DATABASE_URL: databaseUrl,
   DEPLOYMENT_MODE: "local",
   ENCRYPTION_KEY: encryptionKey,
