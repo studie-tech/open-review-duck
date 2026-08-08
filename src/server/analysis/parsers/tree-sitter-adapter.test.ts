@@ -166,4 +166,40 @@ export function load(): number {
     // A real top-level statement is reviewable and must not be suppressed.
     expect(anonymousUnits(units)).toEqual(["3-3 module Module statements"]);
   });
+
+  it("collects a Ruby singleton method and addresses it through the class", async () => {
+    const units = await analyze(
+      "ruby",
+      "a/account.rb",
+      `class Account
+  def self.open(owner)
+    new(owner)
+  end
+
+  def deposit(amount)
+    @balance += amount
+  end
+end
+`,
+    );
+    const names = units.map(({ name }) => name);
+    // A public constructor is the most review-worthy method in the file.
+    expect(names).toContain("Account.open");
+    expect(names).toContain("Account#deposit");
+  });
+
+  it("suppresses keyword block closers the way it suppresses braces", async () => {
+    const units = await analyze(
+      "ruby",
+      "a/user.rb",
+      `class User
+  def name
+    @name
+  end
+end
+`,
+    );
+    // `end` closes the class rather than stating anything of its own.
+    expect(anonymousUnits(units)).toEqual([]);
+  });
 });

@@ -2772,14 +2772,18 @@ function rubyReviewCandidates(
   }
 
   for (const node of syntaxDescendants(root)) {
-    if (node.type !== "method") continue;
+    if (node.type !== "method" && node.type !== "singleton_method") continue;
     const nameNode = node.childForFieldName("name");
     if (!nameNode) continue;
     const methodName = nodeText(source, nameNode);
     const scope = rubyScope(source, node);
+    // `def self.call` declares on the singleton the same way a `class << self`
+    // body does, so both address the method through the class rather than one
+    // of its instances.
+    const singleton = scope.singleton || node.type === "singleton_method";
     const name = scope.testSuite
       ? `${scope.name.split("::").at(-1)} › ${methodName}`
-      : `${scope.name}${scope.singleton ? "." : "#"}${methodName}`;
+      : `${scope.name}${singleton ? "." : "#"}${methodName}`;
     const kind: UnitKind = scope.testSuite
       ? methodName === "setup" || methodName === "teardown"
         ? "test_hook"
