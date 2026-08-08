@@ -1105,48 +1105,240 @@ function lineAt(source: string, offset: number) {
   return source.slice(0, offset).split("\n").length;
 }
 
-/** Returns the first named leaf token represented by a syntax subtree. */
-function namedLeafText(source: string, node: SyntaxNode): string | undefined {
-  if (node.namedChildCount === 0) return nodeText(source, node);
-  const preferred =
-    node.childForFieldName("name") ??
-    node.childForFieldName("declarator") ??
-    node.childForFieldName("left") ??
-    node.childForFieldName("target");
-  return preferred ? namedLeafText(source, preferred) : undefined;
+/**
+ * Grammar fields that label the child naming a declaration, most specific
+ * first. `key` covers mapping entries, `method` covers members written as
+ * `owner.member`, `as`/`alias` cover `<subject> AS <alias>` headers such as a
+ * Dockerfile build stage, and `text` covers markup sectioning commands whose
+ * title is the argument group they take.
+ */
+const nameFields = [
+  "name",
+  "declarator",
+  "key",
+  "method",
+  "alias",
+  "as",
+  "text",
+  "left",
+  "target",
+];
+
+/** Node types that bind a name to a value and so carry the name themselves. */
+const declaratorTypes = [
+  "assignment",
+  "const_spec",
+  "init_declarator",
+  "variable_declarator",
+  "variable_declaration",
+];
+
+/**
+ * Reports whether a node type follows one of Tree-sitter's identifier-token
+ * naming conventions: a member of the shared identifier set, an `ident` token,
+ * or any `*_name` / `*_identifier` / `*_key` node.
+ */
+function isIdentifierNodeType(type: string) {
+  return (
+    commonIdentifiers.has(type) ||
+    type === "ident" ||
+    type.endsWith("_name") ||
+    type.endsWith("_identifier") ||
+    type.endsWith("_key")
+  );
+}
+
+/** Reports whether an identifier node spells a type rather than a declared name. */
+function isTypeAnnotationNodeType(type: string) {
+  return isIdentifierNodeType(type) && type.includes("type");
+}
+
+/**
+ * Reports whether a node points at a declaration made elsewhere. Grammars name
+ * these nodes `*reference*`, so the identifier inside one is the subject a
+ * statement acts on (the table an `ALTER TABLE` mutates), never its own name.
+ */
+function isReferenceNodeType(type: string) {
+  return type.includes("reference");
+}
+
+/** Reports whether a node reaches a member through its owner, as in `a.b`. */
+function isMemberAccessNodeType(type: string) {
+  return type.includes("access");
+}
+
+/** Reports whether a child ends a declaration's header and opens its body. */
+function isBodyChild(child: SyntaxNode, field: string | null) {
+  if (field === "body" || field === "block") return true;
+  if (!child.isNamed) return child.type === "{";
+  return (
+    child.type === "block" ||
+    child.type === "body" ||
+    child.type.endsWith("_block") ||
+    child.type.endsWith("_body")
+  );
+}
+
+/**
+ * Returns the children forming a declaration's header — everything up to the
+ * body it introduces. A declaration never names itself inside its own body, so
+ * this keeps name lookup from reaching into member and statement lists.
+ */
+function declarationHeaderChildren(node: SyntaxNode) {
+  const header: SyntaxNode[] = [];
+  for (let index = 0; index < node.childCount; index += 1) {
+    const child = node.child(index);
+    if (!child) continue;
+    if (isBodyChild(child, node.fieldNameForChild(index))) break;
+    // A markup tag or a heading is a complete header on its own; whatever
+    // follows is the content it introduces, not more of the declaration.
+    const previous = header.at(-1)?.type;
+    if (previous?.endsWith("_tag") || previous?.endsWith("_heading")) break;
+    header.push(child);
+  }
+  return header;
+}
+
+/** Returns the child a grammar field marks as the declaration's name. */
+function fieldNameChild(node: SyntaxNode) {
+  for (const field of nameFields) {
+    const direct = node.childForFieldName(field);
+    if (direct) return direct;
+  }
+  for (let index = 0; index < node.childCount; index += 1) {
+    const child = node.child(index);
+    if (child && node.fieldNameForChild(index)?.endsWith("_name")) return child;
+  }
+  return undefined;
+}
+
+interface NameMatch {
+  node: SyntaxNode;
+  /**
+   * Whether the grammar itself singled this identifier out — through a field, a
+   * declarator chain, or a qualified name's final segment — rather than it just
+   * being the first identifier the search happened to reach.
+   */
+  labelled: boolean;
+}
+
+/**
+ * Reports whether an identifier the grammar never labelled opens the subtree it
+ * was found in. Only keywords and whitespace may precede it: once punctuation
+ * intervenes, that subtree is a compound construct — a CSS selector, a media
+ * feature query — whose leading identifier is one fragment of it, not a name.
+ */
+function opensSubtree(source: string, child: SyntaxNode, match: NameMatch) {
+  return (
+    match.labelled ||
+    !/[^\w\s]/.test(source.slice(child.startIndex, match.node.startIndex))
+  );
+}
+
+/** Searches a header's children for a name the grammar left unlabelled. */
+function nestedNameMatch(
+  source: string,
+  header: SyntaxNode[],
+  allowTypeAnnotation: boolean,
+) {
+  for (const child of header) {
+    if (isTypeAnnotationNodeType(child.type)) continue;
+    const nested = declarationNameMatch(source, child, allowTypeAnnotation);
+    if (nested && opensSubtree(source, child, nested)) return nested;
+  }
+  return undefined;
+}
+
+/**
+ * Locates the identifier a declaration declares, and how the grammar marked it.
+ * Grammars spell a Kotlin class name and a Dart field's type with the same
+ * `type_identifier` node, so a type annotation names the declaration only once
+ * every other candidate is exhausted: any non-type name beats it, a directly
+ * annotated header beats a nested one, and a nested annotation is taken only
+ * when the caller still allows one.
+ */
+function declarationNameMatch(
+  source: string,
+  node: SyntaxNode,
+  allowTypeAnnotation = true,
+): NameMatch | undefined {
+  const labelledChild =
+    fieldNameChild(node) ??
+    node.namedChildren.find(
+      (child): child is SyntaxNode =>
+        child !== null && declaratorTypes.includes(child.type),
+    ) ??
+    node.namedChildren.find((child): child is SyntaxNode =>
+      Boolean(child?.type.includes("declarator")),
+    );
+  if (labelledChild) {
+    return {
+      node: declarationNameMatch(source, labelledChild)?.node ?? labelledChild,
+      labelled: true,
+    };
+  }
+  const header = declarationHeaderChildren(node).filter(
+    (child) => child.isNamed && !isReferenceNodeType(child.type),
+  );
+  // In a member access the leading segments name the owner and the last names
+  // the member, so `$this.Id` declares `Id`. Only grammars that call the node
+  // an access qualify: a `::` elsewhere may ascribe a type instead.
+  const accessed = isMemberAccessNodeType(node.type)
+    ? [...header].reverse().find((child) => isIdentifierNodeType(child.type))
+    : undefined;
+  if (accessed) {
+    return {
+      node: declarationNameMatch(source, accessed)?.node ?? accessed,
+      labelled: true,
+    };
+  }
+  const declared = header.find(
+    (child) =>
+      isIdentifierNodeType(child.type) && !isTypeAnnotationNodeType(child.type),
+  );
+  if (declared) {
+    return {
+      node: declarationNameMatch(source, declared)?.node ?? declared,
+      labelled: false,
+    };
+  }
+  const nested = nestedNameMatch(source, header, false);
+  if (nested) return nested;
+  if (!allowTypeAnnotation) return undefined;
+  const annotated = header.find((child) => isIdentifierNodeType(child.type));
+  if (annotated) {
+    return {
+      node: declarationNameMatch(source, annotated)?.node ?? annotated,
+      labelled: false,
+    };
+  }
+  return nestedNameMatch(source, header, true);
 }
 
 /** Locates the syntax node that owns a declaration's name. */
-function declarationNameNode(node: SyntaxNode): SyntaxNode | undefined {
-  const direct =
-    node.childForFieldName("name") ??
-    node.childForFieldName("declarator") ??
-    node.childForFieldName("left") ??
-    node.childForFieldName("target");
-  if (direct) {
-    const nested = declarationNameNode(direct);
-    return nested ?? direct;
-  }
-  const declarator = node.namedChildren.find(
-    (child): child is SyntaxNode =>
-      child !== null &&
-      [
-        "assignment",
-        "const_spec",
-        "init_declarator",
-        "variable_declarator",
-        "variable_declaration",
-      ].includes(child.type),
-  );
-  if (declarator) return declarationNameNode(declarator);
-  const nestedDeclarator = node.namedChildren.find(
-    (child): child is SyntaxNode => Boolean(child?.type.includes("declarator")),
-  );
-  if (nestedDeclarator) return declarationNameNode(nestedDeclarator);
-  return node.namedChildren.find(
-    (child): child is SyntaxNode =>
-      child !== null && commonIdentifiers.has(child.type),
-  );
+function declarationNameNode(source: string, node: SyntaxNode) {
+  return declarationNameMatch(source, node)?.node;
+}
+
+const MAXIMUM_HEADER_NAME_LENGTH = 72;
+
+/**
+ * Titles a declaration the grammar exposes no identifier for with its own
+ * header text, so instructions and rules that share a leading keyword — every
+ * `COPY`, every `ALTER TABLE`, every CSS selector — stay tellable apart. A
+ * header holding nothing but keywords and punctuation names nothing, and the
+ * declaration is left anonymous rather than titled after its keyword.
+ */
+function declarationHeaderText(source: string, node: SyntaxNode) {
+  const header = declarationHeaderChildren(node);
+  if (!header.some((child) => child.isNamed)) return undefined;
+  const text = source
+    .slice(node.startIndex, header.at(-1)?.endIndex ?? node.endIndex)
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > MAXIMUM_HEADER_NAME_LENGTH
+    ? `${text.slice(0, MAXIMUM_HEADER_NAME_LENGTH - 1).trimEnd()}…`
+    : text;
 }
 
 /**
@@ -1248,12 +1440,13 @@ function ownName(source: string, node: SyntaxNode) {
   if (node.type === "rule") {
     return normalizeName(nodeText(source, node).split(":", 1)[0]);
   }
-  const nameNode = declarationNameNode(node);
+  const nameNode = declarationNameNode(source, node);
   const fieldName = normalizeName(
-    nameNode ? namedLeafText(source, nameNode) : undefined,
+    nameNode ? nodeText(source, nameNode) : undefined,
   );
   if (fieldName) return fieldName;
-  return normalizeName(nodeText(source, node));
+  if (node.namedChildCount === 0) return normalizeName(nodeText(source, node));
+  return declarationHeaderText(source, node);
 }
 
 /** Extracts C++ names, including operators and test-framework cases. */
@@ -1395,7 +1588,7 @@ function declarationScopes(
       if (
         receiver &&
         receiver.startIndex <
-          (declarationNameNode(node)?.startIndex ?? node.endIndex)
+          (declarationNameNode(source, node)?.startIndex ?? node.endIndex)
       ) {
         return [...scopes, nodeText(source, receiver)];
       }
@@ -4369,6 +4562,12 @@ function declarationCandidates(
           : language === "kotlin" && call.kind === "test_hook"
             ? call.name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()
             : call.name;
+    }
+    // A module unit is located by where it sits, not by an identifier, so one
+    // the grammar names nothing for still deserves a card. Any other nameless
+    // declaration is an anonymous literal its owning declaration already covers.
+    if (!name && shape.moduleUnits?.has(node.type)) {
+      name = node.type.replaceAll("_", " ");
     }
     if (!kind || !name) continue;
     const scopes = declarationScopes(language, file.content, node, shape);
