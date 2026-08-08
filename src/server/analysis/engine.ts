@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import {
+  type ImportStatement,
   resolveImportPath,
   resolvePythonImportedSubmodulePath,
 } from "~/lib/import-navigation";
@@ -43,7 +44,10 @@ interface LineChangeHunk {
 }
 
 /** Computes changed-line masks from the shared language-neutral patience diff. */
-function changedLineMasks(previousSource: string, currentSource: string) {
+export function changedLineMasks(
+  previousSource: string,
+  currentSource: string,
+) {
   const previousLines = previousSource.split("\n");
   const currentLines = currentSource.split("\n");
   const masks: LineChangeMasks = {
@@ -75,8 +79,22 @@ export function changedLineCount(
   );
 }
 
+/** The subset of a review unit that decides which lines it renders. */
+export type UnitRangeSource = Pick<
+  AnalyzedUnit,
+  | "changeType"
+  | "endLine"
+  | "previousEndLine"
+  | "previousStartLine"
+  | "relatedRanges"
+  | "startLine"
+>;
+
 /** Lists the side-specific source ranges through which a unit owns lines. */
-function unitOwnershipRanges(unit: RawUnit, side: "previous" | "current") {
+export function unitOwnershipRanges(
+  unit: UnitRangeSource,
+  side: "previous" | "current",
+) {
   const related = unit.relatedRanges?.flatMap((range) => {
     const startLine =
       side === "previous" ? range.previousStartLine : range.startLine;
@@ -803,24 +821,88 @@ function assertChangedLinesCovered(
   }
 }
 
-/** Returns whether a parsed unit owns at least one line changed by the PR. */
-function unitIntersectsChangedLines(unit: RawUnit, changed: boolean[]) {
-  const start = Math.max(0, unit.startLine - 1);
-  const end = Math.min(changed.length, unit.endLine);
+/** Returns whether a one-based line span holds at least one line changed by the PR. */
+function intersectsChangedLines(
+  span: { startLine: number; endLine: number },
+  changed: boolean[],
+) {
+  const start = Math.max(0, span.startLine - 1);
+  const end = Math.min(changed.length, span.endLine);
   for (let index = start; index < end; index += 1) {
     if (changed[index]) return true;
   }
   return false;
 }
 
-/** Marks changed import lines represented as context by a logical code unit. */
-function markContextualImportChanges(
+const importedIdentifier = /^[\w$][\w$.]*$/;
+
+/** Compiles whole-word matchers for the names one import statement binds. */
+function importedNamePatterns(statement: ImportStatement) {
+  return statement.references.flatMap(({ local, specifier }) => {
+    // Wildcard and whole-module imports bind no local identifier, so a body
+    // reaches them through the specifier's final segment instead — Go spells
+    // `import "fmt"` as `fmt.Sprint`. Requiring an identifier also stops the
+    // placeholder itself from matching arbitrary punctuation in a body.
+    const name = importedIdentifier.test(local)
+      ? local
+      : (specifier.split(/[/.]/).at(-1) ?? "");
+    return importedIdentifier.test(name)
+      ? [new RegExp(`(^|[^\\w$])${name.replace(/\./g, "\\.")}([^\\w$]|$)`)]
+      : [];
+  });
+}
+
+/** Records one contextual range on a unit without dropping the range it owns. */
+function addRelatedRange(unit: RawUnit, range: ReviewUnitRange) {
+  const [current] = unitOwnershipRanges(unit, "current");
+  const [previous] = unitOwnershipRanges(unit, "previous");
+  unit.relatedRanges = [
+    ...(unit.relatedRanges ?? [
+      {
+        startLine: current?.startLine,
+        endLine: current?.endLine,
+        previousStartLine: previous?.startLine,
+        previousEndLine: previous?.endLine,
+      },
+    ]),
+    range,
+  ].sort(
+    (left, right) =>
+      (left.startLine ?? left.previousStartLine ?? Number.MAX_SAFE_INTEGER) -
+      (right.startLine ?? right.previousStartLine ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
+/**
+ * Folds each changed import statement into the changed units that use it.
+ *
+ * An import exists for the declarations that reference it, so the declaration
+ * spelling a newly imported symbol is the only card on which a reviewer can
+ * judge the import. Recording the statement's range on that unit keeps the edit
+ * inside a reviewable card — and therefore inside a review concept — instead of
+ * leaving it as whole-file context that no card renders. A statement no changed
+ * unit references is deliberately left uncovered so it surfaces as its own
+ * change unit rather than silently re-opening declarations that never used it.
+ *
+ * Matching on the bound name keeps the rule language-neutral, because every
+ * adapter reports import references through the shared statement model rather
+ * than through per-language syntax.
+ */
+function foldContextualImportChanges(
   source: string,
   language: SupportedLanguage,
   changed: boolean[],
   covered: boolean[],
+  units: Array<{ unit: RawUnit; source: string }>,
+  side: "current" | "previous",
 ) {
-  for (const statement of parseImportStatements(source, language)) {
+  return parseImportStatements(source, language).flatMap((statement) => {
+    if (!intersectsChangedLines(statement, changed)) return [];
+    const patterns = importedNamePatterns(statement);
+    const users = units.filter((candidate) =>
+      patterns.some((pattern) => pattern.test(candidate.source)),
+    );
+    if (users.length === 0) return [];
     for (
       let index = Math.max(0, statement.startLine - 1);
       index < Math.min(changed.length, statement.endLine);
@@ -828,27 +910,26 @@ function markContextualImportChanges(
     ) {
       if (changed[index]) covered[index] = true;
     }
-  }
+    for (const { unit } of users) {
+      addRelatedRange(
+        unit,
+        side === "current"
+          ? { startLine: statement.startLine, endLine: statement.endLine }
+          : {
+              previousStartLine: statement.startLine,
+              previousEndLine: statement.endLine,
+            },
+      );
+    }
+    return [statement];
+  });
 }
 
-/** Hashes changed import statements that are intentionally absorbed as unit context. */
+/** Hashes the import statements intentionally absorbed as unit context. */
 function contextualImportHash(
-  source: string,
+  statements: ImportStatement[],
   language: SupportedLanguage,
-  changed: boolean[],
 ) {
-  const statements = parseImportStatements(source, language).filter(
-    (statement) => {
-      for (
-        let index = Math.max(0, statement.startLine - 1);
-        index < Math.min(changed.length, statement.endLine);
-        index += 1
-      ) {
-        if (changed[index]) return true;
-      }
-      return false;
-    },
-  );
   return statements.length > 0
     ? sha256(
         statements
@@ -930,7 +1011,7 @@ function prScopedReviewUnits(
     .flatMap((unit) => {
       const previous =
         previousByKey.get(unit.stableKey) ?? renamed.pairs.get(unit.stableKey);
-      if (!unitIntersectsChangedLines(unit, masks.current)) return [];
+      if (!intersectsChangedLines(unit, masks.current)) return [];
       if (previous?.contentHash === unit.contentHash) return [];
       return [{ unit, previous }];
     })
@@ -991,7 +1072,7 @@ function prScopedReviewUnits(
     ) {
       return [];
     }
-    if (!unitIntersectsChangedLines(unit, masks.previous)) return [];
+    if (!intersectsChangedLines(unit, masks.previous)) return [];
     for (
       let index = Math.max(0, unit.startLine - 1);
       index < Math.min(previousCovered.length, unit.endLine);
@@ -1013,40 +1094,60 @@ function prScopedReviewUnits(
     ];
   });
 
-  const hasCurrentLogicalUnit = changedCurrent.some(
-    (unit) => !isImportOnlySource(unit.source, language),
+  const currentLogicalUnits = changedCurrent.flatMap((unit) =>
+    isImportOnlySource(unit.source, language)
+      ? []
+      : [{ unit, source: unit.source }],
   );
-  if (hasCurrentLogicalUnit) {
-    markContextualImportChanges(
-      file.content,
-      language,
-      masks.current,
-      currentCovered,
-    );
+  const previousLogicalUnits = [
+    ...deletedUnits.flatMap((unit) =>
+      isImportOnlySource(unit.source, language)
+        ? []
+        : [{ unit, source: unit.source }],
+    ),
+    ...changedCurrent.flatMap((unit) =>
+      unit.previousSource !== undefined &&
+      !isImportOnlySource(unit.previousSource, language)
+        ? [{ unit, source: unit.previousSource }]
+        : [],
+    ),
+  ];
+  const absorbedCurrentImports =
+    currentLogicalUnits.length > 0
+      ? foldContextualImportChanges(
+          file.content,
+          language,
+          masks.current,
+          currentCovered,
+          currentLogicalUnits,
+          "current",
+        )
+      : [];
+  if (currentLogicalUnits.length > 0) {
     markContextualBlankChanges(currentLines, masks.current, currentCovered);
   }
-  const hasPreviousLogicalUnit =
-    deletedUnits.some((unit) => !isImportOnlySource(unit.source, language)) ||
-    changedCurrent.some(
-      (unit) =>
-        unit.previousSource !== undefined &&
-        !isImportOnlySource(unit.previousSource, language),
-    );
-  if (hasPreviousLogicalUnit) {
-    markContextualImportChanges(
-      file.previousContent,
-      language,
-      masks.previous,
-      previousCovered,
-    );
+  const absorbedPreviousImports =
+    previousLogicalUnits.length > 0
+      ? foldContextualImportChanges(
+          file.previousContent,
+          language,
+          masks.previous,
+          previousCovered,
+          previousLogicalUnits,
+          "previous",
+        )
+      : [];
+  if (previousLogicalUnits.length > 0) {
     markContextualBlankChanges(previousLines, masks.previous, previousCovered);
   }
-  const currentImportHash = hasCurrentLogicalUnit
-    ? contextualImportHash(file.content, language, masks.current)
-    : "";
-  const previousImportHash = hasPreviousLogicalUnit
-    ? contextualImportHash(file.previousContent, language, masks.previous)
-    : "";
+  const currentImportHash = contextualImportHash(
+    absorbedCurrentImports,
+    language,
+  );
+  const previousImportHash = contextualImportHash(
+    absorbedPreviousImports,
+    language,
+  );
   if (
     (currentImportHash || previousImportHash) &&
     currentImportHash !== previousImportHash
@@ -1170,13 +1271,19 @@ function mergeConceptUnits(file: SourceFile, members: UnitSymbolProfile[]) {
     previousRange ? [previousRange] : [],
   );
   const relatedRanges = members
-    .map(
-      ({ currentRange, previousRange }): ReviewUnitRange => ({
-        startLine: currentRange?.startLine,
-        endLine: currentRange?.endLine,
-        previousStartLine: previousRange?.startLine,
-        previousEndLine: previousRange?.endLine,
-      }),
+    // A member that already renders disjoint ranges — a declaration holding the
+    // import statement it uses — keeps them, so merging never hides a line the
+    // member alone would have shown.
+    .flatMap(
+      ({ unit, currentRange, previousRange }): ReviewUnitRange[] =>
+        unit.relatedRanges ?? [
+          {
+            startLine: currentRange?.startLine,
+            endLine: currentRange?.endLine,
+            previousStartLine: previousRange?.startLine,
+            previousEndLine: previousRange?.endLine,
+          },
+        ],
     )
     .sort(
       (left, right) =>

@@ -1,6 +1,11 @@
 import { basename, dirname, extname } from "node:path";
+import {
+  changedLineMasks,
+  type UnitRangeSource,
+  unitOwnershipRanges,
+} from "./engine";
 import { sha256 } from "./hash";
-import type { AnalyzedUnit } from "./types";
+import type { AnalyzedUnit, SourceFile } from "./types";
 
 export const MAX_CONCEPT_FILES = 10;
 export const MAX_CONCEPT_CHANGED_LINES = 500;
@@ -56,14 +61,54 @@ function identifierTokens(unit: AnalyzedUnit) {
   );
 }
 
+const qualifiedNameSeparators = ["::", "#", ".", "/"];
+
+/** Splits a qualified declaration name into its owner and its final segment. */
+function splitQualifiedName(name: string) {
+  let cut = -1;
+  let separator = "";
+  for (const candidate of qualifiedNameSeparators) {
+    const index = name.lastIndexOf(candidate);
+    if (index > cut) {
+      cut = index;
+      separator = candidate;
+    }
+  }
+  // A leading separator marks a sigil rather than an owner — Ruby's "#run" is
+  // an unqualified method — so it yields a bare segment and no container.
+  return {
+    owner: cut > 0 ? name.slice(0, cut) : undefined,
+    segment: cut < 0 ? name : name.slice(cut + separator.length),
+  };
+}
+
 /** Derives a lexical owner from normalized qualified declaration names. */
 function lexicalContainer(unit: AnalyzedUnit) {
-  const separators = ["::", "#", ".", "/"];
-  let cut = -1;
-  for (const separator of separators) {
-    cut = Math.max(cut, unit.name.lastIndexOf(separator));
-  }
-  return cut > 0 ? `${unit.path}:${unit.name.slice(0, cut)}` : undefined;
+  const { owner } = splitQualifiedName(unit.name);
+  return owner === undefined ? undefined : `${unit.path}:${owner}`;
+}
+
+/** Returns whether a unit reviews test code rather than the behaviour under test. */
+function isTestUnit({ kind }: AnalyzedUnit) {
+  return kind === "test" || kind === "test_suite" || kind === "test_hook";
+}
+
+/**
+ * Detects a title a reviewer can locate in the code the concept shows.
+ *
+ * A parser titles a declaration with an identifier it read out of that
+ * declaration, so the identifier is present in the source the card renders.
+ * Ranges the analyzer has to invent instead — module sweeps, changed-line
+ * fragments, whole-file context — are titled with generated prose such as
+ * "Module statements" or "Changed line 723" that appears nowhere in the code
+ * and so names nothing a reviewer can act on. Testing a name against its own
+ * source separates the two without a per-language list of generated labels.
+ */
+function namesOwnSource(unit: AnalyzedUnit) {
+  const source = `${unit.source}\n${unit.previousSource ?? ""}`;
+  if (source.includes(unit.name)) return true;
+  const { segment } = splitQualifiedName(unit.name);
+  return segment.length >= 3 && source.includes(segment);
 }
 
 /** Normalizes production and test paths to a shared relationship key. */
@@ -268,12 +313,8 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
   );
 }
 
-/** Chooses the most central member with stable tie-breaking. */
-function conceptAnchor(
-  members: string[],
-  edges: AffinityEdge[],
-  byKey: Map<string, AnalyzedUnit>,
-) {
+/** Sums how much affinity evidence holds each member inside one group. */
+function internalAffinityWeights(members: string[], edges: AffinityEdge[]) {
   const memberSet = new Set(members);
   const weights = new Map(members.map((key) => [key, 0]));
   for (const edge of edges) {
@@ -282,6 +323,16 @@ function conceptAnchor(
       weights.set(edge.right, (weights.get(edge.right) ?? 0) + edge.score);
     }
   }
+  return weights;
+}
+
+/** Chooses the most central member with stable tie-breaking. */
+function conceptAnchor(
+  members: string[],
+  edges: AffinityEdge[],
+  byKey: Map<string, AnalyzedUnit>,
+) {
+  const weights = internalAffinityWeights(members, edges);
   return [...members].sort(
     (left, right) =>
       (weights.get(right) ?? 0) - (weights.get(left) ?? 0) ||
@@ -289,6 +340,56 @@ function conceptAnchor(
         (byKey.get(right)?.reviewOrder ?? 0) ||
       left.localeCompare(right),
   )[0] as string;
+}
+
+/**
+ * Chooses the member whose name states what a concept exists to justify.
+ *
+ * Graph centrality answers a different question — which member holds the group
+ * together — and a shared type or constant is the most central member of almost
+ * every group it appears in, which is how a five-line interface ends up naming a
+ * refresh-policy change. Titles therefore rank by review signal instead:
+ *
+ * 1. a name a reviewer can find in the code beats generated prose, because a
+ *    line number or "Module statements" names nothing anyone can act on;
+ * 2. production code beats a test, because a test is named after the behaviour
+ *    it asserts while the production edit is the behaviour under review;
+ * 3. the member carrying more of the group's changed lines beats a bystander the
+ *    change merely brushed;
+ * 4. affinity weight breaks the remaining ties, so among members carrying equal
+ *    change the most depended-upon one names the group.
+ *
+ * Review order and stable key keep the choice deterministic.
+ */
+function conceptTitleAnchor(
+  members: string[],
+  edges: AffinityEdge[],
+  byKey: Map<string, AnalyzedUnit>,
+) {
+  const weights = internalAffinityWeights(members, edges);
+  return members
+    .flatMap((key) => {
+      const unit = byKey.get(key);
+      return unit
+        ? [
+            {
+              unit,
+              nameable: namesOwnSource(unit) ? 1 : 0,
+              production: isTestUnit(unit) ? 0 : 1,
+              weight: weights.get(key) ?? 0,
+            },
+          ]
+        : [];
+    })
+    .sort(
+      (left, right) =>
+        right.nameable - left.nameable ||
+        right.production - left.production ||
+        right.unit.changedLineCount - left.unit.changedLineCount ||
+        right.weight - left.weight ||
+        left.unit.reviewOrder - right.unit.reviewOrder ||
+        left.unit.stableKey.localeCompare(right.unit.stableKey),
+    )[0]?.unit;
 }
 
 /** Ensures a proposed group is compact around its deterministic anchor. */
@@ -390,8 +491,7 @@ export function clusterReviewConcepts(
           left.stableKey.localeCompare(right.stableKey),
       );
     const stableMembers = orderedMembers.map(({ stableKey }) => stableKey);
-    const anchorKey = conceptAnchor(stableMembers, edges, byKey);
-    const anchor = byKey.get(anchorKey) ?? orderedMembers[0];
+    const anchor = conceptTitleAnchor(stableMembers, edges, byKey);
     if (!anchor) throw new Error("A review concept cannot be empty");
     const paths = new Set(orderedMembers.map(({ path }) => path));
     const changedLineCount = orderedMembers.reduce(
@@ -405,22 +505,24 @@ export function clusterReviewConcepts(
     const reasons = [
       ...new Set(internalEdges.flatMap(({ reasons }) => reasons)),
     ];
-    const hasTest = orderedMembers.some(
-      ({ kind }) =>
-        kind === "test" || kind === "test_suite" || kind === "test_hook",
-    );
-    const hasProduction = orderedMembers.some(
-      ({ kind }) => !["test", "test_suite", "test_hook"].includes(kind),
-    );
+    const hasTest = orderedMembers.some(isTestUnit);
+    const hasProduction = orderedMembers.some((unit) => !isTestUnit(unit));
+    // A group whose best anchor is still generated prose has no name to offer,
+    // so the title falls back to the one thing such a range does carry: where a
+    // reviewer opens it.
+    const subject = namesOwnSource(anchor)
+      ? anchor.name
+      : `${anchor.name} in ${basename(anchor.path)}`;
     const title =
       hasTest && hasProduction
-        ? `${anchor.name} and tests`
+        ? `${subject} and tests`
         : paths.size > 1
-          ? `${anchor.name} across ${paths.size} files`
+          ? `${subject} across ${paths.size} files`
           : stableMembers.length > 1
-            ? `${anchor.name} and related changes`
-            : anchor.name;
+            ? `${subject} and related changes`
+            : subject;
     return {
+      anchorLocation: `${anchor.path}:${anchor.startLine}`,
       stableKey: `concept:${sha256(stableMembers.slice().sort().join("\0"))}`,
       title,
       rationale:
@@ -489,13 +591,69 @@ export function clusterReviewConcepts(
         left.stableKey.localeCompare(right.stableKey),
     )
     .forEach(visit);
-  return ordered.map((concept, reviewOrder) => ({ ...concept, reviewOrder }));
+  // Two cards sharing a title are indistinguishable to whoever signs them off,
+  // so a repeated title is qualified by where its anchor opens.
+  const titleCounts = new Map<string, number>();
+  for (const { title } of ordered) {
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
+  }
+  return ordered.map(({ anchorLocation, ...concept }, reviewOrder) => ({
+    ...concept,
+    reviewOrder,
+    title:
+      (titleCounts.get(concept.title) ?? 0) > 1
+        ? `${concept.title} (${anchorLocation})`
+        : concept.title,
+  }));
+}
+
+type PartitionUnit = Pick<
+  AnalyzedUnit,
+  "changedLineCount" | "path" | "stableKey"
+> &
+  UnitRangeSource;
+
+/**
+ * Reports changed lines of one modified file that no concept member renders.
+ *
+ * Membership alone proves every unit is reachable, not every changed line: the
+ * analyzer may credit a line to the nearest unit while showing a range that
+ * excludes it, which is how an added import used to disappear from the review.
+ * Blank lines are exempt because there is nothing on them to judge, and only
+ * modified files are checked — an added or deleted file is reviewed whole, so
+ * its preamble is context for the declarations shipping with it.
+ */
+function unrenderedChangedLines(file: SourceFile, units: PartitionUnit[]) {
+  if (file.changeType !== "modified" || file.previousContent === undefined) {
+    return [];
+  }
+  const masks = changedLineMasks(file.previousContent, file.content);
+  const sources = {
+    previous: file.previousContent.split("\n"),
+    current: file.content.split("\n"),
+  };
+  return (["previous", "current"] as const).flatMap((side) =>
+    masks[side].flatMap((isChanged, index) => {
+      const line = index + 1;
+      if (!isChanged || !sources[side][index]?.trim()) return [];
+      return units.some((unit) =>
+        unitOwnershipRanges(unit, side).some(
+          ({ startLine, endLine }) => line >= startLine && line <= endLine,
+        ),
+      )
+        ? []
+        : [
+            `${file.path} ${side === "previous" ? "base" : "head"} line ${line}`,
+          ];
+    }),
+  );
 }
 
 /** Fails closed when a layout can hide, duplicate, or overgrow review work. */
 export function validateConceptPartition(
-  units: Array<Pick<AnalyzedUnit, "stableKey" | "path" | "changedLineCount">>,
+  units: PartitionUnit[],
   concepts: Array<Pick<ReviewConceptDefinition, "memberStableKeys">>,
+  files: SourceFile[],
 ) {
   const expected = new Set(units.map(({ stableKey }) => stableKey));
   const seen = new Set<string>();
@@ -525,5 +683,16 @@ export function validateConceptPartition(
   if (seen.size !== expected.size) {
     const missing = [...expected].filter((key) => !seen.has(key));
     throw new Error(`Review concept layout is missing ${missing.join(", ")}`);
+  }
+  const unrendered = files.flatMap((file) =>
+    unrenderedChangedLines(
+      file,
+      units.filter((unit) => unit.path === file.path),
+    ),
+  );
+  if (unrendered.length > 0) {
+    throw new Error(
+      `Review concepts never show changed ${unrendered.join(", ")}`,
+    );
   }
 }
