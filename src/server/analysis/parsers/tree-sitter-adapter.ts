@@ -22,6 +22,20 @@ interface LanguageShape {
   functions: ReadonlySet<string>;
   variables: ReadonlySet<string>;
   moduleUnits?: ReadonlySet<string>;
+  /**
+   * Node types that carry the outline of a hierarchical document format. Only
+   * the outermost occurrences become units, so nested leaves stay inside the
+   * section that owns them instead of turning into one card per scalar.
+   */
+  sections?: ReadonlySet<string>;
+  /**
+   * Marks a format whose sections carry configuration rather than prose. Every
+   * field of a data document is a decision worth its own card, and a repeated
+   * tag lists separate records such as one Maven `<dependency>` each. Prose
+   * markup instead nests and repeats tags for presentation, so only its
+   * structured sections — never its text leaves — become units.
+   */
+  dataSections?: boolean;
   imports: ReadonlySet<string>;
   comments: ReadonlySet<string>;
   identifierTypes: ReadonlySet<string>;
@@ -501,8 +515,9 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     containers: set(),
     functions: set(),
     variables: set(),
-    moduleUnits: set(),
-    imports: set(),
+    moduleUnits: set("script_element", "style_element"),
+    sections: set("element"),
+    imports: set("doctype"),
     comments: set("comment"),
     identifierTypes: commonIdentifiers,
     bodyTypes: set("element"),
@@ -511,7 +526,8 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     containers: set(),
     functions: set(),
     variables: set(),
-    moduleUnits: set(),
+    sections: set("pair", "object"),
+    dataSections: true,
     imports: set(),
     comments: set(),
     identifierTypes: commonIdentifiers,
@@ -804,8 +820,9 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     containers: set(),
     functions: set(),
     variables: set(),
-    moduleUnits: set(),
-    imports: set("XMLDecl", "doctype"),
+    sections: set("element"),
+    dataSections: true,
+    imports: set("prolog", "XMLDecl", "doctype"),
     comments: set("Comment"),
     identifierTypes: commonIdentifiers,
     bodyTypes: set("element", "content"),
@@ -1629,6 +1646,34 @@ function logicalOwnerName(source: string, node: SyntaxNode) {
   return undefined;
 }
 
+/** Reports whether a language shape reviews a node type as a unit of its own. */
+function isReviewedType(shape: LanguageShape, type: string) {
+  return (
+    shape.containers.has(type) ||
+    shape.functions.has(type) ||
+    shape.variables.has(type) ||
+    Boolean(shape.moduleUnits?.has(type))
+  );
+}
+
+const decoratorTypePattern =
+  /(?:^|_)(?:annotation|attribute|decorator)s?(?:_|$)/;
+
+/**
+ * Reports whether a sibling node annotates the declaration that follows it.
+ *
+ * Grammars spell decorators differently — `annotation` in Dart, Java, and
+ * Kotlin, `decorator` in TypeScript, `attribute_item` or `attribute_list`
+ * elsewhere — but they all park them next to the declaration they belong to.
+ * Types the shape already reviews are excluded so that a declaration such as a
+ * Java `annotation_type_declaration` keeps its own review card.
+ */
+function isDecoratorNode(shape: LanguageShape, node: SyntaxNode) {
+  return (
+    decoratorTypePattern.test(node.type) && !isReviewedType(shape, node.type)
+  );
+}
+
 /** Includes contiguous documentation syntax preceding a declaration. */
 function leadingDocumentationStart(
   source: string,
@@ -1641,12 +1686,12 @@ function leadingDocumentationStart(
   let sibling = wrapper.previousNamedSibling;
   while (
     sibling &&
-    (shape.comments.has(sibling.type) || sibling.type.includes("attribute")) &&
+    (shape.comments.has(sibling.type) || isDecoratorNode(shape, sibling)) &&
     source.slice(sibling.endIndex, start).trim() === ""
   ) {
     const text = nodeText(source, sibling).trim();
     const documentation =
-      sibling.type.includes("attribute") ||
+      isDecoratorNode(shape, sibling) ||
       language === "clojure" ||
       language === "go" ||
       language === "hcl" ||
@@ -1691,6 +1736,35 @@ function bodyNode(node: SyntaxNode, shape: LanguageShape) {
     ) ??
     syntaxDescendants(node).find((child) => shape.bodyTypes.has(child.type))
   );
+}
+
+/**
+ * Finds an implementation body that a grammar emits as a sibling of the
+ * declaration it belongs to instead of nesting it inside the declaration.
+ *
+ * Dart is the clearest case: `class_body` holds a `method_signature` and its
+ * `function_body` as consecutive children, so the declaration node stops at the
+ * signature. Absorbing the sibling is only safe when the declaration truly owns
+ * no body of its own and the sibling is not something the shape reviews
+ * separately, which keeps constructs such as a Java field followed by an
+ * instance-initializer block on their own review cards.
+ */
+function trailingBodySibling(
+  source: string,
+  node: SyntaxNode,
+  shape: LanguageShape,
+) {
+  if (bodyNode(node, shape)) return undefined;
+  const sibling = node.nextNamedSibling;
+  if (
+    !sibling ||
+    !shape.bodyTypes.has(sibling.type) ||
+    isReviewedType(shape, sibling.type) ||
+    source.slice(node.endIndex, sibling.startIndex).trim() !== ""
+  ) {
+    return undefined;
+  }
+  return sibling;
 }
 
 /** Chooses the review range end for a declaration or declaration shell. */
@@ -1743,9 +1817,13 @@ function declarationWrapper(node: SyntaxNode) {
 }
 
 /** Collects annotations and modifiers associated with a declaration. */
-function annotationText(source: string, node: SyntaxNode) {
+function annotationText(
+  source: string,
+  language: TreeSitterLanguage,
+  node: SyntaxNode,
+) {
   const start = leadingDocumentationStart(source, node, {
-    ...shapes.javascript,
+    ...shapes[language],
     comments: set(
       "comment",
       "line_comment",
@@ -1765,7 +1843,7 @@ function testRole(
   source: string,
 ): UnitKind | undefined {
   const lower = name.toLowerCase();
-  const prefix = annotationText(source, node).toLowerCase();
+  const prefix = annotationText(source, language, node).toLowerCase();
   if (shapeForTestSuite(language, node, name, prefix, file.path)) {
     return "test_suite";
   }
@@ -2391,8 +2469,8 @@ function nestedEcmascriptCandidate(
   return undefined;
 }
 
-/** Computes lightweight cyclomatic complexity from branching syntax nodes. */
-function complexity(node: SyntaxNode) {
+/** Computes lightweight cyclomatic complexity across the parts of a unit. */
+function complexity(...parts: Array<SyntaxNode | undefined>) {
   const branching = new Set([
     "if_statement",
     "for_statement",
@@ -2407,9 +2485,9 @@ function complexity(node: SyntaxNode) {
   return Math.max(
     1,
     1 +
-      syntaxDescendants(node).filter((descendant) =>
-        branching.has(descendant.type),
-      ).length,
+      parts
+        .flatMap((part) => (part ? syntaxDescendants(part) : []))
+        .filter((descendant) => branching.has(descendant.type)).length,
   );
 }
 
@@ -2441,6 +2519,9 @@ function makeRawUnit(
 ) {
   const start = leadingDocumentationStart(file.content, node, shape, language);
   const wrapper = declarationWrapper(node);
+  const trailingBody = shape.containers.has(node.type)
+    ? undefined
+    : trailingBodySibling(file.content, wrapper, shape);
   const phpStatement =
     language === "php" &&
     (kind === "test" || kind === "test_hook") &&
@@ -2478,9 +2559,7 @@ function makeRawUnit(
             })()
           : reviewsBodyAsMembers(language, shape, node)
             ? declarationEnd(file.content, node, shape, true)
-            : wrapper === node
-              ? node.endIndex
-              : wrapper.endIndex;
+            : (trailingBody ?? wrapper).endIndex;
   const source = file.content.slice(start, end);
   const changeType = file.changeType ?? "modified";
   return {
@@ -2499,7 +2578,7 @@ function makeRawUnit(
     contentHash: sha256(source),
     semanticHash: "",
     changeType,
-    complexity: complexity(node),
+    complexity: complexity(node, trailingBody),
     dependencies: [],
   } satisfies RawUnit;
 }
@@ -4826,6 +4905,191 @@ function clojureReviewCandidates(
   }
   return candidates;
 }
+/** Strips the quoting a document format wraps around a token. */
+function unquoteToken(value: string) {
+  return value.replace(/^["']|["']$/g, "");
+}
+
+/** Returns the sections reachable from a node without crossing a section. */
+function sectionChildren(
+  node: SyntaxNode,
+  sections: ReadonlySet<string>,
+): SyntaxNode[] {
+  return node.namedChildren.flatMap((child) =>
+    child === null
+      ? []
+      : sections.has(child.type)
+        ? [child]
+        : sectionChildren(child, sections),
+  );
+}
+
+/** Returns the label a section leads with, such as a key or a tag name. */
+function sectionLabel(
+  source: string,
+  node: SyntaxNode,
+  sections: ReadonlySet<string>,
+) {
+  const header = node.firstNamedChild;
+  if (!header || sections.has(header.type)) return undefined;
+  let leaf = header;
+  while (leaf.firstNamedChild) leaf = leaf.firstNamedChild;
+  return unquoteToken(nodeText(source, leaf)).trim() || undefined;
+}
+
+/** Returns the scalar a section carries, ignoring tokens repeating its label. */
+function sectionValue(source: string, node: SyntaxNode, label: string) {
+  const values = syntaxDescendants(node)
+    .filter((descendant) => descendant.namedChildCount === 0)
+    .map((leaf) => unquoteToken(nodeText(source, leaf)).trim())
+    .filter((text) => text.length > 0 && text !== label);
+  return values.at(-1);
+}
+
+/**
+ * Matches the labels a document format uses to identify a record, covering
+ * bare keys (`name`), compound keys (`artifactId`) and markup locators (`src`).
+ */
+const identifyingLabel = /^(?:id|name|key|src|href)$|[a-z_.-](?:id|name|key)$/i;
+
+/** Returns the identity a section publishes through attributes or fields. */
+function sectionIdentity(
+  source: string,
+  node: SyntaxNode,
+  sections: ReadonlySet<string>,
+) {
+  const header = node.firstNamedChild;
+  const attributes =
+    header && !sections.has(header.type)
+      ? header.namedChildren.filter(
+          (child): child is SyntaxNode =>
+            child !== null && /attribute/i.test(child.type),
+        )
+      : [];
+  const values = [...attributes, ...sectionChildren(node, sections)].flatMap(
+    (descriptor) => {
+      const label = sectionLabel(source, descriptor, sections);
+      if (!label || !identifyingLabel.test(label)) return [];
+      const value = sectionValue(source, descriptor, label);
+      return value ? [value] : [];
+    },
+  );
+  return values.join(":") || undefined;
+}
+
+/** Returns whether a node lists several sections under one repeated label. */
+function holdsRepeatedSections(
+  source: string,
+  node: SyntaxNode,
+  sections: ReadonlySet<string>,
+) {
+  const labels = sectionChildren(node, sections).map((child) =>
+    sectionLabel(source, child, sections),
+  );
+  return labels.length > 1 && new Set(labels).size === 1 && Boolean(labels[0]);
+}
+
+/** Returns the structured records a document repeats inside list containers. */
+function repeatedSectionRecords(
+  source: string,
+  node: SyntaxNode,
+  sections: ReadonlySet<string>,
+): SyntaxNode[] {
+  const children = sectionChildren(node, sections);
+  if (!holdsRepeatedSections(source, node, sections)) {
+    return children.flatMap((child) =>
+      repeatedSectionRecords(source, child, sections),
+    );
+  }
+  // A repeated scalar is one line of its list, not a card of its own.
+  return children.filter(
+    (child) => sectionChildren(child, sections).length > 0,
+  );
+}
+
+/** Returns the outline of a document, looking past its whole-file wrapper. */
+function documentOutline(root: SyntaxNode, sections: ReadonlySet<string>) {
+  const outline = sectionChildren(root, sections);
+  const [wrapper] = outline;
+  // A lone section is the file itself — the JSON object, the XML or HTML root
+  // element — so the sections it holds are what a reviewer signs off. Looking
+  // any deeper would review the fields of a key instead of the key.
+  return outline.length === 1 && wrapper
+    ? sectionChildren(wrapper, sections)
+    : outline;
+}
+
+/** Extracts review candidates for hierarchical data and markup documents. */
+function documentReviewCandidates(
+  file: SourceFile,
+  language: TreeSitterLanguage,
+  root: SyntaxNode,
+  shape: LanguageShape,
+  sections: ReadonlySet<string>,
+) {
+  const outline = documentOutline(root, sections).filter(
+    // Prose markup nests text leaves for presentation, so only sections that
+    // hold further structure earn a card there.
+    (node) => shape.dataSections || sectionChildren(node, sections).length > 0,
+  );
+  const records = shape.dataSections
+    ? outline.flatMap((node) =>
+        repeatedSectionRecords(file.content, node, sections),
+      )
+    : [];
+  const embedded = syntaxDescendants(root).filter((node) =>
+    Boolean(shape.moduleUnits?.has(node.type)),
+  );
+  const entries = [
+    ...[...outline, ...records].map((node) => ({
+      node,
+      kind: (sectionChildren(node, sections).length > 0
+        ? "module"
+        : "variable") as UnitKind,
+    })),
+    // Embedded code carries its own risk wherever it sits, so it is reviewed
+    // apart from the section it is nested in.
+    ...embedded.map((node) => ({ node, kind: "module" as UnitKind })),
+  ].sort((left, right) => left.node.startIndex - right.node.startIndex);
+  const labels = entries.map(({ node }) =>
+    sectionLabel(file.content, node, sections),
+  );
+  const labelCounts = new Map<string, number>();
+  for (const label of labels) {
+    labelCounts.set(label ?? "", (labelCounts.get(label ?? "") ?? 0) + 1);
+  }
+  const ordinals = new Map<string, number>();
+  return entries.map(({ node, kind }, index) => {
+    const label = labels[index];
+    const group = label ?? "";
+    const ordinal = (ordinals.get(group) ?? 0) + 1;
+    ordinals.set(group, ordinal);
+    const ambiguous = (labelCounts.get(group) ?? 0) > 1;
+    const identity =
+      ambiguous || !label
+        ? sectionIdentity(file.content, node, sections)
+        : undefined;
+    // Repeated tags share a label, so a reviewer can only tell two cards apart
+    // once the record's own identity — or its position — is part of the title.
+    const name = label
+      ? ambiguous
+        ? `${label} ${identity ?? `#${ordinal}`}`
+        : label
+      : (identity ?? `Entry ${ordinal}`);
+    return {
+      node,
+      ownName: label ?? name,
+      unit: makeRawRangeUnit(
+        file,
+        language,
+        kind,
+        name,
+        leadingDocumentationStart(file.content, node, shape, language),
+        node.endIndex,
+      ),
+    };
+  });
+}
 
 /** Extracts language-aware declaration candidates from one syntax tree. */
 function declarationCandidates(
@@ -4841,6 +5105,15 @@ function declarationCandidates(
   if (language === "hcl") return hclReviewCandidates(file, root);
   if (language === "elixir") return elixirReviewCandidates(file, root);
   if (language === "clojure") return clojureReviewCandidates(file, root);
+  if (shape.sections) {
+    return documentReviewCandidates(
+      file,
+      language,
+      root,
+      shape,
+      shape.sections,
+    );
+  }
   const candidates: Array<{
     node: SyntaxNode;
     unit: RawUnit;
@@ -4945,7 +5218,7 @@ function declarationCandidates(
     const testLabel =
       role === "test" && language === "csharp"
         ? /(?:DisplayName|TestName)\s*=\s*"([^"]+)"/i.exec(
-            annotationText(file.content, node),
+            annotationText(file.content, language, node),
           )?.[1]
         : undefined;
     const rustDisplayOwner =
@@ -5961,10 +6234,7 @@ function meaningfulNodes(
     ) {
       return syntaxDescendants(node).some(
         (descendant) =>
-          (shape.containers.has(descendant.type) ||
-            shape.functions.has(descendant.type) ||
-            shape.variables.has(descendant.type) ||
-            shape.moduleUnits?.has(descendant.type)) &&
+          isReviewedType(shape, descendant.type) &&
           !isHeaderGuardDefinition(source, descendant),
       );
     }
@@ -6030,10 +6300,7 @@ function semanticSymbolRole(language: TreeSitterLanguage, node: SyntaxNode) {
   for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
     const type = ancestor.type.toLowerCase();
     const definitionContainer =
-      shape.containers.has(ancestor.type) ||
-      shape.functions.has(ancestor.type) ||
-      shape.variables.has(ancestor.type) ||
-      Boolean(shape.moduleUnits?.has(ancestor.type)) ||
+      isReviewedType(shape, ancestor.type) ||
       semanticDefinitionTypePattern.test(type);
     if (
       (type.includes("import") ||
