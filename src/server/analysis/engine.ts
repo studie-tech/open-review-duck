@@ -364,7 +364,10 @@ function fallbackDeclaration(file: SourceFile) {
  * literal makes the range reviewable content that has to stay visible.
  */
 function isBlockDelimiterOnly(source: string) {
-  return source.trim().length > 0 && /^[\s)\]};,]*$/.test(source);
+  return (
+    source.trim().length > 0 &&
+    /^(?:[\s)\]};,]|\b(?:end|fi|esac|done)\b)*$/.test(source)
+  );
 }
 
 /** Extracts reviewable module-level source not owned by a declaration unit. */
