@@ -253,6 +253,65 @@ require "compat"
     );
   });
 
+  it("reviews the same module identically however many times a process parses it", () => {
+    // The Lua grammar owns mutable scanner state across parses. A server
+    // analyses many Lua files, and `analyze` itself parses more than once, so
+    // a reviewer must see the same cards for the tenth file as for the first.
+    const content = `local M = {}
+
+function M.configure(options)
+  M.options = options
+end
+
+function M.reset()
+  M.options = nil
+end
+
+return M
+`;
+    /** Summarises the review cards a reviewer would see for one analysis. */
+    const cards = () =>
+      analyze(content, "src/settings.lua").map(
+        ({ kind, name, startLine, endLine }) => ({
+          kind,
+          name,
+          startLine,
+          endLine,
+        }),
+      );
+
+    const first = cards();
+    expect(cards()).toEqual(first);
+    expect(cards()).toEqual(first);
+    // Both functions must stay separately reviewable rather than collapsing
+    // into one oversized card or vanishing into anonymous module statements.
+    expect(first).toEqual(
+      expect.arrayContaining([
+        { kind: "method", name: "M.configure", startLine: 3, endLine: 5 },
+        { kind: "method", name: "M.reset", startLine: 7, endLine: 9 },
+        { kind: "module", name: "Module M", startLine: 11, endLine: 11 },
+      ]),
+    );
+  });
+
+  it("keeps an unterminated long string from bleeding into the next file", () => {
+    // Truncated diffs and generated fixtures do reach the parser; a file that
+    // ends inside `[[` must not turn the next module's plain code into string
+    // soup, which would erase every card in that file.
+    analyze("local fragment = [[ unterminated\n", "src/fragment.lua");
+    const units = analyze(`local Cache = {}
+
+function Cache.put(key, value)
+  Cache[key] = value
+end
+
+return Cache
+`);
+    expect(named(units, "Cache.put").kind).toBe("method");
+    expect(named(units, "Cache.put").source).toContain("Cache[key] = value");
+    expect(named(units, "Module Cache").kind).toBe("module");
+  });
+
   it("does not leak nested named functions into duplicate review units", () => {
     const units = analyze(`local function outer(value)
   local function normalize(item)
