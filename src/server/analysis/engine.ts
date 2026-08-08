@@ -399,9 +399,15 @@ function moduleReviewUnits(
   const lines = file.content.split("\n");
   const covered = new Array<boolean>(lines.length).fill(false);
   for (const declaration of declarations) {
+    // A declaration reviewed through its members still owns the lines between
+    // them, so closing delimiters never surface as statements of their own.
+    const end = Math.max(
+      declaration.endLine,
+      declaration.enclosingEndLine ?? declaration.endLine,
+    );
     for (
       let index = Math.max(0, declaration.startLine - 1);
-      index < Math.min(lines.length, declaration.endLine);
+      index < Math.min(lines.length, end);
       index += 1
     ) {
       covered[index] = true;

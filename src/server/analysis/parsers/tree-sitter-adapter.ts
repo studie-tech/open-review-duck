@@ -719,10 +719,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     imports: set(),
     comments: set("comment"),
     identifierTypes: commonIdentifiers,
-    // A table's column list is never extracted as its own unit, so treating it
-    // as a body would truncate the statement to its opening line and orphan the
-    // columns into an anonymous module unit. Only routine bodies nest units.
-    bodyTypes: set("block"),
+    bodyTypes: set("column_definitions", "block"),
   },
   markdown: {
     containers: set(),
@@ -2214,6 +2211,22 @@ function complexity(node: SyntaxNode) {
   );
 }
 
+/**
+ * Reports whether a declaration is reviewed as a header whose members become
+ * units of their own. Such a declaration is truncated to that header, so the
+ * body has to be claimed by those members or it is left unreviewed.
+ */
+function reviewsBodyAsMembers(
+  language: TreeSitterLanguage,
+  shape: LanguageShape,
+  node: SyntaxNode,
+) {
+  return (
+    shape.containers.has(node.type) &&
+    !(language === "cpp" && node.type === "enum_specifier")
+  );
+}
+
 /** Builds a raw review unit from a complete declaration node. */
 function makeRawUnit(
   file: SourceFile,
@@ -2261,8 +2274,7 @@ function makeRawUnit(
                 : undefined;
               return statements ? statements.startIndex : node.endIndex;
             })()
-          : shape.containers.has(node.type) &&
-              !(language === "cpp" && node.type === "enum_specifier")
+          : reviewsBodyAsMembers(language, shape, node)
             ? declarationEnd(file.content, node, shape, true)
             : wrapper === node
               ? node.endIndex
@@ -5569,6 +5581,60 @@ export function semanticSymbolOccurrences(
 }
 
 /** Creates a complete tree-sitter-backed language adapter. */
+/**
+ * Restores the full extent of a declaration that nothing else reviews.
+ *
+ * A container is normally truncated to its header so that each member can be
+ * signed off on its own. When the grammar exposes no member as a unit — an
+ * interface of property signatures, an enum, a table of columns — that
+ * truncation leaves the body behind, where it resurfaces as an anonymous
+ * module unit a reviewer cannot act on. Such a declaration stays whole.
+ */
+function retainWholeChildlessDeclarations<
+  Candidate extends { node: SyntaxNode; unit: RawUnit },
+>(file: SourceFile, language: TreeSitterLanguage, candidates: Candidate[]) {
+  const shape = shapes[language];
+  for (const candidate of candidates) {
+    const { node, unit } = candidate;
+    if (!reviewsBodyAsMembers(language, shape, node)) continue;
+    const start = leadingDocumentationStart(
+      file.content,
+      node,
+      shape,
+      language,
+    );
+    // Language specialisations compose their own ranges, sometimes spanning a
+    // parent they deliberately dropped. Only the standard header truncation
+    // describes a body that nothing else reviews, so only it may be undone.
+    if (
+      unit.startLine !== lineAt(file.content, start) ||
+      unit.endLine !==
+        lineAt(file.content, declarationEnd(file.content, node, shape, true))
+    ) {
+      continue;
+    }
+    const extentEnd = declarationWrapper(node).endIndex;
+    const enclosingEndLine = lineAt(file.content, extentEnd);
+    if (enclosingEndLine <= unit.endLine) continue;
+    const reviewedByMember = candidates.some(
+      (other) =>
+        other !== candidate &&
+        other.node.startIndex >= node.startIndex &&
+        other.node.endIndex <= node.endIndex,
+    );
+    if (reviewedByMember) {
+      unit.enclosingEndLine = enclosingEndLine;
+      continue;
+    }
+    const source = file.content.slice(start, extentEnd);
+    unit.source = source;
+    unit.endLine = enclosingEndLine;
+    unit.contentHash = sha256(source);
+  }
+  return candidates;
+}
+
+/** Builds the review analyzer for one Tree-sitter supported language. */
 export function treeSitterAdapter(
   language: TreeSitterLanguage,
   options?: Pick<LanguageAdapter, "matches">,
@@ -5587,7 +5653,11 @@ export function treeSitterAdapter(
     },
     analyze(file) {
       const units = withSyntaxTree(language, file.content, (tree) => {
-        const candidates = declarationCandidates(file, language, tree.rootNode);
+        const candidates = retainWholeChildlessDeclarations(
+          file,
+          language,
+          declarationCandidates(file, language, tree.rootNode),
+        );
         return connectDependencies(file.content, language, candidates);
       });
       for (const unit of units) {
