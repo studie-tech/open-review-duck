@@ -356,6 +356,17 @@ function fallbackDeclaration(file: SourceFile) {
   } satisfies RawUnit;
 }
 
+/**
+ * Reports source that only closes an enclosing block.
+ *
+ * Nothing in such a range can be reviewed on its own, so it must never become a
+ * unit. The test stays deliberately narrow — any remaining word, operator, or
+ * literal makes the range reviewable content that has to stay visible.
+ */
+function isBlockDelimiterOnly(source: string) {
+  return source.trim().length > 0 && /^[\s)\]};,]*$/.test(source);
+}
+
 /** Extracts reviewable module-level source not owned by a declaration unit. */
 function moduleReviewUnits(
   file: SourceFile,
@@ -399,15 +410,9 @@ function moduleReviewUnits(
   const lines = file.content.split("\n");
   const covered = new Array<boolean>(lines.length).fill(false);
   for (const declaration of declarations) {
-    // A declaration reviewed through its members still owns the lines between
-    // them, so closing delimiters never surface as statements of their own.
-    const end = Math.max(
-      declaration.endLine,
-      declaration.enclosingEndLine ?? declaration.endLine,
-    );
     for (
       let index = Math.max(0, declaration.startLine - 1);
-      index < Math.min(lines.length, end);
+      index < Math.min(lines.length, declaration.endLine);
       index += 1
     ) {
       covered[index] = true;
@@ -442,6 +447,9 @@ function moduleReviewUnits(
       return [];
     }
     if (isContextOnly(source)) return [];
+    // Lines a declaration left behind when its members were reviewed one by
+    // one close that declaration rather than stating anything of their own.
+    if (isBlockDelimiterOnly(source)) return [];
     const setup = range.end + 1 < firstDeclarationLine;
     const name = setup ? "Module setup" : "Module statements";
     return [
