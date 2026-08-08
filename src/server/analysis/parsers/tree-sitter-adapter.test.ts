@@ -16,6 +16,27 @@ function shape(units: AnalyzedUnit[]) {
     .map(({ kind, name }) => `${kind} ${name}`);
 }
 
+/** Renders units as `start-end kind name`, the placement a reviewer navigates. */
+function placedShape(units: AnalyzedUnit[]) {
+  return [...units]
+    .sort((left, right) => left.startLine - right.startLine)
+    .map(
+      ({ startLine, endLine, kind, name }) =>
+        `${startLine}-${endLine} ${kind} ${name}`,
+    );
+}
+
+/** Returns one named unit while reporting the real cards on a miss. */
+function named(units: AnalyzedUnit[], name: string) {
+  const unit = units.find((candidate) => candidate.name === name);
+  expect(
+    unit,
+    `Expected a card named ${name}; received ${units.map((c) => c.name).join(", ")}`,
+  ).toBeDefined();
+  if (!unit) throw new Error(`Missing unit ${name}`);
+  return unit;
+}
+
 /** Returns the leftover ranges swept up because no declaration claimed them. */
 function anonymousUnits(units: AnalyzedUnit[]) {
   return units.filter(({ name }) => name === "Module statements");
@@ -516,5 +537,274 @@ end
     );
     // `end` closes the class rather than stating anything of its own.
     expect(anonymousUnits(units)).toEqual([]);
+  });
+});
+describe("Elixir review analysis", () => {
+  it("splits a module into per-definition cards instead of one module card", () => {
+    const units = analyze(
+      "lib/my_app/accounts.ex",
+      `defmodule MyApp.Accounts do
+  @moduledoc """
+  Account management.
+  """
+  alias MyApp.Repo
+
+  defstruct [:id, :email, :active]
+
+  @default_role :member
+
+  @doc "Fetches a user."
+  @spec fetch(integer) :: term
+  def fetch(id) when is_integer(id) do
+    Repo.get(User, id)
+  end
+
+  def fetch(id, opts) do
+    {id, opts}
+  end
+
+  def handle(:created), do: :ok
+  def handle(:deleted), do: :ok
+
+  defp normalize(email) do
+    String.downcase(email)
+  end
+
+  defmacro __using__(_opts) do
+    quote do: import(MyApp.Accounts)
+  end
+
+  defmodule Nested do
+    def inner(x), do: x
+  end
+end
+`,
+    );
+
+    // Every line of the module belongs to a declaration, so the reviewer never
+    // meets an anonymous card holding a definition body or a stray `end`.
+    expect(anonymousUnits(units)).toEqual([]);
+    expect(placedShape(units)).toEqual([
+      "1-35 module MyApp.Accounts",
+      "7-7 class %MyApp.Accounts{}",
+      "11-15 function MyApp.Accounts.fetch/1",
+      "17-19 function MyApp.Accounts.fetch/2",
+      "21-22 function MyApp.Accounts.handle/1",
+      "24-26 function MyApp.Accounts.normalize/1 (private)",
+      "28-30 function MyApp.Accounts.__using__/1",
+      "32-34 module MyApp.Accounts.Nested",
+      "33-33 function MyApp.Accounts.Nested.inner/1",
+    ]);
+  });
+
+  it("keeps every definition card individually identifiable", () => {
+    const units = analyze(
+      "lib/my_app/accounts.ex",
+      `defmodule MyApp.Accounts do
+  @doc "Fetches a user."
+  @spec fetch(integer) :: term
+  def fetch(id), do: id
+
+  defp fetch(id, :raw), do: id
+end
+`,
+    );
+
+    // Arity and privacy are what tell two same-named Elixir definitions apart,
+    // so both belong in the card title or the reviewer cannot pick a card.
+    const names = units.map(({ name }) => name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(named(units, "MyApp.Accounts.fetch/1").kind).toBe("function");
+    expect(named(units, "MyApp.Accounts.fetch/2 (private)").kind).toBe(
+      "function",
+    );
+    // A signature or documentation edit is a change to the function it
+    // describes, so it must land on that function's card.
+    expect(named(units, "MyApp.Accounts.fetch/1").source).toContain(
+      "@spec fetch(integer) :: term",
+    );
+  });
+
+  it("reviews a protocol and each implementation as separate cards", () => {
+    const units = analyze(
+      "lib/my_app/sizeable.ex",
+      `defprotocol Sizeable do
+  @doc "Returns a size."
+  def size(term)
+end
+
+defimpl Sizeable, for: List do
+  def size(term), do: length(term)
+end
+
+defimpl Sizeable, for: Map do
+  def size(term), do: map_size(term)
+end
+`,
+    );
+
+    // Implementations of one protocol define the same function names, so the
+    // implemented type has to appear in every title to keep the cards apart.
+    expect(placedShape(units)).toEqual([
+      "1-4 class Sizeable",
+      "2-3 function Sizeable.size/1",
+      "6-8 class Sizeable.List",
+      "7-7 function Sizeable.List.size/1",
+      "10-12 class Sizeable.Map",
+      "11-11 function Sizeable.Map.size/1",
+    ]);
+  });
+
+  it("names ExUnit cases by their describe and module context", () => {
+    const units = analyze(
+      "test/my_app/accounts_test.exs",
+      `defmodule MyApp.AccountsTest do
+  use ExUnit.Case, async: true
+
+  setup_all do
+    :ok
+  end
+
+  setup do
+    {:ok, user: build(:user)}
+  end
+
+  test "fetches a user", %{user: user} do
+    assert MyApp.Accounts.fetch(user.id)
+  end
+
+  describe "normalize/1" do
+    test "downcases" do
+      assert true
+    end
+  end
+end
+`,
+    );
+
+    // Test names repeat across describe blocks and across suites in one file,
+    // so a card title only identifies a case when it carries its full path.
+    expect(placedShape(units)).toEqual([
+      "1-21 test_suite MyApp.AccountsTest",
+      "4-6 test_hook MyApp.AccountsTest › setup_all",
+      "8-10 test_hook MyApp.AccountsTest › setup",
+      "12-14 test MyApp.AccountsTest › fetches a user",
+      "16-20 test_suite MyApp.AccountsTest › normalize/1",
+      "17-19 test MyApp.AccountsTest › normalize/1 › downcases",
+    ]);
+  });
+});
+
+describe("Clojure review analysis", () => {
+  it("splits a namespace into per-form cards instead of one module card", () => {
+    const units = analyze(
+      "src/myapp/core.clj",
+      `(ns myapp.core
+  (:require [clojure.string :as str]))
+
+(def default-timeout 30)
+
+(def ^:private secret-key "abc")
+
+;; Trims incoming values.
+(defn normalize
+  "Normalizes a value."
+  [x]
+  (str/trim x))
+
+(defn- internal-helper [x]
+  (inc x))
+
+(defmacro unless [test body]
+  (list 'if (list 'not test) body))
+
+(defroutes app
+  (GET "/" [] "hi"))
+`,
+    );
+
+    expect(anonymousUnits(units)).toEqual([]);
+    expect(placedShape(units)).toEqual([
+      "1-2 module Namespace myapp.core",
+      "4-4 constant default-timeout",
+      "6-6 constant secret-key (private)",
+      // The comment above a form documents it, so it rides on the form's card.
+      "8-12 function normalize",
+      "14-15 function internal-helper (private)",
+      "17-18 function unless",
+      // `defroutes` is an application-defined `def*` macro; it still binds a
+      // namespace-level var, so it stays a reviewable card of its own.
+      "20-21 variable app",
+    ]);
+  });
+
+  it("reviews record and protocol members as cards inside their type", () => {
+    const units = analyze(
+      "src/myapp/duck.clj",
+      `(defprotocol Quacker
+  (quack [this] "Quacks.")
+  (fly [this] [this height]))
+
+(defrecord Duck [sound]
+  Quacker
+  (quack [this] sound)
+  (fly [this height] height))
+`,
+    );
+
+    // A protocol and its implementing record declare the same member names, so
+    // the owning type must prefix each member card.
+    expect(placedShape(units)).toEqual([
+      "1-3 class Quacker",
+      "2-2 method Quacker.quack",
+      "3-3 method Quacker.fly",
+      "5-8 class Duck",
+      "7-7 method Duck.quack",
+      "8-8 method Duck.fly",
+    ]);
+  });
+
+  it("labels multimethod implementations with their dispatch value", () => {
+    const units = analyze(
+      "src/myapp/area.clj",
+      `(defmulti area :shape)
+
+(defmethod area :circle [s]
+  (* Math/PI (:r s) (:r s)))
+
+(defmethod area :square [s]
+  (* (:side s) (:side s)))
+`,
+    );
+
+    // Every implementation of one multimethod shares the multimethod name, so
+    // only the dispatch value can tell the cards apart.
+    expect(placedShape(units)).toEqual([
+      "1-1 function area",
+      "3-4 method area :circle",
+      "6-7 method area :square",
+    ]);
+  });
+
+  it("reviews each clojure.test case as its own card", () => {
+    const units = analyze(
+      "test/myapp/core_test.clj",
+      `(ns myapp.core-test
+  (:require [clojure.test :refer :all]))
+
+(deftest normalize-test
+  (testing "trims"
+    (is (= "a" (normalize " a ")))))
+
+(deftest area-test
+  (is (= 1 (area {:shape :square :side 1}))))
+`,
+    );
+
+    expect(placedShape(units)).toEqual([
+      "1-2 module Namespace myapp.core-test",
+      "4-6 test normalize-test",
+      "8-9 test area-test",
+    ]);
   });
 });
