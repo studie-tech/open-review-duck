@@ -21,7 +21,11 @@ const statementTypes = {
   shell: new Set(["command"]),
   ruby: new Set(["call"]),
   rust: new Set(["use_declaration", "extern_crate_declaration", "mod_item"]),
-  lua: new Set(["call", "local_variable_declaration", "variable_assignment"]),
+  lua: new Set([
+    "function_call",
+    "variable_declaration",
+    "assignment_statement",
+  ]),
   go: new Set(["import_declaration"]),
   makefile: new Set(["include_directive"]),
   hcl: new Set(),
@@ -297,19 +301,13 @@ function isLanguageImport(language: string, source: string, node: SyntaxNode) {
   }
   if (language === "lua") {
     const call =
-      node.type === "call"
+      node.type === "function_call"
         ? node
-        : descendants(node).find((candidate) => candidate.type === "call");
-    const callee =
-      call?.childForFieldName("function") ??
-      descendants(node).find(
-        (candidate) =>
-          candidate.type === "ERROR" &&
-          syntaxText(source, candidate).trimStart().startsWith("require"),
-      );
-    return Boolean(
-      callee && syntaxText(source, callee).trimStart().startsWith("require"),
-    );
+        : descendants(node).find(
+            (candidate) => candidate.type === "function_call",
+          );
+    const callee = call?.childForFieldName("name");
+    return Boolean(callee && syntaxText(source, callee) === "require");
   }
   if (language === "rust" && node.type === "mod_item") {
     return !node.childForFieldName("body");

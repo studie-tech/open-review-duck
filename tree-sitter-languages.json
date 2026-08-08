@@ -76,7 +76,7 @@
     },
     "lua": {
       "asset": "tree-sitter-lua.wasm",
-      "source": "tree-sitter-wasms/out/tree-sitter-lua.wasm",
+      "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-lua.wasm",
       "extensions": [".lua"]
     },
     "go": {

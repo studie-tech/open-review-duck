@@ -378,15 +378,16 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
   },
   lua: {
     containers: set(),
-    functions: set(
-      "function_definition_statement",
-      "local_function_definition_statement",
-    ),
-    variables: set("local_variable_declaration", "variable_assignment"),
-    moduleUnits: set("call"),
+    functions: set("function_declaration"),
+    variables: set("variable_declaration", "assignment_statement"),
+    moduleUnits: set("function_call"),
     imports: set(),
     comments: set("comment"),
-    identifierTypes: set("identifier", "variable", "dot_index_expression"),
+    identifierTypes: set(
+      "identifier",
+      "dot_index_expression",
+      "method_index_expression",
+    ),
     bodyTypes: set("block"),
   },
   go: {
@@ -2631,16 +2632,32 @@ function hclBlockParts(source: string, node: SyntaxNode) {
     });
 }
 
+/**
+ * Returns the assignment that carries a Lua declaration's targets and values.
+ * A `local` binding wraps its assignment in `variable_declaration`, while a
+ * global binding is the assignment itself; a value-less `local x` has no
+ * assignment at all and keeps its target list directly.
+ */
+function luaAssignment(node: SyntaxNode) {
+  if (node.type !== "variable_declaration") return node;
+  return (
+    node.namedChildren.find(
+      (child): child is SyntaxNode =>
+        child !== null && child.type === "assignment_statement",
+    ) ?? node
+  );
+}
+
 /** Extracts the assigned variable path from a Lua declaration. */
 function luaVariableName(source: string, node: SyntaxNode) {
-  const list = node.namedChildren.find(
+  const list = luaAssignment(node).namedChildren.find(
     (child): child is SyntaxNode =>
       child !== null && child.type === "variable_list",
   );
-  const variable = list?.namedChildren.find(
-    (child): child is SyntaxNode => child !== null && child.type === "variable",
+  const target = list?.namedChildren.find(
+    (child): child is SyntaxNode => child !== null,
   );
-  return variable ? nodeText(source, variable) : undefined;
+  return target ? nodeText(source, target) : undefined;
 }
 
 /** Returns the semantic targets declared by a Make rule. */
@@ -3656,7 +3673,7 @@ function makeReviewCandidates(
 
 /** Returns the first value assigned by a Lua declaration. */
 function luaValueNode(node: SyntaxNode) {
-  const values = node.namedChildren.find(
+  const values = luaAssignment(node).namedChildren.find(
     (child): child is SyntaxNode =>
       child !== null && child.type === "expression_list",
   );
@@ -3665,40 +3682,27 @@ function luaValueNode(node: SyntaxNode) {
   );
 }
 
-/** Extracts a Lua require specifier, including grammar recovery nodes. */
+/** Extracts the module specifier bound or executed by a Lua require call. */
 function luaRequireSpec(source: string, node: SyntaxNode) {
   const call =
-    node.type === "call"
+    node.type === "function_call"
       ? node
-      : syntaxDescendants(node).find((child) => child.type === "call");
-  const requireNode = call
-    ? call.childForFieldName("function")
-    : syntaxDescendants(node).find(
-        (child) =>
-          child.type === "ERROR" &&
-          nodeText(source, child).trimStart().startsWith("require"),
-      );
-  if (!requireNode || !nodeText(source, requireNode).startsWith("require")) {
-    return undefined;
-  }
-  const specifier = syntaxDescendants(call ?? node).find(
-    (child) => child.type === "string",
+      : syntaxDescendants(node).find((child) => child.type === "function_call");
+  if (!call) return undefined;
+  const callee = call.childForFieldName("name");
+  if (!callee || nodeText(source, callee) !== "require") return undefined;
+  const specifier = syntaxDescendants(call).find(
+    (child) => child.type === "string_content",
   );
-  return specifier
-    ? nodeText(source, specifier).replace(/^["']|["']$/g, "")
-    : undefined;
+  return specifier ? nodeText(source, specifier) : undefined;
 }
 
-/** Extends a recovered Lua DSL call through its callback body. */
-function luaCallRange(node: SyntaxNode, source: string) {
-  const sibling = node.nextNamedSibling;
-  if (
-    sibling?.type === "ERROR" &&
-    source.slice(node.endIndex, sibling.endIndex).trimStart().startsWith(",")
-  ) {
-    return { start: node.startIndex, end: sibling.endIndex, node: sibling };
-  }
-  return { start: node.startIndex, end: node.endIndex, node };
+/** Returns the name a Lua statement reads or returns, such as `return M`. */
+function luaReferencedName(source: string, node: SyntaxNode) {
+  const reference = syntaxDescendants(node).find((child) =>
+    shapes.lua.identifierTypes.has(child.type),
+  );
+  return reference ? nodeText(source, reference) : undefined;
 }
 
 /** Extracts Lua declarations, modules, classes, and test DSL constructs. */
@@ -3712,19 +3716,14 @@ function luaReviewCandidates(
     unit: RawUnit;
     ownName: string;
   }> = [];
+  const returnStatements = root.namedChildren.filter(
+    (node): node is SyntaxNode =>
+      node !== null && node.type === "return_statement",
+  );
   const returnedModules = new Set(
-    root.namedChildren
-      .filter(
-        (node): node is SyntaxNode =>
-          node !== null && node.type === "return_statement",
-      )
-      .map((node) => {
-        const variable = syntaxDescendants(node).find(
-          (child) => child.type === "variable",
-        );
-        return variable ? nodeText(source, variable) : "";
-      })
-      .filter(Boolean),
+    returnStatements
+      .map((node) => luaReferencedName(source, node))
+      .filter((name): name is string => name !== undefined),
   );
   /** Adds a Lua candidate with an explicit semantic range. */
   const add = (
@@ -3742,10 +3741,7 @@ function luaReviewCandidates(
 
   for (const node of root.namedChildren) {
     if (!node) continue;
-    if (
-      node.type === "local_variable_declaration" ||
-      node.type === "variable_assignment"
-    ) {
+    if (shapes.lua.variables.has(node.type)) {
       const name = luaVariableName(source, node);
       const value = luaValueNode(node);
       if (!name || !value) continue;
@@ -3765,14 +3761,14 @@ function luaReviewCandidates(
         node.startIndex,
       );
       if (
-        value.type === "table" &&
+        value.type === "table_constructor" &&
         (/@class\b/.test(documented) || /^Test[A-Z_]/.test(name))
       ) {
         add(node, "class", `Class ${name}`, name);
       } else if (!returnedModules.has(name)) {
         add(
           node,
-          /^[A-Z][A-Z0-9_]*$/.test(name) || value.type === "table"
+          /^[A-Z][A-Z0-9_]*$/.test(name) || value.type === "table_constructor"
             ? "constant"
             : "variable",
           name,
@@ -3781,10 +3777,7 @@ function luaReviewCandidates(
       }
       continue;
     }
-    if (
-      node.type === "local_function_definition_statement" ||
-      node.type === "function_definition_statement"
-    ) {
+    if (shapes.lua.functions.has(node.type)) {
       const nameNode = node.childForFieldName("name");
       const name = nameNode ? nodeText(source, nameNode) : undefined;
       if (!name) continue;
@@ -3818,12 +3811,10 @@ function luaReviewCandidates(
   }
 
   const calls = syntaxDescendants(root)
-    .filter((node) => node.type === "call")
+    .filter((node) => node.type === "function_call")
     .map((node) => {
       const role = callRole(source, node);
-      return role
-        ? { node, role, range: luaCallRange(node, source) }
-        : undefined;
+      return role ? { node, role } : undefined;
     })
     .filter(
       (
@@ -3831,7 +3822,6 @@ function luaReviewCandidates(
       ): call is {
         node: SyntaxNode;
         role: NonNullable<ReturnType<typeof callRole>>;
-        range: ReturnType<typeof luaCallRange>;
       } => call !== undefined,
     );
   const suites = calls.filter(({ role }) => role.kind === "test_suite");
@@ -3840,7 +3830,7 @@ function luaReviewCandidates(
       .filter(
         (suite) =>
           suite.node.startIndex < call.node.startIndex &&
-          suite.range.end >= call.range.end,
+          suite.node.endIndex >= call.node.endIndex,
       )
       .sort((left, right) => left.node.startIndex - right.node.startIndex);
     const ownLabel =
@@ -3850,23 +3840,12 @@ function luaReviewCandidates(
     const name = [...parents.map(({ role }) => role.name), ownLabel].join(
       " › ",
     );
-    add(
-      call.range.node,
-      call.role.kind,
-      name,
-      name,
-      call.node.startIndex,
-      call.range.end,
-    );
+    add(call.node, call.role.kind, name, name, call.node.startIndex);
   }
 
-  for (const statement of root.namedChildren) {
-    if (statement?.type !== "return_statement") continue;
-    const variable = syntaxDescendants(statement).find(
-      (child) => child.type === "variable",
-    );
-    if (!variable) continue;
-    const name = nodeText(source, variable);
+  for (const statement of returnStatements) {
+    const name = luaReferencedName(source, statement);
+    if (!name) continue;
     add(statement, "module", `Module ${name}`, name);
   }
 
@@ -3875,20 +3854,7 @@ function luaReviewCandidates(
       (node): node is SyntaxNode =>
         node !== null &&
         !shapes.lua.comments.has(node.type) &&
-        !(
-          node.type === "local_variable_declaration" &&
-          syntaxDescendants(node).some(
-            (child) =>
-              child.type === "call" &&
-              nodeText(source, child.childForFieldName("function") ?? child) ===
-                "require",
-          )
-        ) &&
-        !(
-          node.type === "call" &&
-          nodeText(source, node.childForFieldName("function") ?? node) ===
-            "require"
-        ),
+        luaRequireSpec(source, node) === undefined,
     );
     const first = executable[0];
     const last = executable.at(-1);
@@ -5988,15 +5954,18 @@ function connectDependencies(
       while (root.parent) root = root.parent;
       const imports = new Map<string, string>();
       for (const statement of root.namedChildren) {
-        if (statement?.type !== "local_variable_declaration") {
-          continue;
-        }
+        if (statement?.type !== "variable_declaration") continue;
         const alias = luaVariableName(source, statement);
         const specifier = luaRequireSpec(source, statement);
         if (alias && specifier) imports.set(alias, `lua-require:${specifier}`);
       }
+      // Lua spells a use and a binding with the same node, so only identifiers
+      // outside a target list or parameter list are genuine references.
       for (const variable of syntaxDescendants(candidate.node).filter(
-        (node) => node.type === "variable",
+        (node) =>
+          shapes.lua.identifierTypes.has(node.type) &&
+          node.parent?.type !== "variable_list" &&
+          node.parent?.type !== "parameters",
       )) {
         const reference = nodeText(source, variable);
         const target = byName.get(reference);
@@ -6212,7 +6181,7 @@ function meaningfulNodes(
     }
     if (
       language === "lua" &&
-      (node.type === "local_variable_declaration" || node.type === "call")
+      (node.type === "variable_declaration" || node.type === "function_call")
     ) {
       return luaRequireSpec(source, node) === undefined;
     }
