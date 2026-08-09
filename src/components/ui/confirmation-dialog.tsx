@@ -45,6 +45,12 @@ export function ConfirmationDialog({
     if (element && !element.open) {
       if (typeof element.showModal === "function") element.showModal();
       else element.setAttribute("open", "");
+      // Opening a modal moves focus to its first tabbable element, which is
+      // Cancel. Enter would then dismiss the dialog rather than confirm it,
+      // contradicting the shortcut the confirm action advertises.
+      element
+        .querySelector<HTMLButtonElement>('button[type="submit"]')
+        ?.focus();
     }
 
     return () => {
@@ -121,7 +127,6 @@ export function ConfirmationDialog({
           <Button
             type="submit"
             variant={confirmVariant}
-            autoFocus
             disabled={pending || confirmDisabled}
           >
             {pending ? (

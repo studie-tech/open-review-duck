@@ -31,7 +31,57 @@ function renderDialog({
   );
 }
 
+/**
+ * Mimics a real `showModal`, which moves focus to the dialog's first tabbable
+ * element. jsdom implements no such behaviour, so without this a dialog that
+ * relies on React's autofocus passes here and still opens focused on Cancel in
+ * a browser, where Enter dismisses instead of confirming.
+ */
+function withBrowserShowModal() {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLDialogElement.prototype,
+    "showModal",
+  );
+  HTMLDialogElement.prototype.showModal = function showModal(
+    this: HTMLDialogElement,
+  ) {
+    this.setAttribute("open", "");
+    this.querySelector<HTMLElement>(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    )?.focus();
+  };
+  return () => {
+    if (original)
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", original);
+    else
+      delete (HTMLDialogElement.prototype as { showModal?: unknown }).showModal;
+  };
+}
+
 describe("ConfirmationDialog", () => {
+  it("confirms with Enter after the browser moves focus on open", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      const user = userEvent.setup();
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+      renderDialog({ onCancel, onConfirm });
+
+      // Cancel is the first tabbable control, so the dialog must take focus
+      // back for its own default action.
+      expect(
+        screen.getByRole("button", { name: /Reset review.*Enter/i }),
+      ).toHaveFocus();
+
+      await user.keyboard("{Enter}");
+
+      expect(onConfirm).toHaveBeenCalledOnce();
+      expect(onCancel).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
   it("focuses and confirms the primary action with Enter", async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();
