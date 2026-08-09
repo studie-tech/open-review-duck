@@ -3,6 +3,7 @@
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
+import { modalSurfaceClassName } from "~/components/ui/modal-surface";
 import { cn } from "~/lib/utils";
 
 type ConfirmationVariant = "primary" | "danger";
@@ -70,14 +71,17 @@ export function ConfirmationDialog({
       ref={dialog}
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
-      className="w-full max-w-md bg-transparent p-4 backdrop:bg-black/65 backdrop:backdrop-blur-sm"
+      className={cn(
+        modalSurfaceClassName,
+        "z-[70] items-center justify-center p-4 backdrop:bg-black/65 backdrop:backdrop-blur-sm",
+      )}
       onCancel={(event) => {
         event.preventDefault();
         if (!pending) onCancel();
       }}
     >
       <form
-        className="bg-panel relative w-full rounded-2xl border border-line-strong p-5 shadow-2xl shadow-black/30 sm:p-6"
+        className="bg-panel relative w-full max-w-md rounded-2xl border border-line-strong p-5 shadow-2xl shadow-black/30 sm:p-6"
         onSubmit={(event) => {
           event.preventDefault();
           if (!pending && !confirmDisabled) onConfirm();
