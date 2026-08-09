@@ -18,6 +18,7 @@ import {
   matchesShortcutStroke,
   shortcutHelpShortcut,
 } from "~/lib/keyboard-shortcuts";
+import { modalSurfaceClassName } from "~/components/ui/modal-surface";
 import { cn } from "~/lib/utils";
 
 export type CommandCenterItem = {
@@ -511,7 +512,10 @@ export function CommandCenter({
           onClose();
         }
       }}
-      className="fixed inset-0 z-[70] m-0 h-dvh max-h-none w-full max-w-none justify-center border-0 bg-black/65 px-3 pt-[10dvh] backdrop:bg-black/65 backdrop:backdrop-blur-sm open:flex sm:px-6 sm:pt-[14dvh]"
+      className={cn(
+        modalSurfaceClassName,
+        "z-[70] justify-center bg-black/65 px-3 pt-[10dvh] backdrop:bg-black/65 backdrop:backdrop-blur-sm sm:px-6 sm:pt-[14dvh]",
+      )}
     >
       <section className="bg-panel relative flex max-h-[72dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line shadow-2xl">
         <header className="flex items-center gap-3 border-b border-line px-4">
