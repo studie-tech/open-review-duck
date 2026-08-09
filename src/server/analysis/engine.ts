@@ -4,6 +4,7 @@ import {
   resolveImportPath,
   resolvePythonImportedSubmodulePath,
 } from "~/lib/import-navigation";
+import { appendToIndex } from "~/lib/keyed-index";
 import { reviewFoundationPriority } from "~/lib/review-priority";
 import { lineDiffOperations } from "~/lib/side-by-side-diff";
 import { languageAdapterForFile } from "./adapters";
@@ -1269,10 +1270,7 @@ function symbolsWithinRange(
     ) {
       continue;
     }
-    symbols.set(occurrence.name, [
-      ...(symbols.get(occurrence.name) ?? []),
-      occurrence,
-    ]);
+    appendToIndex(symbols, occurrence.name, occurrence);
   }
   return symbols;
 }
@@ -1593,7 +1591,7 @@ function clusterRelatedChangeUnits(
   const grouped = new Map<number, UnitSymbolProfile[]>();
   profiles.forEach((profile, index) => {
     const root = find(index);
-    grouped.set(root, [...(grouped.get(root) ?? []), profile]);
+    appendToIndex(grouped, root, profile);
   });
   const aliases = new Map<string, string>();
   const merged = [...grouped.values()].flatMap((members) => {
@@ -1659,7 +1657,7 @@ function clusterConceptUnits(units: AnalyzedUnit[]) {
     const groupKey = testPaths.has(unit.path)
       ? `test-file:${unit.path}`
       : `unit:${unit.stableKey}`;
-    grouped.set(groupKey, [...(grouped.get(groupKey) ?? []), unit]);
+    appendToIndex(grouped, groupKey, unit);
   }
   const clusters = [...grouped.entries()].map(([id, members]) => {
     return {
@@ -1861,11 +1859,8 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
   const byName = new Map<string, string[]>();
   for (const unit of rawUnits) {
     const shortKey = `${unit.path}:${unit.name}`;
-    byShortKey.set(shortKey, [
-      ...(byShortKey.get(shortKey) ?? []),
-      unit.stableKey,
-    ]);
-    byName.set(unit.name, [...(byName.get(unit.name) ?? []), unit.stableKey]);
+    appendToIndex(byShortKey, shortKey, unit.stableKey);
+    appendToIndex(byName, unit.name, unit.stableKey);
   }
   const importAliases = buildImportAliases(files, rawUnits);
   const dependencies = new Map(
@@ -1916,10 +1911,7 @@ function buildImportAliases(
   const unitsByPathAndName = new Map<string, string[]>();
   for (const unit of units) {
     const key = `${unit.path}:${unit.name}`;
-    unitsByPathAndName.set(key, [
-      ...(unitsByPathAndName.get(key) ?? []),
-      unit.stableKey,
-    ]);
+    appendToIndex(unitsByPathAndName, key, unit.stableKey);
   }
   const result = new Map<string, Map<string, string[]>>();
   for (const file of files) {

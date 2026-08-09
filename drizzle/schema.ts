@@ -599,6 +599,12 @@ export const reviewUnits = createTable(
   (t) => [
     uniqueIndex("review_unit_key_idx").on(t.snapshotId, t.stableKey),
     index("review_order_idx").on(t.snapshotId, t.reviewOrder),
+    // Snapshot pruning cascades from snapshot_file, and source-blob collection
+    // has to prove no unit still references a blob. Without these the referential
+    // triggers scan the whole unit table once per parent row.
+    index("review_unit_snapshot_file_idx").on(t.snapshotFileId),
+    index("review_unit_current_blob_idx").on(t.currentBlobId),
+    index("review_unit_previous_blob_idx").on(t.previousBlobId),
   ],
 );
 
@@ -669,6 +675,9 @@ export const reviewConceptMembers = createTable(
     primaryKey({ columns: [t.conceptId, t.unitId] }),
     uniqueIndex("review_concept_membership_idx").on(t.layoutId, t.unitId),
     index("review_concept_member_order_idx").on(t.conceptId, t.memberOrder),
+    // The membership index leads with layoutId, so deleting a unit could not use
+    // it and scanned every membership row instead.
+    index("review_concept_member_unit_idx").on(t.unitId),
   ],
 );
 
@@ -682,7 +691,12 @@ export const reviewConceptDependencies = createTable(
       .notNull()
       .references(() => reviewConcepts.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.conceptId, t.dependencyId] })],
+  (t) => [
+    primaryKey({ columns: [t.conceptId, t.dependencyId] }),
+    // The primary key only covers the dependent side of the edge, so the
+    // dependency side needs its own index for cascading concept deletes.
+    index("review_concept_dependency_dependency_idx").on(t.dependencyId),
+  ],
 );
 
 export const reviewUnitDependencies = createTable(
@@ -695,7 +709,12 @@ export const reviewUnitDependencies = createTable(
       .notNull()
       .references(() => reviewUnits.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.unitId, t.dependencyId] })],
+  (t) => [
+    primaryKey({ columns: [t.unitId, t.dependencyId] }),
+    // The primary key only covers the dependent side of the edge, so the
+    // dependency side needs its own index for cascading unit deletes.
+    index("review_unit_dependency_dependency_idx").on(t.dependencyId),
+  ],
 );
 
 export const signOffs = createTable(
@@ -836,6 +855,9 @@ export const syncRuns = createTable(
       t.pullRequestNumber,
       t.createdAt,
     ),
+    // Dashboards poll for the workspace's queued, running and recent runs, which
+    // otherwise scans the whole run history on every poll.
+    index("sync_run_workspace_idx").on(t.workspaceId, t.status, t.createdAt),
   ],
 );
 
@@ -944,6 +966,10 @@ export const aiJobs = createTable(
       t.kind,
       t.createdAt,
     ),
+    // The review lookup index leads with pullRequestId, so snapshot pruning could
+    // not use it and scanned every job row for each unit it removed.
+    index("ai_job_unit_idx").on(t.unitId),
+    index("ai_job_snapshot_idx").on(t.snapshotId),
   ],
 );
 

@@ -1,24 +1,35 @@
-import { z } from "zod";
+import type { z } from "zod";
 
-const aiQuestionStreamUpdateSchema = z.object({
-  commentProposals: z
-    .array(
-      z.object({
-        body: z.string(),
-        path: z.string(),
-        line: z.number().int().positive(),
-      }),
-    )
-    .optional(),
-  error: z.string().optional(),
-  cursor: z.number().int().min(-1).optional(),
-  progress: z.string(),
-  status: z.enum(["working", "streaming", "completed", "failed"]),
-  text: z.string(),
-});
+/**
+ * Builds the focused-answer stream schema on first use.
+ *
+ * The review workspace imports this module for its stream reader, so a
+ * top-level Zod import puts the whole validator library in the review route's
+ * initial bundle even though nothing validates until someone asks the AI a
+ * question. Loading it here keeps the schema identical and defers the download.
+ */
+async function aiQuestionStreamUpdateSchema() {
+  const { z } = await import("zod");
+  return z.object({
+    commentProposals: z
+      .array(
+        z.object({
+          body: z.string(),
+          path: z.string(),
+          line: z.number().int().positive(),
+        }),
+      )
+      .optional(),
+    error: z.string().optional(),
+    cursor: z.number().int().min(-1).optional(),
+    progress: z.string(),
+    status: z.enum(["working", "streaming", "completed", "failed"]),
+    text: z.string(),
+  });
+}
 
 export type AiQuestionStreamUpdate = z.infer<
-  typeof aiQuestionStreamUpdateSchema
+  Awaited<ReturnType<typeof aiQuestionStreamUpdateSchema>>
 >;
 
 /** Consumes a server-sent focused-answer stream across arbitrary chunk splits. */
@@ -29,6 +40,7 @@ export async function consumeAiQuestionStream(
   if (!response.ok || !response.body) {
     throw new Error(`AI answer stream returned ${response.status}`);
   }
+  const schema = await aiQuestionStreamUpdateSchema();
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -45,7 +57,7 @@ export async function consumeAiQuestionStream(
         .map((line) => line.slice(5).trimStart())
         .join("\n");
       if (!data) continue;
-      const update = aiQuestionStreamUpdateSchema.safeParse(JSON.parse(data));
+      const update = schema.safeParse(JSON.parse(data));
       if (update.success) {
         lastUpdate = update.data;
         onUpdate(update.data);

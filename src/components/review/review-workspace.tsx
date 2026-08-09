@@ -116,10 +116,16 @@ type ImportTarget = RouterOutputs["review"]["importTarget"];
 type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
 
+// One shared element: every review-unit command renders the same static icon.
+const unitCommandIcon = <FileCode2 className="size-4" />;
+
 /** Derives live concept progress from the canonical atomic-unit ledger. */
-function liveConceptStatus(concept: ReviewConcept, units: ReviewUnit[]) {
+function liveConceptStatus(
+  concept: ReviewConcept,
+  unitsById: Map<string, ReviewUnit>,
+) {
   const members = concept.memberIds
-    .map((id) => units.find((unit) => unit.id === id))
+    .map((id) => unitsById.get(id))
     .filter((unit): unit is ReviewUnit => Boolean(unit));
   const signed = members.filter(({ status }) => status === "signed_off").length;
   const status = members.some(({ status }) => status === "waiting")
@@ -450,15 +456,35 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
-  const activeConcept = activeUnit
-    ? initialData.concepts.find(({ memberIds }) =>
-        memberIds.includes(activeUnit.id),
-      )
+  const unitsById = useMemo(
+    () => new Map(units.map((unit) => [unit.id, unit])),
+    [units],
+  );
+  const unitIndexById = useMemo(
+    () => new Map(units.map((unit, index) => [unit.id, index])),
+    [units],
+  );
+  const conceptByMemberId = useMemo(() => {
+    const owners = new Map<string, ReviewConcept>();
+    for (const concept of initialData.concepts) {
+      for (const memberId of concept.memberIds) {
+        if (!owners.has(memberId)) owners.set(memberId, concept);
+      }
+    }
+    return owners;
+  }, [initialData.concepts]);
+  const activeConcept = activeUnitId
+    ? conceptByMemberId.get(activeUnitId)
     : undefined;
-  const activeConceptProgress = activeConcept
-    ? liveConceptStatus(activeConcept, units)
-    : undefined;
-  const activeConceptMembers = activeConceptProgress?.members ?? [];
+  const activeConceptProgress = useMemo(
+    () =>
+      activeConcept ? liveConceptStatus(activeConcept, unitsById) : undefined,
+    [activeConcept, unitsById],
+  );
+  const activeConceptMembers = useMemo(
+    () => activeConceptProgress?.members ?? [],
+    [activeConceptProgress],
+  );
   const activeConceptMemberIndex = activeUnit
     ? activeConceptMembers.findIndex(({ id }) => id === activeUnit.id)
     : -1;
@@ -562,7 +588,7 @@ export function ReviewWorkspace({
   const conceptPathUnits = useMemo(
     () =>
       initialData.concepts.flatMap((concept): ReviewUnit[] => {
-        const progress = liveConceptStatus(concept, units);
+        const progress = liveConceptStatus(concept, unitsById);
         const anchor = progress.members[0];
         if (!anchor) return [];
         return [
@@ -581,7 +607,7 @@ export function ReviewWorkspace({
           },
         ];
       }),
-    [initialData.concepts, units],
+    [initialData.concepts, unitsById],
   );
   const activeConceptPathIndex = activeConcept
     ? initialData.concepts.findIndex(({ id }) => id === activeConcept.id)
@@ -630,10 +656,14 @@ export function ReviewWorkspace({
   const signedCount = units.filter(
     (unit) => unit.status === "signed_off",
   ).length;
-  const conceptProgress = initialData.concepts.map((concept) => ({
-    concept,
-    ...liveConceptStatus(concept, units),
-  }));
+  const conceptProgress = useMemo(
+    () =>
+      initialData.concepts.map((concept) => ({
+        concept,
+        ...liveConceptStatus(concept, unitsById),
+      })),
+    [initialData.concepts, unitsById],
+  );
   const signedConceptCount = conceptProgress.filter(
     ({ status }) => status === "signed_off",
   ).length;
@@ -914,27 +944,56 @@ export function ReviewWorkspace({
     importPreview?.language ?? "text",
   );
   /** Opens one atomic review unit and selects its concept card. */
-  function selectUnit(index: number) {
-    const target = units[index];
-    if (!target) return;
-    setActiveIndex(index);
-    setShowDiff(true);
-    setStartedAt(Date.now());
-    setQueueLimit(INITIAL_PATH_ITEMS);
-    setKeyboardLine(undefined);
-    setContextBefore(0);
-    setContextAfter(0);
-    setImportReturn(undefined);
-    setImportPreview(undefined);
-    setPathPanelOpen(false);
-    setInsightsPanelOpen(false);
-  }
+  const selectUnit = useCallback(
+    (index: number) => {
+      const target = units[index];
+      if (!target) return;
+      setActiveIndex(index);
+      setShowDiff(true);
+      setStartedAt(Date.now());
+      setQueueLimit(INITIAL_PATH_ITEMS);
+      setKeyboardLine(undefined);
+      setContextBefore(0);
+      setContextAfter(0);
+      setImportReturn(undefined);
+      setImportPreview(undefined);
+      setPathPanelOpen(false);
+      setInsightsPanelOpen(false);
+    },
+    [units],
+  );
+  // Concept members are re-rendered only when their own inputs move, so
+  // unrelated workspace state never re-reconciles hundreds of source lines.
+  const conceptMemberPreviews = useMemo(
+    () =>
+      activeConceptMembers.map((member, memberIndex) => (
+        <ReviewConceptMemberPreview
+          key={member.id}
+          unit={member}
+          index={memberIndex}
+          count={activeConceptMembers.length}
+          sourceAvailable={
+            initialData.sourceDelivery !== "direct" ||
+            member.kind === "binary" ||
+            hydratedUnitIds.has(member.id)
+          }
+          onSelect={() => selectUnit(unitIndexById.get(member.id) ?? -1)}
+        />
+      )),
+    [
+      activeConceptMembers,
+      hydratedUnitIds,
+      initialData.sourceDelivery,
+      selectUnit,
+      unitIndexById,
+    ],
+  );
 
   /** Opens the anchor unit for one concept-first path entry. */
   function selectConceptPath(index: number) {
     const concept = initialData.concepts[index];
     const memberId = concept?.memberIds[0];
-    const unitIndex = units.findIndex(({ id }) => id === memberId);
+    const unitIndex = memberId ? (unitIndexById.get(memberId) ?? -1) : -1;
     if (unitIndex >= 0) selectUnit(unitIndex);
   }
 
@@ -942,7 +1001,7 @@ export function ReviewWorkspace({
   function navigateConceptMember(direction: -1 | 1) {
     const member = activeConceptMembers[activeConceptMemberIndex + direction];
     if (!member) return;
-    const index = units.findIndex(({ id }) => id === member.id);
+    const index = unitIndexById.get(member.id) ?? -1;
     if (index >= 0) selectUnit(index);
   }
 
@@ -3099,6 +3158,23 @@ export function ReviewWorkspace({
     );
   }
 
+  const unitCommands = useMemo(
+    () =>
+      units.map(
+        (unit, index): CommandCenterItem => ({
+          id: `unit-${unit.id}`,
+          label: `Open ${unit.name}`,
+          description: `${unit.path} · ${unit.kind.replace("_", " ")} · ${unit.status.replace("_", " ")}`,
+          group: "Review units",
+          keywords: [unit.path, unit.kind, unit.status, String(index + 1)],
+          icon: unitCommandIcon,
+          disabled: index === activeIndex,
+          searchOnly: true,
+          onSelect: () => selectUnit(index),
+        }),
+      ),
+    [activeIndex, selectUnit, units],
+  );
   const reviewCommands: CommandCenterItem[] = [
     {
       id: "toggle-review-path",
@@ -3381,19 +3457,7 @@ export function ReviewWorkspace({
       shortcut: reviewShortcuts.aiSettings,
       onSelect: () => router.push("/settings/ai"),
     },
-    ...units.map(
-      (unit, index): CommandCenterItem => ({
-        id: `unit-${unit.id}`,
-        label: `Open ${unit.name}`,
-        description: `${unit.path} · ${unit.kind.replace("_", " ")} · ${unit.status.replace("_", " ")}`,
-        group: "Review units",
-        keywords: [unit.path, unit.kind, unit.status, String(index + 1)],
-        icon: <FileCode2 className="size-4" />,
-        disabled: index === activeIndex,
-        searchOnly: true,
-        onSelect: () => selectUnit(index),
-      }),
-    ),
+    ...unitCommands,
   ];
   const pendingShortcut = useCommandCenterBindings({
     commands: reviewCommands,
@@ -4328,26 +4392,11 @@ export function ReviewWorkspace({
             )}
             {activeConceptMembers
               .slice(0, activeConceptMemberIndex)
-              .map((member, memberIndex) => {
-                const memberUnitIndex = units.findIndex(
-                  ({ id }) => id === member.id,
-                );
-                return (
-                  <div key={member.id} className="mb-4">
-                    <ReviewConceptMemberPreview
-                      unit={member}
-                      index={memberIndex}
-                      count={activeConceptMembers.length}
-                      sourceAvailable={
-                        initialData.sourceDelivery !== "direct" ||
-                        member.kind === "binary" ||
-                        hydratedUnitIds.has(member.id)
-                      }
-                      onSelect={() => selectUnit(memberUnitIndex)}
-                    />
-                  </div>
-                );
-              })}
+              .map((member, memberIndex) => (
+                <div key={member.id} className="mb-4">
+                  {conceptMemberPreviews[memberIndex]}
+                </div>
+              ))}
             <div
               ref={reviewUnitStartRef}
               data-review-member-id={activeUnit.id}
@@ -4671,26 +4720,15 @@ export function ReviewWorkspace({
               )}
             {activeConceptMembers
               .slice(activeConceptMemberIndex + 1)
-              .map((member, memberOffset) => {
-                const memberUnitIndex = units.findIndex(
-                  ({ id }) => id === member.id,
-                );
-                return (
-                  <div key={member.id} className="mt-4">
-                    <ReviewConceptMemberPreview
-                      unit={member}
-                      index={activeConceptMemberIndex + memberOffset + 1}
-                      count={activeConceptMembers.length}
-                      sourceAvailable={
-                        initialData.sourceDelivery !== "direct" ||
-                        member.kind === "binary" ||
-                        hydratedUnitIds.has(member.id)
-                      }
-                      onSelect={() => selectUnit(memberUnitIndex)}
-                    />
-                  </div>
-                );
-              })}
+              .map((member, memberOffset) => (
+                <div key={member.id} className="mt-4">
+                  {
+                    conceptMemberPreviews[
+                      activeConceptMemberIndex + memberOffset + 1
+                    ]
+                  }
+                </div>
+              ))}
           </div>
           {aiStatus.data?.status === "completed" && aiStatus.data.result && (
             <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">

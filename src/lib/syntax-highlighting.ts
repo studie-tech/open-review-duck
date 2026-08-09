@@ -25,7 +25,12 @@ const parserLanguages = supportedLanguages.filter(
 
 const parserLanguageSet = new Set<string>(parserLanguages);
 const languagePromises = new Map<string, Promise<Language>>();
+// One review concept highlights every member plus both diff sides at once, so
+// the bound has to exceed the largest concept or on-screen sources evict each
+// other and are reparsed on every revisit.
+const HIGHLIGHT_CACHE_LIMIT = 200;
 const highlightPromises = new Map<string, Promise<HighlightedLine[]>>();
+const highlightLines = new Map<string, HighlightedLine[]>();
 type ClientTreeSitterRuntime = {
   Language: typeof Language;
   Parser: typeof Parser;
@@ -422,27 +427,48 @@ export async function highlightSource(source: string, language: string) {
   );
 }
 
+/** Identifies one highlighting result by its source and grammar. */
+function highlightKey(source: string, language: string) {
+  return `${language}\0${source}`;
+}
+
 /** Returns a bounded cached highlighting operation for source and language. */
 function highlightedSourcePromise(source: string, language: string) {
-  const key = `${language}\0${source}`;
+  const key = highlightKey(source, language);
   let promise = highlightPromises.get(key);
   if (!promise) {
-    promise = highlightSource(source, language);
+    promise = highlightSource(source, language).then((highlighted) => {
+      if (highlightPromises.has(key)) highlightLines.set(key, highlighted);
+      return highlighted;
+    });
     highlightPromises.set(key, promise);
-    if (highlightPromises.size > 40) {
+    if (highlightPromises.size > HIGHLIGHT_CACHE_LIMIT) {
       const oldest = highlightPromises.keys().next().value;
-      if (oldest) highlightPromises.delete(oldest);
+      if (oldest) {
+        highlightPromises.delete(oldest);
+        highlightLines.delete(oldest);
+      }
     }
   }
   return promise;
 }
 
-/** React binding that updates once the lazily loaded grammar has parsed source. */
+/**
+ * React binding that updates once the lazily loaded grammar has parsed source.
+ * Sources highlighted earlier resolve from cache during render, so revisiting a
+ * concept member neither reparses its grammar nor flashes unhighlighted code.
+ */
 export function useHighlightedSource(source: string, language: string) {
-  const [lines, setLines] = useState<HighlightedLine[]>(() =>
-    plainLines(source),
+  const [lines, setLines] = useState<HighlightedLine[]>(
+    () =>
+      highlightLines.get(highlightKey(source, language)) ?? plainLines(source),
   );
   useEffect(() => {
+    const cached = highlightLines.get(highlightKey(source, language));
+    if (cached) {
+      setLines(cached);
+      return;
+    }
     let current = true;
     setLines(plainLines(source));
     void highlightedSourcePromise(source, language)
