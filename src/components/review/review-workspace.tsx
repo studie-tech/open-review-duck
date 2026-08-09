@@ -87,6 +87,7 @@ import {
 import {
   currentChangedLineIndexes,
   sourceByteOffsetLine,
+  sourceEndLine,
   sourceStartLine,
 } from "~/lib/side-by-side-diff";
 import {
@@ -764,7 +765,7 @@ export function ReviewWorkspace({
           )
         : (activeUnit?.startLine ?? 1);
   const previousUnitEndLine = activeUnit?.previousSource
-    ? previousUnitStartLine + activeUnit.previousSource.split("\n").length - 1
+    ? sourceEndLine(activeUnit.previousSource, previousUnitStartLine)
     : previousUnitStartLine;
   const currentRelatedRanges = useMemo(
     () => relatedReviewRanges(activeUnit, "current"),
