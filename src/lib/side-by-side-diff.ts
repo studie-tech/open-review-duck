@@ -509,6 +509,20 @@ export function sourceStartLine(
   return fileSource.slice(0, offset).split("\n").length;
 }
 
+/**
+ * Locates a source excerpt's last line, given the line it starts on.
+ *
+ * A trailing newline terminates the final line rather than opening another, so
+ * counting it would claim the line after the excerpt. Where an insertion
+ * follows, a diff aligns that line past the inserted block, and the excerpt
+ * would appear to span every added line in between.
+ */
+export function sourceEndLine(source: string, startLine: number) {
+  return (
+    startLine + Math.max(0, source.replace(/\n$/, "").split("\n").length - 1)
+  );
+}
+
 /** Converts an exact UTF-8 byte offset in a file blob to a one-based line. */
 export function sourceByteOffsetLine(
   fileSource: string | undefined,

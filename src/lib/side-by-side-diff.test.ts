@@ -4,6 +4,7 @@ import {
   currentChangedLineIndexes,
   sideBySideDiff,
   sourceByteOffsetLine,
+  sourceEndLine,
   sourceStartLine,
 } from "./side-by-side-diff";
 
@@ -376,5 +377,23 @@ describe("currentChangedLineIndexes", () => {
     expect([
       ...currentChangedLineIndexes("one\nold\nthree", "one\nnew\nextra\nthree"),
     ]).toEqual([1, 2]);
+  });
+});
+
+describe("sourceEndLine", () => {
+  it("does not count a terminating newline as another line", () => {
+    // A unit of three lines ending in a newline occupies 10-12, never 10-13:
+    // claiming line 13 would reach past the unit into whatever follows it.
+    expect(
+      sourceEndLine("const a = 1;\nconst b = 2;\nconst c = 3;\n", 10),
+    ).toBe(12);
+    expect(sourceEndLine("const a = 1;\nconst b = 2;\nconst c = 3;", 10)).toBe(
+      12,
+    );
+  });
+
+  it("keeps a single line on its own start line", () => {
+    expect(sourceEndLine("const a = 1;", 7)).toBe(7);
+    expect(sourceEndLine("", 7)).toBe(7);
   });
 });
