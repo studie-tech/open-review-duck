@@ -1,4 +1,5 @@
 import { basename, dirname, extname } from "node:path";
+import { appendToIndex } from "~/lib/keyed-index";
 import {
   changedLineMasks,
   type UnitRangeSource,
@@ -177,6 +178,7 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
   const symbols = new Map<string, string[]>();
   const stems = new Map<string, string[]>();
   const pathParents = new Map<string, string[]>();
+  const tokensByKey = new Map<string, Set<string>>();
 
   for (const unit of reviewable) {
     for (const dependency of unit.dependencies) {
@@ -192,22 +194,14 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
       }
     }
     const container = lexicalContainer(unit);
-    if (container) {
-      containers.set(container, [
-        ...(containers.get(container) ?? []),
-        unit.stableKey,
-      ]);
-    }
-    for (const token of identifierTokens(unit)) {
-      symbols.set(token, [...(symbols.get(token) ?? []), unit.stableKey]);
-    }
+    if (container) appendToIndex(containers, container, unit.stableKey);
+    const tokens = identifierTokens(unit);
+    tokensByKey.set(unit.stableKey, tokens);
+    for (const token of tokens) appendToIndex(symbols, token, unit.stableKey);
     const stem = productionTestStem(unit.path);
-    if (stem) stems.set(stem, [...(stems.get(stem) ?? []), unit.stableKey]);
+    if (stem) appendToIndex(stems, stem, unit.stableKey);
     const parent = dirname(unit.path).split("/").slice(0, 3).join("/");
-    pathParents.set(parent, [
-      ...(pathParents.get(parent) ?? []),
-      unit.stableKey,
-    ]);
+    appendToIndex(pathParents, parent, unit.stableKey);
   }
 
   addIndexedEvidence(containers, edges, 80, "same lexical container");
@@ -227,7 +221,8 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
           unit.path,
         ),
     );
-    const production = related.filter((unit) => !tests.includes(unit));
+    const testSet = new Set(tests);
+    const production = related.filter((unit) => !testSet.has(unit));
     for (const test of tests.slice(0, 16)) {
       for (const source of production.slice(0, 16)) {
         addEvidence(
@@ -242,9 +237,7 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
   }
 
   const byPath = new Map<string, AnalyzedUnit[]>();
-  for (const unit of reviewable) {
-    byPath.set(unit.path, [...(byPath.get(unit.path) ?? []), unit]);
-  }
+  for (const unit of reviewable) appendToIndex(byPath, unit.path, unit);
   for (const pathUnits of byPath.values()) {
     const ordered = pathUnits.sort(
       (left, right) =>
@@ -272,11 +265,9 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
   addIndexedEvidence(pathParents, edges, 20, "shared module path");
 
   for (const edge of edges.values()) {
-    const left = byKey.get(edge.left);
-    const right = byKey.get(edge.right);
-    if (!left || !right) continue;
-    const leftTokens = identifierTokens(left);
-    const rightTokens = identifierTokens(right);
+    const leftTokens = tokensByKey.get(edge.left);
+    const rightTokens = tokensByKey.get(edge.right);
+    if (!leftTokens || !rightTokens) continue;
     const shared = [...leftTokens].filter((token) => rightTokens.has(token));
     const union = new Set([...leftTokens, ...rightTokens]);
     if (shared.length > 0 && union.size > 0) {
@@ -288,8 +279,8 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
 
   const incident = new Map<string, AffinityEdge[]>();
   for (const edge of edges.values()) {
-    incident.set(edge.left, [...(incident.get(edge.left) ?? []), edge]);
-    incident.set(edge.right, [...(incident.get(edge.right) ?? []), edge]);
+    appendToIndex(incident, edge.left, edge);
+    appendToIndex(incident, edge.right, edge);
   }
   const retained = new Set<AffinityEdge>();
   for (const nodeEdges of incident.values()) {
@@ -313,15 +304,51 @@ export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
   );
 }
 
+/** Indexes each affinity edge under both of its endpoints by graph position. */
+function incidentEdgeIndex(edges: AffinityEdge[]) {
+  const incident = new Map<string, number[]>();
+  edges.forEach((edge, position) => {
+    appendToIndex(incident, edge.left, position);
+    appendToIndex(incident, edge.right, position);
+  });
+  return incident;
+}
+
+/**
+ * Lists the edges joining two members of one group, in affinity-graph order.
+ *
+ * Scanning the whole graph for every group costs the product of the two, which
+ * a pull request pays twice over because a group is examined once when it is
+ * proposed and again when it is described. An endpoint index reaches only the
+ * edges that could possibly qualify, and restoring graph position keeps the
+ * rationale wording identical to a scan of the graph itself.
+ */
+function internalEdges(
+  members: readonly string[],
+  edges: AffinityEdge[],
+  incident: Map<string, number[]>,
+) {
+  const memberSet = new Set(members);
+  const positions = new Set<number>();
+  for (const member of members) {
+    for (const position of incident.get(member) ?? []) {
+      const edge = edges[position];
+      if (edge && memberSet.has(edge.left) && memberSet.has(edge.right)) {
+        positions.add(position);
+      }
+    }
+  }
+  return [...positions]
+    .sort((left, right) => left - right)
+    .flatMap((position) => edges[position] ?? []);
+}
+
 /** Sums how much affinity evidence holds each member inside one group. */
 function internalAffinityWeights(members: string[], edges: AffinityEdge[]) {
-  const memberSet = new Set(members);
   const weights = new Map(members.map((key) => [key, 0]));
   for (const edge of edges) {
-    if (memberSet.has(edge.left) && memberSet.has(edge.right)) {
-      weights.set(edge.left, (weights.get(edge.left) ?? 0) + edge.score);
-      weights.set(edge.right, (weights.get(edge.right) ?? 0) + edge.score);
-    }
+    weights.set(edge.left, (weights.get(edge.left) ?? 0) + edge.score);
+    weights.set(edge.right, (weights.get(edge.right) ?? 0) + edge.score);
   }
   return weights;
 }
@@ -329,10 +356,10 @@ function internalAffinityWeights(members: string[], edges: AffinityEdge[]) {
 /** Chooses the most central member with stable tie-breaking. */
 function conceptAnchor(
   members: string[],
-  edges: AffinityEdge[],
+  internal: AffinityEdge[],
   byKey: Map<string, AnalyzedUnit>,
 ) {
-  const weights = internalAffinityWeights(members, edges);
+  const weights = internalAffinityWeights(members, internal);
   return [...members].sort(
     (left, right) =>
       (weights.get(right) ?? 0) - (weights.get(left) ?? 0) ||
@@ -363,10 +390,10 @@ function conceptAnchor(
  */
 function conceptTitleAnchor(
   members: string[],
-  edges: AffinityEdge[],
+  internal: AffinityEdge[],
   byKey: Map<string, AnalyzedUnit>,
 ) {
-  const weights = internalAffinityWeights(members, edges);
+  const weights = internalAffinityWeights(members, internal);
   return members
     .flatMap((key) => {
       const unit = byKey.get(key);
@@ -395,20 +422,13 @@ function conceptTitleAnchor(
 /** Ensures a proposed group is compact around its deterministic anchor. */
 function withinTwoStrongHops(
   members: string[],
-  edges: AffinityEdge[],
+  internal: AffinityEdge[],
   byKey: Map<string, AnalyzedUnit>,
 ) {
   if (members.length <= 1) return true;
-  const memberSet = new Set(members);
   const adjacency = new Map<string, Set<string>>();
-  for (const edge of edges) {
-    if (
-      edge.score < MERGE_THRESHOLD ||
-      !memberSet.has(edge.left) ||
-      !memberSet.has(edge.right)
-    ) {
-      continue;
-    }
+  for (const edge of internal) {
+    if (edge.score < MERGE_THRESHOLD) continue;
     adjacency.set(
       edge.left,
       (adjacency.get(edge.left) ?? new Set()).add(edge.right),
@@ -418,7 +438,7 @@ function withinTwoStrongHops(
       (adjacency.get(edge.right) ?? new Set()).add(edge.left),
     );
   }
-  const anchor = conceptAnchor(members, edges, byKey);
+  const anchor = conceptAnchor(members, internal, byKey);
   const reached = new Set([anchor]);
   let frontier = [anchor];
   for (let depth = 0; depth < 2; depth += 1) {
@@ -437,6 +457,7 @@ export function clusterReviewConcepts(
   const units = allUnits.filter(({ kind }) => kind !== "file");
   const byKey = new Map(units.map((unit) => [unit.stableKey, unit]));
   const edges = buildConceptAffinityGraph(units);
+  const incident = incidentEdgeIndex(edges);
   const parent = new Map(units.map((unit) => [unit.stableKey, unit.stableKey]));
   const members = new Map(
     units.map((unit) => [unit.stableKey, [unit.stableKey]]),
@@ -467,7 +488,11 @@ export function clusterReviewConcepts(
     if (
       files.size > MAX_CONCEPT_FILES ||
       lines > MAX_CONCEPT_CHANGED_LINES ||
-      !withinTwoStrongHops(proposed, edges, byKey)
+      !withinTwoStrongHops(
+        proposed,
+        internalEdges(proposed, edges, incident),
+        byKey,
+      )
     ) {
       continue;
     }
@@ -491,20 +516,15 @@ export function clusterReviewConcepts(
           left.stableKey.localeCompare(right.stableKey),
       );
     const stableMembers = orderedMembers.map(({ stableKey }) => stableKey);
-    const anchor = conceptTitleAnchor(stableMembers, edges, byKey);
+    const internal = internalEdges(stableMembers, edges, incident);
+    const anchor = conceptTitleAnchor(stableMembers, internal, byKey);
     if (!anchor) throw new Error("A review concept cannot be empty");
     const paths = new Set(orderedMembers.map(({ path }) => path));
     const changedLineCount = orderedMembers.reduce(
       (total, unit) => total + unit.changedLineCount,
       0,
     );
-    const internalEdges = edges.filter(
-      (edge) =>
-        stableMembers.includes(edge.left) && stableMembers.includes(edge.right),
-    );
-    const reasons = [
-      ...new Set(internalEdges.flatMap(({ reasons }) => reasons)),
-    ];
+    const reasons = [...new Set(internal.flatMap(({ reasons }) => reasons))];
     const hasTest = orderedMembers.some(isTestUnit);
     const hasProduction = orderedMembers.some((unit) => !isTestUnit(unit));
     // A group whose best anchor is still generated prose has no name to offer,
@@ -632,21 +652,35 @@ function unrenderedChangedLines(file: SourceFile, units: PartitionUnit[]) {
     previous: file.previousContent.split("\n"),
     current: file.content.split("\n"),
   };
-  return (["previous", "current"] as const).flatMap((side) =>
-    masks[side].flatMap((isChanged, index) => {
+  return (["previous", "current"] as const).flatMap((side) => {
+    // Every unit's rendered span is derived once and merged, so a changed line
+    // is answered by a single interval lookup instead of a rescan of the file's
+    // units — the difference between a per-line and a per-file cost.
+    const rendered = units
+      .flatMap((unit) => unitOwnershipRanges(unit, side))
+      .sort((left, right) => left.startLine - right.startLine);
+    let cursor = 0;
+    let coveredThrough = 0;
+    return masks[side].flatMap((isChanged, index) => {
       const line = index + 1;
+      while (
+        cursor < rendered.length &&
+        (rendered[cursor]?.startLine ?? 0) <= line
+      ) {
+        coveredThrough = Math.max(
+          coveredThrough,
+          rendered[cursor]?.endLine ?? 0,
+        );
+        cursor += 1;
+      }
       if (!isChanged || !sources[side][index]?.trim()) return [];
-      return units.some((unit) =>
-        unitOwnershipRanges(unit, side).some(
-          ({ startLine, endLine }) => line >= startLine && line <= endLine,
-        ),
-      )
+      return line <= coveredThrough
         ? []
         : [
             `${file.path} ${side === "previous" ? "base" : "head"} line ${line}`,
           ];
-    }),
-  );
+    });
+  });
 }
 
 /** Fails closed when a layout can hide, duplicate, or overgrow review work. */
@@ -655,7 +689,13 @@ export function validateConceptPartition(
   concepts: Array<Pick<ReviewConceptDefinition, "memberStableKeys">>,
   files: SourceFile[],
 ) {
-  const expected = new Set(units.map(({ stableKey }) => stableKey));
+  const byKey = new Map<string, PartitionUnit>();
+  const byPath = new Map<string, PartitionUnit[]>();
+  for (const unit of units) {
+    if (!byKey.has(unit.stableKey)) byKey.set(unit.stableKey, unit);
+    appendToIndex(byPath, unit.path, unit);
+  }
+  const expected = new Set(byKey.keys());
   const seen = new Set<string>();
   for (const concept of concepts) {
     if (concept.memberStableKeys.length === 0) {
@@ -665,9 +705,7 @@ export function validateConceptPartition(
       if (!expected.has(key)) throw new Error(`Unknown review unit ${key}`);
       if (seen.has(key)) throw new Error(`Duplicate review unit ${key}`);
       seen.add(key);
-      return units.find(
-        (unit) => unit.stableKey === key,
-      ) as (typeof units)[number];
+      return byKey.get(key) as (typeof units)[number];
     });
     const files = new Set(members.map(({ path }) => path)).size;
     const lines = members.reduce((sum, unit) => sum + unit.changedLineCount, 0);
@@ -685,17 +723,12 @@ export function validateConceptPartition(
     throw new Error(`Review concept layout is missing ${missing.join(", ")}`);
   }
   const unrendered = files.flatMap((file) =>
-    unrenderedChangedLines(
-      file,
-      units.filter((unit) => unit.path === file.path),
-    ),
+    unrenderedChangedLines(file, byPath.get(file.path) ?? []),
   );
   // A line no unit renders is review work a reviewer cannot reach, but it
   // degrades one pull request rather than invalidating it. Refusing the whole
   // revision would leave nothing reviewable at all, so report and continue.
   if (unrendered.length > 0) {
-    console.warn(
-      `Review concepts never show changed ${unrendered.join(", ")}`,
-    );
+    console.warn(`Review concepts never show changed ${unrendered.join(", ")}`);
   }
 }

@@ -257,6 +257,15 @@ interface PersistedSignOff {
   snapshotId: string;
 }
 
+type SignOffOutcome =
+  | { ok: true; write: PersistedSignOff }
+  | { code: "CONFLICT" | "NOT_FOUND"; message?: string; ok: false };
+
+/** Builds a lookup key from an identifier and the revision it belongs to. */
+function revisionKey(owner: string, revision: string) {
+  return `${owner}:${revision}`;
+}
+
 /**
  * Serializes every personal-layout writer for one reviewer on one snapshot.
  * Sign-off can clone a shared baseline into a personal layout, so it has to
@@ -525,19 +534,24 @@ async function lockConceptLayoutForReviewer(
   }
 }
 
-/** Persists one authorized sign-off without recomputing aggregate statistics. */
-async function persistSignOff(
+/**
+ * Persists a whole set of authorized sign-offs in a fixed number of round
+ * trips. Every step is the set-at-a-time form of what a single sign-off used to
+ * do on its own, taken in the same order, so a batch or a concept no longer
+ * multiplies the work this transaction holds its advisory locks for.
+ */
+async function persistSignOffs(
   tx: ReviewTransaction,
   userId: string,
-  input: SignOffInput,
-): Promise<PersistedSignOff> {
-  const [requestedUnit] = await tx
+  inputs: SignOffInput[],
+): Promise<Map<string, SignOffOutcome>> {
+  const outcomes = new Map<string, SignOffOutcome>();
+  if (inputs.length === 0) return outcomes;
+  const requestedUnits = await tx
     .select({
       id: reviewUnits.id,
       stableKey: reviewUnits.stableKey,
       semanticHash: reviewUnits.semanticHash,
-      complexity: reviewUnits.complexity,
-      snapshotId: reviewUnits.snapshotId,
       pullRequestId: pullRequests.id,
       currentHeadSha: pullRequests.headSha,
       currentBaseSha: pullRequests.baseSha,
@@ -552,99 +566,202 @@ async function persistSignOff(
     )
     .where(
       and(
-        eq(reviewUnits.id, input.unitId),
+        inArray(reviewUnits.id, [
+          ...new Set(inputs.map(({ unitId }) => unitId)),
+        ]),
         eq(workspaceMembers.userId, userId),
       ),
-    )
-    .limit(1);
-  if (!requestedUnit) throw new TRPCError({ code: "NOT_FOUND" });
+    );
+  const requestedById = new Map(requestedUnits.map((unit) => [unit.id, unit]));
 
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${requestedUnit.pullRequestId}:${userId}`}))`,
-  );
-  const [unit] = await tx
-    .select({
-      id: reviewUnits.id,
-      semanticHash: reviewUnits.semanticHash,
-      complexity: reviewUnits.complexity,
-      snapshotId: reviewUnits.snapshotId,
-    })
-    .from(reviewUnits)
-    .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
-    .where(
-      and(
-        eq(reviewSnapshots.pullRequestId, requestedUnit.pullRequestId),
-        eq(reviewSnapshots.headSha, requestedUnit.currentHeadSha),
-        eq(reviewSnapshots.baseSha, requestedUnit.currentBaseSha),
-        eq(reviewUnits.stableKey, requestedUnit.stableKey),
-      ),
-    )
-    .orderBy(desc(reviewSnapshots.version))
-    .limit(1);
-  if (!unit || unit.semanticHash !== requestedUnit.semanticHash) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: "This review unit changed in the latest revision",
-    });
-  }
-
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${`${unit.id}:${userId}`}))`,
-  );
-  const existingSignOff = await tx.query.signOffs.findFirst({
-    where: and(
-      eq(signOffs.unitId, unit.id),
-      eq(signOffs.userId, userId),
-      eq(signOffs.semanticHash, unit.semanticHash),
-      isNull(signOffs.invalidatedAt),
-    ),
-  });
-  const experience = reviewExperience(unit.complexity, input.durationSeconds);
-  if (existingSignOff) {
-    return {
-      added: false,
-      experience,
-      input,
-      pullRequestId: requestedUnit.pullRequestId,
-      signOff: existingSignOff,
-      snapshotId: unit.snapshotId,
+  const revisionScopes = new Map<
+    string,
+    { headSha: string; baseSha: string; stableKeys: Set<string> }
+  >();
+  for (const unit of requestedUnits) {
+    const scope = revisionScopes.get(unit.pullRequestId) ?? {
+      headSha: unit.currentHeadSha,
+      baseSha: unit.currentBaseSha,
+      stableKeys: new Set<string>(),
     };
+    scope.stableKeys.add(unit.stableKey);
+    revisionScopes.set(unit.pullRequestId, scope);
+  }
+  // Serialize this reviewer's sign-off writes per pull request. Sorting the
+  // keys gives every caller the same acquisition order, so two batches that
+  // overlap on two pull requests cannot deadlock against each other.
+  for (const pullRequestId of [...revisionScopes.keys()].sort()) {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${pullRequestId}:${userId}`}))`,
+    );
   }
 
-  await tx
-    .update(signOffs)
-    .set({ invalidatedAt: new Date() })
+  const revisionFilters = [...revisionScopes].map(([pullRequestId, scope]) =>
+    and(
+      eq(reviewSnapshots.pullRequestId, pullRequestId),
+      eq(reviewSnapshots.headSha, scope.headSha),
+      eq(reviewSnapshots.baseSha, scope.baseSha),
+      inArray(reviewUnits.stableKey, [...scope.stableKeys]),
+    ),
+  );
+  // Only the highest snapshot version still describing the pull request's
+  // current revision may receive a sign-off.
+  const latestRevisions = revisionFilters.length
+    ? await tx
+        .selectDistinctOn(
+          [reviewSnapshots.pullRequestId, reviewUnits.stableKey],
+          {
+            id: reviewUnits.id,
+            stableKey: reviewUnits.stableKey,
+            semanticHash: reviewUnits.semanticHash,
+            complexity: reviewUnits.complexity,
+            snapshotId: reviewUnits.snapshotId,
+            pullRequestId: reviewSnapshots.pullRequestId,
+          },
+        )
+        .from(reviewUnits)
+        .innerJoin(
+          reviewSnapshots,
+          eq(reviewUnits.snapshotId, reviewSnapshots.id),
+        )
+        .where(or(...revisionFilters))
+        .orderBy(
+          reviewSnapshots.pullRequestId,
+          reviewUnits.stableKey,
+          desc(reviewSnapshots.version),
+        )
+    : [];
+  const latestByStableKey = new Map(
+    latestRevisions.map((unit) => [
+      revisionKey(unit.pullRequestId, unit.stableKey),
+      unit,
+    ]),
+  );
+
+  interface ResolvedSignOff {
+    input: SignOffInput;
+    pullRequestId: string;
+    unit: (typeof latestRevisions)[number];
+  }
+  const resolved: ResolvedSignOff[] = [];
+  for (const input of inputs) {
+    const requested = requestedById.get(input.unitId);
+    if (!requested) {
+      outcomes.set(input.unitId, { code: "NOT_FOUND", ok: false });
+      continue;
+    }
+    const unit = latestByStableKey.get(
+      revisionKey(requested.pullRequestId, requested.stableKey),
+    );
+    if (!unit || unit.semanticHash !== requested.semanticHash) {
+      outcomes.set(input.unitId, {
+        code: "CONFLICT",
+        message: "This review unit changed in the latest revision",
+        ok: false,
+      });
+      continue;
+    }
+    resolved.push({ input, pullRequestId: requested.pullRequestId, unit });
+  }
+  if (resolved.length === 0) return outcomes;
+
+  const targetUnitIds = [...new Set(resolved.map(({ unit }) => unit.id))];
+  // Every writer of these rows takes the pull-request lock above first, so no
+  // other transaction can hold one of these unit locks in a conflicting order.
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(key)) from unnest(array[${sql.join(
+      targetUnitIds.map((unitId) => sql`${`${unitId}:${userId}`}`),
+      sql`, `,
+    )}]::text[]) as locks(key)`,
+  );
+  const activeSignOffs = await tx
+    .select()
+    .from(signOffs)
     .where(
       and(
-        eq(signOffs.unitId, unit.id),
         eq(signOffs.userId, userId),
-        sql`${signOffs.invalidatedAt} is null`,
+        inArray(signOffs.unitId, targetUnitIds),
+        isNull(signOffs.invalidatedAt),
       ),
     );
-  const [signOff] = await tx
-    .insert(signOffs)
-    .values({
-      unitId: unit.id,
-      userId,
-      semanticHash: unit.semanticHash,
-      note: input.note,
-      durationSeconds: input.durationSeconds,
-    })
-    .returning();
-  if (!signOff) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "The sign-off could not be saved",
+  const activeByRevision = new Map<string, (typeof activeSignOffs)[number]>();
+  for (const signOff of activeSignOffs) {
+    const key = revisionKey(signOff.unitId, signOff.semanticHash);
+    if (!activeByRevision.has(key)) activeByRevision.set(key, signOff);
+  }
+
+  // One insert per unit, credited to the first request that reached it, so a
+  // set naming two revisions of one unit behaves as it did one at a time.
+  const claimants = new Map<string, SignOffInput>();
+  const pendingInserts: ResolvedSignOff[] = [];
+  for (const entry of resolved) {
+    const key = revisionKey(entry.unit.id, entry.unit.semanticHash);
+    if (activeByRevision.has(key) || claimants.has(entry.unit.id)) continue;
+    claimants.set(entry.unit.id, entry.input);
+    pendingInserts.push(entry);
+  }
+  const insertedByUnit = new Map<string, (typeof activeSignOffs)[number]>();
+  if (pendingInserts.length > 0) {
+    await tx
+      .update(signOffs)
+      .set({ invalidatedAt: new Date() })
+      .where(
+        and(
+          inArray(
+            signOffs.unitId,
+            pendingInserts.map(({ unit }) => unit.id),
+          ),
+          eq(signOffs.userId, userId),
+          isNull(signOffs.invalidatedAt),
+        ),
+      );
+    const written = await tx
+      .insert(signOffs)
+      .values(
+        pendingInserts.map(({ input, unit }) => ({
+          unitId: unit.id,
+          userId,
+          semanticHash: unit.semanticHash,
+          note: input.note,
+          durationSeconds: input.durationSeconds,
+        })),
+      )
+      .returning();
+    for (const signOff of written) insertedByUnit.set(signOff.unitId, signOff);
+  }
+
+  for (const entry of resolved) {
+    const existing = activeByRevision.get(
+      revisionKey(entry.unit.id, entry.unit.semanticHash),
+    );
+    const signOff = existing ?? insertedByUnit.get(entry.unit.id);
+    if (!signOff) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "The sign-off could not be saved",
+      });
+    }
+    outcomes.set(entry.input.unitId, {
+      ok: true,
+      write: {
+        added: !existing && claimants.get(entry.unit.id) === entry.input,
+        experience: reviewExperience(
+          entry.unit.complexity,
+          entry.input.durationSeconds,
+        ),
+        input: entry.input,
+        pullRequestId: entry.pullRequestId,
+        signOff,
+        snapshotId: entry.unit.snapshotId,
+      },
     });
   }
-  return {
-    added: true,
-    experience,
-    input,
-    pullRequestId: requestedUnit.pullRequestId,
-    signOff,
-    snapshotId: unit.snapshotId,
-  };
+  return outcomes;
+}
+
+/** Reports one rejected sign-off exactly as the single-unit mutation always has. */
+function signOffFailure(outcome: SignOffOutcome & { ok: false }) {
+  return new TRPCError({ code: outcome.code, message: outcome.message });
 }
 
 /** Applies aggregate user and review-session updates once per sign-off request. */
@@ -661,7 +778,9 @@ async function finalizeSignOffs(
   for (const write of added) {
     if (!write.input.sessionId) continue;
     const key = `${write.input.sessionId}:${write.snapshotId}:${write.pullRequestId}`;
-    sessionGroups.set(key, [...(sessionGroups.get(key) ?? []), write]);
+    const existing = sessionGroups.get(key);
+    if (existing) existing.push(write);
+    else sessionGroups.set(key, [write]);
   }
   for (const writesForSession of sessionGroups.values()) {
     const first = writesForSession[0];
@@ -795,10 +914,9 @@ export const reviewRouter = createTRPCRouter({
     );
     const unitsBySnapshot = new Map<string, typeof units>();
     for (const unit of reviewableUnits) {
-      unitsBySnapshot.set(unit.snapshotId, [
-        ...(unitsBySnapshot.get(unit.snapshotId) ?? []),
-        unit,
-      ]);
+      const existing = unitsBySnapshot.get(unit.snapshotId);
+      if (existing) existing.push(unit);
+      else unitsBySnapshot.set(unit.snapshotId, [unit]);
     }
     const snapshotByPullRequest = new Map(
       snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot.id]),
@@ -928,87 +1046,27 @@ export const reviewRouter = createTRPCRouter({
             ? ("inline" as const)
             : ("direct" as const),
         };
-      const storedUnits = await ctx.db.query.reviewUnits.findMany({
-        where: eq(reviewUnits.snapshotId, snapshot.id),
-        orderBy: [reviewUnits.reviewOrder],
-      });
-      const allUnits = isLocalDeployment()
-        ? await hydrateReviewUnits(ctx.db, storedUnits)
-        : storedUnits.map((unit) => ({
-            ...unit,
-            source: "",
-            previousSource: null,
-          }));
-      const units = allUnits.filter(({ kind }) => kind !== "file");
-      const fileContexts = allUnits.filter(({ kind }) => kind === "file");
-      const dependencyRows = units.length
-        ? await ctx.db
-            .select({
-              unitId: reviewUnitDependencies.unitId,
-              dependencyId: reviewUnitDependencies.dependencyId,
-            })
-            .from(reviewUnitDependencies)
-            .where(
-              inArray(
-                reviewUnitDependencies.unitId,
-                units.map(({ id }) => id),
+      // The unit list, the reviewer's concept layouts and their sign-offs on
+      // earlier revisions depend only on the snapshot, so they are one round.
+      const [storedUnits, layouts, priorSignedUnits] = await Promise.all([
+        ctx.db.query.reviewUnits.findMany({
+          where: eq(reviewUnits.snapshotId, snapshot.id),
+          orderBy: [reviewUnits.reviewOrder],
+        }),
+        ctx.db
+          .select()
+          .from(reviewConceptLayouts)
+          .where(
+            and(
+              eq(reviewConceptLayouts.snapshotId, snapshot.id),
+              or(
+                eq(reviewConceptLayouts.userId, ctx.auth.userId),
+                isNull(reviewConceptLayouts.userId),
               ),
-            )
-        : [];
-      const dependenciesByUnit = new Map<string, string[]>();
-      for (const { unitId, dependencyId } of dependencyRows) {
-        dependenciesByUnit.set(unitId, [
-          ...(dependenciesByUnit.get(unitId) ?? []),
-          dependencyId,
-        ]);
-      }
-      const [userSignOffs, userWaits] = units.length
-        ? await Promise.all([
-            ctx.db
-              .select({
-                unitId: signOffs.unitId,
-                signedOffAt: signOffs.signedOffAt,
-              })
-              .from(signOffs)
-              .where(
-                and(
-                  eq(signOffs.userId, ctx.auth.userId),
-                  inArray(
-                    signOffs.unitId,
-                    units.map((unit) => unit.id),
-                  ),
-                  isNull(signOffs.invalidatedAt),
-                ),
-              ),
-            ctx.db
-              .select({
-                unitId: reviewWaits.unitId,
-                waitingSince: reviewWaits.waitingSince,
-              })
-              .from(reviewWaits)
-              .where(
-                and(
-                  eq(reviewWaits.userId, ctx.auth.userId),
-                  inArray(
-                    reviewWaits.unitId,
-                    units.map((unit) => unit.id),
-                  ),
-                ),
-              ),
-          ])
-        : [[], []];
-      const signedUnitIds = new Set(
-        userSignOffs.map((signOff) => signOff.unitId),
-      );
-      const layoutLockedByNewSignOff = userSignOffs.some(
-        ({ signedOffAt }) => signedOffAt >= snapshot.createdAt,
-      );
-      const waitByUnitId = new Map(
-        userWaits.map((wait) => [wait.unitId, wait]),
-      );
-      const priorSignedUnits =
+            ),
+          ),
         snapshot.version > 1
-          ? await ctx.db
+          ? ctx.db
               .selectDistinct({ stableKey: reviewUnits.stableKey })
               .from(signOffs)
               .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
@@ -1024,7 +1082,93 @@ export const reviewRouter = createTRPCRouter({
                   lt(reviewSnapshots.version, snapshot.version),
                 ),
               )
-          : [];
+          : [],
+      ]);
+      const activeLayout =
+        layouts.find(({ userId }) => userId === ctx.auth.userId) ??
+        layouts.find(({ userId }) => userId === null);
+      // Source hydration, per-unit review state and the concepts of the active
+      // layout are all derived from that round and are independent of one
+      // another, so they issue together instead of one after the next.
+      const reviewableUnitIds = storedUnits
+        .filter(({ kind }) => kind !== "file")
+        .map(({ id }) => id);
+      const [
+        allUnits,
+        dependencyRows,
+        userSignOffs,
+        userWaits,
+        storedConcepts,
+      ] = await Promise.all([
+        isLocalDeployment()
+          ? hydrateReviewUnits(ctx.db, storedUnits)
+          : storedUnits.map((unit) => ({
+              ...unit,
+              source: "",
+              previousSource: null,
+            })),
+        reviewableUnitIds.length
+          ? ctx.db
+              .select({
+                unitId: reviewUnitDependencies.unitId,
+                dependencyId: reviewUnitDependencies.dependencyId,
+              })
+              .from(reviewUnitDependencies)
+              .where(inArray(reviewUnitDependencies.unitId, reviewableUnitIds))
+          : [],
+        reviewableUnitIds.length
+          ? ctx.db
+              .select({
+                unitId: signOffs.unitId,
+                signedOffAt: signOffs.signedOffAt,
+              })
+              .from(signOffs)
+              .where(
+                and(
+                  eq(signOffs.userId, ctx.auth.userId),
+                  inArray(signOffs.unitId, reviewableUnitIds),
+                  isNull(signOffs.invalidatedAt),
+                ),
+              )
+          : [],
+        reviewableUnitIds.length
+          ? ctx.db
+              .select({
+                unitId: reviewWaits.unitId,
+                waitingSince: reviewWaits.waitingSince,
+              })
+              .from(reviewWaits)
+              .where(
+                and(
+                  eq(reviewWaits.userId, ctx.auth.userId),
+                  inArray(reviewWaits.unitId, reviewableUnitIds),
+                ),
+              )
+          : [],
+        activeLayout
+          ? ctx.db.query.reviewConcepts.findMany({
+              where: eq(reviewConcepts.layoutId, activeLayout.id),
+              orderBy: [reviewConcepts.reviewOrder],
+            })
+          : [],
+      ]);
+      const units = allUnits.filter(({ kind }) => kind !== "file");
+      const fileContexts = allUnits.filter(({ kind }) => kind === "file");
+      const dependenciesByUnit = new Map<string, string[]>();
+      for (const { unitId, dependencyId } of dependencyRows) {
+        const existing = dependenciesByUnit.get(unitId);
+        if (existing) existing.push(dependencyId);
+        else dependenciesByUnit.set(unitId, [dependencyId]);
+      }
+      const signedUnitIds = new Set(
+        userSignOffs.map((signOff) => signOff.unitId),
+      );
+      const layoutLockedByNewSignOff = userSignOffs.some(
+        ({ signedOffAt }) => signedOffAt >= snapshot.createdAt,
+      );
+      const waitByUnitId = new Map(
+        userWaits.map((wait) => [wait.unitId, wait]),
+      );
       const previouslySignedStableKeys = new Set(
         priorSignedUnits.map(({ stableKey }) => stableKey),
       );
@@ -1047,21 +1191,6 @@ export const reviewRouter = createTRPCRouter({
             previouslySignedStableKeys.has(unit.stableKey),
         };
       });
-      const layouts = await ctx.db
-        .select()
-        .from(reviewConceptLayouts)
-        .where(
-          and(
-            eq(reviewConceptLayouts.snapshotId, snapshot.id),
-            or(
-              eq(reviewConceptLayouts.userId, ctx.auth.userId),
-              isNull(reviewConceptLayouts.userId),
-            ),
-          ),
-        );
-      const activeLayout =
-        layouts.find(({ userId }) => userId === ctx.auth.userId) ??
-        layouts.find(({ userId }) => userId === null);
       let conceptLayout: {
         id: string;
         version: number;
@@ -1091,10 +1220,6 @@ export const reviewRouter = createTRPCRouter({
           locked: Boolean(activeLayout.lockedAt) || layoutLockedByNewSignOff,
           personal: Boolean(activeLayout.userId),
         };
-        const storedConcepts = await ctx.db.query.reviewConcepts.findMany({
-          where: eq(reviewConcepts.layoutId, activeLayout.id),
-          orderBy: [reviewConcepts.reviewOrder],
-        });
         const conceptIds = storedConcepts.map(({ id }) => id);
         const [memberRows, conceptDependencyRows] = conceptIds.length
           ? await Promise.all([
@@ -1112,17 +1237,19 @@ export const reviewRouter = createTRPCRouter({
           : [[], []];
         const membersByConcept = new Map<string, typeof memberRows>();
         for (const member of memberRows) {
-          membersByConcept.set(member.conceptId, [
-            ...(membersByConcept.get(member.conceptId) ?? []),
-            member,
-          ]);
+          const existing = membersByConcept.get(member.conceptId);
+          if (existing) existing.push(member);
+          else membersByConcept.set(member.conceptId, [member]);
         }
         const dependenciesByConcept = new Map<string, string[]>();
         for (const dependency of conceptDependencyRows) {
-          dependenciesByConcept.set(dependency.conceptId, [
-            ...(dependenciesByConcept.get(dependency.conceptId) ?? []),
-            dependency.dependencyId,
-          ]);
+          const existing = dependenciesByConcept.get(dependency.conceptId);
+          if (existing) existing.push(dependency.dependencyId);
+          else {
+            dependenciesByConcept.set(dependency.conceptId, [
+              dependency.dependencyId,
+            ]);
+          }
         }
         const unitById = new Map(workspaceUnits.map((unit) => [unit.id, unit]));
         concepts = storedConcepts.map((concept) => {
@@ -3042,8 +3169,7 @@ export const reviewRouter = createTRPCRouter({
           0,
         );
         let allocated = 0;
-        const writes: PersistedSignOff[] = [];
-        for (const [index, member] of concept.members.entries()) {
+        const memberInputs = concept.members.map((member, index) => {
           const durationSeconds =
             index === concept.members.length - 1
               ? input.durationSeconds - allocated
@@ -3052,14 +3178,24 @@ export const reviewRouter = createTRPCRouter({
                     complexity,
                 );
           allocated += durationSeconds;
-          writes.push(
-            await persistSignOff(tx, ctx.auth.userId, {
-              unitId: member.id,
-              sessionId: input.sessionId,
-              note: input.note,
-              durationSeconds,
-            }),
-          );
+          return {
+            unitId: member.id,
+            sessionId: input.sessionId,
+            note: input.note,
+            durationSeconds,
+          };
+        });
+        const outcomes = await persistSignOffs(
+          tx,
+          ctx.auth.userId,
+          memberInputs,
+        );
+        const writes: PersistedSignOff[] = [];
+        for (const { unitId } of memberInputs) {
+          const outcome = outcomes.get(unitId);
+          if (!outcome) throw new TRPCError({ code: "NOT_FOUND" });
+          if (!outcome.ok) throw signOffFailure(outcome);
+          writes.push(outcome.write);
         }
         await finalizeSignOffs(tx, ctx.auth.userId, writes);
         await lockConceptLayoutForReviewer(tx, ctx.auth.userId, concept);
@@ -3157,9 +3293,13 @@ export const reviewRouter = createTRPCRouter({
     .input(signOffSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        const write = await persistSignOff(tx, ctx.auth.userId, input);
-        await finalizeSignOffs(tx, ctx.auth.userId, [write]);
-        return write.signOff;
+        const outcome = (
+          await persistSignOffs(tx, ctx.auth.userId, [input])
+        ).get(input.unitId);
+        if (!outcome) throw new TRPCError({ code: "NOT_FOUND" });
+        if (!outcome.ok) throw signOffFailure(outcome);
+        await finalizeSignOffs(tx, ctx.auth.userId, [outcome.write]);
+        return outcome.write.signOff;
       }),
     ),
 
@@ -3181,33 +3321,22 @@ export const reviewRouter = createTRPCRouter({
         const ordered = [...input.signOffs].sort((left, right) =>
           left.unitId.localeCompare(right.unitId),
         );
-        for (const signOffInput of ordered) {
-          try {
-            const write = await persistSignOff(
-              tx,
-              ctx.auth.userId,
-              signOffInput,
-            );
-            writes.push(write);
-            results.set(signOffInput.unitId, {
-              ok: true,
-              unitId: signOffInput.unitId,
-            });
-          } catch (cause) {
-            if (
-              cause instanceof TRPCError &&
-              (cause.code === "CONFLICT" || cause.code === "NOT_FOUND")
-            ) {
-              results.set(signOffInput.unitId, {
-                code: cause.code,
-                message: cause.message,
-                ok: false,
-                unitId: signOffInput.unitId,
-              });
-              continue;
-            }
-            throw cause;
+        const outcomes = await persistSignOffs(tx, ctx.auth.userId, ordered);
+        for (const { unitId } of ordered) {
+          const outcome = outcomes.get(unitId);
+          if (!outcome) continue;
+          if (outcome.ok) {
+            writes.push(outcome.write);
+            results.set(unitId, { ok: true, unitId });
+            continue;
           }
+          results.set(unitId, {
+            code: outcome.code,
+            // A rejected unit reports the message its own mutation would raise.
+            message: outcome.message ?? outcome.code,
+            ok: false,
+            unitId,
+          });
         }
         await finalizeSignOffs(tx, ctx.auth.userId, writes);
         return input.signOffs.map(

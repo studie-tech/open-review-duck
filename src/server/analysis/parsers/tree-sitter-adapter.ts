@@ -1119,9 +1119,51 @@ const hookCalls = new Set([
   "aftertest",
 ]);
 
+const MAXIMUM_INDEXED_SOURCES = 4;
+const lineStartIndexes = new Map<string, Int32Array>();
+
+/**
+ * Indexes where every line of one source begins.
+ *
+ * Each declaration asks for the line of its first and last offset, so a file's
+ * offsets are converted as many times as it holds declarations. The index is a
+ * pure function of the text, and analysis walks one revision of one file at a
+ * time, so retaining the few most recent ones converts the whole file once.
+ */
+function lineStartOffsets(source: string) {
+  const indexed = lineStartIndexes.get(source);
+  if (indexed) return indexed;
+  const starts = [0];
+  for (
+    let index = source.indexOf("\n");
+    index !== -1;
+    index = source.indexOf("\n", index + 1)
+  ) {
+    starts.push(index + 1);
+  }
+  const offsets = Int32Array.from(starts);
+  const oldest = lineStartIndexes.keys().next().value;
+  if (
+    lineStartIndexes.size >= MAXIMUM_INDEXED_SOURCES &&
+    oldest !== undefined
+  ) {
+    lineStartIndexes.delete(oldest);
+  }
+  lineStartIndexes.set(source, offsets);
+  return offsets;
+}
+
 /** Returns the one-based source line containing an offset. */
 function lineAt(source: string, offset: number) {
-  return source.slice(0, offset).split("\n").length;
+  const offsets = lineStartOffsets(source);
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if ((offsets[middle] ?? 0) <= offset) low = middle;
+    else high = middle - 1;
+  }
+  return low + 1;
 }
 
 /**
@@ -2291,12 +2333,12 @@ function isNestedImplementation(
   ) {
     return true;
   }
-  for (let parent = node.parent; parent; parent = parent.parent) {
-    if (
-      shape.functions.has(parent.type) ||
-      functionBoundaryTypes.has(parent.type)
-    ) {
-      const directParent = node.parent;
+  // Every node property crosses into Wasm, and this runs for each named node in
+  // the file, so the immediate parent and each ancestor's type are read once.
+  const directParent = node.parent;
+  for (let parent = directParent; parent; parent = parent.parent) {
+    const type = parent.type;
+    if (shape.functions.has(type) || functionBoundaryTypes.has(type)) {
       return (
         !assignmentTypes.has(directParent?.type ?? "") ||
         !directParent ||
@@ -5901,7 +5943,17 @@ function connectDependencies(
       byName.set(normalized, normalizedKeys);
     }
   }
-  for (const candidate of candidates) {
+  // Nesting is decided by comparing every declaration against every other, and
+  // a node's extent and parenthood each cost a round trip into Wasm. Reading
+  // them once per declaration keeps that comparison in plain JavaScript.
+  const extents = candidates.map(({ node, unit }) => ({
+    nested: node.parent !== null,
+    startIndex: node.startIndex,
+    endIndex: node.endIndex,
+    stableKey: unit.stableKey,
+    name: unit.name,
+  }));
+  for (const [position, candidate] of candidates.entries()) {
     const dependencies = new Set<string>();
     if (language === "hcl") {
       for (const variable of syntaxDescendants(candidate.node).filter(
@@ -6125,22 +6177,26 @@ function connectDependencies(
         }
       }
     }
-    for (const child of candidates) {
+    const extent = extents[position] ?? {
+      startIndex: candidate.node.startIndex,
+      endIndex: candidate.node.endIndex,
+    };
+    for (const child of extents) {
       if (
-        child.node.parent &&
-        child.node.startIndex >= candidate.node.startIndex &&
-        child.node.endIndex <= candidate.node.endIndex &&
-        child.unit.stableKey !== candidate.unit.stableKey
+        child.nested &&
+        child.startIndex >= extent.startIndex &&
+        child.endIndex <= extent.endIndex &&
+        child.stableKey !== candidate.unit.stableKey
       ) {
-        dependencies.add(child.unit.stableKey);
+        dependencies.add(child.stableKey);
       }
       if (
         language === "go" &&
         candidate.unit.kind === "class" &&
-        child.unit.name.startsWith(`${candidate.ownName}.`) &&
-        child.unit.stableKey !== candidate.unit.stableKey
+        child.name.startsWith(`${candidate.ownName}.`) &&
+        child.stableKey !== candidate.unit.stableKey
       ) {
-        dependencies.add(child.unit.stableKey);
+        dependencies.add(child.stableKey);
       }
     }
     candidate.unit.dependencies = [...dependencies];

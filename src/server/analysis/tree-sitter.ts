@@ -117,6 +117,7 @@ export async function withPreparedTreeSitterLanguages<T>(
   } finally {
     releaseLanguages(requestedSet);
     trimLanguageCache(activeLanguages());
+    if (activeLanguageCounts.size === 0) releaseCachedSyntaxTrees();
   }
 }
 
@@ -150,17 +151,79 @@ function parseSource(language: TreeSitterLanguage, source: string) {
   return tree;
 }
 
-/** Executes a callback with a syntax tree and always releases Wasm memory. */
+interface CachedSyntaxTree {
+  tree: Tree;
+  bytes: number;
+  borrowed: number;
+}
+
+/**
+ * Bounds the Wasm memory held by reusable syntax trees.
+ *
+ * Analysis parses the same text repeatedly — a file is read by the declaration
+ * extractor, the import scanner, the symbol-occurrence stream and the semantic
+ * hash, and each extracted declaration is then hashed from the same bytes its
+ * container was parsed from. Retaining the parse for source already seen turns
+ * those repeats into lookups. The budget is expressed in source bytes, which
+ * scales with tree size, and it is a small fraction of one pull request's
+ * source so the cache stays a working set rather than a second copy of the diff.
+ */
+const MAXIMUM_CACHED_PARSE_BYTES = 2_000_000;
+const cachedTrees = new Map<string, CachedSyntaxTree>();
+let cachedParseBytes = 0;
+
+/** Discards one cached parse and frees the Wasm memory behind it. */
+function evictCachedTree(key: string, entry: CachedSyntaxTree) {
+  cachedTrees.delete(key);
+  cachedParseBytes -= entry.bytes;
+  entry.tree.delete();
+}
+
+/** Evicts least-recently-used parses that no traversal is still reading. */
+function trimParseCache() {
+  for (const [key, entry] of cachedTrees) {
+    if (cachedParseBytes <= MAXIMUM_CACHED_PARSE_BYTES) return;
+    if (entry.borrowed === 0) evictCachedTree(key, entry);
+  }
+}
+
+/** Frees every retained parse once no analysis operation is running. */
+function releaseCachedSyntaxTrees() {
+  for (const [key, entry] of cachedTrees) {
+    if (entry.borrowed === 0) evictCachedTree(key, entry);
+  }
+}
+
+/**
+ * Executes a callback with the syntax tree for one source, reusing the parse.
+ *
+ * A tree is a pure function of its grammar and its bytes, so the same source
+ * always yields the same tree and sharing one cannot change a result. The entry
+ * records how many traversals are reading it, which keeps a reused tree — and a
+ * tree a nested traversal re-entered — alive until every reader has finished.
+ */
 export function withSyntaxTree<T>(
   language: TreeSitterLanguage,
   source: string,
   callback: (tree: Tree) => T,
 ) {
-  const tree = parseSource(language, source);
+  const key = `${language}\0${source}`;
+  const cached = cachedTrees.get(key);
+  // Re-inserting moves the entry to the most-recently-used end of the map.
+  if (cached) cachedTrees.delete(key);
+  const entry = cached ?? {
+    tree: parseSource(language, source),
+    bytes: source.length,
+    borrowed: 0,
+  };
+  if (!cached) cachedParseBytes += entry.bytes;
+  cachedTrees.set(key, entry);
+  entry.borrowed += 1;
   try {
-    return callback(tree);
+    return callback(entry.tree);
   } finally {
-    tree.delete();
+    entry.borrowed -= 1;
+    trimParseCache();
   }
 }
 
@@ -170,7 +233,11 @@ export function syntaxDescendants(root: SyntaxNode) {
   const cursor = root.walk();
   let reachedRoot = false;
   while (!reachedRoot) {
-    if (cursor.currentNode.isNamed) nodes.push(cursor.currentNode);
+    // Every read of the cursor marshals a fresh node across the Wasm boundary,
+    // which is the most-executed operation in analysis, so each visited node is
+    // materialized once and reused.
+    const node = cursor.currentNode;
+    if (node.isNamed) nodes.push(node);
     if (cursor.gotoFirstChild()) continue;
     if (cursor.gotoNextSibling()) continue;
     while (true) {
