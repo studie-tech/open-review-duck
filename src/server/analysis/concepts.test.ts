@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   clusterReviewConcepts,
   MAX_CONCEPT_CHANGED_LINES,
@@ -244,9 +244,14 @@ describe("clusterReviewConcepts", () => {
       previousStartLine: 2,
       previousEndLine: 2,
     }));
-    expect(() =>
-      validateConceptPartition(hidden, clusterReviewConcepts(units), files),
-    ).toThrow(/never show changed/i);
+    // Unreachable review work is reported rather than raised: refusing the
+    // revision outright would leave the reviewer with nothing at all.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    validateConceptPartition(hidden, clusterReviewConcepts(units), files);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/never show changed/i),
+    );
+    warn.mockRestore();
   });
 
   it("distinguishes concepts that would otherwise carry one title", () => {

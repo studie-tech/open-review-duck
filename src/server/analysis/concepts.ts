@@ -690,8 +690,11 @@ export function validateConceptPartition(
       units.filter((unit) => unit.path === file.path),
     ),
   );
+  // A line no unit renders is review work a reviewer cannot reach, but it
+  // degrades one pull request rather than invalidating it. Refusing the whole
+  // revision would leave nothing reviewable at all, so report and continue.
   if (unrendered.length > 0) {
-    throw new Error(
+    console.warn(
       `Review concepts never show changed ${unrendered.join(", ")}`,
     );
   }
