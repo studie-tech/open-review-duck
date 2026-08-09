@@ -85,12 +85,6 @@ import {
   shortRevision,
 } from "~/lib/review-revision";
 import {
-  afterLayoutSettle,
-  scrollTopAfterContextReveal,
-  shouldRevealLeadingContext,
-  verticalRangesOverlap,
-} from "~/lib/review-scroll";
-import {
   currentChangedLineIndexes,
   sourceByteOffsetLine,
   sourceStartLine,
@@ -432,7 +426,6 @@ export function ReviewWorkspace({
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const pathSearchRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
-  const contextRevealGeneration = useRef(0);
   const aiQuestionMoveAnchor = useRef<
     | {
         cardTop: number;
@@ -3050,110 +3043,16 @@ export function ReviewWorkspace({
     openCommands();
   }
 
-  /** Scrolls the code viewport while revealing context at its boundaries. */
+  /**
+   * Scrolls the code viewport.
+   *
+   * Revealing surrounding context is deliberately left to its own controls: a
+   * concept shows many atomic units at once, and expanding one of them because
+   * the reader happened to reach an edge made a unit appear to contain code
+   * that belongs to the next one.
+   */
   function scrollCode(direction: -1 | 1) {
-    const pane = codeScrollRef.current;
-    if (!pane) return;
-    const atBoundary =
-      direction === -1
-        ? pane.scrollTop <= 1
-        : pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
-    const unitStart = reviewUnitStartRef.current;
-    const unitStartVisible =
-      direction === -1 &&
-      unitStart !== null &&
-      verticalRangesOverlap(
-        pane.getBoundingClientRect(),
-        unitStart.getBoundingClientRect(),
-      );
-    if (sideBySideVisible && atBoundary) {
-      const previousScrollTop = pane.scrollTop;
-      const previousScrollHeight = pane.scrollHeight;
-      if (diffContextRef.current?.revealContext(direction)) {
-        const generation = ++contextRevealGeneration.current;
-        afterLayoutSettle(
-          () => pane.scrollHeight,
-          previousScrollHeight,
-          () => {
-            if (generation !== contextRevealGeneration.current) return;
-            pane.scrollTop = scrollTopAfterContextReveal({
-              direction,
-              previousScrollTop,
-              previousScrollHeight,
-              nextScrollHeight: pane.scrollHeight,
-              viewportHeight: pane.clientHeight,
-            });
-          },
-        );
-        return;
-      }
-    }
-    if (
-      direction === -1 &&
-      shouldRevealLeadingContext({
-        atPhysicalBoundary: atBoundary,
-        unitStartVisible,
-        sideBySideVisible,
-        contextAvailable,
-        contextBefore,
-        availableBefore,
-      })
-    ) {
-      const previousScrollTop = pane.scrollTop;
-      const previousScrollHeight = pane.scrollHeight;
-      const generation = ++contextRevealGeneration.current;
-      setContextBefore((current) =>
-        Math.min(current + CONTEXT_PAGE_LINES, availableBefore),
-      );
-      afterLayoutSettle(
-        () => pane.scrollHeight,
-        previousScrollHeight,
-        () => {
-          if (generation !== contextRevealGeneration.current) return;
-          pane.scrollTop = scrollTopAfterContextReveal({
-            direction: -1,
-            previousScrollTop,
-            previousScrollHeight,
-            nextScrollHeight: pane.scrollHeight,
-            viewportHeight: pane.clientHeight,
-          });
-        },
-      );
-      return;
-    }
-    if (
-      direction === 1 &&
-      pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 &&
-      contextAvailable &&
-      !sideBySideVisible &&
-      contextAfter < availableAfter
-    ) {
-      const previousScrollTop = pane.scrollTop;
-      const previousScrollHeight = pane.scrollHeight;
-      const generation = ++contextRevealGeneration.current;
-      setContextAfter((current) =>
-        Math.min(current + CONTEXT_PAGE_LINES, availableAfter),
-      );
-      afterLayoutSettle(
-        () => pane.scrollHeight,
-        previousScrollHeight,
-        () => {
-          if (generation !== contextRevealGeneration.current) return;
-          pane.scrollTop = scrollTopAfterContextReveal({
-            direction: 1,
-            previousScrollTop,
-            previousScrollHeight,
-            nextScrollHeight: pane.scrollHeight,
-            viewportHeight: pane.clientHeight,
-          });
-        },
-      );
-      return;
-    }
-    pane.scrollBy({
-      top: direction * 72,
-      behavior: "auto",
-    });
+    codeScrollRef.current?.scrollBy({ top: direction * 72, behavior: "auto" });
   }
 
   /** Renders direct AI controls without hiding their distinct scopes in a menu. */
