@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 35;
+export const CURRENT_ANALYSIS_VERSION = 36;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -338,8 +338,18 @@ function renamedUnitPairs(
   return { pairs, matchedPrevious };
 }
 
-/** Creates one honest review unit when no structural parser can inspect a file. */
-function fallbackDeclaration(file: SourceFile) {
+/**
+ * Represents a file that is signed off as a whole rather than piece by piece.
+ *
+ * Two kinds of file are read this way: one whose text no grammar can break
+ * into declarations, and one whose grammar declares that its content is data
+ * rather than behaviour. Both are confirmed by reading the file, so the file
+ * is the unit.
+ */
+function wholeFileDeclaration(
+  file: SourceFile,
+  language: SupportedLanguage = "text",
+) {
   const changeType = file.changeType ?? "modified";
   const binary = Boolean(file.isBinary);
   const oversized = file.skipReason === "too_large";
@@ -352,11 +362,11 @@ function fallbackDeclaration(file: SourceFile) {
   const semanticContent =
     binary || oversized
       ? (file.binaryHash ?? `${file.path}:${changeType}`)
-      : semanticSource(source, "text");
+      : semanticSource(source, language);
   return {
     stableKey: stableReviewKey(file.path, kind, "<whole-file>"),
     path: file.path,
-    language: "text" as const,
+    language,
     kind,
     name: oversized
       ? `${basename(file.path)} · too large`
@@ -575,9 +585,17 @@ function disambiguateStableKeys(units: RawUnit[]) {
 function rawFileReviewUnits(file: SourceFile) {
   const adapter =
     file.isBinary || file.skipReason ? undefined : languageAdapterForFile(file);
+  if (adapter?.reviewsWholeFile) {
+    // The file already covers every line, so there is no uncovered remainder
+    // for module units to pick up and no preamble to set aside as context.
+    return {
+      adapter,
+      reviewUnits: [wholeFileDeclaration(file, adapter.language)],
+    };
+  }
   const analyzed = adapter
     ? adapter.analyze(file)
-    : [fallbackDeclaration(file)];
+    : [wholeFileDeclaration(file)];
   const isContextOnly =
     adapter?.isContextOnly ??
     ((source: string) =>
@@ -1006,7 +1024,7 @@ function prScopedReviewUnits(
       file.changeType === undefined ||
       language !== "text"
       ? currentUnits
-      : [{ ...fallbackDeclaration(file), language }];
+      : [wholeFileDeclaration(file, language)];
   }
 
   const previousFile: SourceFile = {
@@ -1811,11 +1829,16 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     const { adapter, reviewUnits: unscopedReviewUnits } =
       rawFileReviewUnits(file);
     const changeType = file.changeType ?? "modified";
-    const scopedReviewUnits = prScopedReviewUnits(
-      file,
-      adapter?.language ?? "text",
-      unscopedReviewUnits,
-    );
+    // Scoping exists to decide which of a file's declarations a revision
+    // touched. A file reviewed whole has one, and it answers for every line on
+    // both sides, so there is nothing left to decide.
+    const scopedReviewUnits = adapter?.reviewsWholeFile
+      ? unscopedReviewUnits
+      : prScopedReviewUnits(
+          file,
+          adapter?.language ?? "text",
+          unscopedReviewUnits,
+        );
     // Preserve the analyzer's existing high-confidence atomic units. Broader
     // multi-file concepts are built as a separate presentation layer.
     const atomicReviewUnits = clusterRelatedChangeUnits(
@@ -1826,7 +1849,7 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     const reviewUnitsForPr = assignChangedLineCounts(file, atomicReviewUnits);
     const fileContextSource =
       file.isBinary || file.skipReason
-        ? fallbackDeclaration(file).source
+        ? wholeFileDeclaration(file).source
         : file.content;
     const fileContext: CountedUnit = {
       stableKey: stableReviewKey(file.path, "file", "<file-context>"),

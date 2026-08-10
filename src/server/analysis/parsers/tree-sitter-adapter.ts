@@ -29,13 +29,10 @@ interface LanguageShape {
    */
   sections?: ReadonlySet<string>;
   /**
-   * Marks a format whose sections carry configuration rather than prose. Every
-   * field of a data document is a decision worth its own card, and a repeated
-   * tag lists separate records such as one Maven `<dependency>` each. Prose
-   * markup instead nests and repeats tags for presentation, so only its
-   * structured sections — never its text leaves — become units.
+   * Marks a format that is read as one document rather than as a set of
+   * declarations, so it never reaches declaration extraction at all.
    */
-  dataSections?: boolean;
+  reviewsWholeFile?: boolean;
   imports: ReadonlySet<string>;
   comments: ReadonlySet<string>;
   identifierTypes: ReadonlySet<string>;
@@ -83,6 +80,27 @@ const commonIdentifiers = set(
   "variable_name",
   "word",
 );
+
+/**
+ * The shape of a format that stores data rather than behaviour.
+ *
+ * A key in a manifest, a job in a workflow, a table in a lock file: none of
+ * them carry meaning apart from the document that surrounds them, and none can
+ * be confirmed without reading it. Splitting such a file into a card per field
+ * therefore asks for many sign-offs on one decision, and turns a generated
+ * manifest into hundreds of them. These formats declare no reviewable
+ * constructs, so the file itself is the unit.
+ */
+const dataDocumentShape = {
+  containers: set(),
+  functions: set(),
+  variables: set(),
+  imports: set(),
+  comments: set(),
+  identifierTypes: commonIdentifiers,
+  bodyTypes: set(),
+  reviewsWholeFile: true,
+} satisfies LanguageShape;
 
 const shapes: Record<TreeSitterLanguage, LanguageShape> = {
   javascript: {
@@ -523,17 +541,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     identifierTypes: commonIdentifiers,
     bodyTypes: set("element"),
   },
-  json: {
-    containers: set(),
-    functions: set(),
-    variables: set(),
-    sections: set("pair", "object"),
-    dataSections: true,
-    imports: set(),
-    comments: set(),
-    identifierTypes: commonIdentifiers,
-    bodyTypes: set("object", "array"),
-  },
+  json: dataDocumentShape,
   objc: {
     containers: set(
       "class_interface",
@@ -683,15 +691,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     identifierTypes: commonIdentifiers,
     bodyTypes: set("source_file"),
   },
-  toml: {
-    containers: set("table", "table_array_element"),
-    functions: set(),
-    variables: set("pair"),
-    imports: set(),
-    comments: set("comment"),
-    identifierTypes: commonIdentifiers,
-    bodyTypes: set("document"),
-  },
+  toml: dataDocumentShape,
   vue: {
     containers: set(),
     functions: set(),
@@ -702,15 +702,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     identifierTypes: commonIdentifiers,
     bodyTypes: set("element"),
   },
-  yaml: {
-    containers: set(),
-    functions: set(),
-    variables: set("block_mapping_pair", "flow_pair"),
-    imports: set(),
-    comments: set("comment"),
-    identifierTypes: commonIdentifiers,
-    bodyTypes: set("block_mapping", "block_sequence"),
-  },
+  yaml: dataDocumentShape,
   zig: {
     containers: set(
       "struct_declaration",
@@ -817,17 +809,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     identifierTypes: commonIdentifiers,
     bodyTypes: set("message_body", "enum_body", "service_body", "oneof_body"),
   },
-  xml: {
-    containers: set(),
-    functions: set(),
-    variables: set(),
-    sections: set("element"),
-    dataSections: true,
-    imports: set("prolog", "XMLDecl", "doctype"),
-    comments: set("Comment"),
-    identifierTypes: commonIdentifiers,
-    bodyTypes: set("element", "content"),
-  },
+  xml: dataDocumentShape,
   scss: {
     containers: set("rule_set", "media_statement", "mixin_statement"),
     functions: set("function_statement", "mixin_statement"),
@@ -4985,49 +4967,19 @@ function sectionIdentity(
   return values.join(":") || undefined;
 }
 
-/** Returns whether a node lists several sections under one repeated label. */
-function holdsRepeatedSections(
-  source: string,
-  node: SyntaxNode,
-  sections: ReadonlySet<string>,
-) {
-  const labels = sectionChildren(node, sections).map((child) =>
-    sectionLabel(source, child, sections),
-  );
-  return labels.length > 1 && new Set(labels).size === 1 && Boolean(labels[0]);
-}
-
-/** Returns the structured records a document repeats inside list containers. */
-function repeatedSectionRecords(
-  source: string,
-  node: SyntaxNode,
-  sections: ReadonlySet<string>,
-): SyntaxNode[] {
-  const children = sectionChildren(node, sections);
-  if (!holdsRepeatedSections(source, node, sections)) {
-    return children.flatMap((child) =>
-      repeatedSectionRecords(source, child, sections),
-    );
-  }
-  // A repeated scalar is one line of its list, not a card of its own.
-  return children.filter(
-    (child) => sectionChildren(child, sections).length > 0,
-  );
-}
-
 /** Returns the outline of a document, looking past its whole-file wrapper. */
 function documentOutline(root: SyntaxNode, sections: ReadonlySet<string>) {
   const outline = sectionChildren(root, sections);
   const [wrapper] = outline;
-  // A lone section is the file itself — the JSON object, the XML or HTML root
-  // element — so the sections it holds are what a reviewer signs off. Looking
-  // any deeper would review the fields of a key instead of the key.
+  // A lone section is the file itself — the root element — so the sections it
+  // holds are what a reviewer signs off. Looking any deeper would review the
+  // contents of a section instead of the section.
   return outline.length === 1 && wrapper
     ? sectionChildren(wrapper, sections)
     : outline;
 }
 
-/** Extracts review candidates for hierarchical data and markup documents. */
+/** Extracts review candidates for hierarchical markup documents. */
 function documentReviewCandidates(
   file: SourceFile,
   language: TreeSitterLanguage,
@@ -5036,25 +4988,15 @@ function documentReviewCandidates(
   sections: ReadonlySet<string>,
 ) {
   const outline = documentOutline(root, sections).filter(
-    // Prose markup nests text leaves for presentation, so only sections that
-    // hold further structure earn a card there.
-    (node) => shape.dataSections || sectionChildren(node, sections).length > 0,
+    // Markup nests text leaves for presentation, so only sections that hold
+    // further structure earn a card.
+    (node) => sectionChildren(node, sections).length > 0,
   );
-  const records = shape.dataSections
-    ? outline.flatMap((node) =>
-        repeatedSectionRecords(file.content, node, sections),
-      )
-    : [];
   const embedded = syntaxDescendants(root).filter((node) =>
     Boolean(shape.moduleUnits?.has(node.type)),
   );
   const entries = [
-    ...[...outline, ...records].map((node) => ({
-      node,
-      kind: (sectionChildren(node, sections).length > 0
-        ? "module"
-        : "variable") as UnitKind,
-    })),
+    ...outline.map((node) => ({ node, kind: "module" as UnitKind })),
     // Embedded code carries its own risk wherever it sits, so it is reviewed
     // apart from the section it is nested in.
     ...embedded.map((node) => ({ node, kind: "module" as UnitKind })),
@@ -6437,7 +6379,6 @@ export function semanticSymbolOccurrences(
   });
 }
 
-/** Creates a complete tree-sitter-backed language adapter. */
 /**
  * Restores the full extent of a declaration that nothing else reviews.
  *
@@ -6497,6 +6438,7 @@ export function treeSitterAdapter(
     extensions: supportedExtensions[language],
     fileNames: supportedFileNames[language as keyof typeof supportedFileNames],
     matches: options?.matches,
+    reviewsWholeFile: shapes[language].reviewsWholeFile,
     isContextOnly(source) {
       return withSyntaxTree(
         language,

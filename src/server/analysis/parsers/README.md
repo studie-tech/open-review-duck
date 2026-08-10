@@ -34,5 +34,8 @@ member bodies, imports are context rather than standalone work, tests and
 lifecycle hooks should be distinct, and direct dependencies should point to
 stable keys whenever they can be inferred safely.
 
-Unknown text formats are reviewed as whole files. Binary files are represented
-by a notice and their contents are never retained in review units.
+Unknown text formats are reviewed as whole files, and so are data formats: a
+shape that sets `reviewsWholeFile` declares no reviewable constructs, because a
+key in a manifest cannot be confirmed apart from the document around it. Adding
+a data format is one line — give it `dataDocumentShape`. Binary files are
+represented by a notice and their contents are never retained in review units.
