@@ -10,6 +10,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,6 +26,22 @@ import {
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
 } from "./review-workspace-support";
+
+vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("~/lib/syntax-highlighting")>();
+  return {
+    ...actual,
+    // Counting the calls is the only way to see that a collapsed card never
+    // asks for highlighting; the lines it returns still carry the real text so
+    // every other assertion in this file reads the same source it did before.
+    useHighlightedSource: vi.fn((source: string) =>
+      source
+        .split("\n")
+        .map((text) => ({ text, tokens: [{ text, className: "" }] })),
+    ),
+  };
+});
 
 afterEach(cleanup);
 
@@ -127,6 +144,21 @@ describe("ReviewConceptMemberPreview", () => {
     cleanup();
     renderMember("pending");
     expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
+  });
+
+  it("spends no highlighting on a member nobody has opened", () => {
+    // The highlighter is a hook, so keeping it out of a collapsed card means
+    // the card's body must not mount at all — the bounded highlight cache is
+    // shared with the members the reviewer is actually reading.
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    renderMember("signed_off");
+    expect(highlight).not.toHaveBeenCalled();
+
+    cleanup();
+    highlight.mockClear();
+    renderMember("pending");
+    expect(highlight).toHaveBeenCalled();
   });
 
   it("lets the reviewer open a member back up and close it again", async () => {

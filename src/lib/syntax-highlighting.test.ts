@@ -136,5 +136,9 @@ describe("highlightSource", () => {
       expect(lines.map(({ text }) => text).join("\n")).toBe(fixture.source);
       expect(lines.flatMap(({ tokens }) => tokens).length).toBeGreaterThan(0);
     },
+    // Each case compiles a grammar's WebAssembly. That is milliseconds on an
+    // idle machine and far more on a shared runner compiling sixty-two of them
+    // beside every other suite, which the default five seconds does not cover.
+    30_000,
   );
 });
