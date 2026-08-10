@@ -65,12 +65,19 @@ export function languageAdapterForPath(path: string) {
   );
 }
 
-/** Finds a parser by path first, then by an explicit content signature. */
+/**
+ * Finds a parser by an explicit content signature first, then by path.
+ *
+ * A signature is written to fire only where the name leaves the language open
+ * — a shebang on a file with no extension, C++ syntax in a header C and C++
+ * both spell `.h` — so reading it first settles those files without taking
+ * any file the path already answers for.
+ */
 export function languageAdapterForFile(
   file: Pick<import("../types").SourceFile, "path" | "content">,
 ) {
   return (
-    languageAdapterForPath(file.path) ??
-    languageAdapters.find(({ matches }) => matches?.(file))
+    languageAdapters.find(({ matches }) => matches?.(file)) ??
+    languageAdapterForPath(file.path)
   );
 }

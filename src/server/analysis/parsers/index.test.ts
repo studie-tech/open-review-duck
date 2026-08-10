@@ -63,3 +63,38 @@ describe("language parser registry", () => {
     expect(languageAdapterForPath("notes.unknown")).toBeUndefined();
   });
 });
+
+describe("a header C and C++ both call .h", () => {
+  const cppHeader = [
+    "#pragma once",
+    "namespace pond {",
+    "class Registry {",
+    " public:",
+    "  void Add(const std::string &name);",
+    "};",
+    "}  // namespace pond",
+    "",
+  ].join("\n");
+  const cHeader = "#pragma once\nint pond_size(void);\n";
+
+  it("reads C++ syntax with the C++ grammar", () => {
+    expect(
+      languageAdapterForFile({ path: "pond/registry.h", content: cppHeader })
+        ?.language,
+    ).toBe("cpp");
+  });
+
+  it("leaves a C header to the C grammar", () => {
+    expect(
+      languageAdapterForFile({ path: "pond/registry.h", content: cHeader })
+        ?.language,
+    ).toBe("c");
+  });
+
+  it("does not take a header named for C++ away from it", () => {
+    expect(
+      languageAdapterForFile({ path: "pond/registry.hpp", content: cppHeader })
+        ?.language,
+    ).toBe("cpp");
+  });
+});
