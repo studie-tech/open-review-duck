@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 37;
+export const CURRENT_ANALYSIS_VERSION = 38;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -861,6 +861,30 @@ function intersectsChangedLines(
   return false;
 }
 
+/** Reports whether a span still holds a changed line no unit has claimed. */
+function ownsUnclaimedChange(
+  span: { startLine: number; endLine: number },
+  changed: readonly boolean[],
+  covered: readonly boolean[],
+) {
+  const start = Math.max(0, span.startLine - 1);
+  const end = Math.min(covered.length, span.endLine);
+  for (let index = start; index < end; index += 1) {
+    if (changed[index] && !covered[index]) return true;
+  }
+  return false;
+}
+
+/** Records every line of a span as answered by the unit that claimed it. */
+function markSpanCovered(
+  span: { startLine: number; endLine: number },
+  covered: boolean[],
+) {
+  const start = Math.max(0, span.startLine - 1);
+  const end = Math.min(covered.length, span.endLine);
+  for (let index = start; index < end; index += 1) covered[index] = true;
+}
+
 const importedIdentifier = /^[\w$][\w$.]*$/;
 
 /** Compiles whole-word matchers for the names one import statement binds. */
@@ -1056,7 +1080,15 @@ function prScopedReviewUnits(
     .flatMap((unit) => {
       const previous =
         previousByKey.get(unit.stableKey) ?? renamed.pairs.get(unit.stableKey);
-      if (!intersectsChangedLines(unit, masks.current)) return [];
+      // A revision that only removes lines leaves the head side untouched, so
+      // a declaration that lost one is invisible to the head mask alone. Its
+      // own base span is where that edit shows.
+      if (
+        !intersectsChangedLines(unit, masks.current) &&
+        !(previous && intersectsChangedLines(previous, masks.previous))
+      ) {
+        return [];
+      }
       if (previous?.contentHash === unit.contentHash) return [];
       return [{ unit, previous }];
     })
@@ -1070,34 +1102,15 @@ function prScopedReviewUnits(
     );
   const changedCurrent: RawUnit[] = [];
   for (const { unit, previous } of changedCandidates) {
-    let ownsChangedLine = false;
-    for (
-      let index = Math.max(0, unit.startLine - 1);
-      index < Math.min(currentCovered.length, unit.endLine);
-      index += 1
-    ) {
-      if (masks.current[index] && !currentCovered[index]) {
-        ownsChangedLine = true;
-        break;
-      }
-    }
+    // Candidates are sorted smallest first, so the innermost declaration
+    // claims a changed line and the ones enclosing it find nothing left.
+    const ownsChangedLine =
+      ownsUnclaimedChange(unit, masks.current, currentCovered) ||
+      (previous !== undefined &&
+        ownsUnclaimedChange(previous, masks.previous, previousCovered));
     if (!ownsChangedLine) continue;
-    for (
-      let index = Math.max(0, unit.startLine - 1);
-      index < Math.min(currentCovered.length, unit.endLine);
-      index += 1
-    ) {
-      currentCovered[index] = true;
-    }
-    if (previous) {
-      for (
-        let index = Math.max(0, previous.startLine - 1);
-        index < Math.min(previousCovered.length, previous.endLine);
-        index += 1
-      ) {
-        previousCovered[index] = true;
-      }
-    }
+    markSpanCovered(unit, currentCovered);
+    if (previous) markSpanCovered(previous, previousCovered);
     changedCurrent.push({
       ...unit,
       previousSource: previous?.source,
