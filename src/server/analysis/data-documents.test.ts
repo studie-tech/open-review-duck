@@ -184,6 +184,25 @@ describe("data documents", () => {
     },
   );
 
+  it.each(dataDocuments)(
+    "asks for no sign-off when a $language revision changed nothing",
+    ({ path, content }) => {
+      // A mode change, or a rebase that reports a file as touched, arrives as
+      // a modification whose two sides are identical. Every other language
+      // drops such a file in diff scoping, which a file reviewed whole skips.
+      const units = reviewUnits([
+        {
+          path,
+          content,
+          previousContent: content,
+          changeType: "modified",
+        },
+      ]);
+
+      expect(units).toEqual([]);
+    },
+  );
+
   it("reviews a deleted data file as one unit", () => {
     const units = reviewUnits([
       {
