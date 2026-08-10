@@ -3113,6 +3113,28 @@ export function ReviewWorkspace({
   }
 
   /**
+   * Reveals the next page of source preceding the reviewed unit.
+   *
+   * The side-by-side view pages its own rows, so it is offered the reveal
+   * first and the surrounding-source counter only moves when it declines.
+   * One shortcut then means the same thing in either view.
+   */
+  function revealContextAbove() {
+    if (diffContextRef.current?.revealContext(-1)) return;
+    setContextBefore((current) =>
+      Math.min(current + CONTEXT_PAGE_LINES, availableBefore),
+    );
+  }
+
+  /** Reveals the next page of source following the reviewed unit. */
+  function revealContextBelow() {
+    if (diffContextRef.current?.revealContext(1)) return;
+    setContextAfter((current) =>
+      Math.min(current + CONTEXT_PAGE_LINES, availableAfter),
+    );
+  }
+
+  /**
    * Scrolls the code viewport.
    *
    * Revealing surrounding context is deliberately left to its own controls: a
@@ -3232,6 +3254,30 @@ export function ReviewWorkspace({
       shortcut: reviewShortcuts.scrollUp,
       onSelect: () =>
         aiQuestionLine === undefined ? scrollCode(-1) : stepAiQuestion(-1),
+    },
+    {
+      id: "reveal-context-below",
+      label: "Show more lines below",
+      description: "Reveal the source that follows the reviewed unit",
+      group: "Review navigation",
+      icon: <ChevronDown className="size-4" />,
+      shortcut: reviewShortcuts.revealContextBelow,
+      disabled:
+        !sideBySideVisible &&
+        (!contextAvailable || contextAfter >= availableAfter),
+      onSelect: revealContextBelow,
+    },
+    {
+      id: "reveal-context-above",
+      label: "Show more lines above",
+      description: "Reveal the source that precedes the reviewed unit",
+      group: "Review navigation",
+      icon: <ChevronDown className="size-4 rotate-180" />,
+      shortcut: reviewShortcuts.revealContextAbove,
+      disabled:
+        !sideBySideVisible &&
+        (!contextAvailable || contextBefore >= availableBefore),
+      onSelect: revealContextAbove,
     },
     {
       id: "next-unit",
@@ -4511,11 +4557,7 @@ export function ReviewWorkspace({
                   <span className="h-px flex-1 bg-line" />
                   <button
                     type="button"
-                    onClick={() =>
-                      setContextBefore((current) =>
-                        Math.min(current + CONTEXT_PAGE_LINES, availableBefore),
-                      )
-                    }
+                    onClick={revealContextAbove}
                     className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
                   >
                     <ChevronDown className="size-3 rotate-180" />
@@ -4525,6 +4567,10 @@ export function ReviewWorkspace({
                       availableBefore - contextBefore,
                     )}{" "}
                     {contextBefore > 0 ? "more " : ""}lines above
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.revealContextAbove}
+                      className="ml-1"
+                    />
                   </button>
                   <span className="h-px flex-1 bg-line" />
                 </div>
@@ -4709,11 +4755,7 @@ export function ReviewWorkspace({
                   <span className="h-px flex-1 bg-line" />
                   <button
                     type="button"
-                    onClick={() =>
-                      setContextAfter((current) =>
-                        Math.min(current + CONTEXT_PAGE_LINES, availableAfter),
-                      )
-                    }
+                    onClick={revealContextBelow}
                     className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
                   >
                     <ChevronDown className="size-3" />
@@ -4723,6 +4765,10 @@ export function ReviewWorkspace({
                       availableAfter - contextAfter,
                     )}{" "}
                     {contextAfter > 0 ? "more " : ""}lines below
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.revealContextBelow}
+                      className="ml-1"
+                    />
                   </button>
                   <span className="h-px flex-1 bg-line" />
                 </div>
