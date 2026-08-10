@@ -17,6 +17,7 @@ import {
   aiConversationVisibility,
   InlineAiQuestion,
   ProviderConversation,
+  conceptMembersInReadingOrder,
   ProviderConversationHistory,
   ReviewConceptMemberPreview,
   rememberAiConversationVisibility,
@@ -117,6 +118,33 @@ describe("ReviewConceptMemberPreview", () => {
     expect(screen.getByText("Reviewed")).toBeInTheDocument();
   });
 
+  it("opens a signed-off member closed and an unreviewed one open", () => {
+    renderMember("signed_off");
+    expect(screen.getByRole("article")).not.toHaveTextContent(
+      "const answer = 42;",
+    );
+
+    cleanup();
+    renderMember("pending");
+    expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
+  });
+
+  it("lets the reviewer open a member back up and close it again", async () => {
+    renderMember("signed_off");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Expand example" }),
+    );
+    expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Collapse example" }),
+    );
+    expect(screen.getByRole("article")).not.toHaveTextContent(
+      "const answer = 42;",
+    );
+  });
+
   it.each(["pending", "partial", "waiting", "changed"])(
     "leaves a %s member unmarked",
     (status) => {
@@ -127,6 +155,52 @@ describe("ReviewConceptMemberPreview", () => {
       expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
     },
   );
+});
+
+describe("conceptMembersInReadingOrder", () => {
+  it("sinks the signed-off members below the work that remains", () => {
+    const members = [
+      { id: "a", status: "signed_off" },
+      { id: "b", status: "pending" },
+      { id: "c", status: "signed_off" },
+      { id: "d", status: "changed" },
+    ];
+
+    expect(conceptMembersInReadingOrder(members).map(({ id }) => id)).toEqual([
+      "b",
+      "d",
+      "a",
+      "c",
+    ]);
+  });
+
+  it("keeps dependency order inside each group", () => {
+    // Members arrive in the order they must be read, and a reviewer follows a
+    // dependency before its caller, so reordering within a group would break
+    // the reading the concept was built to give.
+    const members = [
+      { id: "a", status: "pending" },
+      { id: "b", status: "waiting" },
+      { id: "c", status: "partial" },
+    ];
+
+    expect(conceptMembersInReadingOrder(members).map(({ id }) => id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("leaves the caller's array untouched", () => {
+    const members = [
+      { id: "a", status: "signed_off" },
+      { id: "b", status: "pending" },
+    ];
+
+    conceptMembersInReadingOrder(members);
+
+    expect(members.map(({ id }) => id)).toEqual(["a", "b"]);
+  });
 });
 
 describe("InlineAiQuestion", () => {
