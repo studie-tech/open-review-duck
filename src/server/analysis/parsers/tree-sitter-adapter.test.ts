@@ -808,3 +808,58 @@ describe("Clojure review analysis", () => {
     ]);
   });
 });
+
+describe("a declaration rewritten in another form", () => {
+  it("reviews a constant that became a function as one change", () => {
+    const previousContent = `export const limit = {
+  retries: 3,
+  timeout: 1000,
+};
+
+export function unrelated() {
+  return limit;
+}
+`;
+    const content = `export function limit() {
+  return {
+    retries: 3,
+    timeout: 1000,
+  };
+}
+
+export function unrelated() {
+  return limit();
+}
+`;
+    const units = analyzeFiles([
+      { path: "a/limit.ts", previousContent, content, changeType: "modified" },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    // The declaration kept its name and its purpose, so a reviewer wants its
+    // before and after on one card - not a removal beside an addition that
+    // reads as two unrelated changes.
+    const rewritten = units.filter(({ name }) => name === "limit");
+    expect(rewritten).toHaveLength(1);
+    expect(rewritten[0]?.changeType).toBe("modified");
+    expect(rewritten[0]?.previousSource).toContain("export const limit");
+    expect(rewritten[0]?.source).toContain("export function limit()");
+  });
+
+  it("keeps a differently named rewrite as two changes", () => {
+    const previousContent = `export const alpha = {
+  retries: 3,
+};
+`;
+    const content = `export function beta() {
+  return 3;
+}
+`;
+    const units = analyzeFiles([
+      { path: "a/pair.ts", previousContent, content, changeType: "modified" },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    // Neither the name nor the kind carries over, so nothing identifies these
+    // as the same declaration and they stay two separate changes.
+    expect(units.map(({ name }) => name).sort()).toEqual(["alpha", "beta"]);
+  });
+});

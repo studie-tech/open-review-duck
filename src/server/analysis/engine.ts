@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 34;
+export const CURRENT_ANALYSIS_VERSION = 35;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -294,7 +294,15 @@ function renamedUnitPairs(
     const candidates = previousUnits
       .filter(
         (previous) =>
-          previous.kind === current.kind &&
+          // A declaration keeps its identity when it is rewritten in a
+          // different form - a constant becoming a function, a function
+          // becoming a class. Recognising only the same kind leaves it as a
+          // removal beside an unrelated-looking addition, so the reviewer is
+          // shown the old text and the new text as two separate changes with
+          // no before and after between them. Either the kind or the name
+          // carrying over is enough to consider the pair, and the shared hunk
+          // required below still has to place them in the same edit.
+          (previous.kind === current.kind || previous.name === current.name) &&
           !currentByKey.has(previous.stableKey) &&
           !matchedPrevious.has(previous.stableKey),
       )
