@@ -59,6 +59,16 @@ export const unreviewConceptSchema = signOffConceptSchema.pick({
   sessionId: true,
 });
 
+/**
+ * The most members one layout may place, counted across all of its concepts.
+ *
+ * A layout partitions the snapshot's atomic units, so its members cannot
+ * outnumber them. Capping each array alone lets the two multiply: five
+ * thousand concepts of five thousand members is twenty-five million
+ * identifiers, and nothing in the shape says they cannot all arrive at once.
+ */
+export const MAX_CONCEPT_LAYOUT_MEMBERS = 5_000;
+
 export const replacePersonalConceptLayoutSchema = z.object({
   pullRequestId: z.string().uuid(),
   snapshotId: z.string().uuid(),
@@ -69,11 +79,24 @@ export const replacePersonalConceptLayoutSchema = z.object({
       z.object({
         title: z.string().trim().min(1).max(200),
         rationale: z.string().trim().max(1_000).optional(),
-        memberUnitIds: z.array(z.string().uuid()).min(1).max(5_000),
+        memberUnitIds: z
+          .array(z.string().uuid())
+          .min(1)
+          .max(MAX_CONCEPT_LAYOUT_MEMBERS),
       }),
     )
     .min(1)
-    .max(5_000),
+    .max(MAX_CONCEPT_LAYOUT_MEMBERS)
+    .refine(
+      (concepts) =>
+        concepts.reduce(
+          (total, { memberUnitIds }) => total + memberUnitIds.length,
+          0,
+        ) <= MAX_CONCEPT_LAYOUT_MEMBERS,
+      {
+        message: `A layout may place at most ${MAX_CONCEPT_LAYOUT_MEMBERS} members`,
+      },
+    ),
 });
 
 export const improveConceptGroupingSchema = z.object({

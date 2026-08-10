@@ -587,32 +587,47 @@ export function ReviewWorkspace({
       persistentInsights.removeEventListener("change", settlePersistentPanels);
     };
   }, []);
-  const conceptPathUnits = useMemo(
+  // A concept whose members are all absent is dropped, which compacts the
+  // list. Entry and lookup are therefore derived from one array, so that the
+  // index a reviewer clicks names the concept they are looking at.
+  const conceptPathEntries = useMemo(
     () =>
-      initialData.concepts.flatMap((concept): ReviewUnit[] => {
+      initialData.concepts.flatMap((concept) => {
         const progress = liveConceptStatus(concept, unitsById);
         const anchor = progress.members[0];
         if (!anchor) return [];
         return [
           {
-            ...anchor,
-            name: concept.title,
-            status:
-              progress.status === "signed_off" ||
-              progress.status === "waiting" ||
-              progress.status === "changed"
-                ? progress.status
-                : ("pending" as const),
-            waitingSince:
-              progress.members.find(({ waitingSince }) => waitingSince)
-                ?.waitingSince ?? null,
+            concept,
+            unit: {
+              ...anchor,
+              name: concept.title,
+              status:
+                progress.status === "signed_off" ||
+                progress.status === "waiting" ||
+                progress.status === "changed"
+                  ? progress.status
+                  : ("pending" as const),
+              waitingSince:
+                progress.members.find(({ waitingSince }) => waitingSince)
+                  ?.waitingSince ?? null,
+            } satisfies ReviewUnit,
           },
         ];
       }),
     [initialData.concepts, unitsById],
   );
+  const conceptPathUnits = useMemo(
+    () => conceptPathEntries.map(({ unit }) => unit),
+    [conceptPathEntries],
+  );
   const activeConceptPathIndex = activeConcept
-    ? initialData.concepts.findIndex(({ id }) => id === activeConcept.id)
+    ? Math.max(
+        0,
+        conceptPathEntries.findIndex(
+          ({ concept }) => concept.id === activeConcept.id,
+        ),
+      )
     : 0;
   const pathSections = useMemo(
     () => reviewPathSections(conceptPathUnits, activeConceptPathIndex),
@@ -993,7 +1008,7 @@ export function ReviewWorkspace({
 
   /** Opens the anchor unit for one concept-first path entry. */
   function selectConceptPath(index: number) {
-    const concept = initialData.concepts[index];
+    const concept = conceptPathEntries[index]?.concept;
     const memberId = concept?.memberIds[0];
     const unitIndex = memberId ? (unitIndexById.get(memberId) ?? -1) : -1;
     if (unitIndex >= 0) selectUnit(unitIndex);

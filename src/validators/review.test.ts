@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   importTargetSchema,
+  MAX_CONCEPT_LAYOUT_MEMBERS,
   providerReviewDecisionSchema,
   publishReviewCommentSchema,
+  replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
   signOffBatchSchema,
 } from "./review";
@@ -183,6 +185,42 @@ describe("import target validation", () => {
         imported: "Review",
         kind: "named",
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe("personal concept layout validation", () => {
+  /** Builds a layout of `conceptCount` concepts holding `each` members apiece. */
+  const layout = (conceptCount: number, each: number) => ({
+    pullRequestId: "11111111-1111-4111-8111-111111111111",
+    snapshotId: "22222222-2222-4222-8222-222222222222",
+    expectedVersion: 1,
+    source: "manual" as const,
+    concepts: Array.from({ length: conceptCount }, (_, concept) => ({
+      title: `Concept ${concept}`,
+      memberUnitIds: Array.from(
+        { length: each },
+        (_, member) =>
+          `33333333-3333-4333-8333-${String(concept * each + member).padStart(12, "0")}`,
+      ),
+    })),
+  });
+
+  it("accepts a layout up to the total member bound", () => {
+    expect(
+      replacePersonalConceptLayoutSchema.safeParse(
+        layout(2, MAX_CONCEPT_LAYOUT_MEMBERS / 2),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("rejects a layout whose concepts together exceed it", () => {
+    // Each concept is within its own cap; only the total is over, which is
+    // what the two caps multiplying used to allow.
+    expect(
+      replacePersonalConceptLayoutSchema.safeParse(
+        layout(3, MAX_CONCEPT_LAYOUT_MEMBERS / 2),
+      ).success,
     ).toBe(false);
   });
 });
