@@ -36,6 +36,24 @@ describe("lexicalLines", () => {
     },
   );
 
+  it.each([
+    ["0xFF", "c"],
+    ["0xdeadbeef", "rust"],
+    ["0b1010", "go"],
+    ["0o755", "java"],
+    ["42", "typescript"],
+  ])("classifies the literal %s as a number", (literal, language) => {
+    // A radix prefix used to be followed by decimal digits only, so a hex
+    // literal matched nothing and fell through to the operator class.
+    const tokens = tokensOf(lexicalLines(`x = ${literal};`, language));
+
+    expect(tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: literal, className: "tok-number" }),
+      ]),
+    );
+  });
+
   it("classifies comments, strings and numbers without a grammar", () => {
     const tokens = tokensOf(
       lexicalLines("const answer: number = 42; // meaning", "typescript"),

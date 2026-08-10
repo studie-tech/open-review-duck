@@ -85,9 +85,13 @@ export const lexicalSyntaxes = Object.fromEntries(
     if (!definition) return [];
     const syntax: LexicalSyntax = {
       lineComments: definition.lineComments ?? [],
-      blockComments: (definition.blockComments ?? []).map(
-        (pair) => [pair[0] ?? "", pair[1] ?? ""] as const,
-      ),
+      // A pair missing a delimiter, completed with an empty string, would
+      // match at every index and leave the highlighter's scan with nowhere to
+      // advance to. A malformed pair is dropped instead.
+      blockComments: (definition.blockComments ?? []).flatMap((pair) => {
+        const [open, close] = pair;
+        return open && close ? [[open, close] as const] : [];
+      }),
       quotes: definition.quotes ?? [],
       directive: definition.directive,
     };

@@ -5,6 +5,12 @@
       "blockComments": [["/*", "*/"]],
       "quotes": ["\"", "'"]
     },
+    "backtick-directive": {
+      "lineComments": ["//"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\""],
+      "directive": "`"
+    },
     "c-preprocessor": {
       "lineComments": ["//"],
       "blockComments": [["/*", "*/"]],
@@ -207,7 +213,7 @@
       "asset": "tree-sitter-go.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-go.wasm",
       "extensions": [".go"],
-      "lexical": "c-family"
+      "lexical": "js-family"
     },
     "makefile": {
       "asset": "tree-sitter-makefile.wasm",
@@ -470,7 +476,7 @@
       "asset": "tree-sitter-groovy.wasm",
       "source": "tree-sitter-groovy/tree-sitter-groovy.wasm",
       "extensions": [".groovy", ".gradle"],
-      "lexical": "js-family"
+      "lexical": "c-family"
     },
     "nix": {
       "asset": "tree-sitter-nix.wasm",
@@ -488,7 +494,7 @@
       "asset": "tree-sitter-systemverilog.wasm",
       "source": "@lumis-sh/wasm-systemverilog/tree-sitter-systemverilog.wasm",
       "extensions": [".sv", ".svh"],
-      "lexical": "c-preprocessor"
+      "lexical": "backtick-directive"
     },
     "assembly": {
       "asset": "tree-sitter-assembly.wasm",

@@ -10,7 +10,7 @@ export interface HighlightedLine {
   tokens: SyntaxToken[];
 }
 
-/** One classified, non-overlapping byte range of a source document. */
+/** One classified, non-overlapping character range of a source document. */
 export interface TokenSpan {
   from: number;
   to: number;
@@ -138,7 +138,7 @@ export const builtinTypes = new Set([
 ]);
 
 export const numericLiteralPattern =
-  /^(?:0[xob])?[\d_]+(?:\.[\d_]+)?(?:e[+-]?[\d_]+)?$/i;
+  /^(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+(?:\.[\d_]+)?(?:e[+-]?[\d_]+)?)$/i;
 
 /**
  * Classifies a token from its text alone, without any grammar knowledge.
