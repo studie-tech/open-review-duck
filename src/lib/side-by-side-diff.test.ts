@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compactSideBySideDiff,
   currentChangedLineIndexes,
+  focusedRowRegions,
   sideBySideDiff,
   sourceByteOffsetLine,
   focusedRowSpan,
@@ -471,6 +472,39 @@ describe("focusedRowSpan", () => {
     ).toEqual({ start: 5, end: 9 });
   });
 
+  it("groups a multi-range declaration into the regions it occupies", () => {
+    // Base 1-2 / head 1-2 are the imports the declaration needs; base 6-7 /
+    // head 6-7 are its body. Rows 2-4 hold another declaration entirely.
+    const rows = rowsFrom([
+      [1, 1],
+      [2, 2],
+      [3, 3],
+      [4, 4],
+      [5, 5],
+      [6, 6],
+      [7, 7],
+    ]);
+
+    expect(
+      focusedRowRegions({
+        rows,
+        previousStartLine: 1,
+        currentStartLine: 1,
+        previousRanges: [
+          { startLine: 1, endLine: 2 },
+          { startLine: 6, endLine: 7 },
+        ],
+        currentRanges: [
+          { startLine: 1, endLine: 2 },
+          { startLine: 6, endLine: 7 },
+        ],
+      }),
+    ).toEqual([
+      { start: 0, end: 2 },
+      { start: 5, end: 7 },
+    ]);
+  });
+
   it("keeps a deletion inside the declaration from ending it early", () => {
     // Row 2 is a removed line: it carries no head line, so it cannot show the
     // declaration has been left, and rows 3-4 still belong to it.
@@ -571,5 +605,48 @@ describe("focusedRowSpan", () => {
         true,
       ).end,
     ).toBe(4);
+  });
+});
+
+describe("compactSideBySideDiff with a multi-range declaration", () => {
+  /** Builds rows where only the given zero-based indexes changed. */
+  function rowsWithChangesAt(total: number, changed: readonly number[]) {
+    return Array.from({ length: total }, (_, index) => ({
+      kind: changed.includes(index)
+        ? ("modified" as const)
+        : ("unchanged" as const),
+      previousIndex: index,
+      currentIndex: index,
+    }));
+  }
+
+  it("collapses a change that belongs to another declaration", () => {
+    // The card shows an import at row 0 and the declaration's body at rows
+    // 18-19. Row 9 changed too, but it sits in the gap between them, so it is
+    // another declaration's work and has its own card elsewhere.
+    const rows = rowsWithChangesAt(20, [0, 9, 18]);
+    const ownRegions = [
+      { start: 0, end: 1 },
+      { start: 18, end: 20 },
+    ];
+
+    const items = compactSideBySideDiff(rows, 3, { ownRegions });
+    const shown = items.flatMap((item) =>
+      item.kind === "row" ? [item.rowIndex] : [],
+    );
+
+    expect(shown).not.toContain(9);
+    expect(shown).toContain(0);
+    expect(shown).toContain(18);
+  });
+
+  it("still shows every change when the declaration states one region", () => {
+    const rows = rowsWithChangesAt(20, [0, 9, 18]);
+
+    const shown = compactSideBySideDiff(rows, 3).flatMap((item) =>
+      item.kind === "row" ? [item.rowIndex] : [],
+    );
+
+    expect(shown).toEqual(expect.arrayContaining([0, 9, 18]));
   });
 });

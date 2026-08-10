@@ -47,6 +47,7 @@ import type {
 } from "~/lib/review-navigation";
 import {
   compactSideBySideDiff,
+  focusedRowRegions,
   focusedRowSpan,
   sideBySideDiff,
 } from "~/lib/side-by-side-diff";
@@ -1270,6 +1271,19 @@ export const SideBySideUnitDiff = forwardRef<
       currentEnd,
       previousRanges,
       currentRanges,
+      // Only a declaration stating several ranges leaves gaps holding other
+      // declarations; a single range has none, and asking for its regions
+      // would collapse the surrounding source a reviewer paged in.
+      ownRegions:
+        previousFocusRanges !== undefined || currentFocusRanges !== undefined
+          ? focusedRowRegions({
+              rows,
+              previousStartLine,
+              currentStartLine,
+              previousRanges,
+              currentRanges,
+            })
+          : undefined,
     };
   }, [
     currentFocusEndLine,
@@ -1325,10 +1339,15 @@ export const SideBySideUnitDiff = forwardRef<
         : undefined,
       // Keep unit edges visible so trail compact never stacks with "show below".
       pinRangeEnds: hasFocusWindow && explicitFocusHasDiff ? 2 : 0,
+      ownRegions: focusRange.ownRegions?.map(({ start, end }) => ({
+        start: start - visibleRowStart,
+        end: end - visibleRowStart,
+      })),
     });
   }, [
     explicitFocusHasDiff,
     focusRange.end,
+    focusRange.ownRegions,
     focusRange.start,
     hasExplicitFocus,
     visibleRowStart,
