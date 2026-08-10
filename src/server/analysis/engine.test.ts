@@ -1275,6 +1275,80 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     expect(reviewable[0]?.source).not.toContain("route124");
   });
 
+  it("reads the fields of a command table with the table", () => {
+    const padding = Array.from(
+      { length: 120 },
+      (_, index) =>
+        `  { id: "cmd-${index}", label: "Command ${index}", onSelect: () => run(${index}) },`,
+    );
+    /** Builds the same oversized command table with an optional extra entry. */
+    const table = (extended: boolean) =>
+      [
+        "export const commands = [",
+        ...padding,
+        ...(extended
+          ? [
+              "  {",
+              '    id: "reveal-below",',
+              '    label: "Show more lines below",',
+              '    description: "Reveal the source that follows",',
+              "    shortcut: shortcuts.revealBelow,",
+              "    disabled: !visible || after >= availableAfter,",
+              "    onSelect: revealBelow,",
+              "  },",
+            ]
+          : []),
+        "];",
+      ].join("\n");
+    const reviewable = analyzeFiles([
+      {
+        path: "commands.ts",
+        content: table(true),
+        previousContent: table(false),
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    // Every key of the new entry is one decision — the command — so a card per
+    // key asks for the same sign-off seven times over.
+    expect(reviewable).toHaveLength(1);
+    expect(reviewable[0]).toMatchObject({ name: "commands" });
+    expect(reviewable[0]?.source).toContain('id: "reveal-below"');
+  });
+
+  it("still focuses an oversized table on a key that carries behaviour", () => {
+    const padding = Array.from(
+      { length: 125 },
+      (_, index) => `  route${index}: procedure.query(() => ${index}),`,
+    );
+    /** Builds the same oversized router with an optional changed handler. */
+    const router = (guarded: boolean) =>
+      [
+        "export const itemRouter = createRouter({",
+        ...padding,
+        "  splitStack: procedure",
+        ...(guarded ? ["    .use(rateLimit)"] : []),
+        "    .query(() => true),",
+        "});",
+      ].join("\n");
+    const reviewable = analyzeFiles([
+      {
+        path: "item.ts",
+        content: router(true),
+        previousContent: router(false),
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    // The handler is two calls deep inside the value, which is where a router
+    // and a resolver usually put it.
+    expect(reviewable).toHaveLength(1);
+    expect(reviewable[0]).toMatchObject({
+      name: "itemRouter › splitStack",
+      kind: "method",
+    });
+  });
+
   it("focuses an oversized component on its changed hook", () => {
     const padding = Array.from(
       { length: 125 },

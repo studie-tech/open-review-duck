@@ -2399,6 +2399,37 @@ function precedingCommentStart(source: string, node: SyntaxNode) {
     : statement.startIndex;
 }
 
+/** Node types that hold code to run rather than a value to read. */
+const ecmascriptBehaviour = set(
+  "arrow_function",
+  "function",
+  "function_expression",
+  "generator_function",
+  "function_declaration",
+  "generator_function_declaration",
+  "method_definition",
+  "class",
+  "class_declaration",
+);
+
+/**
+ * Reports whether a value carries work of its own.
+ *
+ * A key of an object literal earns a card when something in it executes — a
+ * handler, a resolver, a procedure assembled from a chain of calls. A key
+ * holding a string, an icon, a shortcut or a flag cannot be judged apart from
+ * the object that gives it meaning, and a command table of such keys turns one
+ * decision into a card per field. The search is for anything callable anywhere
+ * inside the value, because the code is often wrapped: `procedure.query(() =>
+ * …)` states its behaviour two calls deep.
+ */
+function carriesBehaviour(node: SyntaxNode) {
+  if (ecmascriptBehaviour.has(node.type)) return true;
+  return syntaxDescendants(node).some((descendant) =>
+    ecmascriptBehaviour.has(descendant.type),
+  );
+}
+
 /** Builds focused review units for nested ECMAScript members and hooks. */
 function nestedEcmascriptCandidate(
   file: SourceFile,
@@ -2412,6 +2443,8 @@ function nestedEcmascriptCandidate(
       : undefined;
     const owner = logicalOwnerName(file.content, node);
     if (!name || !owner) return undefined;
+    const value = node.childForFieldName("value");
+    if (!value || !carriesBehaviour(value)) return undefined;
     const start = precedingCommentStart(file.content, node);
     const ownerDeclaration = (() => {
       for (let parent = node.parent; parent; parent = parent.parent) {
