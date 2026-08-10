@@ -88,6 +88,8 @@ export const reviewShortcuts = {
   previousConcept: [{ key: "ArrowLeft" }],
   scrollUp: [{ key: "ArrowUp" }],
   scrollDown: [{ key: "ArrowDown" }],
+  revealContextAbove: [{ key: "ArrowUp", shift: true }],
+  revealContextBelow: [{ key: "ArrowDown", shift: true }],
   togglePathPanel: [{ key: "b", mod: true }],
   toggleInsightsPanel: [{ key: "g", mod: true }],
   nextPending: [{ key: "n" }],
@@ -1008,6 +1010,13 @@ function DiffEdgeRevealButton({
           <span className="text-mist">of {externalRemaining}</span>
         </>
       )}
+      <ShortcutHint
+        shortcut={
+          direction === -1
+            ? reviewShortcuts.revealContextAbove
+            : reviewShortcuts.revealContextBelow
+        }
+      />
     </button>
   );
 }
