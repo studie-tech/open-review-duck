@@ -476,6 +476,64 @@ describe("focusedRowSpan", () => {
     ).toEqual({ start: 0, end: 4 });
   });
 
+  it("ends a removed declaration before the block that replaced it", () => {
+    // The declaration exists only in the base revision. A block was inserted
+    // where it stood, and the diff paired its closing base line with an
+    // identical line below that insertion. Nothing the inserted rows carry can
+    // be compared against a head range, since the declaration has none — but
+    // they are plainly not part of a declaration that was removed.
+    const rows: Array<{
+      kind: "unchanged" | "added" | "deleted";
+      previousIndex?: number;
+      currentIndex?: number;
+    }> = [];
+    for (let base = 3; base <= 17; base += 1) {
+      rows.push({ kind: "deleted", previousIndex: base - 1 });
+    }
+    for (let head = 1; head <= 12; head += 1) {
+      rows.push({ kind: "added", currentIndex: head - 1 });
+    }
+    rows.push({ kind: "unchanged", previousIndex: 17, currentIndex: 12 });
+    rows.push({ kind: "unchanged", previousIndex: 18, currentIndex: 13 });
+
+    expect(
+      focusedRowSpan({
+        rows,
+        previousStartLine: 1,
+        currentStartLine: 1,
+        previousRanges: [{ startLine: 3, endLine: 18 }],
+        currentRanges: [],
+        multiRange: false,
+      }),
+    ).toEqual({ start: 0, end: 15 });
+  });
+
+  it("ends an added declaration before the block it replaced", () => {
+    const rows: Array<{
+      kind: "unchanged" | "added" | "deleted";
+      previousIndex?: number;
+      currentIndex?: number;
+    }> = [];
+    for (let head = 3; head <= 17; head += 1) {
+      rows.push({ kind: "added", currentIndex: head - 1 });
+    }
+    for (let base = 1; base <= 12; base += 1) {
+      rows.push({ kind: "deleted", previousIndex: base - 1 });
+    }
+    rows.push({ kind: "unchanged", previousIndex: 12, currentIndex: 17 });
+
+    expect(
+      focusedRowSpan({
+        rows,
+        previousStartLine: 1,
+        currentStartLine: 1,
+        previousRanges: [],
+        currentRanges: [{ startLine: 3, endLine: 18 }],
+        multiRange: false,
+      }),
+    ).toEqual({ start: 0, end: 15 });
+  });
+
   it("lets a declaration of several ranges skip the rows between them", () => {
     const rows = rowsFrom([
       [1, 1],

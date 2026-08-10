@@ -618,7 +618,20 @@ export function focusedRowSpan({
   let last = start;
   while (last + 1 <= furthest) {
     const { previousLine, currentLine } = linesAt(last + 1);
+    // A row carrying only a side the declaration does not occupy cannot be
+    // inside it: a removed declaration has no line in the head revision, and
+    // an added one none in the base. Where the declaration occupies both
+    // sides, such a row is an edit within it and settles nothing; only a line
+    // past that side's end does.
+    const outsideDeclaredSide =
+      (currentLine !== undefined &&
+        previousLine === undefined &&
+        currentRanges.length === 0) ||
+      (previousLine !== undefined &&
+        currentLine === undefined &&
+        previousRanges.length === 0);
     const passed =
+      outsideDeclaredSide ||
       (currentLine !== undefined &&
         currentRanges.length > 0 &&
         currentLine > currentEnd) ||
