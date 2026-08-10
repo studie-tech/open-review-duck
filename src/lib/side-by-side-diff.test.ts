@@ -4,6 +4,7 @@ import {
   currentChangedLineIndexes,
   sideBySideDiff,
   sourceByteOffsetLine,
+  focusedRowSpan,
   sourceEndLine,
   sourceStartLine,
 } from "./side-by-side-diff";
@@ -395,5 +396,100 @@ describe("sourceEndLine", () => {
   it("keeps a single line on its own start line", () => {
     expect(sourceEndLine("const a = 1;", 7)).toBe(7);
     expect(sourceEndLine("", 7)).toBe(7);
+  });
+});
+
+describe("focusedRowSpan", () => {
+  /** Builds diff rows from a compact "prev/curr" description, "-" for absent. */
+  function rowsFrom(pairs: Array<[number | null, number | null]>) {
+    return pairs.map(([previous, current]) => ({
+      kind:
+        previous === null
+          ? ("added" as const)
+          : current === null
+            ? ("deleted" as const)
+            : ("unchanged" as const),
+      previousIndex: previous === null ? undefined : previous - 1,
+      currentIndex: current === null ? undefined : current - 1,
+    }));
+  }
+
+  /** Computes the span for one declaration range on each side. */
+  const span = (
+    rows: ReturnType<typeof rowsFrom>,
+    previous: { startLine: number; endLine: number },
+    current: { startLine: number; endLine: number },
+    multiRange = false,
+  ) =>
+    focusedRowSpan({
+      rows,
+      previousStartLine: 1,
+      currentStartLine: 1,
+      previousRanges: [previous],
+      currentRanges: [current],
+      multiRange,
+    });
+
+  it("ends at the declaration when its closer is paired far below", () => {
+    // The declaration is base 1-3 / head 1-3. Lines 4-6 are a second
+    // declaration inserted whole. The diff paired the first declaration's
+    // closing base line 3 with head line 6 — the second declaration's
+    // identical closer — leaving head 4 and 5 as insertions in between.
+    const rows = rowsFrom([
+      [1, 1],
+      [2, 2],
+      [null, 3],
+      [null, 4],
+      [null, 5],
+      [3, 6],
+      [4, 7],
+    ]);
+    expect(
+      span(rows, { startLine: 1, endLine: 3 }, { startLine: 1, endLine: 3 }),
+    ).toEqual({ start: 0, end: 3 });
+  });
+
+  it("keeps a deletion inside the declaration from ending it early", () => {
+    // Row 2 is a removed line: it carries no head line, so it cannot show the
+    // declaration has been left, and rows 3-4 still belong to it.
+    const rows = rowsFrom([
+      [1, 1],
+      [2, null],
+      [3, 2],
+      [4, 3],
+      [5, 4],
+    ]);
+    expect(
+      span(rows, { startLine: 1, endLine: 4 }, { startLine: 1, endLine: 3 }),
+    ).toEqual({ start: 0, end: 4 });
+  });
+
+  it("keeps an insertion inside the declaration from ending it early", () => {
+    const rows = rowsFrom([
+      [1, 1],
+      [null, 2],
+      [2, 3],
+      [3, 4],
+    ]);
+    expect(
+      span(rows, { startLine: 1, endLine: 3 }, { startLine: 1, endLine: 4 }),
+    ).toEqual({ start: 0, end: 4 });
+  });
+
+  it("lets a declaration of several ranges skip the rows between them", () => {
+    const rows = rowsFrom([
+      [1, 1],
+      [2, 2],
+      [3, 3],
+      [4, 4],
+    ]);
+    expect(
+      span(
+        rows,
+        { startLine: 1, endLine: 4 },
+        { startLine: 1, endLine: 4 },
+        true,
+      ).end,
+    ).toBe(4);
   });
 });
