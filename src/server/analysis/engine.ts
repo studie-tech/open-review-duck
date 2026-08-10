@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 38;
+export const CURRENT_ANALYSIS_VERSION = 39;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;

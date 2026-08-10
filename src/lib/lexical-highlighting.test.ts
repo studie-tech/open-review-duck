@@ -40,7 +40,8 @@ describe("lexicalLines", () => {
     ["0xFF", "c"],
     ["0xdeadbeef", "rust"],
     ["0b1010", "go"],
-    ["0o755", "java"],
+    ["0o755", "rust"],
+    ["0755", "java"],
     ["42", "typescript"],
   ])("classifies the literal %s as a number", (literal, language) => {
     // A radix prefix used to be followed by decimal digits only, so a hex
