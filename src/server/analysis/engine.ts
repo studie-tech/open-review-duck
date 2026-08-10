@@ -887,6 +887,18 @@ function markSpanCovered(
 
 const importedIdentifier = /^[\w$][\w$.]*$/;
 
+/**
+ * Escapes every character a regular expression would otherwise read as syntax.
+ *
+ * The names reaching this are already narrowed to word characters, `$` and
+ * `.`, so only the dot can occur in practice. Escaping the whole set anyway
+ * keeps the pattern correct where it is built rather than resting on a test
+ * several lines above it.
+ */
+function escapeRegExp(value: string) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
 /** Compiles whole-word matchers for the names one import statement binds. */
 function importedNamePatterns(statement: ImportStatement) {
   return statement.references.flatMap(({ local, specifier }) => {
@@ -898,7 +910,7 @@ function importedNamePatterns(statement: ImportStatement) {
       ? local
       : (specifier.split(/[/.]/).at(-1) ?? "");
     return importedIdentifier.test(name)
-      ? [new RegExp(`(^|[^\\w$])${name.replace(/\./g, "\\.")}([^\\w$]|$)`)]
+      ? [new RegExp(`(^|[^\\w$])${escapeRegExp(name)}([^\\w$]|$)`)]
       : [];
   });
 }
