@@ -1275,6 +1275,49 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     expect(reviewable[0]?.source).not.toContain("route124");
   });
 
+  /** Builds a declaration followed by one optional top-level statement. */
+  const withTrailingStatement = (statement?: string) =>
+    [
+      "export function keep() {",
+      "  return 1;",
+      "}",
+      ...(statement ? [statement] : []),
+      "",
+    ].join("\n");
+
+  it.each(["endpoint;", "ending;", "endless;"])(
+    "keeps the module card when a lone %s follows a declaration",
+    (statement) => {
+      // Matching terminators with an `end` prefix also matched these, so the
+      // sweep trimmed the line away as block chrome and the change came back
+      // as an anonymous fragment.
+      const reviewable = analyzeFiles([
+        {
+          path: "boot.ts",
+          content: withTrailingStatement(statement),
+          previousContent: withTrailingStatement(),
+          changeType: "modified",
+        },
+      ]).units.filter(({ kind }) => kind !== "file");
+
+      expect(reviewable).toHaveLength(1);
+      expect(reviewable[0]?.name).toBe("Module statements");
+    },
+  );
+
+  it("still drops a line that only closes a block", () => {
+    const reviewable = analyzeFiles([
+      {
+        path: "boot.ts",
+        content: withTrailingStatement("end;"),
+        previousContent: withTrailingStatement(),
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable[0]?.name).not.toBe("Module statements");
+  });
+
   it("reads the fields of a command table with the table", () => {
     const padding = Array.from(
       { length: 120 },

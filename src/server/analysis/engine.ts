@@ -394,11 +394,55 @@ function wholeFileDeclaration(
 }
 
 /**
- * Matches the reserved words languages use to end a block instead of a brace:
- * the `end` family (`end`, `endif`, `endmodule`, `endfunction`, …) and the
- * three POSIX shell loop and branch terminators.
+ * The reserved words languages use to end a block instead of a brace.
+ *
+ * The list is written out rather than matched with an `end` prefix, because a
+ * prefix also swallows ordinary identifiers — `endpoint`, `endless`, `ending`
+ * — and a lone `endpoint,` in an object literal would then be trimmed off the
+ * module card that should have carried it.
  */
-const blockCloseWord = /^(?:end[a-z]*|fi|done|esac)$/;
+const blockCloseWords = new Set([
+  "end",
+  "endassociate",
+  "endblock",
+  "endcase",
+  "endclass",
+  "endclocking",
+  "enddeclare",
+  "enddo",
+  "endenum",
+  "endfor",
+  "endforall",
+  "endforeach",
+  "endfunction",
+  "endgenerate",
+  "endgroup",
+  "endif",
+  "endinterface",
+  "endmodule",
+  "endpackage",
+  "endprimitive",
+  "endprogram",
+  "endproperty",
+  "endrecord",
+  "endselect",
+  "endsequence",
+  "endspecify",
+  "endstruct",
+  "endsubroutine",
+  "endswitch",
+  "endtable",
+  "endtask",
+  "endtry",
+  "endtype",
+  "endunion",
+  "endwhere",
+  "endwhile",
+  "endwith",
+  "esac",
+  "done",
+  "fi",
+]);
 
 /**
  * Detects a line that only closes a block a reviewed declaration already owns.
@@ -416,7 +460,7 @@ function isBlockDelimiterOnly(line: string | undefined) {
   return line
     .replace(/[)\]};,]/g, " ")
     .split(/\s+/)
-    .every((token) => !token || blockCloseWord.test(token.toLowerCase()));
+    .every((token) => !token || blockCloseWords.has(token.toLowerCase()));
 }
 
 /** Measures a line's indentation, treating a blank line as absent. */

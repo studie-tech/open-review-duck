@@ -234,6 +234,52 @@ export function ReviewConceptMemberHeader({
   );
 }
 
+/**
+ * Renders one member's highlighted source.
+ *
+ * The highlighter is a hook and cannot be called conditionally, so the body of
+ * an open card is its own component: a collapsed member then never mounts it,
+ * and never spends a grammar parse — or a slot in the bounded highlight cache
+ * — on code nobody is looking at.
+ */
+function ReviewConceptMemberSource({ unit }: { unit: ReviewUnit }) {
+  const source =
+    unit.changeType === "deleted"
+      ? (unit.previousSource ?? unit.source)
+      : unit.source;
+  const lines = useHighlightedSource(source, unit.language);
+  return (
+    // A member is read in the page's own scroll rather than in a window of its
+    // own: a card that scrolls inside a scrolling page hides how much of a
+    // concept is left and takes two gestures to read one unit. Only long lines
+    // scroll, and only sideways.
+    <div className="overflow-x-auto py-2">
+      {lines.map((line, lineIndex) => (
+        <div
+          key={`${unit.id}-${lineIndex}`}
+          className="grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
+        >
+          <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+            {unit.startLine + lineIndex}
+          </span>
+          <pre className="syntax-code overflow-visible text-cloud/80">
+            {line.tokens.length
+              ? line.tokens.map((token, tokenIndex) => (
+                  <span
+                    key={`${tokenIndex}-${token.text.length}`}
+                    className={token.className || undefined}
+                  >
+                    {token.text}
+                  </span>
+                ))
+              : " "}
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Renders a selectable, syntax-highlighted atomic member without hiding its code. */
 export function ReviewConceptMemberPreview({
   unit,
@@ -248,11 +294,6 @@ export function ReviewConceptMemberPreview({
   sourceAvailable: boolean;
   onSelect: () => void;
 }) {
-  const source =
-    unit.changeType === "deleted"
-      ? (unit.previousSource ?? unit.source)
-      : unit.source;
-  const lines = useHighlightedSource(source, unit.language);
   // A member already signed off opens closed: its header still says what it
   // is and that it is done, and the code behind it is work the reviewer has
   // finished reading.
@@ -287,34 +328,7 @@ export function ReviewConceptMemberPreview({
           Binary change · explicit acknowledgement required
         </p>
       ) : (
-        // A member is read in the page's own scroll rather than in a window of
-        // its own: a card that scrolls inside a scrolling page hides how much
-        // of a concept is left and takes two gestures to read one unit. Only
-        // long lines scroll, and only sideways.
-        <div className="overflow-x-auto py-2">
-          {lines.map((line, lineIndex) => (
-            <div
-              key={`${unit.id}-${lineIndex}`}
-              className="grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
-            >
-              <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-                {unit.startLine + lineIndex}
-              </span>
-              <pre className="syntax-code overflow-visible text-cloud/80">
-                {line.tokens.length
-                  ? line.tokens.map((token, tokenIndex) => (
-                      <span
-                        key={`${tokenIndex}-${token.text.length}`}
-                        className={token.className || undefined}
-                      >
-                        {token.text}
-                      </span>
-                    ))
-                  : " "}
-              </pre>
-            </div>
-          ))}
-        </div>
+        <ReviewConceptMemberSource unit={unit} />
       )}
     </article>
   );
