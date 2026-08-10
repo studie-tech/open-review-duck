@@ -111,6 +111,16 @@ export const reviewShortcuts = {
   postComment: [{ key: "Enter", mod: true }],
 } satisfies Record<string, KeyboardShortcut>;
 
+/**
+ * Reports whether a member no longer needs the reviewer's attention.
+ *
+ * A unit whose code changed after it was signed off comes back as "changed",
+ * so only a standing sign-off counts as read.
+ */
+function reviewedMember(unit: ReviewUnit) {
+  return unit.status === "signed_off";
+}
+
 /** Renders the shared identity and selection treatment for one concept member. */
 export function ReviewConceptMemberHeader({
   unit,
@@ -139,6 +149,15 @@ export function ReviewConceptMemberHeader({
         <span className="text-fog">
           Unit {index + 1}/{count}
         </span>
+        {reviewedMember(unit) && (
+          // Green, not the accent: the accent is the colour of the sign-off
+          // button, and a marker saying "already done" must not wear the same
+          // hue as the control asking for the next sign-off.
+          <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
+            <Check className="size-2.5" aria-hidden />
+            Reviewed
+          </span>
+        )}
         {selected && (
           <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
             Selected
@@ -156,7 +175,10 @@ export function ReviewConceptMemberHeader({
       type="button"
       aria-label={`Select ${unit.name}`}
       onClick={onSelect}
-      className="hover:bg-surface-subtle flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left transition"
+      className={cn(
+        "hover:bg-surface-subtle flex w-full items-center justify-between gap-3 border-b px-3 py-2 text-left transition",
+        reviewedMember(unit) ? "border-addition/25" : "border-line",
+      )}
     >
       {content}
     </button>
@@ -185,7 +207,14 @@ export function ReviewConceptMemberPreview({
   return (
     <article
       data-review-member-id={unit.id}
-      className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30"
+      className={cn(
+        "mx-4 overflow-hidden rounded-xl border",
+        // A read member stays legible but stops competing for attention, so
+        // the eye lands on what is left to review.
+        reviewedMember(unit)
+          ? "border-addition/30 bg-addition/[.04]"
+          : "border-line bg-surface/30",
+      )}
     >
       <ReviewConceptMemberHeader
         unit={unit}
