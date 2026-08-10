@@ -121,6 +121,23 @@ function reviewedMember(unit: ReviewUnit) {
   return unit.status === "signed_off";
 }
 
+/**
+ * Orders a concept's members by what the reviewer still owes.
+ *
+ * Members are read in dependency order, which the signed-off ones no longer
+ * take part in: they hold that order among themselves but sit below the work
+ * that remains, so a part-reviewed concept opens on what is left.
+ */
+export function conceptMembersInReadingOrder<Member extends { status: string }>(
+  members: readonly Member[],
+) {
+  return [...members].sort(
+    (left, right) =>
+      Number(left.status === "signed_off") -
+      Number(right.status === "signed_off"),
+  );
+}
+
 /** Renders the shared identity and selection treatment for one concept member. */
 export function ReviewConceptMemberHeader({
   unit,
@@ -128,12 +145,16 @@ export function ReviewConceptMemberHeader({
   count,
   selected,
   onSelect,
+  expanded,
+  onToggleExpanded,
 }: {
   unit: ReviewUnit;
   index: number;
   count: number;
   selected: boolean;
   onSelect?: () => void;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }) {
   const content = (
     <>
@@ -166,22 +187,49 @@ export function ReviewConceptMemberHeader({
       </span>
     </>
   );
-  return selected ? (
-    <div className="bg-cyan/[.035] flex items-center justify-between gap-3 border-b border-cyan/20 px-3 py-2 text-left">
-      {content}
-    </div>
-  ) : (
-    <button
-      type="button"
-      aria-label={`Select ${unit.name}`}
-      onClick={onSelect}
+  return (
+    <div
       className={cn(
-        "hover:bg-surface-subtle flex w-full items-center justify-between gap-3 border-b px-3 py-2 text-left transition",
-        reviewedMember(unit) ? "border-addition/25" : "border-line",
+        "flex items-stretch border-b",
+        selected
+          ? "bg-cyan/[.035] border-cyan/20"
+          : reviewedMember(unit)
+            ? "border-addition/25"
+            : "border-line",
       )}
     >
-      {content}
-    </button>
+      {onToggleExpanded && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${unit.name}`}
+          onClick={onToggleExpanded}
+          className="hover:bg-surface-subtle text-fog flex shrink-0 items-center px-2 transition"
+        >
+          <ChevronRight
+            className={cn(
+              "size-3.5 transition-transform",
+              expanded && "rotate-90",
+            )}
+            aria-hidden
+          />
+        </button>
+      )}
+      {selected ? (
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left">
+          {content}
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-label={`Select ${unit.name}`}
+          onClick={onSelect}
+          className="hover:bg-surface-subtle flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left transition"
+        >
+          {content}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -204,6 +252,10 @@ export function ReviewConceptMemberPreview({
       ? (unit.previousSource ?? unit.source)
       : unit.source;
   const lines = useHighlightedSource(source, unit.language);
+  // A member already signed off opens closed: its header still says what it
+  // is and that it is done, and the code behind it is work the reviewer has
+  // finished reading.
+  const [expanded, setExpanded] = useState(() => !reviewedMember(unit));
   return (
     <article
       data-review-member-id={unit.id}
@@ -222,8 +274,10 @@ export function ReviewConceptMemberPreview({
         count={count}
         selected={false}
         onSelect={onSelect}
+        expanded={expanded}
+        onToggleExpanded={() => setExpanded((open) => !open)}
       />
-      {!sourceAvailable ? (
+      {!expanded ? null : !sourceAvailable ? (
         <p className="px-3 py-4 font-sans text-[10px] text-amber-700 dark:text-amber-200">
           Source unavailable. Concept sign-off is blocked.
         </p>

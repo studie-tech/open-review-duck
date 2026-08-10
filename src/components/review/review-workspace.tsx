@@ -234,6 +234,7 @@ import {
   PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
   providerLabel,
+  conceptMembersInReadingOrder,
   ReviewConceptMemberHeader,
   ReviewConceptMemberPreview,
   ReviewHierarchyDialog,
@@ -483,7 +484,7 @@ export function ReviewWorkspace({
     [activeConcept, unitsById],
   );
   const activeConceptMembers = useMemo(
-    () => activeConceptProgress?.members ?? [],
+    () => conceptMembersInReadingOrder(activeConceptProgress?.members ?? []),
     [activeConceptProgress],
   );
   const activeConceptMemberIndex = activeUnit
