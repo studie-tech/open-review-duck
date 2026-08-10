@@ -530,9 +530,14 @@ export function clusterReviewConcepts(
     // A group whose best anchor is still generated prose has no name to offer,
     // so the title falls back to the one thing such a range does carry: where a
     // reviewer opens it.
-    const subject = namesOwnSource(anchor)
-      ? anchor.name
-      : `${anchor.name} in ${basename(anchor.path)}`;
+    // A unit that stands for its whole file is already named after it, so the
+    // qualifier would only repeat what the title says: "package.json in
+    // package.json".
+    const anchorFile = basename(anchor.path);
+    const subject =
+      namesOwnSource(anchor) || anchor.name.includes(anchorFile)
+        ? anchor.name
+        : `${anchor.name} in ${anchorFile}`;
     const title =
       hasTest && hasProduction
         ? `${subject} and tests`

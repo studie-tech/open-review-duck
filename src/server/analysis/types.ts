@@ -240,6 +240,11 @@ export interface LanguageAdapter {
   fileNames?: readonly string[];
   /** Detects extensionless language files from a conservative source marker. */
   matches?(file: Pick<SourceFile, "path" | "content">): boolean;
+  /**
+   * Marks a format whose file is the smallest thing worth signing off, so the
+   * engine reviews it whole instead of calling `analyze`.
+   */
+  reviewsWholeFile?: boolean;
   /** Recognizes language-specific imports, package headers, and inert preamble. */
   isContextOnly?(source: string): boolean;
   /** Extracts reviewable declarations and dependencies from one source file. */
