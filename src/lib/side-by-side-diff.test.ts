@@ -449,6 +449,28 @@ describe("focusedRowSpan", () => {
     ).toEqual({ start: 0, end: 3 });
   });
 
+  it("starts past a base line whose text now sits outside the declaration", () => {
+    // The declaration is base 1-4 / head 6-9, and base 1 is its documentation.
+    // A copy of that documentation was left behind above a block inserted at
+    // head 2-5, so the diff pairs base 1 with head 1. Reaching back for it
+    // would open the card five lines above the declaration and draw the whole
+    // inserted block in as its leading context.
+    const rows = rowsFrom([
+      [1, 1],
+      [null, 2],
+      [null, 3],
+      [null, 4],
+      [null, 5],
+      [null, 6],
+      [2, 7],
+      [3, 8],
+      [4, 9],
+    ]);
+    expect(
+      span(rows, { startLine: 1, endLine: 4 }, { startLine: 6, endLine: 9 }),
+    ).toEqual({ start: 5, end: 9 });
+  });
+
   it("keeps a deletion inside the declaration from ending it early", () => {
     // Row 2 is a removed line: it carries no head line, so it cannot show the
     // declaration has been left, and rows 3-4 still belong to it.

@@ -603,9 +603,19 @@ export function focusedRowSpan({
   const focused: number[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     const { previousLine, currentLine } = linesAt(index);
+    const insideCurrent = within(currentLine, currentRanges);
+    // A base line the declaration owns can be paired with a copy of its own
+    // text elsewhere in the head revision — documentation left behind above an
+    // inserted declaration, a closing delimiter. The head line it carries then
+    // says where that text lives now, and it is not here, so following it back
+    // would open the card at another declaration's lines. A row carrying no
+    // head line settles nothing and is left alone: that is a deletion, which
+    // the declaration still owns.
+    const movedOutside =
+      currentLine !== undefined && currentRanges.length > 0 && !insideCurrent;
     if (
-      within(previousLine, previousRanges) ||
-      within(currentLine, currentRanges)
+      insideCurrent ||
+      (within(previousLine, previousRanges) && !movedOutside)
     ) {
       focused.push(index);
     }
