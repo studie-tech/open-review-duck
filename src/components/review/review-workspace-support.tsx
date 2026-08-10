@@ -203,7 +203,11 @@ export function ReviewConceptMemberPreview({
           Binary change · explicit acknowledgement required
         </p>
       ) : (
-        <div className="max-h-[32rem] overflow-auto py-2">
+        // A member is read in the page's own scroll rather than in a window of
+        // its own: a card that scrolls inside a scrolling page hides how much
+        // of a concept is left and takes two gestures to read one unit. Only
+        // long lines scroll, and only sideways.
+        <div className="overflow-x-auto py-2">
           {lines.map((line, lineIndex) => (
             <div
               key={`${unit.id}-${lineIndex}`}
