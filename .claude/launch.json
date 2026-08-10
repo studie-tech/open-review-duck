@@ -3,11 +3,8 @@
   "configurations": [
     {
       "name": "reviewduck-dev",
-      "runtimeExecutable": "bash",
-      "runtimeArgs": [
-        "-lc",
-        "cd '/Users/mathiasgruber/Documents/github/open-review-duck/.claude/worktrees/saas-security-review-3b81e7' && exec make start"
-      ],
+      "runtimeExecutable": "make",
+      "runtimeArgs": ["start"],
       "port": 3666
     }
   ]
