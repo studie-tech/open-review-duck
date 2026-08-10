@@ -388,19 +388,28 @@ export function compactSideBySideDiff(
         collapseWithin?: { start: number; end: number };
         /** Keep this many rows pinned at each end of collapseWithin. */
         pinRangeEnds?: number;
+        /**
+         * The row regions the reviewed declaration actually occupies. A change
+         * outside them belongs to another declaration and is only in view
+         * because it falls between two of this one's regions, so it collapses
+         * like context rather than opening the card on someone else's work.
+         */
+        ownRegions?: ReadonlyArray<{ start: number; end: number }>;
       },
 ): CompactSideBySideDiffItem[] {
   const normalized =
-    options && "collapseWithin" in options
+    options &&
+    ("collapseWithin" in options ||
+      "requiredRange" in options ||
+      "ownRegions" in options)
       ? options
-      : options && "requiredRange" in options
-        ? options
-        : options && "start" in options && "end" in options
-          ? { requiredRange: options }
-          : {};
+      : options && "start" in options && "end" in options
+        ? { requiredRange: options }
+        : {};
   const requiredRange = normalized.requiredRange;
   const collapseWithin = normalized.collapseWithin;
   const pinRangeEnds = normalized.pinRangeEnds ?? 0;
+  const ownRegions = normalized.ownRegions;
 
   const changedIndexes = rows.flatMap((row, index) =>
     row.kind === "unchanged" ? [] : [index],
@@ -433,6 +442,16 @@ export function compactSideBySideDiff(
       collapseWithin &&
       (changedIndex < collapseWithin.start ||
         changedIndex >= collapseWithin.end)
+    ) {
+      continue;
+    }
+    if (
+      ownRegions &&
+      changedIndex >= (collapseWithin?.start ?? 0) &&
+      changedIndex < (collapseWithin?.end ?? rows.length) &&
+      !ownRegions.some(
+        ({ start, end }) => changedIndex >= start && changedIndex < end,
+      )
     ) {
       continue;
     }
@@ -553,30 +572,14 @@ export interface FocusedRowSpanInput {
   multiRange: boolean;
 }
 
-/**
- * Bounds the diff rows a single declaration owns.
- *
- * A closing delimiter repeats throughout a file, so a diff is free to pair a
- * declaration's last base line with an identical line far below it, past
- * whatever was inserted between. Reaching for the furthest matching row would
- * then draw every one of those inserted lines — which belong to later
- * declarations — into this one.
- *
- * The span therefore walks out from the declaration and stops at the first row
- * that proves it has been left: one carrying a line past the end of its own
- * side. Rows carrying only one side stay ambiguous and never end the span — an
- * insertion between two of the declaration's own lines has no base line to
- * judge, and a deletion has no head line. The rule reads line numbers alone,
- * so it holds for any language and any diff alignment.
- */
-export function focusedRowSpan({
+/** Returns the indexes of the rows a declaration's own ranges cover. */
+function focusedRowIndexes({
   rows,
   previousStartLine,
   currentStartLine,
   previousRanges,
   currentRanges,
-  multiRange,
-}: FocusedRowSpanInput) {
+}: Omit<FocusedRowSpanInput, "multiRange">) {
   /** Returns the base and head line a row carries, where it carries one. */
   const linesAt = (index: number) => {
     const row = rows[index];
@@ -620,6 +623,69 @@ export function focusedRowSpan({
       focused.push(index);
     }
   }
+  return focused;
+}
+
+/**
+ * Groups the rows a declaration occupies into contiguous regions.
+ *
+ * A declaration that states several ranges — a body plus the imports it needs
+ * — leaves gaps between them holding other declarations. Those rows are not
+ * this declaration's work, so a card that shows them needs to know where they
+ * are.
+ */
+export function focusedRowRegions(
+  input: Omit<FocusedRowSpanInput, "multiRange">,
+) {
+  const regions: Array<{ start: number; end: number }> = [];
+  for (const index of focusedRowIndexes(input)) {
+    const last = regions.at(-1);
+    if (last && index === last.end) last.end = index + 1;
+    else regions.push({ start: index, end: index + 1 });
+  }
+  return regions;
+}
+
+/**
+ * Bounds the diff rows a single declaration owns.
+ *
+ * A closing delimiter repeats throughout a file, so a diff is free to pair a
+ * declaration's last base line with an identical line far below it, past
+ * whatever was inserted between. Reaching for the furthest matching row would
+ * then draw every one of those inserted lines — which belong to later
+ * declarations — into this one.
+ *
+ * The span therefore walks out from the declaration and stops at the first row
+ * that proves it has been left: one carrying a line past the end of its own
+ * side. Rows carrying only one side stay ambiguous and never end the span — an
+ * insertion between two of the declaration's own lines has no base line to
+ * judge, and a deletion has no head line. The rule reads line numbers alone,
+ * so it holds for any language and any diff alignment.
+ */
+export function focusedRowSpan(input: FocusedRowSpanInput) {
+  const {
+    rows,
+    previousStartLine,
+    currentStartLine,
+    previousRanges,
+    currentRanges,
+    multiRange,
+  } = input;
+  /** Returns the base and head line a row carries, where it carries one. */
+  const linesAt = (index: number) => {
+    const row = rows[index];
+    return {
+      previousLine:
+        row?.previousIndex === undefined
+          ? undefined
+          : previousStartLine + row.previousIndex,
+      currentLine:
+        row?.currentIndex === undefined
+          ? undefined
+          : currentStartLine + row.currentIndex,
+    };
+  };
+  const focused = focusedRowIndexes(input);
   const furthest = focused.at(-1) ?? Math.max(0, rows.length - 1);
   const start = focused[0] ?? 0;
   if (multiRange || focused.length === 0) return { start, end: furthest + 1 };
