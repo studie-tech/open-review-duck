@@ -542,3 +542,91 @@ export function sourceByteOffsetLine(
     return fallback;
   }
 }
+
+export interface FocusedRowSpanInput {
+  rows: readonly SideBySideDiffRow[];
+  previousStartLine: number;
+  currentStartLine: number;
+  previousRanges: ReadonlyArray<{ startLine: number; endLine: number }>;
+  currentRanges: ReadonlyArray<{ startLine: number; endLine: number }>;
+  /** A declaration that states several ranges of its own may skip rows. */
+  multiRange: boolean;
+}
+
+/**
+ * Bounds the diff rows a single declaration owns.
+ *
+ * A closing delimiter repeats throughout a file, so a diff is free to pair a
+ * declaration's last base line with an identical line far below it, past
+ * whatever was inserted between. Reaching for the furthest matching row would
+ * then draw every one of those inserted lines — which belong to later
+ * declarations — into this one.
+ *
+ * The span therefore walks out from the declaration and stops at the first row
+ * that proves it has been left: one carrying a line past the end of its own
+ * side. Rows carrying only one side stay ambiguous and never end the span — an
+ * insertion between two of the declaration's own lines has no base line to
+ * judge, and a deletion has no head line. The rule reads line numbers alone,
+ * so it holds for any language and any diff alignment.
+ */
+export function focusedRowSpan({
+  rows,
+  previousStartLine,
+  currentStartLine,
+  previousRanges,
+  currentRanges,
+  multiRange,
+}: FocusedRowSpanInput) {
+  /** Returns the base and head line a row carries, where it carries one. */
+  const linesAt = (index: number) => {
+    const row = rows[index];
+    return {
+      previousLine:
+        row?.previousIndex === undefined
+          ? undefined
+          : previousStartLine + row.previousIndex,
+      currentLine:
+        row?.currentIndex === undefined
+          ? undefined
+          : currentStartLine + row.currentIndex,
+    };
+  };
+  /** Reports whether a line falls inside any focused range. */
+  const within = (
+    line: number | undefined,
+    ranges: FocusedRowSpanInput["previousRanges"],
+  ) =>
+    line !== undefined &&
+    ranges.some(
+      ({ startLine, endLine }) => line >= startLine && line <= endLine,
+    );
+  const focused: number[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const { previousLine, currentLine } = linesAt(index);
+    if (
+      within(previousLine, previousRanges) ||
+      within(currentLine, currentRanges)
+    ) {
+      focused.push(index);
+    }
+  }
+  const furthest = focused.at(-1) ?? Math.max(0, rows.length - 1);
+  const start = focused[0] ?? 0;
+  if (multiRange || focused.length === 0) return { start, end: furthest + 1 };
+  const previousEnd = Math.max(...previousRanges.map(({ endLine }) => endLine));
+  const currentEnd = Math.max(...currentRanges.map(({ endLine }) => endLine));
+  let last = start;
+  while (last + 1 <= furthest) {
+    const { previousLine, currentLine } = linesAt(last + 1);
+    const passed =
+      (currentLine !== undefined &&
+        currentRanges.length > 0 &&
+        currentLine > currentEnd) ||
+      (previousLine !== undefined &&
+        previousRanges.length > 0 &&
+        previousLine > previousEnd);
+    if (passed) break;
+    last += 1;
+  }
+  return { start, end: last + 1 };
+}

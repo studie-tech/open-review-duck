@@ -45,7 +45,11 @@ import type {
   IndexedReviewUnit,
   ReviewHierarchyNode,
 } from "~/lib/review-navigation";
-import { compactSideBySideDiff, sideBySideDiff } from "~/lib/side-by-side-diff";
+import {
+  compactSideBySideDiff,
+  focusedRowSpan,
+  sideBySideDiff,
+} from "~/lib/side-by-side-diff";
 import {
   type HighlightedLine,
   useHighlightedSource,
@@ -1144,32 +1148,18 @@ export const SideBySideUnitDiff = forwardRef<
       currentRanges.length > 0
         ? Math.max(...currentRanges.map(({ endLine }) => endLine))
         : undefined;
-    /** Checks whether one diff-side line belongs to any focused range. */
-    const isFocusedLine = (
-      line: number | undefined,
-      ranges: Array<{ startLine: number; endLine: number }>,
-    ) =>
-      line !== undefined &&
-      ranges.some(
-        ({ startLine, endLine }) => line >= startLine && line <= endLine,
-      );
-    const focusedIndexes = rows.flatMap((row, rowIndex) => {
-      const previousLine =
-        row.previousIndex === undefined
-          ? undefined
-          : previousStartLine + row.previousIndex;
-      const currentLine =
-        row.currentIndex === undefined
-          ? undefined
-          : currentStartLine + row.currentIndex;
-      return isFocusedLine(previousLine, previousRanges) ||
-        isFocusedLine(currentLine, currentRanges)
-        ? [rowIndex]
-        : [];
+    const span = focusedRowSpan({
+      rows,
+      previousStartLine,
+      currentStartLine,
+      previousRanges,
+      currentRanges,
+      multiRange:
+        previousFocusRanges !== undefined || currentFocusRanges !== undefined,
     });
     return {
-      start: focusedIndexes[0] ?? 0,
-      end: (focusedIndexes.at(-1) ?? Math.max(0, rows.length - 1)) + 1,
+      start: span.start,
+      end: span.end,
       previousStart,
       previousEnd,
       currentStart,
