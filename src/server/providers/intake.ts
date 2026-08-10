@@ -187,8 +187,8 @@ export async function reconcileRepositoryIntake(
         }),
       );
     }
-    const changedCandidates = candidates.filter((candidate) => {
-      if (activeNumbers.has(candidate.number)) return false;
+    /** Reports whether a candidate differs from what intake already holds. */
+    const differsFromKnown = (candidate: (typeof candidates)[number]) => {
       const known = knownByNumber.get(candidate.number);
       return (
         !known ||
@@ -197,7 +197,11 @@ export async function reconcileRepositoryIntake(
         known.baseSha !== candidate.baseSha ||
         known.state !== candidate.state
       );
-    });
+    };
+    const changedCandidates = candidates.filter(
+      (candidate) =>
+        !activeNumbers.has(candidate.number) && differsFromKnown(candidate),
+    );
     const retryFailed = shouldRetryFailedAutomaticSync(input);
     const eligible = retryFailed
       ? changedCandidates
@@ -223,11 +227,12 @@ export async function reconcileRepositoryIntake(
     let directlyAssigned = 0;
     for (const candidate of candidates) {
       const known = knownByNumber.get(candidate.number);
+      // Direct assignment is for a pull request intake already holds
+      // unchanged. One counted here as well as queued would be reported
+      // twice, and would subtract itself out of `alreadyCurrent`.
       if (
         !known ||
-        sourceRepairNumbers.has(candidate.number) ||
-        known.headSha !== candidate.headSha ||
-        known.baseSha !== candidate.baseSha ||
+        differsFromKnown(candidate) ||
         queueStateByNumber.get(candidate.number) === "active"
       ) {
         continue;
