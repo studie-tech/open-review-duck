@@ -83,6 +83,50 @@ describe("ReviewConceptMemberPreview", () => {
     );
     expect(onSelect).toHaveBeenCalledOnce();
   });
+
+  /** Renders one member card at the given review status. */
+  function renderMember(status: string) {
+    return render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: `unit-${status}`,
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "const answer = 42;",
+            startLine: 10,
+            language: "typescript",
+            kind: "function",
+            status,
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable
+        onSelect={vi.fn()}
+      />,
+    );
+  }
+
+  it("marks a member the reviewer has already signed off", () => {
+    renderMember("signed_off");
+
+    expect(screen.getByText("Reviewed")).toBeInTheDocument();
+  });
+
+  it.each(["pending", "partial", "waiting", "changed"])(
+    "leaves a %s member unmarked",
+    (status) => {
+      // A unit whose code changed after sign-off is back in the queue, so
+      // calling it reviewed would send the reviewer past work still owed.
+      renderMember(status);
+
+      expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+    },
+  );
 });
 
 describe("InlineAiQuestion", () => {
