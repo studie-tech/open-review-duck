@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
+import languageManifest from "../../../tree-sitter-languages.json";
 import { treeSitterLanguageFixtures } from "~/test/tree-sitter-language-fixtures";
 import { analyzeFiles } from "./engine";
 import { languageAdapterForPath } from "./parsers";
 import { semanticSymbolOccurrences } from "./parsers/tree-sitter-adapter";
 import { withSyntaxTree } from "./tree-sitter";
-import { grammarAssets, supportedLanguages } from "./types";
+import { grammarAssets, lexicalSyntaxes, supportedLanguages } from "./types";
+
+const languageDefinitions = languageManifest.languages as Record<
+  string,
+  { lexical?: string }
+>;
 
 describe("complete Tree-sitter language support", () => {
   it("keeps every grammar, adapter, extension, and fixture in lockstep", () => {
@@ -19,6 +25,16 @@ describe("complete Tree-sitter language support", () => {
     )) {
       expect(languageAdapterForPath(fixture.path)?.language).toBe(language);
     }
+  });
+
+  it("resolves every declared lexical syntax family", () => {
+    const declared = supportedLanguages.filter(
+      (language) => languageDefinitions[language]?.lexical,
+    );
+
+    expect(declared.filter((language) => !lexicalSyntaxes[language])).toEqual(
+      [],
+    );
   });
 
   it.each(Object.entries(treeSitterLanguageFixtures))(

@@ -81,6 +81,20 @@ const config = {
   async headers() {
     return [
       {
+        // The browser loader appends the prepared asset set's identifier to
+        // every grammar URL it builds. A request that carries one therefore
+        // names an exact byte sequence and can never go stale, while the
+        // loader's own unversioned URL keeps revalidating.
+        source: "/tree-sitter/:path*",
+        has: [{ type: "query", key: "v" }],
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+      {
         source: "/:path*",
         headers: [
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

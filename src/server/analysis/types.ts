@@ -7,11 +7,31 @@ interface LanguageDefinition {
   source?: string;
   extensions: readonly string[];
   fileNames?: readonly string[];
+  lexical?: string;
+}
+
+/** Comment, string and directive syntax a language can be scanned with. */
+export interface LexicalSyntax {
+  lineComments: readonly string[];
+  blockComments: readonly (readonly [string, string])[];
+  quotes: readonly string[];
+  directive?: string;
+}
+
+interface LexicalSyntaxDefinition {
+  lineComments?: readonly string[];
+  blockComments?: readonly (readonly string[])[];
+  quotes?: readonly string[];
+  directive?: string;
 }
 
 const languageDefinitions = languageManifest.languages as Record<
   SupportedLanguage,
   LanguageDefinition
+>;
+const lexicalSyntaxDefinitions = languageManifest.lexicalSyntaxes as Record<
+  string,
+  LexicalSyntaxDefinition
 >;
 export const supportedLanguages = Object.keys(
   languageDefinitions,
@@ -57,6 +77,28 @@ export const grammarAssets = Object.fromEntries(
     return asset ? [[language, asset] as const] : [];
   }),
 ) as Record<Exclude<SupportedLanguage, "text">, string>;
+
+export const lexicalSyntaxes = Object.fromEntries(
+  supportedLanguages.flatMap((language) => {
+    const family = languageDefinitions[language].lexical;
+    const definition = family ? lexicalSyntaxDefinitions[family] : undefined;
+    if (!definition) return [];
+    const syntax: LexicalSyntax = {
+      lineComments: definition.lineComments ?? [],
+      blockComments: (definition.blockComments ?? []).map(
+        (pair) => [pair[0] ?? "", pair[1] ?? ""] as const,
+      ),
+      quotes: definition.quotes ?? [],
+      directive: definition.directive,
+    };
+    return [[language, syntax] as const];
+  }),
+) as Partial<Record<SupportedLanguage, LexicalSyntax>>;
+
+/** Returns the lexical syntax declared for a language, when it has one. */
+export function lexicalSyntaxFor(language: string) {
+  return lexicalSyntaxes[language as SupportedLanguage];
+}
 
 /** Checks whether a repository path uses a supported source extension. */
 export function isSupportedSourcePath(path: string) {

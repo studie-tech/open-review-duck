@@ -231,6 +231,7 @@ import {
   INITIAL_PATH_ITEMS,
   InlineAiQuestion,
   PATH_PAGE_SIZE,
+  PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
   providerLabel,
   ReviewConceptMemberHeader,
@@ -1715,8 +1716,16 @@ export function ReviewWorkspace({
     { pullRequestId: initialData.pullRequest.id },
     {
       retry: false,
+      // Every read of this query is a live provider round trip, so the whole
+      // workspace refreshes conversations on one declared cadence instead of
+      // the generic client default. `staleTime` bounds the mount and focus
+      // triggers; the interval below keeps waiting units on the same cadence
+      // and, unlike those triggers, always refetches. Explicit refetches after
+      // publishing, replying, synchronizing, or retrying stay immediate.
+      staleTime: PROVIDER_CONVERSATION_REFRESH_MS,
       refetchOnWindowFocus: true,
-      refetchInterval: waitingCount > 0 ? 45_000 : false,
+      refetchInterval:
+        waitingCount > 0 ? PROVIDER_CONVERSATION_REFRESH_MS : false,
     },
   );
   const manualSyncPending = reviewSession.matches("synchronizing");

@@ -72,6 +72,14 @@ type ProviderConversationThread =
 export const INITIAL_PATH_ITEMS = 10;
 export const PATH_PAGE_SIZE = 20;
 export const CONTEXT_PAGE_LINES = 20;
+/**
+ * How long a fetched provider conversation snapshot is treated as current.
+ *
+ * Reading provider conversations costs a live GitHub, GitLab, or Azure DevOps
+ * round trip, so this is the one place that decides how old that view of the
+ * conversations may become before the workspace refreshes it in the background.
+ */
+export const PROVIDER_CONVERSATION_REFRESH_MS = 45_000;
 const DIFF_CONTEXT_PAGE_LINES = 20;
 export const reviewShortcuts = {
   nextUnit: [{ key: "ArrowDown", mod: true }],

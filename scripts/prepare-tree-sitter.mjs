@@ -1,4 +1,5 @@
-import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,17 +29,32 @@ const assets = {
   ),
 };
 
+/** Resolves one declared asset to the file the published copy is taken from. */
+function sourcePath(moduleName) {
+  if (isAbsolute(moduleName)) return moduleName;
+  if (moduleName.startsWith("vendor/")) return join(repositoryRoot, moduleName);
+  return require.resolve(moduleName);
+}
+
 await rm(outputDirectory, { force: true, recursive: true });
 await mkdir(outputDirectory, { recursive: true });
-await Promise.all(
-  Object.entries(assets).map(([fileName, moduleName]) =>
-    copyFile(
-      isAbsolute(moduleName)
-        ? moduleName
-        : moduleName.startsWith("vendor/")
-          ? join(repositoryRoot, moduleName)
-          : require.resolve(moduleName),
-      join(outputDirectory, fileName),
-    ),
-  ),
+const digests = await Promise.all(
+  Object.entries(assets).map(async ([fileName, moduleName]) => {
+    const content = await readFile(sourcePath(moduleName));
+    await writeFile(join(outputDirectory, fileName), content);
+    return `${fileName}:${createHash("sha256").update(content).digest("hex")}`;
+  }),
+);
+
+// The published assets keep stable file names, so the loader hands the browser
+// an identifier to append to their URLs. Any changed byte changes it, which is
+// what lets the served grammars be cached immutably.
+const version = createHash("sha256")
+  .update(digests.sort().join("\n"))
+  .digest("hex")
+  .slice(0, 16);
+const loaderFile = join(outputDirectory, "tree-sitter-browser-loader.js");
+await writeFile(
+  loaderFile,
+  `${await readFile(loaderFile, "utf8")}\nglobalThis.__openReviewDuckTreeSitterVersion = ${JSON.stringify(version)};\n`,
 );

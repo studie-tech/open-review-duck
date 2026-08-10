@@ -1,29 +1,145 @@
 {
+  "lexicalSyntaxes": {
+    "c-family": {
+      "lineComments": ["//"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\"", "'"]
+    },
+    "c-preprocessor": {
+      "lineComments": ["//"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\"", "'"],
+      "directive": "#"
+    },
+    "js-family": {
+      "lineComments": ["//"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\"", "'", "`"]
+    },
+    "block-comment": {
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\"", "'"]
+    },
+    "hash": {
+      "lineComments": ["#"],
+      "quotes": ["\"", "'"]
+    },
+    "hash-double-quote": {
+      "lineComments": ["#"],
+      "quotes": ["\""]
+    },
+    "hash-block": {
+      "lineComments": ["#"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\""]
+    },
+    "hash-slash": {
+      "lineComments": ["#", "//"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\""]
+    },
+    "hash-slash-quotes": {
+      "lineComments": ["//", "#"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["\"", "'"]
+    },
+    "hash-equals-block": {
+      "lineComments": ["#"],
+      "blockComments": [["#=", "=#"]],
+      "quotes": ["\"", "'"]
+    },
+    "hash-angle-block": {
+      "lineComments": ["#"],
+      "blockComments": [["<#", "#>"]],
+      "quotes": ["\"", "'"]
+    },
+    "dash-block": {
+      "lineComments": ["--"],
+      "blockComments": [["/*", "*/"]],
+      "quotes": ["'", "\""]
+    },
+    "dash-brace-block": {
+      "lineComments": ["--"],
+      "blockComments": [["{-", "-}"]],
+      "quotes": ["\""]
+    },
+    "dash-bracket-block": {
+      "lineComments": ["--"],
+      "blockComments": [["--[[", "]]"]],
+      "quotes": ["\"", "'"]
+    },
+    "semicolon": {
+      "lineComments": [";"],
+      "quotes": ["\""]
+    },
+    "semicolon-hash": {
+      "lineComments": [";", "#"],
+      "quotes": ["\"", "'"]
+    },
+    "percent": {
+      "lineComments": ["%"],
+      "quotes": ["\"", "'"]
+    },
+    "percent-only": {
+      "lineComments": ["%"],
+      "quotes": []
+    },
+    "bang": {
+      "lineComments": ["!"],
+      "quotes": ["\"", "'"]
+    },
+    "paren-star-block": {
+      "blockComments": [["(*", "*)"]],
+      "quotes": ["\""]
+    },
+    "slash-paren-star-block": {
+      "lineComments": ["//"],
+      "blockComments": [["(*", "*)"]],
+      "quotes": ["\""]
+    },
+    "backslash-star": {
+      "lineComments": ["\\*"],
+      "blockComments": [["(*", "*)"]],
+      "quotes": ["\""]
+    },
+    "markup": {
+      "blockComments": [["<!--", "-->"]],
+      "quotes": ["\"", "'"]
+    },
+    "double-quote-only": {
+      "quotes": ["\""]
+    }
+  },
   "languages": {
     "javascript": {
       "asset": "tree-sitter-javascript.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-javascript.wasm",
-      "extensions": [".js", ".jsx", ".mjs", ".cjs"]
+      "extensions": [".js", ".jsx", ".mjs", ".cjs"],
+      "lexical": "js-family"
     },
     "typescript": {
       "asset": "tree-sitter-typescript.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-tsx.wasm",
-      "extensions": [".ts", ".tsx", ".mts", ".cts"]
+      "extensions": [".ts", ".tsx", ".mts", ".cts"],
+      "lexical": "js-family"
     },
     "python": {
       "asset": "tree-sitter-python.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-python.wasm",
-      "extensions": [".py", ".pyi"]
+      "extensions": [".py", ".pyi"],
+      "lexical": "hash"
     },
     "java": {
       "asset": "tree-sitter-java.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-java.wasm",
-      "extensions": [".java"]
+      "extensions": [".java"],
+      "lexical": "c-family"
     },
     "csharp": {
       "asset": "tree-sitter-csharp.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-c_sharp.wasm",
-      "extensions": [".cs", ".csx"]
+      "extensions": [".cs", ".csx"],
+      "lexical": "c-preprocessor"
     },
     "cpp": {
       "asset": "tree-sitter-cpp.wasm",
@@ -40,85 +156,101 @@
         ".ipp",
         ".tpp",
         ".inl"
-      ]
+      ],
+      "lexical": "c-preprocessor"
     },
     "php": {
       "asset": "tree-sitter-php.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-php.wasm",
-      "extensions": [".php", ".phtml", ".inc"]
+      "extensions": [".php", ".phtml", ".inc"],
+      "lexical": "hash-slash-quotes"
     },
     "shell": {
       "asset": "tree-sitter-shell.wasm",
       "source": "tree-sitter-bash/tree-sitter-bash.wasm",
       "extensions": [".sh", ".bash", ".zsh", ".ksh"],
-      "fileNames": [".bashrc", ".zshrc", ".profile"]
+      "fileNames": [".bashrc", ".zshrc", ".profile"],
+      "lexical": "hash"
     },
     "c": {
       "asset": "tree-sitter-c.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-c.wasm",
-      "extensions": [".c", ".h"]
+      "extensions": [".c", ".h"],
+      "lexical": "c-preprocessor"
     },
     "ruby": {
       "asset": "tree-sitter-ruby.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-ruby.wasm",
       "extensions": [".rb", ".rake", ".gemspec"],
-      "fileNames": ["rakefile", "gemfile"]
+      "fileNames": ["rakefile", "gemfile"],
+      "lexical": "hash"
     },
     "hcl": {
       "asset": "tree-sitter-hcl.wasm",
       "source": "@tree-sitter-grammars/tree-sitter-hcl/tree-sitter-hcl.wasm",
-      "extensions": [".hcl", ".tf", ".tfvars"]
+      "extensions": [".hcl", ".tf", ".tfvars"],
+      "lexical": "hash-slash"
     },
     "rust": {
       "asset": "tree-sitter-rust.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-rust.wasm",
-      "extensions": [".rs"]
+      "extensions": [".rs"],
+      "lexical": "c-family"
     },
     "lua": {
       "asset": "tree-sitter-lua.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-lua.wasm",
-      "extensions": [".lua"]
+      "extensions": [".lua"],
+      "lexical": "dash-bracket-block"
     },
     "go": {
       "asset": "tree-sitter-go.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-go.wasm",
-      "extensions": [".go"]
+      "extensions": [".go"],
+      "lexical": "c-family"
     },
     "makefile": {
       "asset": "tree-sitter-makefile.wasm",
       "source": "tree-sitter-make/tree-sitter-make.wasm",
       "extensions": [".mk"],
-      "fileNames": ["makefile", "gnumakefile"]
+      "fileNames": ["makefile", "gnumakefile"],
+      "lexical": "hash"
     },
     "kotlin": {
       "asset": "tree-sitter-kotlin.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-kotlin.wasm",
-      "extensions": [".kt", ".kts"]
+      "extensions": [".kt", ".kts"],
+      "lexical": "c-family"
     },
     "css": {
       "asset": "tree-sitter-css.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-css.wasm",
-      "extensions": [".css"]
+      "extensions": [".css"],
+      "lexical": "block-comment"
     },
     "dart": {
       "asset": "tree-sitter-dart.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-dart.wasm",
-      "extensions": [".dart"]
+      "extensions": [".dart"],
+      "lexical": "c-family"
     },
     "elisp": {
       "asset": "tree-sitter-elisp.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-elisp.wasm",
-      "extensions": [".el"]
+      "extensions": [".el"],
+      "lexical": "semicolon"
     },
     "elixir": {
       "asset": "tree-sitter-elixir.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-elixir.wasm",
-      "extensions": [".ex", ".exs"]
+      "extensions": [".ex", ".exs"],
+      "lexical": "hash"
     },
     "elm": {
       "asset": "tree-sitter-elm.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-elm.wasm",
-      "extensions": [".elm"]
+      "extensions": [".elm"],
+      "lexical": "dash-brace-block"
     },
     "embedded_template": {
       "asset": "tree-sitter-embedded-template.wasm",
@@ -128,82 +260,98 @@
     "html": {
       "asset": "tree-sitter-html.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-html.wasm",
-      "extensions": [".html", ".htm"]
+      "extensions": [".html", ".htm"],
+      "lexical": "markup"
     },
     "json": {
       "asset": "tree-sitter-json.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-json.wasm",
-      "extensions": [".json"]
+      "extensions": [".json"],
+      "lexical": "double-quote-only"
     },
     "objc": {
       "asset": "tree-sitter-objc.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-objc.wasm",
-      "extensions": [".m"]
+      "extensions": [".m"],
+      "lexical": "c-preprocessor"
     },
     "ocaml": {
       "asset": "tree-sitter-ocaml.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-ocaml.wasm",
-      "extensions": [".ml", ".mli"]
+      "extensions": [".ml", ".mli"],
+      "lexical": "paren-star-block"
     },
     "ql": {
       "asset": "tree-sitter-ql.wasm",
       "source": "vendor/tree-sitter/tree-sitter-ql.wasm",
-      "extensions": [".ql", ".qll"]
+      "extensions": [".ql", ".qll"],
+      "lexical": "c-family"
     },
     "rescript": {
       "asset": "tree-sitter-rescript.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-rescript.wasm",
-      "extensions": [".res", ".resi"]
+      "extensions": [".res", ".resi"],
+      "lexical": "c-family"
     },
     "scala": {
       "asset": "tree-sitter-scala.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-scala.wasm",
-      "extensions": [".scala", ".sc"]
+      "extensions": [".scala", ".sc"],
+      "lexical": "c-family"
     },
     "solidity": {
       "asset": "tree-sitter-solidity.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-solidity.wasm",
-      "extensions": [".sol"]
+      "extensions": [".sol"],
+      "lexical": "c-family"
     },
     "swift": {
       "asset": "tree-sitter-swift.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-swift.wasm",
-      "extensions": [".swift"]
+      "extensions": [".swift"],
+      "lexical": "c-family"
     },
     "systemrdl": {
       "asset": "tree-sitter-systemrdl.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-systemrdl.wasm",
-      "extensions": [".rdl"]
+      "extensions": [".rdl"],
+      "lexical": "c-family"
     },
     "tlaplus": {
       "asset": "tree-sitter-tlaplus.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-tlaplus.wasm",
-      "extensions": [".tla"]
+      "extensions": [".tla"],
+      "lexical": "backslash-star"
     },
     "toml": {
       "asset": "tree-sitter-toml.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-toml.wasm",
-      "extensions": [".toml"]
+      "extensions": [".toml"],
+      "lexical": "hash"
     },
     "vue": {
       "asset": "tree-sitter-vue.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-vue.wasm",
-      "extensions": [".vue"]
+      "extensions": [".vue"],
+      "lexical": "markup"
     },
     "yaml": {
       "asset": "tree-sitter-yaml.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-yaml.wasm",
-      "extensions": [".yaml", ".yml"]
+      "extensions": [".yaml", ".yml"],
+      "lexical": "hash"
     },
     "zig": {
       "asset": "tree-sitter-zig.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-zig.wasm",
-      "extensions": [".zig"]
+      "extensions": [".zig"],
+      "lexical": "c-family"
     },
     "sql": {
       "asset": "tree-sitter-sql.wasm",
       "source": "@lumis-sh/wasm-sql/tree-sitter-sql.wasm",
-      "extensions": [".sql"]
+      "extensions": [".sql"],
+      "lexical": "dash-block"
     },
     "markdown": {
       "asset": "tree-sitter-markdown.wasm",
@@ -219,112 +367,134 @@
       "asset": "tree-sitter-dockerfile.wasm",
       "source": "@lumis-sh/wasm-dockerfile/tree-sitter-dockerfile.wasm",
       "extensions": [".dockerfile"],
-      "fileNames": ["dockerfile", "containerfile"]
+      "fileNames": ["dockerfile", "containerfile"],
+      "lexical": "hash"
     },
     "graphql": {
       "asset": "tree-sitter-graphql.wasm",
       "source": "@lumis-sh/wasm-graphql/tree-sitter-graphql.wasm",
-      "extensions": [".graphql", ".gql"]
+      "extensions": [".graphql", ".gql"],
+      "lexical": "hash-double-quote"
     },
     "prisma": {
       "asset": "tree-sitter-prisma.wasm",
       "source": "@lumis-sh/wasm-prisma/tree-sitter-prisma.wasm",
-      "extensions": [".prisma"]
+      "extensions": [".prisma"],
+      "lexical": "c-family"
     },
     "protobuf": {
       "asset": "tree-sitter-protobuf.wasm",
       "source": "@lumis-sh/wasm-protobuf/tree-sitter-protobuf.wasm",
-      "extensions": [".proto"]
+      "extensions": [".proto"],
+      "lexical": "c-family"
     },
     "xml": {
       "asset": "tree-sitter-xml.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-xml.wasm",
-      "extensions": [".xml", ".xsl", ".xslt", ".svg"]
+      "extensions": [".xml", ".xsl", ".xslt", ".svg"],
+      "lexical": "markup"
     },
     "scss": {
       "asset": "tree-sitter-scss.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-scss.wasm",
-      "extensions": [".scss"]
+      "extensions": [".scss"],
+      "lexical": "c-family"
     },
     "svelte": {
       "asset": "tree-sitter-svelte.wasm",
       "source": "@lumis-sh/wasm-svelte/tree-sitter-svelte.wasm",
-      "extensions": [".svelte"]
+      "extensions": [".svelte"],
+      "lexical": "markup"
     },
     "astro": {
       "asset": "tree-sitter-astro.wasm",
       "source": "@lumis-sh/wasm-astro/tree-sitter-astro.wasm",
-      "extensions": [".astro"]
+      "extensions": [".astro"],
+      "lexical": "markup"
     },
     "r": {
       "asset": "tree-sitter-r.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-r.wasm",
-      "extensions": [".r"]
+      "extensions": [".r"],
+      "lexical": "hash"
     },
     "julia": {
       "asset": "tree-sitter-julia.wasm",
       "source": "tree-sitter-julia/tree-sitter-julia.wasm",
-      "extensions": [".jl"]
+      "extensions": [".jl"],
+      "lexical": "hash-equals-block"
     },
     "haskell": {
       "asset": "tree-sitter-haskell.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-haskell.wasm",
-      "extensions": [".hs", ".lhs"]
+      "extensions": [".hs", ".lhs"],
+      "lexical": "dash-brace-block"
     },
     "clojure": {
       "asset": "tree-sitter-clojure.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-clojure.wasm",
-      "extensions": [".clj", ".cljs", ".cljc", ".edn"]
+      "extensions": [".clj", ".cljs", ".cljc", ".edn"],
+      "lexical": "semicolon"
     },
     "erlang": {
       "asset": "tree-sitter-erlang.wasm",
       "source": "@lumis-sh/wasm-erlang/tree-sitter-erlang.wasm",
-      "extensions": [".erl", ".hrl"]
+      "extensions": [".erl", ".hrl"],
+      "lexical": "percent"
     },
     "fsharp": {
       "asset": "tree-sitter-fsharp.wasm",
       "source": "@plurnk/plurnk-mimetypes-grammar-fsharp/fsharp.wasm",
-      "extensions": [".fs", ".fsx", ".fsi"]
+      "extensions": [".fs", ".fsx", ".fsi"],
+      "lexical": "slash-paren-star-block"
     },
     "powershell": {
       "asset": "tree-sitter-powershell.wasm",
       "source": "tree-sitter-powershell/tree-sitter-powershell.wasm",
-      "extensions": [".ps1", ".psm1", ".psd1"]
+      "extensions": [".ps1", ".psm1", ".psd1"],
+      "lexical": "hash-angle-block"
     },
     "fortran": {
       "asset": "tree-sitter-fortran.wasm",
       "source": "@lumis-sh/wasm-fortran/tree-sitter-fortran.wasm",
-      "extensions": [".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08"]
+      "extensions": [".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08"],
+      "lexical": "bang"
     },
     "perl": {
       "asset": "tree-sitter-perl.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-perl.wasm",
-      "extensions": [".pl", ".pm", ".t"]
+      "extensions": [".pl", ".pm", ".t"],
+      "lexical": "hash"
     },
     "groovy": {
       "asset": "tree-sitter-groovy.wasm",
       "source": "tree-sitter-groovy/tree-sitter-groovy.wasm",
-      "extensions": [".groovy", ".gradle"]
+      "extensions": [".groovy", ".gradle"],
+      "lexical": "js-family"
     },
     "nix": {
       "asset": "tree-sitter-nix.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-nix.wasm",
-      "extensions": [".nix"]
+      "extensions": [".nix"],
+      "lexical": "hash-block"
     },
     "latex": {
       "asset": "tree-sitter-latex.wasm",
       "source": "@cursorless/tree-sitter-wasms/out/tree-sitter-latex.wasm",
-      "extensions": [".tex", ".sty", ".cls"]
+      "extensions": [".tex", ".sty", ".cls"],
+      "lexical": "percent-only"
     },
     "systemverilog": {
       "asset": "tree-sitter-systemverilog.wasm",
       "source": "@lumis-sh/wasm-systemverilog/tree-sitter-systemverilog.wasm",
-      "extensions": [".sv", ".svh"]
+      "extensions": [".sv", ".svh"],
+      "lexical": "c-preprocessor"
     },
     "assembly": {
       "asset": "tree-sitter-assembly.wasm",
       "source": "@lumis-sh/wasm-asm/tree-sitter-asm.wasm",
-      "extensions": [".s", ".asm"]
+      "extensions": [".s", ".asm"],
+      "lexical": "semicolon-hash"
     },
     "text": {
       "extensions": []
