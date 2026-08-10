@@ -1831,9 +1831,13 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     const changeType = file.changeType ?? "modified";
     // Scoping exists to decide which of a file's declarations a revision
     // touched. A file reviewed whole has one, and it answers for every line on
-    // both sides, so there is nothing left to decide.
+    // both sides, so the only question left is whether the revision touched
+    // the file at all — a mode change and some rebases report a file as
+    // modified with both sides identical, and scoping is what drops those.
     const scopedReviewUnits = adapter?.reviewsWholeFile
-      ? unscopedReviewUnits
+      ? changeType === "modified" && file.previousContent === file.content
+        ? []
+        : unscopedReviewUnits
       : prScopedReviewUnits(
           file,
           adapter?.language ?? "text",
