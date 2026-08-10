@@ -5,18 +5,18 @@ import {
   type SupportedLanguage,
   supportedLanguages,
 } from "~/server/analysis/types";
+import {
+  type HighlightedLine,
+  lexicalValueClass,
+  linesFromSpans,
+  numericLiteralPattern,
+  plainLines,
+  type SyntaxToken,
+  type TokenSpan,
+} from "./highlight-tokens";
+import { lexicalLines } from "./lexical-highlighting";
 
-export interface SyntaxToken {
-  className: string;
-  text: string;
-  from: number;
-  to: number;
-}
-
-export interface HighlightedLine {
-  text: string;
-  tokens: SyntaxToken[];
-}
+export type { HighlightedLine, SyntaxToken };
 
 const parserLanguages = supportedLanguages.filter(
   (language): language is Exclude<SupportedLanguage, "text"> =>
@@ -39,15 +39,56 @@ type ClientTreeSitterRuntime = {
 const runtimeGlobal = globalThis as typeof globalThis & {
   __openReviewDuckTreeSitter?: ClientTreeSitterRuntime;
   __openReviewDuckTreeSitterAssetRoot?: string;
+  __openReviewDuckTreeSitterVersion?: string;
 };
 let runtimePromise: Promise<ClientTreeSitterRuntime> | undefined;
 let initializationPromise: Promise<ClientTreeSitterRuntime> | undefined;
+let idlePromise: Promise<void> | undefined;
+// A busy or hidden tab may never report an idle period, so the deadline is what
+// guarantees the grammar upgrade still arrives shortly after the page loads.
+const GRAMMAR_IDLE_DEADLINE_MS = 2_000;
 
-/** Resolves a grammar asset from the application's prepared public directory. */
+/**
+ * Resolves a grammar asset from the application's prepared public directory.
+ *
+ * The loader publishes the identifier of the prepared asset set, and every URL
+ * built after it has loaded carries that identifier, so the served files may be
+ * cached immutably and still change the moment a grammar is rebuilt.
+ */
 function assetPath(fileName: string) {
-  return runtimeGlobal.__openReviewDuckTreeSitterAssetRoot
-    ? `${runtimeGlobal.__openReviewDuckTreeSitterAssetRoot}/${fileName}`
+  if (runtimeGlobal.__openReviewDuckTreeSitterAssetRoot) {
+    return `${runtimeGlobal.__openReviewDuckTreeSitterAssetRoot}/${fileName}`;
+  }
+  const version = runtimeGlobal.__openReviewDuckTreeSitterVersion;
+  return version
+    ? `/tree-sitter/${fileName}?v=${version}`
     : `/tree-sitter/${fileName}`;
+}
+
+/**
+ * Resolves once the document has loaded and the browser has spare time.
+ *
+ * Grammars are an upgrade over the lexical highlighting a reviewer already
+ * sees, so they must never compete for bandwidth with the review's own data.
+ */
+function whenBrowserIdle() {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return Promise.resolve();
+  }
+  idlePromise ??= new Promise<void>((resolve) => {
+    /** Waits for the first idle period, but never past the deadline. */
+    const settle = () => {
+      window.setTimeout(resolve, GRAMMAR_IDLE_DEADLINE_MS);
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(() => {
+          resolve();
+        });
+      }
+    };
+    if (document.readyState === "complete") settle();
+    else window.addEventListener("load", settle, { once: true });
+  });
+  return idlePromise;
 }
 
 /** Loads the browser runtime as a native module outside the application bundle. */
@@ -89,12 +130,14 @@ function loadRuntime() {
 
 /** Initializes the shared browser Tree-sitter runtime once. */
 function initializeRuntime() {
-  initializationPromise ??= loadRuntime().then(async (runtime) => {
-    await runtime.Parser.init({
-      locateFile: () => assetPath("tree-sitter.wasm"),
+  initializationPromise ??= whenBrowserIdle()
+    .then(loadRuntime)
+    .then(async (runtime) => {
+      await runtime.Parser.init({
+        locateFile: () => assetPath("tree-sitter.wasm"),
+      });
+      return runtime;
     });
-    return runtime;
-  });
   return initializationPromise;
 }
 
@@ -137,126 +180,6 @@ export async function withClientSyntaxTree<T>(
   }
 }
 
-const keywords = new Set([
-  "abstract",
-  "alias",
-  "and",
-  "as",
-  "async",
-  "await",
-  "begin",
-  "break",
-  "case",
-  "catch",
-  "class",
-  "const",
-  "continue",
-  "def",
-  "default",
-  "defer",
-  "do",
-  "else",
-  "elseif",
-  "elsif",
-  "end",
-  "enum",
-  "except",
-  "export",
-  "extends",
-  "extern",
-  "false",
-  "final",
-  "finally",
-  "fn",
-  "for",
-  "foreach",
-  "from",
-  "fun",
-  "function",
-  "go",
-  "if",
-  "implements",
-  "import",
-  "in",
-  "interface",
-  "internal",
-  "is",
-  "lambda",
-  "let",
-  "local",
-  "match",
-  "mod",
-  "module",
-  "namespace",
-  "new",
-  "nil",
-  "none",
-  "not",
-  "null",
-  "operator",
-  "or",
-  "package",
-  "private",
-  "protected",
-  "public",
-  "readonly",
-  "record",
-  "repeat",
-  "require",
-  "rescue",
-  "return",
-  "sealed",
-  "static",
-  "struct",
-  "switch",
-  "then",
-  "throw",
-  "trait",
-  "true",
-  "try",
-  "type",
-  "typedef",
-  "union",
-  "unless",
-  "until",
-  "use",
-  "using",
-  "val",
-  "var",
-  "virtual",
-  "when",
-  "where",
-  "while",
-  "with",
-  "yield",
-]);
-
-const builtinTypes = new Set([
-  "any",
-  "bool",
-  "boolean",
-  "byte",
-  "char",
-  "decimal",
-  "double",
-  "float",
-  "int",
-  "integer",
-  "long",
-  "never",
-  "number",
-  "object",
-  "short",
-  "str",
-  "string",
-  "symbol",
-  "uint",
-  "ulong",
-  "unknown",
-  "ushort",
-  "void",
-]);
-
 /** Returns normalized ancestor types used for token classification. */
 function ancestors(node: SyntaxNode) {
   const types: string[] = [];
@@ -273,7 +196,6 @@ function ancestors(node: SyntaxNode) {
 /** Maps a Tree-sitter leaf token to the application's syntax class. */
 function tokenClass(node: SyntaxNode, source: string) {
   const value = source.slice(node.startIndex, node.endIndex);
-  const lower = value.toLowerCase();
   const types = ancestors(node);
   if (types.some((type) => type.includes("comment"))) return "tok-comment";
   if (types.some((type) => type.startsWith("preproc"))) return "tok-meta";
@@ -294,7 +216,7 @@ function tokenClass(node: SyntaxNode, source: string) {
       : "tok-string";
   }
   if (
-    /^(?:0[xob])?[\d_]+(?:\.[\d_]+)?(?:e[+-]?[\d_]+)?$/i.test(value) &&
+    numericLiteralPattern.test(value) &&
     types.some(
       (type) =>
         type.includes("number") ||
@@ -305,15 +227,20 @@ function tokenClass(node: SyntaxNode, source: string) {
   ) {
     return "tok-number";
   }
-  if (keywords.has(lower)) {
-    return lower === "true" || lower === "false" ? "tok-bool" : "tok-keyword";
+  // The token's own text decides keywords, booleans and capitalized type names
+  // before the tree is consulted; only the remaining classes depend on nodes.
+  const identified = lexicalValueClass(value);
+  if (
+    identified === "tok-keyword" ||
+    identified === "tok-bool" ||
+    identified === "tok-typeName"
+  ) {
+    return identified;
   }
-  if (builtinTypes.has(lower)) return "tok-typeName";
   if (
     node.type.includes("type_identifier") ||
     node.type.includes("predefined_type") ||
-    node.type.includes("primitive_type") ||
-    /^[A-Z][\w$]*$/.test(value)
+    node.type.includes("primitive_type")
   ) {
     return "tok-typeName";
   }
@@ -325,9 +252,7 @@ function tokenClass(node: SyntaxNode, source: string) {
   ) {
     return "tok-function";
   }
-  if (/^[A-Za-z_$][\w$]*$/.test(value)) return "tok-variableName";
-  if (/^\s+$/.test(value)) return "";
-  return "tok-operator";
+  return identified;
 }
 
 /** Returns every concrete leaf token in source order. */
@@ -352,71 +277,16 @@ function leafNodes(root: SyntaxNode) {
   return leaves;
 }
 
-/** Splits unparsed source into unstyled highlighted lines. */
-function plainLines(source: string) {
-  let offset = 0;
-  return source.split("\n").map((text) => {
-    const line: HighlightedLine = {
-      text,
-      tokens: text
-        ? [{ className: "", text, from: offset, to: offset + text.length }]
-        : [],
-    };
-    offset += text.length + 1;
-    return line;
-  });
-}
-
 /** Projects classified syntax leaves onto line-local token spans. */
 function highlightedLines(source: string, root: SyntaxNode) {
-  const spans = leafNodes(root)
+  const spans: TokenSpan[] = leafNodes(root)
     .map((node) => ({
       from: node.startIndex,
       to: node.endIndex,
       className: tokenClass(node, source),
     }))
     .sort((left, right) => left.from - right.from || left.to - right.to);
-  const lines: HighlightedLine[] = [];
-  let absoluteOffset = 0;
-  for (const text of source.split("\n")) {
-    const lineStart = absoluteOffset;
-    const lineEnd = lineStart + text.length;
-    const tokens: SyntaxToken[] = [];
-    let cursor = lineStart;
-    for (const span of spans) {
-      const from = Math.max(lineStart, span.from);
-      const to = Math.min(lineEnd, span.to);
-      if (to <= from) continue;
-      if (from > cursor) {
-        tokens.push({
-          className: "",
-          text: source.slice(cursor, from),
-          from: cursor,
-          to: from,
-        });
-      }
-      const previous = tokens.at(-1);
-      const value = source.slice(from, to);
-      if (previous?.className === span.className && previous.to === from) {
-        previous.text += value;
-        previous.to = to;
-      } else {
-        tokens.push({ className: span.className, text: value, from, to });
-      }
-      cursor = Math.max(cursor, to);
-    }
-    if (cursor < lineEnd) {
-      tokens.push({
-        className: "",
-        text: source.slice(cursor, lineEnd),
-        from: cursor,
-        to: lineEnd,
-      });
-    }
-    lines.push({ text, tokens });
-    absoluteOffset = lineEnd + 1;
-  }
-  return lines;
+  return linesFromSpans(source, spans);
 }
 
 /** Parses and syntax-highlights source using its tree-sitter grammar. */
@@ -454,14 +324,16 @@ function highlightedSourcePromise(source: string, language: string) {
 }
 
 /**
- * React binding that updates once the lazily loaded grammar has parsed source.
+ * React binding that paints lexically first and upgrades to grammar output.
  * Sources highlighted earlier resolve from cache during render, so revisiting a
  * concept member neither reparses its grammar nor flashes unhighlighted code.
+ * A reviewer can therefore read and sign off code before any grammar arrives.
  */
 export function useHighlightedSource(source: string, language: string) {
   const [lines, setLines] = useState<HighlightedLine[]>(
     () =>
-      highlightLines.get(highlightKey(source, language)) ?? plainLines(source),
+      highlightLines.get(highlightKey(source, language)) ??
+      lexicalLines(source, language),
   );
   useEffect(() => {
     const cached = highlightLines.get(highlightKey(source, language));
@@ -470,13 +342,14 @@ export function useHighlightedSource(source: string, language: string) {
       return;
     }
     let current = true;
-    setLines(plainLines(source));
+    const lexical = lexicalLines(source, language);
+    setLines(lexical);
     void highlightedSourcePromise(source, language)
       .then((highlighted) => {
         if (current) setLines(highlighted);
       })
       .catch(() => {
-        if (current) setLines(plainLines(source));
+        if (current) setLines(lexical);
       });
     return () => {
       current = false;
