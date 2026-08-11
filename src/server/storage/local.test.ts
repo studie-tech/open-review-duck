@@ -46,4 +46,11 @@ describe("LocalSourceObjectStore", () => {
       "escapes the storage root",
     );
   });
+
+  it("refuses to report a rejected key as an absent object", async () => {
+    const store = new LocalSourceObjectStore("/tmp/reviewduck-test");
+    await expect(store.exists("../escape")).rejects.toThrow(
+      "escapes the storage root",
+    );
+  });
 });

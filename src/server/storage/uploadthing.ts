@@ -83,7 +83,14 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
     // A store that ignores Range answers 200 with the full body, so release it
     // rather than letting the response buffer behind an unread stream.
     await response.body?.cancel();
-    return response.ok;
+    // Only a deletion may answer false, because the caller responds by dropping
+    // the row that is this object's last reference. A refused range still
+    // proves the object is there: an empty one cannot satisfy bytes=0-0.
+    if (response.status === 404 || response.status === 410) return false;
+    if (response.ok || response.status === 416) return true;
+    throw new Error(
+      `UploadThing source presence check failed with ${response.status}`,
+    );
   }
 
   /** Permanently deletes one private UploadThing object. */

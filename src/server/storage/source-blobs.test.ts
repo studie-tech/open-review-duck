@@ -127,6 +127,45 @@ describe("source blob pruning", () => {
     expect(mocks.put).toHaveBeenCalledOnce();
   });
 
+  it("keeps a ready row when a presence probe cannot reach the object", async () => {
+    // A probe that failed proves nothing. Reading it as absence claims the
+    // row, re-uploads, and leaves the object it was naming with no reference.
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    mocks.sourceObjectStore.mockResolvedValueOnce({
+      kind: "local",
+      put: mocks.put,
+      read: mocks.read,
+      exists: vi.fn(async () => {
+        throw new Error("provider unavailable");
+      }),
+    } as never);
+    const bytes = new TextEncoder().encode("still stored");
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/present",
+      digest: sourceDigest(bytes),
+    };
+    const set = vi.fn(() => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => []) })),
+    }));
+    const database = {
+      query: { sourceBlobs: { findFirst: vi.fn(async () => existing) } },
+      update: vi.fn(() => ({ set })),
+    };
+
+    await expect(
+      persistSourceBlob(database as never, {
+        workspaceId: "workspace",
+        bytes,
+      }),
+    ).rejects.toThrow("provider unavailable");
+    expect(set).not.toHaveBeenCalled();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
   it("reclaims a failed upload on the next synchronization attempt", async () => {
     mocks.put.mockReset();
     mocks.read.mockReset();

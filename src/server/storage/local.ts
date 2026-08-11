@@ -66,11 +66,21 @@ export class LocalSourceObjectStore implements SourceObjectStore {
 
   /** Checks one validated object key without reading its contents. */
   async exists(objectKey: string) {
+    const target = this.resolve(objectKey);
     try {
-      await access(this.resolve(objectKey));
+      await access(target);
       return true;
-    } catch {
-      return false;
+    } catch (cause) {
+      // Only a proven-missing file may answer false, because the caller
+      // responds by dropping the row that is this object's last reference.
+      if (
+        cause instanceof Error &&
+        "code" in cause &&
+        cause.code === "ENOENT"
+      ) {
+        return false;
+      }
+      throw cause;
     }
   }
 

@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   deleteFiles: vi.fn(),
+  generateSignedURL: vi.fn(async () => ({
+    ufsUrl: "https://example.test/object",
+  })),
   uploadFiles: vi.fn(async () => ({
     data: { key: "object-key" },
     error: null,
@@ -11,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("uploadthing/server", () => ({
   UTApi: class {
     deleteFiles = mocks.deleteFiles;
+    generateSignedURL = mocks.generateSignedURL;
     uploadFiles = mocks.uploadFiles;
   },
   UTFile: class {},
@@ -46,6 +50,20 @@ describe("UploadThing source storage", () => {
       acl: "private",
       contentDisposition: "inline",
     });
+  });
+
+  it("reports absence only when the object is provably gone", async () => {
+    const store = new UploadThingSourceObjectStore("token", "identity-key");
+    const respond = vi.fn(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", respond);
+
+    await expect(store.exists("object-key")).resolves.toBe(false);
+    respond.mockResolvedValue(new Response(null, { status: 416 }));
+    await expect(store.exists("object-key")).resolves.toBe(true);
+    respond.mockResolvedValue(new Response(null, { status: 503 }));
+    await expect(store.exists("object-key")).rejects.toThrow("503");
+
+    vi.unstubAllGlobals();
   });
 
   it("can delete a crashed upload by its pre-persisted custom identity", async () => {
