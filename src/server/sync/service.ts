@@ -14,6 +14,7 @@ import {
   signOffs,
   snapshotFiles,
 } from "@/drizzle/schema";
+import { mapWithLimit } from "~/lib/concurrency";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import {
   clusterReviewConcepts,
@@ -49,27 +50,6 @@ const CONCEPT_MEMBER_INSERT_BATCH_SIZE = 1_000;
 const CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
-
-/** Maps values with bounded ingestion concurrency and stable result order. */
-async function mapWithLimit<T, R>(
-  values: T[],
-  concurrency: number,
-  operation: (value: T) => Promise<R>,
-) {
-  const results = new Array<R>(values.length);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      while (cursor < values.length) {
-        const index = cursor;
-        cursor += 1;
-        const value = values[index];
-        if (value !== undefined) results[index] = await operation(value);
-      }
-    }),
-  );
-  return results;
-}
 
 /** Synchronizes provider data and review state for one pull request. */
 export async function syncPullRequest(

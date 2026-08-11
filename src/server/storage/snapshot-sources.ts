@@ -2,10 +2,13 @@ import "server-only";
 
 import { desc, eq, inArray } from "drizzle-orm";
 import { reviewSnapshots, reviewUnits, sourceBlobs } from "@/drizzle/schema";
+import { mapWithLimit } from "~/lib/concurrency";
 import type { db as database } from "~/server/db";
 import { sourceObjectStore } from "./index";
 
 type Database = typeof database;
+
+const SOURCE_OBJECT_PROBE_CONCURRENCY = 4;
 
 /** Checks that every source object needed to render a snapshot is still present. */
 export async function reviewSnapshotSourcesAvailable(
@@ -32,25 +35,27 @@ export async function reviewSnapshotSourcesAvailable(
   });
   if (blobs.length !== blobIds.length) return false;
   const store = await sourceObjectStore();
-  return (
-    await Promise.all(
-      blobs.map(async (blob) => {
-        if (
-          blob.state !== "ready" ||
-          blob.storage !== store.kind ||
-          !blob.objectKey
-        ) {
-          return false;
-        }
-        if (!store.exists) return true;
-        try {
-          return await store.exists(blob.objectKey);
-        } catch {
-          return false;
-        }
-      }),
-    )
-  ).every(Boolean);
+  let available = true;
+  // Each worker rereads the verdict before spending a round trip, so the first
+  // missing object retires the probes still queued behind it.
+  await mapWithLimit(blobs, SOURCE_OBJECT_PROBE_CONCURRENCY, async (blob) => {
+    if (!available) return;
+    if (
+      blob.state !== "ready" ||
+      blob.storage !== store.kind ||
+      !blob.objectKey
+    ) {
+      available = false;
+      return;
+    }
+    if (!store.exists) return;
+    try {
+      if (!(await store.exists(blob.objectKey))) available = false;
+    } catch {
+      available = false;
+    }
+  });
+  return available;
 }
 
 /** Checks the newest snapshot for one pull request before queue assignment. */
