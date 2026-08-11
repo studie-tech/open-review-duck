@@ -8,16 +8,30 @@ import {
 } from "./error";
 
 describe("resolved sync failures", () => {
-  it("clears failures that predate a provider credential update", () => {
-    const failedAt = new Date("2026-08-05T15:03:03Z");
+  it("reads when a run failed rather than when it was queued", () => {
+    const queuedAt = new Date("2026-08-05T15:00:00Z");
+    const connectionUpdatedAt = new Date("2026-08-06T07:27:51Z");
 
     expect(
       connectionUpdateResolvesSyncFailure(
-        failedAt,
-        new Date("2026-08-06T07:27:51Z"),
+        { createdAt: queuedAt, completedAt: new Date("2026-08-05T15:03:03Z") },
+        connectionUpdatedAt,
       ),
     ).toBe(true);
-    expect(connectionUpdateResolvesSyncFailure(failedAt, failedAt)).toBe(false);
+    // Queued before the credential was repaired and failed after it, so the
+    // repair explains nothing and the failure is still the reviewer's to see.
+    expect(
+      connectionUpdateResolvesSyncFailure(
+        { createdAt: queuedAt, completedAt: new Date("2026-08-06T07:31:12Z") },
+        connectionUpdatedAt,
+      ),
+    ).toBe(false);
+    expect(
+      connectionUpdateResolvesSyncFailure(
+        { createdAt: connectionUpdatedAt, completedAt: null },
+        connectionUpdatedAt,
+      ),
+    ).toBe(false);
   });
 });
 

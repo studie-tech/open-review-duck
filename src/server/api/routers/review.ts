@@ -2702,12 +2702,7 @@ export const reviewRouter = createTRPCRouter({
       if (seenPullRequests.has(key)) continue;
       seenPullRequests.add(key);
       if (row.status !== "failed") continue;
-      if (
-        connectionUpdateResolvesSyncFailure(
-          row.createdAt,
-          row.connectionUpdatedAt,
-        )
-      ) {
+      if (connectionUpdateResolvesSyncFailure(row, row.connectionUpdatedAt)) {
         continue;
       }
       failures.push({

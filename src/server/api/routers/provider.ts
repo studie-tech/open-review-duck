@@ -13,6 +13,7 @@ import {
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
+import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { createProvider } from "~/server/providers";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
@@ -57,6 +58,52 @@ import { createTRPCRouter, protectedProcedure } from "../trpc";
 
 const PROVIDER_WEBHOOK_REGISTRATION_ERROR =
   "Automatic provider notifications could not be enabled with this account. Reviews still work; use Check now to fetch updates.";
+
+const DUPLICATE_CONNECTION_TOKEN_ERROR =
+  "Another connection in this workspace already uses this token. Remove that connection first, or supply a different token.";
+
+type Transaction = Parameters<
+  Parameters<(typeof database)["transaction"]>[0]
+>[0];
+
+/**
+ * Frees the local-credential fingerprint a recovery is about to store on its own
+ * credential row. Disconnecting removes only the connection, so the credential
+ * it left behind still holds that token's fingerprint and would collide on the
+ * unique index; a row another connection still points at is refused instead of
+ * deleted, because deleting it would strip that connection of its credential.
+ */
+async function releaseLocalCredentialFingerprint(
+  tx: Transaction,
+  claim: {
+    workspaceId: string;
+    kind: string;
+    fingerprint: string;
+    credentialId: string;
+  },
+) {
+  const conflicting = await tx.query.localCredentials.findFirst({
+    where: and(
+      eq(localCredentials.workspaceId, claim.workspaceId),
+      eq(localCredentials.kind, claim.kind),
+      eq(localCredentials.fingerprint, claim.fingerprint),
+      ne(localCredentials.id, claim.credentialId),
+    ),
+  });
+  if (!conflicting) return;
+  const owner = await tx.query.providerConnections.findFirst({
+    where: eq(providerConnections.localCredentialId, conflicting.id),
+  });
+  if (owner) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: DUPLICATE_CONNECTION_TOKEN_ERROR,
+    });
+  }
+  await tx
+    .delete(localCredentials)
+    .where(eq(localCredentials.id, conflicting.id));
+}
 
 export const providerRouter = createTRPCRouter({
   listConnections: protectedProcedure.query(async ({ ctx }) => {
@@ -157,8 +204,7 @@ export const providerRouter = createTRPCRouter({
         if (conflicting) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message:
-              "Another connection in this workspace already uses this token. Remove that connection first, or supply a different token.",
+            message: DUPLICATE_CONNECTION_TOKEN_ERROR,
           });
         }
       }
@@ -262,6 +308,7 @@ export const providerRouter = createTRPCRouter({
       }
       const credentialId =
         existingConnection?.localCredentialId ?? randomUUID();
+      const credentialKind = `${input.provider}_pat`;
       const initialEncryptedPayload = await sealVaultSecret(
         {
           workspaceId: workspace.id,
@@ -271,8 +318,16 @@ export const providerRouter = createTRPCRouter({
         JSON.stringify({ token: input.accessToken }),
       );
       return ctx.db.transaction(async (tx) => {
+        if (existingConnection?.localCredentialId) {
+          await releaseLocalCredentialFingerprint(tx, {
+            workspaceId: workspace.id,
+            kind: credentialKind,
+            fingerprint,
+            credentialId: existingConnection.localCredentialId,
+          });
+        }
         const credentialValues = {
-          kind: `${input.provider}_pat`,
+          kind: credentialKind,
           label: input.displayName ?? identity.displayName,
           encryptedPayload: initialEncryptedPayload,
           fingerprint,

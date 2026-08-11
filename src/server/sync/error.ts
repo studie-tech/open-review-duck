@@ -18,12 +18,19 @@ interface ErrorDetails {
 const diagnosticValue = (value: unknown) =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
-/** Returns whether a later credential update resolved an earlier sync failure. */
+/**
+ * Returns whether a later credential update resolved an earlier sync failure.
+ *
+ * A run can sit queued while the connection is repaired and then fail anyway,
+ * so the moment the run failed decides this, not the moment it was queued. A
+ * run holding no completion never reported a failure time, and its queue time
+ * is the only evidence left.
+ */
 export function connectionUpdateResolvesSyncFailure(
-  syncCreatedAt: Date,
+  syncRun: { createdAt: Date; completedAt: Date | null },
   connectionUpdatedAt: Date,
 ) {
-  return connectionUpdatedAt > syncCreatedAt;
+  return connectionUpdatedAt > (syncRun.completedAt ?? syncRun.createdAt);
 }
 
 /** Converts a sync failure into actionable user-facing details. */
