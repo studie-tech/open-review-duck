@@ -3,6 +3,7 @@ import {
   enforceSemanticConceptCaps,
   MAX_CONCEPT_RATIONALE_LENGTH,
   MAX_CONCEPT_TITLE_LENGTH,
+  semanticClusterJobInput,
   semanticPartitionErrors,
 } from "./semantic-partition";
 
@@ -94,5 +95,55 @@ describe("semantic concept validation", () => {
     }
     // The suffix has to survive truncation or the parts stop being labelled.
     expect(result[0]?.title).toContain("part 1/");
+  });
+});
+
+describe("the job a clustering run reserves", () => {
+  /**
+   * The database check that decides whether an `ai_job` row may be written.
+   *
+   * Copied from `ai_job_question_context_check`: a question states a
+   * reviewer's turn and is meaningless without the line and thread it was
+   * asked at, so all three travel together or none of them do.
+   */
+  const questionContextHolds = (job: Record<string, unknown>) =>
+    (job.question === undefined &&
+      job.focusLine === undefined &&
+      job.threadId === undefined) ||
+    (job.question !== undefined &&
+      job.focusLine !== undefined &&
+      job.threadId !== undefined);
+
+  it("names its layout without borrowing the question column", () => {
+    // Layout identity used to travel in `question`, which a clustering run
+    // has no focus line or thread for, so the check refused every row and
+    // the feature could never start a job at all.
+    const job = semanticClusterJobInput({
+      pullRequestId: "11111111-1111-4111-8111-111111111111",
+      layoutId: "22222222-2222-4222-8222-222222222222",
+      layoutVersion: 3,
+      userId: "user",
+      subscribed: false,
+    });
+
+    expect(questionContextHolds(job)).toBe(true);
+    expect(job).toMatchObject({
+      kind: "semantic_cluster",
+      layoutKey: "22222222-2222-4222-8222-222222222222:3",
+    });
+  });
+
+  it("tells two revisions of the same layout apart", () => {
+    /** Builds the layout key one revision of the layout would reserve. */
+    const of = (layoutVersion: number) =>
+      semanticClusterJobInput({
+        pullRequestId: "11111111-1111-4111-8111-111111111111",
+        layoutId: "22222222-2222-4222-8222-222222222222",
+        layoutVersion,
+        userId: "user",
+        subscribed: false,
+      }).layoutKey;
+
+    expect(of(3)).not.toBe(of(4));
   });
 });

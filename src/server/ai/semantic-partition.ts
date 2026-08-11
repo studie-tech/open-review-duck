@@ -108,3 +108,27 @@ export function enforceSemanticConceptCaps(
     }));
   });
 }
+
+/**
+ * Describes the job one clustering run reserves.
+ *
+ * The layout it proposes for travels in `layoutKey`, not in `question`: a
+ * question states a reviewer's turn and the database checks it against the
+ * focus line and thread it was asked at, neither of which a clustering run
+ * has. Naming the layout there made every one of these rows unwritable.
+ */
+export function semanticClusterJobInput(input: {
+  pullRequestId: string;
+  layoutId: string;
+  layoutVersion: number;
+  userId: string;
+  subscribed: boolean;
+}) {
+  return {
+    pullRequestId: input.pullRequestId,
+    kind: "semantic_cluster" as const,
+    layoutKey: `${input.layoutId}:${input.layoutVersion}`,
+    userId: input.userId,
+    subscribed: input.subscribed,
+  };
+}

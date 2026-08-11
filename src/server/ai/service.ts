@@ -312,6 +312,7 @@ export async function createAiJob(
     unitId?: string;
     kind: "explain" | "review" | "semantic_cluster";
     question?: string;
+    layoutKey?: string;
     focusLine?: number;
     threadId?: string;
     userId: string;
@@ -349,7 +350,10 @@ export async function createAiJob(
     : undefined;
   return db.transaction(async (tx) => {
     if (!input.question) {
-      const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:automatic:${input.unitId ?? "pull-request"}`;
+      // A clustering run is identified by the layout revision it proposes
+      // for, so two of them collide only when they would produce the same
+      // answer. Anything else keys on the unit it reads.
+      const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:automatic:${input.layoutKey ?? input.unitId ?? "pull-request"}`;
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${dedupeKey}))`,
       );
@@ -363,6 +367,9 @@ export async function createAiJob(
             ? eq(aiJobs.unitId, input.unitId)
             : isNull(aiJobs.unitId),
           isNull(aiJobs.question),
+          input.layoutKey
+            ? eq(aiJobs.layoutKey, input.layoutKey)
+            : isNull(aiJobs.layoutKey),
           or(
             eq(aiJobs.status, "queued"),
             eq(aiJobs.status, "running"),
@@ -406,6 +413,7 @@ export async function createAiJob(
         question: input.question,
         focusLine: input.focusLine,
         threadId: input.threadId,
+        layoutKey: input.layoutKey,
         agentVersion: CURRENT_AI_AGENT_VERSION,
         status: "queued",
         model: scope.model,

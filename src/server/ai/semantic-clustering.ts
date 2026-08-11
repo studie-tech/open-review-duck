@@ -18,6 +18,7 @@ import { hydrateReviewUnits } from "~/server/storage/review-units";
 import { resolveAiModel } from "./models";
 import {
   enforceSemanticConceptCaps,
+  semanticClusterJobInput,
   semanticPartitionErrors,
   semanticPartitionSchema,
 } from "./semantic-partition";
@@ -86,13 +87,7 @@ export async function proposeSemanticConceptLayout(
     subscribed: boolean;
   },
 ) {
-  const job = await createAiJob(db, {
-    pullRequestId: input.pullRequestId,
-    kind: "semantic_cluster",
-    question: `concept-layout:${input.layoutId}:${input.layoutVersion}`,
-    userId: input.userId,
-    subscribed: input.subscribed,
-  });
+  const job = await createAiJob(db, semanticClusterJobInput(input));
   try {
     const [pullRequest, snapshot, layout] = await Promise.all([
       db.query.pullRequests.findFirst({
