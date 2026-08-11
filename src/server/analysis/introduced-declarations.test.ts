@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clusterReviewConcepts, validateConceptPartition } from "./concepts";
 import { analyzeFiles } from "./engine";
 import type { SourceFile } from "./types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** Returns the units a reviewer signs off, dropping the file context record. */
 function reviewUnits(file: SourceFile) {
@@ -196,6 +200,5 @@ describe("a declaration this revision introduces", () => {
     validateConceptPartition(units, clusterReviewConcepts(units), [file]);
 
     expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 });

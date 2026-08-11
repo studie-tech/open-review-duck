@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clusterReviewConcepts, validateConceptPartition } from "./concepts";
 import { analyzeFiles } from "./engine";
 import type { SourceFile } from "./types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /**
  * One declaration per language, each holding a line the revision removes.
@@ -89,7 +93,6 @@ describe("a revision that only removes lines", () => {
     validateConceptPartition(units, clusterReviewConcepts(units), [file]);
 
     expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 
   it("gives the innermost declaration the removal, not the file", () => {

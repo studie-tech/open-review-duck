@@ -1008,9 +1008,11 @@ export function ReviewWorkspace({
 
   /** Opens the anchor unit for one concept-first path entry. */
   function selectConceptPath(index: number) {
-    const concept = conceptPathEntries[index]?.concept;
-    const memberId = concept?.memberIds[0];
-    const unitIndex = memberId ? (unitIndexById.get(memberId) ?? -1) : -1;
+    // The entry is anchored on the concept's first member that this snapshot
+    // still holds. Its own first member id may name one the snapshot dropped,
+    // and reading that instead opens nothing.
+    const anchorId = conceptPathEntries[index]?.unit.id;
+    const unitIndex = anchorId ? (unitIndexById.get(anchorId) ?? -1) : -1;
     if (unitIndex >= 0) selectUnit(unitIndex);
   }
 
