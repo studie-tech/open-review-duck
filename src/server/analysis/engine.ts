@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 39;
+export const CURRENT_ANALYSIS_VERSION = 40;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -1088,6 +1088,64 @@ function markContextualBlockCloserChanges(
   }
 }
 
+/**
+ * Gives a declaration this revision introduces the members it introduced with it.
+ *
+ * A container is normally truncated to its header so that each member can be
+ * signed off on its own, which is the right reading of a class that gained a
+ * field. It is the wrong reading of a class that did not exist: its ten fields
+ * are not ten decisions, they are one — the class — and nobody can judge a
+ * field of a type they have not read. So a declaration absent from the previous
+ * revision is restored to its full extent and answers for everything inside it,
+ * while one that was already there keeps reviewing its members separately.
+ *
+ * Nesting needs no special case: an outer declaration absorbs an inner one the
+ * same way it absorbs a field, because the inner one is inside its extent.
+ */
+function absorbNewDeclarationMembers(
+  file: SourceFile,
+  units: RawUnit[],
+  previousKeys: ReadonlySet<string>,
+) {
+  const introduced = units.filter(
+    (unit) =>
+      unit.bodyEndLine !== undefined && !previousKeys.has(unit.stableKey),
+  );
+  if (introduced.length === 0) return units;
+  const absorbed = new Set<string>();
+  for (const container of introduced) {
+    for (const member of units) {
+      if (member === container || previousKeys.has(member.stableKey)) continue;
+      if (
+        member.startLine >= container.startLine &&
+        member.endLine <= (container.bodyEndLine ?? container.endLine)
+      ) {
+        absorbed.add(member.stableKey);
+      }
+    }
+  }
+  const lines = file.content.split("\n");
+  return units
+    .filter(({ stableKey }) => !absorbed.has(stableKey))
+    .map((unit) => {
+      if (unit.bodyEndLine === undefined || previousKeys.has(unit.stableKey)) {
+        return unit;
+      }
+      const source = lines
+        .slice(unit.startLine - 1, unit.bodyEndLine)
+        .join("\n");
+      return {
+        ...unit,
+        endLine: unit.bodyEndLine,
+        source,
+        contentHash: sha256(source),
+        semanticHash: sha256(
+          `${unit.changeType}:${semanticSource(source, unit.language)}`,
+        ),
+      };
+    });
+}
+
 /** Scopes parsed units to the actual base-to-head changes in one modified file. */
 function prScopedReviewUnits(
   file: SourceFile,
@@ -1100,10 +1158,17 @@ function prScopedReviewUnits(
     file.isBinary ||
     file.skipReason
   ) {
-    return currentUnits.length > 0 ||
+    // Only a file the revision adds introduces its declarations whole. An
+    // unstated change type means a revision whose previous side was not
+    // supplied, which is read as a modification and keeps its members.
+    const whole =
+      file.changeType === "added"
+        ? absorbNewDeclarationMembers(file, currentUnits, new Set())
+        : currentUnits;
+    return whole.length > 0 ||
       file.changeType === undefined ||
       language !== "text"
-      ? currentUnits
+      ? whole
       : [wholeFileDeclaration(file, language)];
   }
 
@@ -1116,11 +1181,16 @@ function prScopedReviewUnits(
   const previousByKey = new Map(
     previousUnits.map((unit) => [unit.stableKey, unit]),
   );
+  const scopedUnits = absorbNewDeclarationMembers(
+    file,
+    currentUnits,
+    new Set(previousByKey.keys()),
+  );
   const currentByKey = new Map(
-    currentUnits.map((unit) => [unit.stableKey, unit]),
+    scopedUnits.map((unit) => [unit.stableKey, unit]),
   );
   const renamed = renamedUnitPairs(
-    currentUnits,
+    scopedUnits,
     previousUnits,
     currentByKey,
     previousByKey,
@@ -1132,7 +1202,7 @@ function prScopedReviewUnits(
   const currentCovered = new Array<boolean>(currentLines.length).fill(false);
   const previousCovered = new Array<boolean>(previousLines.length).fill(false);
 
-  const changedCandidates = currentUnits
+  const changedCandidates = scopedUnits
     .flatMap((unit) => {
       const previous =
         previousByKey.get(unit.stableKey) ?? renamed.pairs.get(unit.stableKey);

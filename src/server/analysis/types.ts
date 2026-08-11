@@ -229,6 +229,15 @@ export interface AnalyzedUnit {
   changedLineCount: number;
   dependencies: string[];
   relatedRanges?: ReviewUnitRange[];
+  /**
+   * Where a declaration shown only as its header actually ends.
+   *
+   * A container is truncated to its header so each member can be signed off on
+   * its own, which leaves nothing saying how far the declaration reaches. A
+   * revision that introduces the whole declaration needs to know, because then
+   * there are no separate members to sign off — only the one new thing.
+   */
+  bodyEndLine?: number;
   depth: number;
   reviewOrder: number;
 }
