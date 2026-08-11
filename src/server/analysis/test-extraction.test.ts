@@ -632,3 +632,39 @@ describe("test unit extraction", () => {
     ).toBe(true);
   });
 });
+
+describe("GoogleTest case names", () => {
+  it.each([
+    ["TEST", "TEST(PondSuite, HoldsWater)", "PondSuite › HoldsWater"],
+    ["TEST_F", "TEST_F(PondFixture, Refills)", "PondFixture › Refills"],
+    ["TEST_P", "TEST_P(PondParams, Drains)", "PondParams › Drains"],
+    ["TYPED_TEST", "TYPED_TEST(PondTyped, Floats)", "PondTyped › Floats"],
+  ])("names a %s case after its suite and case", (_macro, header, name) => {
+    // Every one of these spells the suite and the case the same way. Matching
+    // only the fixture form left the rest named after the macro, so a file of
+    // them held several cards all called "TEST".
+    const units = analyzeFiles([
+      {
+        path: "pond_test.cc",
+        content: `#include <gtest/gtest.h>\n\n${header} {\n  EXPECT_TRUE(true);\n}\n`,
+        changeType: "added",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({ kind: "test", name });
+  });
+
+  it("still reads a Catch2 case from its description", () => {
+    const units = analyzeFiles([
+      {
+        path: "pond_test.cc",
+        content:
+          '#include <catch2/catch.hpp>\n\nTEST_CASE("the pond holds water") {\n  REQUIRE(true);\n}\n',
+        changeType: "added",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units[0]?.name).toBe("the pond holds water");
+  });
+});
