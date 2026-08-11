@@ -6446,6 +6446,10 @@ function retainWholeChildlessDeclarations<
     }
     const extentEnd = declarationWrapper(node).endIndex;
     if (lineAt(file.content, extentEnd) <= unit.endLine) continue;
+    // Recorded whether or not the body is reviewed member by member: a
+    // revision that adds the whole declaration has no separate members to
+    // sign off, and needs to know how far it reaches to say so.
+    unit.bodyEndLine = lineAt(file.content, extentEnd);
     const reviewedByMember = candidates.some(
       (other) =>
         other !== candidate &&
