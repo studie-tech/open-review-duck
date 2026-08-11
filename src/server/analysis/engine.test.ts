@@ -1214,7 +1214,8 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     {
       what: "a preprocessor branch",
       previousContent: "int total(void) {\n  return 1;\n}\n",
-      content: "#ifdef DEBUG\n#include <stdio.h>\n#endif\nint total(void) {\n  return 1;\n}\n",
+      content:
+        "#ifdef DEBUG\n#include <stdio.h>\n#endif\nint total(void) {\n  return 1;\n}\n",
       path: "total.c",
       name: "#ifdef DEBUG",
     },
