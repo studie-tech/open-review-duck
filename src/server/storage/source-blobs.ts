@@ -49,17 +49,22 @@ export async function persistSourceBlob(
   /** Reuses a ready row only when its immutable object still exists. */
   const reuseReadyBlob = async (blob: typeof sourceBlobs.$inferSelect) => {
     if (blob.storage !== store.kind || !blob.objectKey) return undefined;
-    try {
-      // Presence is the only thing in doubt here, and this runs for every
-      // deduplicated file of every sync. readSourceBlob would transfer and
-      // rehash the whole object; it still verifies the digest on real reads.
-      const present = store.exists
-        ? await store.exists(blob.objectKey)
-        : Boolean(await readSourceBlob(blob));
-      if (!present) return undefined;
-    } catch {
-      return undefined;
-    }
+    // Presence is the only thing in doubt here, and this runs for every
+    // deduplicated file of every sync. readSourceBlob would transfer and
+    // rehash the whole object; it still verifies the digest on real reads.
+    //
+    // A probe answers false only for a proven absence and throws otherwise, so
+    // it is let through: an outage must not cost the row naming the object.
+    // A store with no probe has to read the whole thing, and a transfer that
+    // failed cannot be told apart from one with nothing to transfer, so the
+    // two stay conflated there and nowhere else.
+    const present = store.exists
+      ? await store.exists(blob.objectKey)
+      : await readSourceBlob(blob).then(
+          () => true,
+          () => false,
+        );
+    if (!present) return undefined;
     const [reused] = await db
       .update(sourceBlobs)
       .set({ updatedAt: new Date() })
