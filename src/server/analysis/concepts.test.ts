@@ -151,7 +151,7 @@ describe("clusterReviewConcepts", () => {
     validateConceptPartition(units, concepts, files);
   });
 
-  it("reaches an import-only edit through a concept that names its file", () => {
+  it("reaches an import-only edit through a concept that names it", () => {
     const previous = [
       "import { alpha } from './alpha';",
       "",
@@ -180,7 +180,9 @@ describe("clusterReviewConcepts", () => {
     );
     const concepts = clusterReviewConcepts(units);
     expect(concepts).toHaveLength(1);
-    expect(concepts[0]?.title).toBe("Changed line 2 in run.ts");
+    // The fragment is named after the import it holds, which a reviewer can
+    // find in the card, so the concept needs no file to locate it by.
+    expect(concepts[0]?.title).toBe("import { beta } from './beta';");
     validateConceptPartition(units, concepts, files);
   });
 

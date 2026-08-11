@@ -1203,6 +1203,45 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     ]);
   });
 
+  it.each([
+    {
+      what: "a file-level directive",
+      previousContent: "export const x = 1;\n",
+      content: '"use client";\n\nexport const x = 1;\n',
+      path: "page.ts",
+      name: '"use client";',
+    },
+    {
+      what: "a preprocessor branch",
+      previousContent: "int total(void) {\n  return 1;\n}\n",
+      content: "#ifdef DEBUG\n#include <stdio.h>\n#endif\nint total(void) {\n  return 1;\n}\n",
+      path: "total.c",
+      name: "#ifdef DEBUG",
+    },
+  ])("names a change no declaration claimed after $what", (fixture) => {
+    // "Changed lines 1–2" says where to look and never what is being decided.
+    const reviewable = analyzeFiles([
+      { ...fixture, changeType: "modified" },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toHaveLength(1);
+    expect(reviewable[0]?.name).toBe(fixture.name);
+  });
+
+  it("falls back to the line span when a change carries no words", () => {
+    const reviewable = analyzeFiles([
+      {
+        path: "shape.ts",
+        previousContent: "const shape = [\n  1,\n];\nrun();\n",
+        content: "const shape = [\n  1,\n  ,\n];\nrun();\n",
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable.length).toBeGreaterThan(0);
+    expect(reviewable.every(({ name }) => name.trim().length > 0)).toBe(true);
+  });
+
   it("pairs a rewritten import as one modified change unit", () => {
     const previous = [
       'import NotFoundPage from "@/app/[...not-found]/page";',
@@ -1226,7 +1265,9 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
 
     expect(reviewable).toMatchObject([
       {
-        name: "Changed line 1",
+        // A fragment is named after the code it holds, so a reviewer reads
+        // what changed rather than where it sits.
+        name: 'import NotFoundPage from "@/components/layout/NotFoundPage";',
         changeType: "modified",
         source: 'import NotFoundPage from "@/components/layout/NotFoundPage";',
         previousSource: 'import NotFoundPage from "@/app/[...not-found]/page";',

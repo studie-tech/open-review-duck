@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 40;
+export const CURRENT_ANALYSIS_VERSION = 41;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -702,6 +702,32 @@ function changeLineLabel(startIndex: number, endIndex: number) {
     : `lines ${startIndex + 1}–${endIndex + 1}`;
 }
 
+/** The longest a fragment's name may run before it stops being scannable. */
+const CHANGE_FRAGMENT_NAME_LIMIT = 64;
+
+/**
+ * Names a fragment after the code it holds rather than the lines it sits on.
+ *
+ * These are the changes no declaration claimed — a directive, a preprocessor
+ * branch, a call at the top of a module — and a card called "Changed lines
+ * 1–2" says only where to look, never what is being decided. The first line
+ * carrying a word says it instead: `"use client"`, `#ifdef DEBUG`,
+ * `app.use(rateLimit())`. Punctuation-only lines are stepped over because an
+ * opening brace or a comment fence names nothing, and the line span is still
+ * there in the card's own header for anyone who wants it.
+ */
+function changeFragmentName(source: string, lineLabel: string) {
+  const first = source
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => /\w/.test(line));
+  if (!first) return `Changed ${lineLabel}`;
+  const condensed = first.replace(/\s+/g, " ");
+  return condensed.length > CHANGE_FRAGMENT_NAME_LIMIT
+    ? `${condensed.slice(0, CHANGE_FRAGMENT_NAME_LIMIT - 1)}…`
+    : condensed;
+}
+
 /** Creates an explicit unit for changed lines not owned by a parsed declaration. */
 function changeFragment(
   file: SourceFile,
@@ -752,7 +778,7 @@ function changeFragment(
     path: file.path,
     language,
     kind: "module",
-    name: `Changed ${lineLabel}`,
+    name: changeFragmentName(identitySource, lineLabel),
     signature: `Changed ${lineLabel} in ${file.path}`,
     startLine: labelStart + 1,
     endLine: labelEnd + 1,
