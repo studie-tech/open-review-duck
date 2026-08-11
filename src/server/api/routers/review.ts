@@ -523,7 +523,9 @@ async function lockConceptLayoutForReviewer(
       baselineDependencies.flatMap((dependency) => {
         const conceptId = copiedIdByBaselineId.get(dependency.conceptId);
         const dependencyId = copiedIdByBaselineId.get(dependency.dependencyId);
-        return conceptId && dependencyId ? [{ conceptId, dependencyId }] : [];
+        return conceptId && dependencyId
+          ? [{ layoutId: personal.id, conceptId, dependencyId }]
+          : [];
       }),
     );
   }
@@ -3111,7 +3113,13 @@ export const reviewRouter = createTRPCRouter({
             return [...dependsOn].flatMap((key) => {
               const dependency = conceptByKey.get(key);
               return dependency
-                ? [{ conceptId: concept.id, dependencyId: dependency.id }]
+                ? [
+                    {
+                      layoutId,
+                      conceptId: concept.id,
+                      dependencyId: dependency.id,
+                    },
+                  ]
                 : [];
             });
           },

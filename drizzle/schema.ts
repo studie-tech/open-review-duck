@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -654,6 +655,10 @@ export const reviewConcepts = createTable(
   (t) => [
     uniqueIndex("review_concept_key_idx").on(t.layoutId, t.stableKey),
     uniqueIndex("review_concept_order_idx").on(t.layoutId, t.reviewOrder),
+    // Membership carries its own layoutId so one unit can be unique per layout.
+    // That copy is only trustworthy if it can be tied back to the concept, which
+    // needs the pair to be referenceable.
+    uniqueIndex("review_concept_scope_idx").on(t.id, t.layoutId),
   ],
 );
 
@@ -663,9 +668,7 @@ export const reviewConceptMembers = createTable(
     layoutId: uuid()
       .notNull()
       .references(() => reviewConceptLayouts.id, { onDelete: "cascade" }),
-    conceptId: uuid()
-      .notNull()
-      .references(() => reviewConcepts.id, { onDelete: "cascade" }),
+    conceptId: uuid().notNull(),
     unitId: uuid()
       .notNull()
       .references(() => reviewUnits.id, { onDelete: "cascade" }),
@@ -678,24 +681,41 @@ export const reviewConceptMembers = createTable(
     // The membership index leads with layoutId, so deleting a unit could not use
     // it and scanned every membership row instead.
     index("review_concept_member_unit_idx").on(t.unitId),
+    // Reaching the concept through the layout the row already claims keeps the
+    // membership uniqueness above from being enforced against the wrong layout.
+    foreignKey({
+      columns: [t.conceptId, t.layoutId],
+      foreignColumns: [reviewConcepts.id, reviewConcepts.layoutId],
+    }).onDelete("cascade"),
   ],
 );
 
 export const reviewConceptDependencies = createTable(
   "review_concept_dependency",
   {
-    conceptId: uuid()
+    // An edge belongs to one layout, and carrying it lets both endpoints be
+    // reached through the pair the concept is unique on. Without it the two
+    // ends are only known to be concepts, and an edge could join a concept of
+    // one layout to a concept of another.
+    layoutId: uuid()
       .notNull()
-      .references(() => reviewConcepts.id, { onDelete: "cascade" }),
-    dependencyId: uuid()
-      .notNull()
-      .references(() => reviewConcepts.id, { onDelete: "cascade" }),
+      .references(() => reviewConceptLayouts.id, { onDelete: "cascade" }),
+    conceptId: uuid().notNull(),
+    dependencyId: uuid().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.conceptId, t.dependencyId] }),
     // The primary key only covers the dependent side of the edge, so the
     // dependency side needs its own index for cascading concept deletes.
     index("review_concept_dependency_dependency_idx").on(t.dependencyId),
+    foreignKey({
+      columns: [t.conceptId, t.layoutId],
+      foreignColumns: [reviewConcepts.id, reviewConcepts.layoutId],
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.dependencyId, t.layoutId],
+      foreignColumns: [reviewConcepts.id, reviewConcepts.layoutId],
+    }).onDelete("cascade"),
   ],
 );
 

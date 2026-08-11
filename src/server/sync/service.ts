@@ -548,7 +548,13 @@ export async function syncPullRequest(
       return concept.dependencies.flatMap((dependencyKey) => {
         const dependency = insertedConceptByKey.get(dependencyKey);
         return dependency
-          ? [{ conceptId: insertedConcept.id, dependencyId: dependency.id }]
+          ? [
+              {
+                layoutId: baselineLayout.id,
+                conceptId: insertedConcept.id,
+                dependencyId: dependency.id,
+              },
+            ]
           : [];
       });
     });
