@@ -1496,9 +1496,18 @@ function ownName(source: string, node: SyntaxNode) {
 function cppDeclarationName(source: string, node: SyntaxNode) {
   if (shapes.cpp.containers.has(node.type)) return ownName(source, node);
   const text = nodeText(source, node);
-  const fixture =
-    /\bTEST_F\s*\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)/.exec(text);
-  if (fixture?.[1] && fixture[2]) return `${fixture[1]} › ${fixture[2]}`;
+  // GoogleTest spells a case `TEST`, a fixture case `TEST_F`, a parameterised
+  // one `TEST_P` and a typed one `TYPED_TEST`, and every one of them names the
+  // suite and the case the same way. Matching only the fixture form left a
+  // plain `TEST` with nothing but the macro for a name, so every case in a
+  // file was called "TEST" and no two could be told apart.
+  const testCaseName =
+    /\b(?:TYPED_)?TEST(?:_[FP])?\s*\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)/.exec(
+      text,
+    );
+  if (testCaseName?.[1] && testCaseName[2]) {
+    return `${testCaseName[1]} › ${testCaseName[2]}`;
+  }
   const testCase = /\bTEST_CASE\s*\(\s*"([^"]+)"/.exec(text)?.[1];
   if (testCase) return testCase;
   const destructor = /(~[A-Za-z_]\w*)\s*\(/.exec(text)?.[1];
