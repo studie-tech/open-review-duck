@@ -898,6 +898,14 @@ export const aiJobs = createTable(
     question: text(),
     focusLine: integer(),
     threadId: uuid(),
+    /**
+     * The concept layout a clustering run proposes for, as `<id>:<version>`.
+     *
+     * Layout identity used to travel in `question`, which states a reviewer's
+     * conversation turn and is checked against `focusLine` and `threadId`. A
+     * clustering run has neither, so the check refused every one of them.
+     */
+    layoutKey: text(),
     agentVersion: integer().notNull().default(1),
     status: aiJobStatusEnum().notNull().default("queued"),
     workflowRunId: uuid().references(() => workflowRuns.id, {
