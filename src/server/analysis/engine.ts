@@ -1108,20 +1108,27 @@ function absorbNewDeclarationMembers(
   previousKeys: ReadonlySet<string>,
 ) {
   const introduced = units.filter(
-    (unit) =>
-      unit.bodyEndLine !== undefined && !previousKeys.has(unit.stableKey),
+    ({ stableKey }) => !previousKeys.has(stableKey),
   );
   if (introduced.length === 0) return units;
+  /** How far a declaration reaches, past the header a card may show. */
+  const extentOf = (unit: RawUnit) => unit.bodyEndLine ?? unit.endLine;
   const absorbed = new Set<string>();
   for (const container of introduced) {
-    for (const member of units) {
-      if (member === container || previousKeys.has(member.stableKey)) continue;
-      if (
+    // A sweep over statements no declaration claimed is a range, not a
+    // declaration, so it answers for nothing but itself.
+    if (container.kind === "module" || container.kind === "file") continue;
+    for (const member of introduced) {
+      if (member === container) continue;
+      const inside =
         member.startLine >= container.startLine &&
-        member.endLine <= (container.bodyEndLine ?? container.endLine)
-      ) {
-        absorbed.add(member.stableKey);
-      }
+        member.endLine <= extentOf(container);
+      // Equal spans are the same declaration read twice, and neither can
+      // stand for the other.
+      const encloses =
+        container.startLine < member.startLine ||
+        extentOf(container) > member.endLine;
+      if (inside && encloses) absorbed.add(member.stableKey);
     }
   }
   const lines = file.content.split("\n");

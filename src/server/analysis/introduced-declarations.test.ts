@@ -146,6 +146,40 @@ describe("a declaration this revision introduces", () => {
     expect(units[0]?.source).toContain("class Duck");
   });
 
+  it("leaves two unrelated introduced declarations apart", () => {
+    // Absorption is containment, so declarations that merely arrive together
+    // must not collapse into each other.
+    const units = reviewUnits({
+      path: "pair.ts",
+      previousContent: "export const x = 1;\n",
+      content: [
+        "export const x = 1;",
+        "",
+        "export function first() { return 1; }",
+        "",
+        "export function second() { return 2; }",
+        "",
+      ].join("\n"),
+      changeType: "modified",
+    });
+
+    expect(units.map(({ name }) => name)).toEqual(["first", "second"]);
+  });
+
+  it("adds no whole-container card when a member is appended to one", () => {
+    // A container emitted at its full extent rather than as a header used to
+    // arrive alongside its own members, overlapping them.
+    const units = reviewUnits({
+      path: "sound.kt",
+      previousContent: "enum class Sound {\n    A,\n    B,\n}\n",
+      content: "enum class Sound {\n    A,\n    B,\n    C,\n}\n",
+      changeType: "modified",
+    });
+
+    expect(units).toHaveLength(1);
+    expect(units[0]?.name).toContain("C");
+  });
+
   it("leaves no changed line of an introduced declaration unrendered", () => {
     // The closing brace of a new container used to belong to nothing: the
     // shell stopped at the header and the members each held one line.
