@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "reviewduck-dev",
-      "runtimeExecutable": "make",
-      "runtimeArgs": ["start"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "exec make start"],
       "port": 3666
     }
   ]
