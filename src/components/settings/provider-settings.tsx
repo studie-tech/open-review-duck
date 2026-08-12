@@ -69,6 +69,16 @@ const providers: Array<{
   },
 ];
 
+/**
+ * Names a provider the way the connection form does.
+ *
+ * A two-way test read every provider that was not GitHub as GitLab, so an
+ * Azure DevOps connection offered to reconnect the wrong one.
+ */
+function providerLabel(provider: string) {
+  return providers.find(({ id }) => id === provider)?.label ?? provider;
+}
+
 /** Returns the user-facing authorization method for a saved connection. */
 function credentialLabel(kind: string) {
   if (kind === "github_app") return "GitHub App";
@@ -405,7 +415,11 @@ export function ProviderSettings({
 
   /** Returns whether this connection can repeat its managed authorization. */
   const canReauthorize = (connection: Connection) =>
-    supportsManagedReauthorization(localMode, connection.credentialKind);
+    supportsManagedReauthorization(
+      localMode,
+      connection.credentialKind,
+      connection.provider,
+    );
 
   /** Opens the provider form in create mode. */
   const openNewConnectionForm = (nextProvider: Provider = provider) => {
@@ -901,8 +915,7 @@ export function ProviderSettings({
                         ) : (
                           <RefreshCw className="size-3.5" />
                         )}
-                        Reconnect{" "}
-                        {connection.provider === "github" ? "GitHub" : "GitLab"}
+                        Reconnect {providerLabel(connection.provider)}
                       </Button>
                     )}
                   </div>
