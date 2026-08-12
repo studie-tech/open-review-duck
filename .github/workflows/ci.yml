@@ -85,7 +85,6 @@ jobs:
           context: .
           load: true
           tags: open-review-duck:ci
-          platforms: linux/amd64
           provenance: false
           sbom: false
       - name: Scan the local appliance

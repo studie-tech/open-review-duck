@@ -17,7 +17,10 @@ ENV DEPLOYMENT_MODE=local
 ENV SKIP_ENV_VALIDATION=1
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL=postgresql://reviewduck:build-only@localhost/reviewduck
-RUN ENCRYPTION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
+# The compiler cache is the one part of .next worth keeping between builds; the
+# output beside it is written fresh into this layer either way.
+RUN --mount=type=cache,id=next,target=/app/.next/cache \
+    ENCRYPTION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
     CRON_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")" \
     pnpm build
 
