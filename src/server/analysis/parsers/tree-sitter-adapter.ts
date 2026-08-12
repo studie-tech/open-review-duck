@@ -619,7 +619,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
       "enum_case_definitions",
     ),
     imports: set("package_clause", "import_declaration", "export_declaration"),
-    comments: set("comment"),
+    comments: set("comment", "block_comment", "line_comment"),
     identifierTypes: commonIdentifiers,
     bodyTypes: set("template_body", "block"),
   },
@@ -721,11 +721,18 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     containers: set(
       "create_table",
       "create_view",
+      "create_materialized_view",
       "create_type",
       "create_schema",
     ),
     functions: set("create_function", "create_procedure", "create_trigger"),
-    variables: set("create_index", "alter_table", "drop_statement"),
+    variables: set(
+      "create_index",
+      "create_policy",
+      "create_sequence",
+      "alter_table",
+      "drop_statement",
+    ),
     imports: set(),
     comments: set("comment"),
     identifierTypes: commonIdentifiers,
@@ -1402,7 +1409,7 @@ function normalizeName(value: string | undefined) {
 function ownName(source: string, node: SyntaxNode) {
   if (node.type.startsWith("create_")) {
     const name =
-      /^\s*create\s+(?:or\s+replace\s+)?(?:unique\s+)?(?:table|view|index|schema|type|function|procedure|trigger)\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([^\s(;]+)/i.exec(
+      /^\s*create\s+(?:or\s+replace\s+)?(?:unique\s+)?(?:materialized\s+view|table|view|index|schema|type|function|procedure|trigger|policy|sequence)\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([^\s(;]+)/i.exec(
         nodeText(source, node),
       )?.[1];
     if (name) return name.replace(/^(?:["'`]|\[)|(?:["'`]|\])$/g, "");

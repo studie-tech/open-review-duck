@@ -107,3 +107,47 @@ describe("complete Tree-sitter language support", () => {
     );
   });
 });
+
+describe("declarations a grammar names in its own vocabulary", () => {
+  it.each([
+    ["a table", "CREATE TABLE ducks (id integer);", "ducks"],
+    ["an index", "CREATE INDEX duck_idx ON ducks (id);", "duck_idx"],
+    [
+      "a policy",
+      "CREATE POLICY duck_read ON ducks FOR SELECT USING (true);",
+      "duck_read",
+    ],
+    ["a sequence", "CREATE SEQUENCE duck_id_seq;", "duck_id_seq"],
+    [
+      "a materialized view",
+      "CREATE MATERIALIZED VIEW duck_counts AS SELECT count(*) FROM ducks;",
+      "duck_counts",
+    ],
+  ])("reviews %s as a unit named after it", (_what, statement, name) => {
+    // A policy, a sequence and a materialized view are objects a reviewer
+    // signs off, and each one used to arrive as the whole statement for a
+    // name — or, before that, inside one undifferentiated file card.
+    const units = analyzeFiles([
+      { path: "schema.sql", content: `${statement}\n`, changeType: "added" },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(1);
+    expect(units[0]?.name).toBe(name);
+  });
+
+  it("gives a Scala declaration the documentation written above it", () => {
+    // The grammar spells its comments `block_comment`, which the shape did not
+    // list, so a Scaladoc was left outside the declaration it describes.
+    const units = analyzeFiles([
+      {
+        path: "Pond.scala",
+        content: "/** Holds water. */\nclass Pond {\n  def depth: Int = 3\n}\n",
+        changeType: "added",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({ name: "Pond", startLine: 1 });
+    expect(units[0]?.source).toContain("Holds water");
+  });
+});

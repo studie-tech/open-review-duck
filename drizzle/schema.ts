@@ -699,7 +699,10 @@ export const reviewConceptMembers = createTable(
     }).onDelete("cascade"),
     foreignKey({
       columns: [t.layoutId, t.snapshotId],
-      foreignColumns: [reviewConceptLayouts.id, reviewConceptLayouts.snapshotId],
+      foreignColumns: [
+        reviewConceptLayouts.id,
+        reviewConceptLayouts.snapshotId,
+      ],
     }).onDelete("cascade"),
     foreignKey({
       columns: [t.unitId, t.snapshotId],
