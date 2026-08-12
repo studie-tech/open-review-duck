@@ -19,8 +19,13 @@ const pool =
       connectionString: env.DATABASE_URL,
       // The old fixed 5 was sized for an app whose heaviest AI operation was a
       // single agent. Deep review fans out across files, each holding its own
-      // statements, so production sizes the pool to the reviewer instead.
-      max: env.NODE_ENV === "production" ? env.DATABASE_POOL_MAX : 2,
+      // statements, so the pool is sized to the reviewer instead. Development
+      // stays smaller by default but honours the same setting, because a
+      // fan-out cannot be exercised locally against two connections.
+      max:
+        env.NODE_ENV === "production"
+          ? env.DATABASE_POOL_MAX
+          : Math.min(env.DATABASE_POOL_MAX, 8),
       idleTimeoutMillis: 20_000,
       connectionTimeoutMillis: 15_000,
       keepAlive: true,
