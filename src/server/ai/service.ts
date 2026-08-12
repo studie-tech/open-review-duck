@@ -50,6 +50,26 @@ export type TokenUsage = {
 };
 
 export const CURRENT_AI_AGENT_VERSION = 14;
+
+/** The refusal a caller without a deep-review entitlement is told verbatim. */
+export const DEEP_REVIEW_UNENTITLED_MESSAGE =
+  "Deep review requires a paid plan";
+
+/**
+ * Reports whether an account may run a deep review of a pull request.
+ *
+ * The disjunction is load-bearing rather than redundant. `jobScope` below
+ * forces `subscribed` to false on a local deployment, because it is derived
+ * from a Clerk entitlement and there is no Clerk on the appliance — so writing
+ * this as `subscribed` alone would switch deep review permanently off for
+ * every self-hosted operator. Nor is there anything to protect there:
+ * `useManagedQuota` is likewise `!local`, so a local operator configures and
+ * pays for their own provider. The paid gate is a rule about hosted economics,
+ * and the appliance has none.
+ */
+export function deepReviewAvailable(subscribed: boolean) {
+  return subscribed || isLocalDeployment();
+}
 /** Estimates a conservative token reservation for one investigation. */
 function estimateAiReservation(
   units: Array<{
@@ -310,6 +330,11 @@ export async function createAiJob(
   input: {
     pullRequestId: string;
     unitId?: string;
+    /**
+     * `review` is the deep-review parent, and the only review row created
+     * here: the fan-out's `review_file` and `review_survey` children are
+     * inserted by `createReviewChildJob` inside the seal-plan transaction.
+     */
     kind: "explain" | "review" | "semantic_cluster";
     question?: string;
     layoutKey?: string;
@@ -319,6 +344,13 @@ export async function createAiJob(
     subscribed: boolean;
   },
 ) {
+  // Entitlement is read once, here, and never again: a job that exists is a
+  // job that runs, so a subscription lapsing mid-review cannot strand a sealed
+  // plan with no reviewer willing to execute it. Refusing before `jobScope`
+  // also keeps an unentitled caller off the snapshot hydration entirely.
+  if (input.kind === "review" && !deepReviewAvailable(input.subscribed)) {
+    throw new Error(DEEP_REVIEW_UNENTITLED_MESSAGE);
+  }
   const scope = await jobScope(db, input);
   const units = await hydrateReviewUnits(
     db,

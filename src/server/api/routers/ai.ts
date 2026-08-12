@@ -24,10 +24,13 @@ import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
   CURRENT_AI_AGENT_VERSION,
   createAiJob,
+  DEEP_REVIEW_UNENTITLED_MESSAGE,
+  deepReviewAvailable,
   scheduleAiJob,
   settleAiJobQuota,
 } from "~/server/ai/service";
 import { isLocalDeployment } from "~/server/deployment";
+import { cancelDeepReviewTree } from "~/server/review/deep/cancel";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import {
   assertSafeRemoteUrl,
@@ -67,6 +70,10 @@ function publicConfiguration(managedModel: string) {
 }
 
 const safeAiStartMessages = new Set([
+  // Imported rather than repeated: the set matches on exact text, so a copy
+  // that drifted from the thrown message would be laundered into the generic
+  // "could not start" reply and the caller would never learn it needs a plan.
+  DEEP_REVIEW_UNENTITLED_MESSAGE,
   "Pull request not found",
   "Accept the Big Pickle data disclosure before using AI",
   "The managed SaaS model is not configured",
@@ -111,6 +118,12 @@ export const aiRouter = createTRPCRouter({
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
+      // Both review entry points read this: the Review button and the
+      // auto-start effect that fires on every pull-request page load. Without
+      // it an unentitled account would issue a mutation that can only fail.
+      deepReviewAvailable: deepReviewAvailable(
+        ctx.auth.has({ feature: PAID_AI_FEATURE }),
+      ),
       managedModel,
       managedModels: [managedModel],
       disclosure: {
@@ -543,6 +556,12 @@ export const aiRouter = createTRPCRouter({
         where: and(
           eq(aiJobs.id, input.jobId),
           eq(aiJobs.userId, ctx.auth.userId),
+          // A deep-review child owns no `workflowRunId`, so cancelling one
+          // here would mark its row terminal while its file agent kept
+          // running and its coverage item stayed `selected`. A run is
+          // cancelled through the parent that owns the workflow, or not at
+          // all, so a child id is not a job this procedure can resolve.
+          isNull(aiJobs.parentJobId),
         ),
       });
       if (!job) throw new TRPCError({ code: "NOT_FOUND" });
@@ -561,6 +580,17 @@ export const aiRouter = createTRPCRouter({
           completedAt: new Date(),
         })
         .where(eq(aiJobs.id, job.id));
+      if (job.kind === "review") {
+        // Killing the workflow above means nothing will ever sweep the tree
+        // again, so without this every child stays live and every item stays
+        // `selected` — a run that can never reach a terminal state. Ordering
+        // is load-bearing at both ends: the parent is already `cancelled`, so
+        // the finalize inside cannot flip the run back to `completed`, and it
+        // runs before the settle below because it first rolls the children's
+        // tokens onto the parent that one-shot settle would otherwise record
+        // as zero.
+        await cancelDeepReviewTree(ctx.db, job.id);
+      }
       await settleAiJobQuota(ctx.db, job.id);
       return { status: "cancelled" as const };
     }),
@@ -570,7 +600,12 @@ export const aiRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const [usage] = await ctx.db
         .select({
-          runs: sql<number>`count(${aiJobs.id})`,
+          // A deep review is a tree, not a row. The parent is the run the
+          // reviewer started, while every child carries the consumption, so
+          // the two halves of this aggregate need different scopes: counting
+          // rows would report one run per reviewed file, and narrowing the
+          // whole rowset to parents would report the run's tokens as zero.
+          runs: sql<number>`count(*) filter (where ${aiJobs.parentJobId} is null)`,
           inputTokens: sql<number>`coalesce(sum(${aiJobs.inputTokens}), 0)`,
           outputTokens: sql<number>`coalesce(sum(${aiJobs.outputTokens}), 0)`,
           cacheReadTokens: sql<number>`coalesce(sum(${aiJobs.cacheReadTokens}), 0)`,
@@ -604,6 +639,11 @@ export const aiRouter = createTRPCRouter({
         orderBy: (table, { desc }) => [desc(table.version)],
       });
       if (!snapshot) return null;
+      // The whole row, deliberately: `deepReviewTerminalState` and
+      // `runFailureClass` are what let the UI distinguish a complete run from
+      // a partial or failed one, and a narrowing column list is exactly how
+      // they would be dropped. Children never match — they are `review_file`
+      // and `review_survey`, not `review`.
       return (
         (await ctx.db.query.aiJobs.findFirst({
           where: and(

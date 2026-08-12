@@ -5,6 +5,7 @@ import { generateText } from "ai";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { aiJobs, aiReviewFindings, aiReviewItems } from "@/drizzle/schema";
+import { env } from "~/env";
 import { resolveAiModel } from "~/server/ai/models";
 import type { TokenUsage } from "~/server/ai/service";
 import type { db as database } from "~/server/db";
@@ -29,7 +30,7 @@ type Database = typeof database;
  * so below this size the remaining findings are almost always distinct and the
  * call buys nothing but a suppression channel.
  */
-export const DEEP_REVIEW_DEDUPE_MIN = 3;
+export const DEEP_REVIEW_DEDUPE_MIN = env.DEEP_REVIEW_DEDUPE_MIN;
 
 /**
  * The largest set one clustering call may reason over.

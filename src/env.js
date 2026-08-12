@@ -13,6 +13,12 @@ export const env = createEnv({
     DEPLOYMENT_MODE: z.enum(["local", "saas"]).default("saas"),
     DATABASE_URL: z.string().url(),
     MIGRATION_DATABASE_URL: z.string().url().optional(),
+    // Sized to the deep reviewer's fan-out rather than to a single agent:
+    // DEEP_REVIEW_EXECUTION_SLOTS files run at once, each holding up to
+    // DEEP_REVIEW_TOOL_SLOTS statements, plus polling, cron, and headroom.
+    // The ceiling guards a shared Postgres max_connections, because every
+    // concurrent serverless instance carries its own pool.
+    DATABASE_POOL_MAX: z.coerce.number().int().min(2).max(50).default(5),
     CLERK_SECRET_KEY: z.string().min(1).optional(),
     ENCRYPTION_KEY: environmentSecretSchema.optional(),
     CLERK_WEBHOOK_SIGNING_SECRET: z.string().min(1).optional(),
@@ -95,6 +101,43 @@ export const env = createEnv({
       .min(60_000)
       .max(1_800_000)
       .default(1_800_000),
+    // Instantaneous concurrency, never a coverage cap: every selected file is
+    // reviewed, and this only bounds how many are in flight at one instant.
+    DEEP_REVIEW_EXECUTION_SLOTS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(32)
+      .default(4),
+    // Concurrent tool bodies inside one file scout, multiplied by the slots
+    // above when sizing DATABASE_POOL_MAX.
+    DEEP_REVIEW_TOOL_SLOTS: z.coerce.number().int().min(1).max(16).default(4),
+    // Durable model turns one file scout may take; each turn is its own step,
+    // so a crash resumes at a turn boundary instead of restarting the file.
+    DEEP_REVIEW_FILE_MAX_TURNS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10)
+      .default(3),
+    // Changed lines in a file before it earns a pre-scan planning call. A plan
+    // over a three-line change has nothing to rank and only adds noise.
+    DEEP_REVIEW_PLAN_LINE_THRESHOLD: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10_000)
+      .default(50),
+    // Optional run-wide guard on finding relocation, in re-extraction calls.
+    DEEP_REVIEW_RELOCATION_LIMIT: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1_000)
+      .default(20),
+    // Surviving findings required before one clustering call is worth making;
+    // below it the deterministic collapse has already done the work.
+    DEEP_REVIEW_DEDUPE_MIN: z.coerce.number().int().min(2).max(100).default(3),
     ALLOW_PRIVATE_PROVIDER_HOSTS: z
       .enum(["true", "false"])
       .default("false")
@@ -121,6 +164,7 @@ export const env = createEnv({
     DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE,
     DATABASE_URL: process.env.DATABASE_URL,
     MIGRATION_DATABASE_URL: process.env.MIGRATION_DATABASE_URL,
+    DATABASE_POOL_MAX: process.env.DATABASE_POOL_MAX,
     CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
     CLERK_WEBHOOK_SIGNING_SECRET: process.env.CLERK_WEBHOOK_SIGNING_SECRET,
@@ -160,6 +204,13 @@ export const env = createEnv({
     AI_MAX_DISTINCT_FILES: process.env.AI_MAX_DISTINCT_FILES,
     AI_MAX_SOURCE_BYTES: process.env.AI_MAX_SOURCE_BYTES,
     AI_MAX_DURATION_MS: process.env.AI_MAX_DURATION_MS,
+    DEEP_REVIEW_EXECUTION_SLOTS: process.env.DEEP_REVIEW_EXECUTION_SLOTS,
+    DEEP_REVIEW_TOOL_SLOTS: process.env.DEEP_REVIEW_TOOL_SLOTS,
+    DEEP_REVIEW_FILE_MAX_TURNS: process.env.DEEP_REVIEW_FILE_MAX_TURNS,
+    DEEP_REVIEW_PLAN_LINE_THRESHOLD:
+      process.env.DEEP_REVIEW_PLAN_LINE_THRESHOLD,
+    DEEP_REVIEW_RELOCATION_LIMIT: process.env.DEEP_REVIEW_RELOCATION_LIMIT,
+    DEEP_REVIEW_DEDUPE_MIN: process.env.DEEP_REVIEW_DEDUPE_MIN,
     ALLOW_PRIVATE_PROVIDER_HOSTS: process.env.ALLOW_PRIVATE_PROVIDER_HOSTS,
     ALLOW_PRIVATE_AI_HOSTS: process.env.ALLOW_PRIVATE_AI_HOSTS,
     NODE_ENV: process.env.NODE_ENV,

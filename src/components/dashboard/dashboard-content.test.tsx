@@ -117,6 +117,7 @@ describe("DashboardContent", () => {
         managedModel: "big-pickle",
         managedModels: ["big-pickle"],
         reviewPullRequests: false,
+        deepReviewAvailable: false,
         configuration: null,
         disclosure: {
           accepted: false,
@@ -181,6 +182,7 @@ describe("DashboardContent", () => {
           managedModel: "big-pickle",
           managedModels: ["big-pickle"],
           reviewPullRequests: false,
+          deepReviewAvailable: false,
           configuration: null,
           disclosure: { accepted: false, version: "test" },
         }}
@@ -254,6 +256,7 @@ describe("DashboardContent", () => {
           managedModel: "big-pickle",
           managedModels: ["big-pickle"],
           reviewPullRequests: false,
+          deepReviewAvailable: false,
           configuration: testCase.configuration,
           disclosure: { accepted: false, version: "test" },
         }}
@@ -275,6 +278,7 @@ describe("DashboardContent", () => {
           managedModel: "provider/model",
           managedModels: ["provider/model"],
           reviewPullRequests: false,
+          deepReviewAvailable: false,
           configuration: {
             provider: "openrouter",
             model: "provider/model",
