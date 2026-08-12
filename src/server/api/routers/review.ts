@@ -511,6 +511,7 @@ async function lockConceptLayoutForReviewer(
                 layoutId: personal.id,
                 conceptId,
                 unitId: member.unitId,
+                snapshotId: concept.snapshotId,
                 memberOrder: member.memberOrder,
               },
             ]
@@ -3102,6 +3103,7 @@ export const reviewRouter = createTRPCRouter({
               layoutId,
               conceptId: concept.id,
               unitId,
+              snapshotId: snapshot.id,
               memberOrder,
             }));
           }),

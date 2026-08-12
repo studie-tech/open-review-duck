@@ -524,6 +524,7 @@ export async function syncPullRequest(
           layoutId: baselineLayout.id,
           conceptId: insertedConcept.id,
           unitId: unit.id,
+          snapshotId: snapshot.id,
           memberOrder,
         };
       });
