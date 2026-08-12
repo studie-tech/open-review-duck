@@ -28,6 +28,7 @@ const fixture = {
   personalLayoutId: randomUUID(),
   personalConceptId: randomUUID(),
   baselineConceptId: randomUUID(),
+  foreignSnapshotId: randomUUID(),
 };
 
 beforeAll(async () => {
@@ -68,13 +69,22 @@ beforeAll(async () => {
     baseSha: "b".repeat(40),
     webUrl: "https://github.com/reviewduck/integration/pull/1",
   });
-  await db.insert(reviewSnapshots).values({
-    id: fixture.snapshotId,
-    pullRequestId: fixture.pullRequestId,
-    headSha: "a".repeat(40),
-    baseSha: "b".repeat(40),
-    version: 1,
-  });
+  await db.insert(reviewSnapshots).values([
+    {
+      id: fixture.snapshotId,
+      pullRequestId: fixture.pullRequestId,
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      version: 1,
+    },
+    {
+      id: fixture.foreignSnapshotId,
+      pullRequestId: fixture.pullRequestId,
+      headSha: "c".repeat(40),
+      baseSha: "b".repeat(40),
+      version: 2,
+    },
+  ]);
   await db.insert(reviewUnits).values({
     id: fixture.unitId,
     snapshotId: fixture.snapshotId,
@@ -131,6 +141,23 @@ afterAll(async () => {
   await db.delete(users).where(eq(users.id, fixture.userId));
 });
 
+describe("review concept membership snapshot scope", () => {
+  it("confines a member to a unit of the layout's own snapshot", async () => {
+    // A layout partitions one snapshot. A membership naming a unit from
+    // another revision would place work the reviewer is not looking at into
+    // the path they are.
+    await expect(
+      db.insert(reviewConceptMembers).values({
+        layoutId: fixture.personalLayoutId,
+        conceptId: fixture.personalConceptId,
+        unitId: fixture.unitId,
+        snapshotId: fixture.foreignSnapshotId,
+        memberOrder: 0,
+      }),
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+  });
+});
+
 describe("review concept dependency scope", () => {
   it("confines both ends of an edge to one layout", async () => {
     // An edge whose two concepts live in different layouts would order a
@@ -160,6 +187,7 @@ describe("review concept membership scope", () => {
         layoutId: fixture.baselineLayoutId,
         conceptId: fixture.personalConceptId,
         unitId: fixture.unitId,
+        snapshotId: fixture.snapshotId,
         memberOrder: 0,
       }),
     ).rejects.toMatchObject({ cause: { code: "23503" } });
@@ -168,6 +196,7 @@ describe("review concept membership scope", () => {
       layoutId: fixture.personalLayoutId,
       conceptId: fixture.personalConceptId,
       unitId: fixture.unitId,
+      snapshotId: fixture.snapshotId,
       memberOrder: 0,
     });
     await db

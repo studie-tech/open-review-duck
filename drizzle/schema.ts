@@ -599,6 +599,9 @@ export const reviewUnits = createTable(
   },
   (t) => [
     uniqueIndex("review_unit_key_idx").on(t.snapshotId, t.stableKey),
+    // Membership reaches a unit through the snapshot it claims, so the pair
+    // that identifies a unit inside its snapshot has to be referenceable.
+    uniqueIndex("review_unit_scope_idx").on(t.id, t.snapshotId),
     index("review_order_idx").on(t.snapshotId, t.reviewOrder),
     // Snapshot pruning cascades from snapshot_file, and source-blob collection
     // has to prove no unit still references a blob. Without these the referential
@@ -633,6 +636,9 @@ export const reviewConceptLayouts = createTable(
     uniqueIndex("review_concept_personal_idx")
       .on(t.snapshotId, t.userId)
       .where(sql`${t.userId} is not null`),
+    // Membership carries the snapshot as well, and that copy is only
+    // trustworthy if it can be tied back to the layout.
+    uniqueIndex("review_concept_layout_scope_idx").on(t.id, t.snapshotId),
   ],
 );
 
@@ -669,9 +675,13 @@ export const reviewConceptMembers = createTable(
       .notNull()
       .references(() => reviewConceptLayouts.id, { onDelete: "cascade" }),
     conceptId: uuid().notNull(),
-    unitId: uuid()
+    unitId: uuid().notNull(),
+    // A layout partitions one snapshot's units. Carrying the snapshot lets
+    // both the layout and the unit be reached through it, so a membership
+    // cannot place a unit from one revision into a layout of another.
+    snapshotId: uuid()
       .notNull()
-      .references(() => reviewUnits.id, { onDelete: "cascade" }),
+      .references(() => reviewSnapshots.id, { onDelete: "cascade" }),
     memberOrder: integer().notNull(),
   },
   (t) => [
@@ -686,6 +696,14 @@ export const reviewConceptMembers = createTable(
     foreignKey({
       columns: [t.conceptId, t.layoutId],
       foreignColumns: [reviewConcepts.id, reviewConcepts.layoutId],
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.layoutId, t.snapshotId],
+      foreignColumns: [reviewConceptLayouts.id, reviewConceptLayouts.snapshotId],
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.unitId, t.snapshotId],
+      foreignColumns: [reviewUnits.id, reviewUnits.snapshotId],
     }).onDelete("cascade"),
   ],
 );
