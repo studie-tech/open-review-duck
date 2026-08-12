@@ -18,9 +18,22 @@ describe("provider credential recovery", () => {
   });
 
   it("reauthorizes managed credentials only in hosted deployments", () => {
-    expect(supportsManagedReauthorization(false, "github_app")).toBe(true);
-    expect(supportsManagedReauthorization(false, "oauth")).toBe(true);
-    expect(supportsManagedReauthorization(false, "pat")).toBe(false);
-    expect(supportsManagedReauthorization(true, "github_app")).toBe(false);
+    expect(supportsManagedReauthorization(false, "github_app", "github")).toBe(
+      true,
+    );
+    expect(supportsManagedReauthorization(false, "oauth", "gitlab")).toBe(true);
+    expect(supportsManagedReauthorization(false, "pat", "github")).toBe(false);
+    expect(supportsManagedReauthorization(true, "github_app", "github")).toBe(
+      false,
+    );
+  });
+
+  it("offers no hosted reconnect for a provider that has no such flow", () => {
+    // A legacy Azure DevOps row can still carry a managed credential kind, and
+    // the reconnect it used to offer named the wrong provider and did nothing.
+    expect(supportsManagedReauthorization(false, "oauth", "azure_devops")).toBe(
+      false,
+    );
+    expect(supportsTokenReplacement(false, "pat")).toBe(true);
   });
 });
