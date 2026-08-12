@@ -151,3 +151,45 @@ describe("declarations a grammar names in its own vocabulary", () => {
     expect(units[0]?.source).toContain("Holds water");
   });
 });
+
+describe("a definition written as a run of clauses", () => {
+  const haskell = [
+    "module M where",
+    "",
+    "quack :: Int -> String",
+    'quack 0 = "none"',
+    'quack 1 = "one"',
+    'quack _ = "many"',
+    "",
+    "honk :: Int",
+    "honk = 1",
+    "",
+  ].join("\n");
+
+  it("is one Haskell unit, signature and equations together", () => {
+    // A card per equation gives a reviewer a column of cards all called
+    // "quack", and nobody confirms one equation without the others.
+    const units = analyzeFiles([
+      { path: "M.hs", content: haskell, changeType: "added" },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units.map(({ name }) => name)).toEqual(["quack", "honk"]);
+    expect(units[0]).toMatchObject({ startLine: 3, endLine: 6 });
+    expect(units[0]?.source).toContain('quack _ = "many"');
+    expect(units[1]).toMatchObject({ startLine: 8, endLine: 9 });
+  });
+
+  it("leaves an overload set of the same name apart", () => {
+    // Two C++ overloads share a name and are different functions, so a
+    // language that is not written in clauses must keep them separate.
+    const units = analyzeFiles([
+      {
+        path: "f.cpp",
+        content: "int f(int a) { return a; }\nint f(double a) { return 1; }\n",
+        changeType: "added",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(2);
+  });
+});

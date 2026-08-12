@@ -33,6 +33,12 @@ interface LanguageShape {
    * declarations, so it never reaches declaration extraction at all.
    */
   reviewsWholeFile?: boolean;
+  /**
+   * Marks a language that writes one definition as a run of same-named
+   * declarations — a type signature and the equations under it — rather than
+   * allowing two of that name to be different things.
+   */
+  clausesShareOneDeclaration?: boolean;
   imports: ReadonlySet<string>;
   comments: ReadonlySet<string>;
   identifierTypes: ReadonlySet<string>;
@@ -893,6 +899,7 @@ const shapes: Record<TreeSitterLanguage, LanguageShape> = {
     ),
     functions: set("function", "signature"),
     variables: set("bind", "pattern_synonym"),
+    clausesShareOneDeclaration: true,
     imports: set("header", "import"),
     comments: set("comment", "haddock"),
     identifierTypes: commonIdentifiers,
@@ -6481,6 +6488,51 @@ function retainWholeChildlessDeclarations<
   return candidates;
 }
 
+/**
+ * Joins the run of declarations that spell one definition into a single unit.
+ *
+ * Haskell writes a definition as a type signature followed by its equations,
+ * each its own node and every one of them carrying the same name. They are one
+ * thing to read and one thing to sign off — nobody confirms `quack 0 = …`
+ * without `quack _ = …`, and a card per equation gives a reviewer a column of
+ * cards that cannot be told apart. A language where two adjacent declarations
+ * of one name are genuinely different things, such as a C++ overload set, is
+ * not marked and keeps them separate.
+ */
+function mergeClauseDeclarations<
+  Candidate extends { node: SyntaxNode; unit: RawUnit; ownName: string },
+>(file: SourceFile, language: TreeSitterLanguage, candidates: Candidate[]) {
+  if (!shapes[language].clausesShareOneDeclaration) return candidates;
+  const ordered = [...candidates].sort(
+    (left, right) => left.node.startIndex - right.node.startIndex,
+  );
+  const merged: Candidate[] = [];
+  for (const candidate of ordered) {
+    const previous = merged.at(-1);
+    // A signature and the equations beneath it are read as different kinds of
+    // node — one is a type, the others are bindings — and are still the one
+    // definition, so only the name and the adjacency decide.
+    if (
+      !previous ||
+      !candidate.ownName ||
+      previous.ownName !== candidate.ownName
+    ) {
+      merged.push(candidate);
+      continue;
+    }
+    const start = file.content.indexOf(
+      previous.unit.source,
+      Math.max(0, previous.node.startIndex - previous.unit.source.length),
+    );
+    const from = start >= 0 ? start : previous.node.startIndex;
+    const source = file.content.slice(from, candidate.node.endIndex);
+    previous.unit.source = source;
+    previous.unit.endLine = lineAt(file.content, candidate.node.endIndex);
+    previous.unit.contentHash = sha256(source);
+  }
+  return merged;
+}
+
 /** Builds the review analyzer for one Tree-sitter supported language. */
 export function treeSitterAdapter(
   language: TreeSitterLanguage,
@@ -6501,10 +6553,14 @@ export function treeSitterAdapter(
     },
     analyze(file) {
       const units = withSyntaxTree(language, file.content, (tree) => {
-        const candidates = retainWholeChildlessDeclarations(
+        const candidates = mergeClauseDeclarations(
           file,
           language,
-          declarationCandidates(file, language, tree.rootNode),
+          retainWholeChildlessDeclarations(
+            file,
+            language,
+            declarationCandidates(file, language, tree.rootNode),
+          ),
         );
         return connectDependencies(file.content, language, candidates);
       });
