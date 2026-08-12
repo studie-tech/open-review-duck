@@ -86,8 +86,18 @@ jobs:
             playwright-${{ runner.os }}-${{
             steps.playwright-version.outputs.value }}
       # The browser needs system libraries the runner image does not carry, so
-      # this reaches Ubuntu's mirrors. A stalled mirror used to hold the job
-      # until its own timeout; it now gives up while the run can still say so.
+      # this reaches Ubuntu's mirrors. There is more than one, and apt does
+      # move on when the first stops answering — but it waits two minutes per
+      # index file first, which is where a quarter of an hour came from. Ten
+      # seconds is long enough to tell a slow mirror from a dead one, and the
+      # step keeps a budget of its own in case every mirror is unreachable.
+      - name: Give up quickly on a package mirror that has stopped answering
+        run: |
+          sudo tee /etc/apt/apt.conf.d/99-mirror-timeouts >/dev/null <<'CONF'
+          Acquire::http::Timeout "10";
+          Acquire::https::Timeout "10";
+          Acquire::Retries "1";
+          CONF
       - run: pnpm exec playwright install-deps chromium
         timeout-minutes: 6
       - run: pnpm exec playwright install chromium
