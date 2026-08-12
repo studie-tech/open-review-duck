@@ -238,6 +238,14 @@ export interface AnalyzedUnit {
    * there are no separate members to sign off — only the one new thing.
    */
   bodyEndLine?: number;
+  /**
+   * Marks a range the analyzer invented rather than a declaration it found.
+   *
+   * A sweep over statements no declaration claimed, and a fragment of changed
+   * lines, each stand for themselves and for nothing around them. A
+   * declaration can speak for what it encloses; neither of these can.
+   */
+  invented?: boolean;
   depth: number;
   reviewOrder: number;
 }

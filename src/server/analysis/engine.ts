@@ -27,7 +27,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 42;
+export const CURRENT_ANALYSIS_VERSION = 43;
 
 type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
@@ -587,6 +587,7 @@ function moduleReviewUnits(
         language,
         kind: "module" as const,
         name,
+        invented: true,
         signature: `${name} in ${file.path}`,
         startLine: range.start + 1,
         endLine: range.end + 1,
@@ -779,6 +780,7 @@ function changeFragment(
     language,
     kind: "module",
     name: changeFragmentName(identitySource, lineLabel),
+    invented: true,
     signature: `Changed ${lineLabel} in ${file.path}`,
     startLine: labelStart + 1,
     endLine: labelEnd + 1,
@@ -1141,9 +1143,9 @@ function absorbNewDeclarationMembers(
   const extentOf = (unit: RawUnit) => unit.bodyEndLine ?? unit.endLine;
   const absorbed = new Set<string>();
   for (const container of introduced) {
-    // A sweep over statements no declaration claimed is a range, not a
-    // declaration, so it answers for nothing but itself.
-    if (container.kind === "module" || container.kind === "file") continue;
+    // A range the analyzer invented stands for itself and for nothing around
+    // it, and a file's context record is not a declaration either.
+    if (container.invented || container.kind === "file") continue;
     for (const member of introduced) {
       if (member === container) continue;
       const inside =

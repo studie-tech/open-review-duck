@@ -184,6 +184,54 @@ describe("a declaration this revision introduces", () => {
     expect(units[0]?.name).toContain("C");
   });
 
+  it.each([
+    {
+      language: "Elixir",
+      path: "pond.ex",
+      preamble: "# pond",
+      content: "defmodule Pond do\n  @depth 3\n\n  def run, do: @depth\nend",
+      name: "Pond",
+    },
+    {
+      language: "Kotlin",
+      path: "Sound.kt",
+      preamble: "val port = 1",
+      content: "enum class Sound {\n    QUACK,\n    HONK,\n}",
+      name: "Sound",
+    },
+  ])(
+    "answers for what it encloses however $language builds the card",
+    ({ path, preamble, content, name }) => {
+      // A declaration whose card is not a truncated header — an Elixir module,
+      // a Kotlin enum — must absorb the same way, so the rule cannot key on
+      // how the card was built.
+      const units = reviewUnits({
+        path,
+        previousContent: `${preamble}\n`,
+        content: `${preamble}\n\n${content}\n`,
+        changeType: "modified",
+      });
+
+      expect(units).toHaveLength(1);
+      expect(units[0]).toMatchObject({ name });
+    },
+  );
+
+  it("leaves a statement sweep answering only for itself", () => {
+    // A range the analyzer invented stands for itself. Letting one absorb
+    // would hide a declaration that merely sits inside the same lines.
+    const units = reviewUnits({
+      path: "boot.ts",
+      previousContent: "const app = express();\napp.listen(3000);\n",
+      content:
+        "const app = express();\napp.use(rateLimit());\napp.listen(3000);\n",
+      changeType: "modified",
+    });
+
+    expect(units).toHaveLength(1);
+    expect(units[0]?.name).toBe("Module statements");
+  });
+
   it("leaves no changed line of an introduced declaration unrendered", () => {
     // The closing brace of a new container used to belong to nothing: the
     // shell stopped at the header and the members each held one line.
