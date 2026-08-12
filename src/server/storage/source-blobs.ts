@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { and, eq, lt, or, sql } from "drizzle-orm";
 import { sourceBlobs } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
@@ -10,6 +11,8 @@ import { sourceObjectStore } from "./index";
 type Database = typeof database;
 const UPLOAD_LEASE_MILLISECONDS = 4 * 60_000;
 const DELETION_LEASE_MILLISECONDS = 15 * 60_000;
+const CONCURRENT_UPLOAD_POLL_MILLISECONDS = 250;
+const CONCURRENT_UPLOAD_WAIT_MILLISECONDS = 30_000;
 
 /** Returns the SHA-256 content identity used for source object deduplication. */
 export function sourceDigest(bytes: Uint8Array) {
@@ -81,21 +84,9 @@ export async function persistSourceBlob(
       .returning();
     return claimed;
   };
-  const existing = await db.query.sourceBlobs.findFirst({
-    where: and(
-      eq(sourceBlobs.workspaceId, input.workspaceId),
-      eq(sourceBlobs.digest, digest),
-    ),
-  });
-  let claimed: typeof sourceBlobs.$inferSelect | undefined;
-  if (existing?.state === "ready") {
-    const reused = await reuseReadyBlob(existing);
-    if (reused) return reused;
-    claimed = await claimReadyBlob(existing.id);
-  }
-
-  if (!claimed) {
-    [claimed] = await db
+  /** Claims the digest for this call when no row holds it yet. */
+  const insertUploadClaim = async () => {
+    const [inserted] = await db
       .insert(sourceBlobs)
       .values({
         workspaceId: input.workspaceId,
@@ -113,41 +104,74 @@ export async function persistSourceBlob(
         target: [sourceBlobs.workspaceId, sourceBlobs.digest],
       })
       .returning();
-  }
-  if (!claimed) {
-    const raced = await db.query.sourceBlobs.findFirst({
-      where: and(
-        eq(sourceBlobs.workspaceId, input.workspaceId),
-        eq(sourceBlobs.digest, digest),
-      ),
-    });
-    if (raced?.state === "ready") {
-      const reused = await reuseReadyBlob(raced);
-      if (reused) return reused;
-      claimed = await claimReadyBlob(raced.id);
-    }
-    if (raced) {
-      if (!claimed) {
-        [claimed] = await db
-          .update(sourceBlobs)
-          .set(uploadClaim)
-          .where(
+    return inserted;
+  };
+  /** Claims a row whose upload failed or whose lease its writer let expire. */
+  const claimAbandonedBlob = async (id: string) => {
+    const [reclaimed] = await db
+      .update(sourceBlobs)
+      .set(uploadClaim)
+      .where(
+        and(
+          eq(sourceBlobs.id, id),
+          or(
+            eq(sourceBlobs.state, "failed"),
             and(
-              eq(sourceBlobs.id, raced.id),
-              or(
-                eq(sourceBlobs.state, "failed"),
-                and(
-                  eq(sourceBlobs.state, "uploading"),
-                  lt(sourceBlobs.uploadLeaseExpiresAt, new Date()),
-                ),
-              ),
+              eq(sourceBlobs.state, "uploading"),
+              lt(sourceBlobs.uploadLeaseExpiresAt, new Date()),
             ),
-          )
-          .returning();
+          ),
+        ),
+      )
+      .returning();
+    return reclaimed;
+  };
+  const existing = await db.query.sourceBlobs.findFirst({
+    where: and(
+      eq(sourceBlobs.workspaceId, input.workspaceId),
+      eq(sourceBlobs.digest, digest),
+    ),
+  });
+  let claimed: typeof sourceBlobs.$inferSelect | undefined;
+  if (existing?.state === "ready") {
+    const reused = await reuseReadyBlob(existing);
+    if (reused) return reused;
+    claimed = await claimReadyBlob(existing.id);
+  }
+
+  if (!claimed) claimed = await insertUploadClaim();
+  if (!claimed) {
+    // Repeated content is ordinary rather than exceptional: one pull request
+    // carries the same generated or empty file twice, and two pull requests of
+    // one workspace share whole directories. Losing the race says only that
+    // another call is already writing the very object this one would write, so
+    // this waits for that object instead of refusing. Giving up here spends a
+    // whole synchronization on a duplicate file.
+    const deadline = Date.now() + CONCURRENT_UPLOAD_WAIT_MILLISECONDS;
+    for (;;) {
+      const raced = await db.query.sourceBlobs.findFirst({
+        where: and(
+          eq(sourceBlobs.workspaceId, input.workspaceId),
+          eq(sourceBlobs.digest, digest),
+        ),
+      });
+      if (raced?.state === "ready") {
+        const reused = await reuseReadyBlob(raced);
+        if (reused) return reused;
+        claimed = await claimReadyBlob(raced.id);
       }
-    }
-    if (!claimed) {
-      throw new Error("A concurrent source upload is still in progress");
+      if (!claimed) {
+        // A row collected between the conflict and this read leaves the digest
+        // unheld again, and the insert that lost is the way back to holding it.
+        claimed = raced
+          ? await claimAbandonedBlob(raced.id)
+          : await insertUploadClaim();
+      }
+      if (claimed) break;
+      if (Date.now() >= deadline) {
+        throw new Error("A concurrent source upload is still in progress");
+      }
+      await delay(CONCURRENT_UPLOAD_POLL_MILLISECONDS);
     }
   }
 

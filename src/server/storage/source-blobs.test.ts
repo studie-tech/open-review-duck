@@ -218,4 +218,60 @@ describe("source blob pruning", () => {
     ).resolves.toMatchObject({ state: "ready" });
     expect(mocks.put).toHaveBeenCalledOnce();
   });
+
+  it("waits for a concurrent upload of the same content rather than failing", async () => {
+    // Two files of one pull request holding identical bytes is ordinary. The
+    // call that loses the race wants the object the winner is already writing,
+    // and refusing it spends the whole synchronization on a duplicate file.
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    const bytes = new TextEncoder().encode("shared by two files");
+    mocks.read.mockResolvedValue(bytes);
+    const uploading = {
+      id: "blob-id",
+      state: "uploading",
+      storage: "local",
+      objectKey: null,
+      digest: sourceDigest(bytes),
+      uploadLeaseExpiresAt: new Date(Date.now() + 60_000),
+    };
+    const ready = {
+      ...uploading,
+      state: "ready",
+      objectKey: "objects/shared",
+    };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(uploading)
+      .mockResolvedValueOnce(uploading)
+      .mockResolvedValue(ready);
+    const returning = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ ...ready, updatedAt: new Date() }]);
+    const database = {
+      query: { sourceBlobs: { findFirst } },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(async () => []),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning })),
+        })),
+      })),
+    };
+
+    await expect(
+      persistSourceBlob(database as never, {
+        workspaceId: "workspace",
+        bytes,
+      }),
+    ).resolves.toMatchObject({ state: "ready", objectKey: "objects/shared" });
+    // The winner stored the object, so the waiter must not store it again.
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
 });
