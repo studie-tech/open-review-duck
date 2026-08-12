@@ -14,7 +14,8 @@
       "!!**/coverage",
       "!!**/dist",
       "!!drizzle/meta",
-      "!!pnpm-lock.yaml"
+      "!!pnpm-lock.yaml",
+      "!!src/server/review/deep/rulebooks"
     ]
   },
   "formatter": {

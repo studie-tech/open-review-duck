@@ -244,6 +244,19 @@ function usageFromResult(result: {
   } satisfies TokenUsage;
 }
 
+/**
+ * Narrows a job kind to the two prompts this single-agent loop can build.
+ *
+ * Deep-review children run their own loop and must never reach here, so an
+ * unexpected kind is a dispatch bug rather than something to paper over.
+ */
+function singleAgentJobKind(kind: (typeof aiJobs.$inferSelect)["kind"]) {
+  if (kind === "explain") return "explain" as const;
+  if (kind === "review" || kind === "semantic_cluster")
+    return "review" as const;
+  throw new Error(`Job kind ${kind} does not run on the single-agent loop`);
+}
+
 /** Executes exactly one non-retrying model turn for a durable AI job. */
 export async function executeAiTurn(
   db: Database,
@@ -382,7 +395,7 @@ export async function executeAiTurn(
     const prompt: ModelMessage = {
       role: "user",
       content: reviewDuckAgentPrompt({
-        jobKind: job.kind === "semantic_cluster" ? "review" : job.kind,
+        jobKind: singleAgentJobKind(job.kind),
         pullRequest: {
           title: pullRequest.title,
           description: pullRequest.description ?? undefined,

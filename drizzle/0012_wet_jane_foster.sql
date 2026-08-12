@@ -1,1 +1,0 @@
-ALTER TABLE "open_review_duck_ai_job" ADD COLUMN "layoutKey" text;
