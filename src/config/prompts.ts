@@ -21,7 +21,7 @@ export interface AiPromptPullRequest {
 }
 
 export const REVIEWDUCK_AGENT_RUN_PROMPT =
-  "Inspect the authorized review context using the provided tools. Complete the requested explanation or review, submit the structured result exactly once, and do not modify repository files.";
+  "Inspect the authorized review context using the provided tools. Complete the requested explanation, submit the structured result exactly once, and do not modify repository files.";
 
 export const REVIEWDUCK_AGENT_QUESTION_PROMPT =
   "Inspect the authorized review context using the provided tools, then submit the structured focused answer exactly once. Do not modify repository files.";
@@ -38,7 +38,7 @@ export function escapePromptXml(value: string) {
 
 /** Builds the complete, reviewable instruction set for one isolated AI job. */
 export function reviewDuckAgentPrompt(configuration: {
-  jobKind: "explain" | "review";
+  jobKind: "explain";
   pullRequest: AiPromptPullRequest;
   selectedUnit?: AiPromptUnit;
 }) {
@@ -56,7 +56,7 @@ export function reviewDuckAgentPrompt(configuration: {
     ].join("\n"),
   ];
 
-  const explanation = [
+  const instructions = [
     configuration.selectedUnit?.question
       ? [
           "Answer the reviewer's exact question about the focused source line and its surrounding review unit. Use the pull-request objective, delta, dependencies, and other changed files when they materially help answer it.",
@@ -113,23 +113,9 @@ export function reviewDuckAgentPrompt(configuration: {
       : "No selected review unit was supplied; do not invent one.",
   ];
 
-  const review = [
-    "Act as a senior engineer reviewing the proposed pull-request change, not the pre-existing codebase in general.",
-    "Start by listing every changed file, understanding the stated intent, and comparing current content with previousContent where available. Inspect all changed files before submitting.",
-    "Trace relevant control flow, data flow, callers, callees, tests, schemas, configuration, and cross-file contracts available in the scoped workspace. Check whether the implementation matches the pull-request intent and repository conventions.",
-    "Look for concrete regressions in correctness, security, authorization, validation, concurrency, error handling, resource use, performance, compatibility, migrations, and test coverage. Consider realistic edge cases and failure paths.",
-    "Before reporting a finding, seek evidence that could disprove it. Report it only when the affected scenario and impact are supported by the code and the author would likely fix it.",
-    "Ignore praise, summaries disguised as findings, speculative concerns, and minor style preferences unless they obscure behavior or violate an explicit project rule.",
-    "Return annotations as an empty array. Report every distinct actionable issue you found, but prefer an empty findings array over low-confidence noise.",
-    "Return commentProposals as an empty array; full pull-request review issues belong in findings.",
-    "Each finding must identify the exact changed file path and the most precise current-revision line where the issue appears. Keep the body concise, state the triggering inputs or environment when conditional, explain the impact, and do not include a proposed patch.",
-    "Use critical only for release-blocking or broadly exploitable failures, warning for material defects that should be fixed, and info for lower-severity but still actionable defects.",
-    "The summary should briefly state what was reviewed and whether actionable findings were found. It must not hide additional findings that lack line-level evidence.",
-  ];
-
   return [
     ...shared,
-    ...(configuration.jobKind === "review" ? review : explanation),
+    ...instructions,
     "When analysis is complete, call submit_answer exactly once with the final structured result. Do not emit a separate answer before or after the tool call.",
   ].join("\n");
 }

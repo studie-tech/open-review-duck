@@ -13,17 +13,34 @@ const pullRequest = {
 };
 
 describe("ReviewDuck agent prompts", () => {
-  it("keeps repository content untrusted and review findings evidence-based", () => {
+  it("keeps repository content untrusted without a selected unit", () => {
     const prompt = reviewDuckAgentPrompt({
-      jobKind: "review",
+      jobKind: "explain",
       pullRequest,
     });
 
     expect(prompt).toContain("untrusted data");
     expect(prompt).toContain("compare it with current content");
-    expect(prompt).toContain("seek evidence that could disprove it");
-    expect(prompt).toContain("prefer an empty findings array");
-    expect(prompt).not.toContain("No selected review unit was supplied");
+    expect(prompt).toContain("No selected review unit was supplied");
+  });
+
+  it("no longer carries the retired whole-pull-request review instructions", () => {
+    const prompt = reviewDuckAgentPrompt({
+      jobKind: "explain",
+      pullRequest,
+      selectedUnit: {
+        path: "src/auth.ts",
+        name: "authorize",
+        kind: "function",
+        startLine: 20,
+        endLine: 45,
+        changedLineRanges: [{ startLine: 24, endLine: 26 }],
+      },
+    });
+
+    expect(prompt).not.toContain("Act as a senior engineer reviewing");
+    expect(prompt).not.toContain("seek evidence that could disprove it");
+    expect(prompt).not.toContain("prefer an empty findings array");
   });
 
   it("strictly scopes explanations to the selected unit", () => {
@@ -52,7 +69,6 @@ describe("ReviewDuck agent prompts", () => {
     expect(prompt).toContain("pull-request delta");
     expect(prompt).toContain("findings as an empty array");
     expect(prompt).toContain("<title>Tighten authorization</title>");
-    expect(prompt).not.toContain("Act as a senior engineer reviewing");
   });
 
   it("keeps dependency-only explanations free of invented inline notes", () => {

@@ -244,19 +244,6 @@ function usageFromResult(result: {
   } satisfies TokenUsage;
 }
 
-/**
- * Narrows a job kind to the two prompts this single-agent loop can build.
- *
- * Deep-review children run their own loop and must never reach here, so an
- * unexpected kind is a dispatch bug rather than something to paper over.
- */
-function singleAgentJobKind(kind: (typeof aiJobs.$inferSelect)["kind"]) {
-  if (kind === "explain") return "explain" as const;
-  if (kind === "review" || kind === "semantic_cluster")
-    return "review" as const;
-  throw new Error(`Job kind ${kind} does not run on the single-agent loop`);
-}
-
 /** Executes exactly one non-retrying model turn for a durable AI job. */
 export async function executeAiTurn(
   db: Database,
@@ -382,9 +369,14 @@ export async function executeAiTurn(
       where: eq(pullRequests.id, job.pullRequestId),
     });
     if (!pullRequest) throw new Error("AI pull request context not found");
-    if (job.kind === "explain" && !selectedUnit) {
-      throw new Error("AI explanation unit not found");
+    // Explanations and question threads are the only jobs this loop serves.
+    // Deep-review children drive their own turn loop and semantic clustering
+    // is a single structured call, so any other kind reaching here is a
+    // dispatch bug and must not be answered with an explanation prompt.
+    if (job.kind !== "explain") {
+      throw new Error(`Job kind ${job.kind} does not run on this agent loop`);
     }
+    if (!selectedUnit) throw new Error("AI explanation unit not found");
     const priorConversation = await loadPriorConversation(db, {
       threadId: job.threadId,
       userId: job.userId,
@@ -395,32 +387,29 @@ export async function executeAiTurn(
     const prompt: ModelMessage = {
       role: "user",
       content: reviewDuckAgentPrompt({
-        jobKind: singleAgentJobKind(job.kind),
+        jobKind: "explain",
         pullRequest: {
           title: pullRequest.title,
           description: pullRequest.description ?? undefined,
           sourceBranch: pullRequest.sourceBranch,
           targetBranch: pullRequest.targetBranch,
         },
-        selectedUnit: selectedUnit
-          ? {
-              path: selectedUnit.path,
-              name: selectedUnit.name,
-              kind: selectedUnit.kind,
-              startLine: selectedUnit.startLine,
-              endLine: selectedUnit.endLine,
-              previousStartLine:
-                selectedUnit.relatedRanges?.at(0)?.previousStartLine,
-              previousEndLine:
-                selectedUnit.relatedRanges?.at(-1)?.previousEndLine,
-              changedLineRanges: explanationChangedLineRanges(selectedUnit),
-              question: job.question ?? undefined,
-              focusLine: job.focusLine ?? undefined,
-              focusSide:
-                selectedUnit.changeType === "deleted" ? "previous" : "current",
-              conversation: priorConversation.turns,
-            }
-          : undefined,
+        selectedUnit: {
+          path: selectedUnit.path,
+          name: selectedUnit.name,
+          kind: selectedUnit.kind,
+          startLine: selectedUnit.startLine,
+          endLine: selectedUnit.endLine,
+          previousStartLine:
+            selectedUnit.relatedRanges?.at(0)?.previousStartLine,
+          previousEndLine: selectedUnit.relatedRanges?.at(-1)?.previousEndLine,
+          changedLineRanges: explanationChangedLineRanges(selectedUnit),
+          question: job.question ?? undefined,
+          focusLine: job.focusLine ?? undefined,
+          focusSide:
+            selectedUnit.changeType === "deleted" ? "previous" : "current",
+          conversation: priorConversation.turns,
+        },
       }),
     };
     await persistMessage(db, job, 0, prompt);

@@ -70,7 +70,7 @@ type ReviewItem = typeof aiReviewItems.$inferSelect;
  * than the agent: each turn is its own durable step, so a crashed process
  * resumes at the turn boundary instead of restarting the file.
  */
-export const DEEP_REVIEW_FILE_MAX_TURNS = 3;
+export const DEEP_REVIEW_FILE_MAX_TURNS = env.DEEP_REVIEW_FILE_MAX_TURNS;
 
 /**
  * The changed-line count above which a file earns a pre-scan planning call.
@@ -79,7 +79,8 @@ export const DEEP_REVIEW_FILE_MAX_TURNS = 3;
  * call: a severity-biased plan over a three-line change has nothing to rank,
  * and its output is noise the scout then has to discount.
  */
-export const DEEP_REVIEW_PLAN_LINE_THRESHOLD = 50;
+export const DEEP_REVIEW_PLAN_LINE_THRESHOLD =
+  env.DEEP_REVIEW_PLAN_LINE_THRESHOLD;
 
 /**
  * Concurrent tool bodies per file scout.
@@ -88,7 +89,7 @@ export const DEEP_REVIEW_PLAN_LINE_THRESHOLD = 50;
  * connection pool. A fan-out multiplies this by the number of files in flight,
  * so the child path runs narrower until `DATABASE_POOL_MAX` is measured.
  */
-export const DEEP_REVIEW_TOOL_SLOTS = 2;
+export const DEEP_REVIEW_TOOL_SLOTS = env.DEEP_REVIEW_TOOL_SLOTS;
 
 /** The reason recorded on an item whose scout used every turn it was given. */
 const TURN_LIMIT_REASON = "turn_limit";

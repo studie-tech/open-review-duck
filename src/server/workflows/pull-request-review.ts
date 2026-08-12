@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { FatalError, getWorkflowMetadata } from "workflow";
 import { aiJobs, workflowRuns } from "@/drizzle/schema";
+import { env } from "~/env";
 import { failAiJob } from "~/server/ai/agent-loop";
 import { db } from "~/server/db";
 import { runDeepReviewDedupe } from "~/server/review/deep/dedupe";
@@ -23,7 +24,7 @@ import { ensureWorkflowRunLink } from "./run-link";
  * pool of five, times `DEEP_REVIEW_TOOL_SLOTS` statements per file in flight,
  * and to be revisited with `DATABASE_POOL_MAX`.
  */
-const DEEP_REVIEW_EXECUTION_SLOTS = 4;
+const DEEP_REVIEW_EXECUTION_SLOTS = env.DEEP_REVIEW_EXECUTION_SLOTS;
 
 interface PlannedReviewFile {
   childJobId: string;

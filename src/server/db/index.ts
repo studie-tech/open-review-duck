@@ -17,7 +17,10 @@ const pool =
   new Pool(
     nodePostgresPoolConfig({
       connectionString: env.DATABASE_URL,
-      max: env.NODE_ENV === "production" ? 5 : 2,
+      // The old fixed 5 was sized for an app whose heaviest AI operation was a
+      // single agent. Deep review fans out across files, each holding its own
+      // statements, so production sizes the pool to the reviewer instead.
+      max: env.NODE_ENV === "production" ? env.DATABASE_POOL_MAX : 2,
       idleTimeoutMillis: 20_000,
       connectionTimeoutMillis: 15_000,
       keepAlive: true,

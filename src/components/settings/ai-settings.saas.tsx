@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import { formatTokenCount } from "~/lib/token-usage";
+import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Configuration = RouterOutputs["ai"]["configuration"];
@@ -28,6 +29,9 @@ export function SaasAiSettings({
   const [reviewPullRequests, setReviewPullRequests] = useState(
     initialConfiguration.reviewPullRequests,
   );
+  // Read from the configuration rather than from `planUsage.subscribed`, so
+  // this page and the review workspace gate on exactly one predicate.
+  const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
   const planUsage = api.ai.planUsage.useQuery(undefined, {
     initialData: initialPlanUsage,
     refetchOnMount: "always",
@@ -162,18 +166,29 @@ export function SaasAiSettings({
             </option>
           </select>
         </label>
-        <label className="bg-surface-subtle text-mist flex items-center justify-between gap-5 rounded-xl border border-line p-4 text-xs">
+        <label
+          className={cn(
+            "bg-surface-subtle text-mist flex items-center justify-between gap-5 rounded-xl border border-line p-4 text-xs",
+            !deepReviewAvailable && "opacity-60",
+          )}
+        >
           <span>
             <span className="text-cloud block text-sm font-medium">
               Review the full pull request
             </span>
             <span className="mt-1 block">
-              Request evidence-backed findings after a new revision syncs.
+              {deepReviewAvailable
+                ? "Request evidence-backed findings after a new revision syncs."
+                : "Pull-request review is a Pro capability. A full review fans out one agent per changed file, which the free monthly token allowance cannot fund."}
             </span>
           </span>
           <input
             type="checkbox"
             checked={reviewPullRequests}
+            // Disabled rather than hidden: the preference persists across a
+            // downgrade, so a reader needs to see that it is on and why it is
+            // not running.
+            disabled={!deepReviewAvailable}
             onChange={(event) => setReviewPullRequests(event.target.checked)}
             className="accent-lime size-4"
           />

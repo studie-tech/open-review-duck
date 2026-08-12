@@ -116,6 +116,19 @@ export const importTargetSchema = z.object({
   kind: z.enum(["default", "module", "named", "namespace"]),
 });
 
+/**
+ * The mutually exclusive ways one publish request may name AI-authored text.
+ *
+ * A deep-review finding is a row rather than a position in a job's result
+ * array, so it is keyed by id; naming it alongside either index would leave the
+ * publisher two disagreeing sources for the same comment body.
+ */
+const AI_COMMENT_SOURCE_KEYS = [
+  "aiFindingIndex",
+  "aiCommentIndex",
+  "aiFindingId",
+] as const;
+
 export const publishReviewCommentSchema = z
   .object({
     unitId: z.string().uuid(),
@@ -124,22 +137,20 @@ export const publishReviewCommentSchema = z
     aiJobId: z.string().uuid().optional(),
     aiFindingIndex: z.number().int().nonnegative().optional(),
     aiCommentIndex: z.number().int().nonnegative().optional(),
+    // `ai_review_finding.id` is a derived varchar, not a uuid, so this is
+    // bounded by the column width rather than parsed as one.
+    aiFindingId: z.string().trim().min(1).max(64).optional(),
   })
   .superRefine((value, context) => {
-    const hasAiIndex =
-      value.aiFindingIndex !== undefined || value.aiCommentIndex !== undefined;
-    const isAiComment = value.aiJobId !== undefined || hasAiIndex;
-    if (
-      isAiComment &&
-      (value.aiJobId === undefined ||
-        !hasAiIndex ||
-        (value.aiFindingIndex !== undefined &&
-          value.aiCommentIndex !== undefined))
-    ) {
+    const namedSources = AI_COMMENT_SOURCE_KEYS.filter(
+      (key) => value[key] !== undefined,
+    ).length;
+    const isAiComment = value.aiJobId !== undefined || namedSources > 0;
+    if (isAiComment && (value.aiJobId === undefined || namedSources !== 1)) {
       context.addIssue({
         code: "custom",
         message:
-          "AI job and exactly one finding or comment index must be provided together",
+          "AI job and exactly one finding or comment reference must be provided together",
       });
     }
     if (!isAiComment && !value.body) {

@@ -45,7 +45,7 @@ type Database = typeof database;
  * treatment — so `validateFileFindings` relocates without limit unless a
  * budget is passed in. The constant exists for callers that want the guard.
  */
-export const DEEP_REVIEW_RELOCATION_LIMIT = 20;
+export const DEEP_REVIEW_RELOCATION_LIMIT = env.DEEP_REVIEW_RELOCATION_LIMIT;
 
 const MAX_RELOCATE_OUTPUT_TOKENS = 1_024;
 const MAX_REFUTE_OUTPUT_TOKENS = 4_096;

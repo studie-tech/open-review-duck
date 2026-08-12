@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("~/env", () => ({
-  env: { ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" },
+  env: {
+    ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+    DEEP_REVIEW_DEDUPE_MIN: 3,
+  },
 }));
 
 const mocks = vi.hoisted(() => ({

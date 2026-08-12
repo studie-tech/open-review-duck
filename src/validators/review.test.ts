@@ -134,6 +134,17 @@ describe("review comment validation", () => {
     ).toBe(true);
   });
 
+  it("accepts a reference to a deep-review finding row", () => {
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        aiFindingId: "b9f1c0d2e3a4b5c6d7e8f9a0b1c2d3e4",
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects incomplete AI references and empty human feedback", () => {
     expect(
       publishReviewCommentSchema.safeParse({
@@ -156,6 +167,47 @@ describe("review comment validation", () => {
         unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
         line: 12,
         body: " ",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a finding row named alongside either index", () => {
+    // The three AI keys select the comment body from three different places,
+    // so any pair of them leaves the publisher without a single answer.
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        aiFindingId: "b9f1c0d2e3a4b5c6d7e8f9a0b1c2d3e4",
+        aiFindingIndex: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        aiFindingId: "b9f1c0d2e3a4b5c6d7e8f9a0b1c2d3e4",
+        aiCommentIndex: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a finding row without the job that authorizes it", () => {
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        aiFindingId: "b9f1c0d2e3a4b5c6d7e8f9a0b1c2d3e4",
+      }).success,
+    ).toBe(false);
+    expect(
+      publishReviewCommentSchema.safeParse({
+        unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        line: 12,
+        aiJobId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        aiFindingId: "  ",
       }).success,
     ).toBe(false);
   });

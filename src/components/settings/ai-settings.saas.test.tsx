@@ -73,6 +73,7 @@ describe("SaasAiSettings", () => {
           managedModel: "provider/model",
           managedModels: ["provider/model"],
           reviewPullRequests: false,
+          deepReviewAvailable: false,
           configuration: {
             provider: "openrouter",
             model: "provider/model",
@@ -103,6 +104,10 @@ describe("SaasAiSettings", () => {
     expect(screen.getByTestId("clerk-pricing-table")).toBeVisible();
     expect(screen.queryByText("Managed model")).not.toBeInTheDocument();
     expect(screen.queryByText(/Big Pickle/)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+    expect(
+      screen.getByText(/Pull-request review is a Pro capability/),
+    ).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Save preferences" }));
     expect(mocks.save).toHaveBeenCalledWith({
@@ -129,6 +134,7 @@ describe("SaasAiSettings", () => {
           managedModel: "provider/model",
           managedModels: ["provider/model"],
           reviewPullRequests: true,
+          deepReviewAvailable: true,
           configuration: {
             provider: "openrouter",
             model: "provider/model",
@@ -157,6 +163,10 @@ describe("SaasAiSettings", () => {
     expect(
       screen.getByRole("button", { name: "Manage subscription" }),
     ).toBeVisible();
+    expect(screen.getByRole("checkbox")).toBeEnabled();
+    expect(
+      screen.queryByText(/Pull-request review is a Pro capability/),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("clerk-pricing-table")).not.toBeInTheDocument();
   });
 });

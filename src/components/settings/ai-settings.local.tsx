@@ -12,6 +12,7 @@ import {
   localDefaultAiPreset,
   matchingAiProviderPreset,
 } from "~/lib/ai-provider-presets";
+import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Configuration = RouterOutputs["ai"]["configuration"];
@@ -46,6 +47,7 @@ export function LocalAiSettings({
   const [reviewPullRequests, setReviewPullRequests] = useState(
     initialConfiguration.reviewPullRequests,
   );
+  const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
   const [disclosureAccepted, setDisclosureAccepted] = useState(
     initialConfiguration.disclosure.accepted,
   );
@@ -224,19 +226,29 @@ export function LocalAiSettings({
             </Button>
           </div>
         )}
-        <label className="bg-surface-subtle text-mist flex items-center justify-between gap-5 rounded-xl border border-line p-4 text-xs">
+        <label
+          className={cn(
+            "bg-surface-subtle text-mist flex items-center justify-between gap-5 rounded-xl border border-line p-4 text-xs",
+            !deepReviewAvailable && "opacity-60",
+          )}
+        >
           <span>
             <span className="text-cloud block text-sm font-medium">
               Review the full pull request
             </span>
             <span className="mt-1 block">
-              Ask the assistant for evidence-backed findings when a new revision
-              syncs.
+              {deepReviewAvailable
+                ? "Ask the assistant for evidence-backed findings when a new revision syncs. One agent runs per changed file."
+                : "This deployment cannot run a pull-request review."}
             </span>
           </span>
           <input
             type="checkbox"
             checked={reviewPullRequests}
+            // The appliance always satisfies the gate today, but reading the
+            // flag rather than hardcoding `true` keeps entitlement expressed in
+            // exactly one place instead of restated per deployment.
+            disabled={!deepReviewAvailable}
             onChange={(event) => setReviewPullRequests(event.target.checked)}
             className="accent-lime size-4"
           />

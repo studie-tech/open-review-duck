@@ -115,9 +115,241 @@ type ReviewConcept = WorkspaceData["concepts"][number];
 type ImportTarget = RouterOutputs["review"]["importTarget"];
 type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
+type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
+type DeepReviewFinding = DeepReviewRun["findings"][number];
 
 // One shared element: every review-unit command renders the same static icon.
 const unitCommandIcon = <FileCode2 className="size-4" />;
+
+// Only three of the seven `ai_job_status` values are terminal. A deep-review
+// parent sits in `waiting_for_provider` from `startAiJob` until seal-plan marks
+// it running, so a predicate written as ["queued", "running"] reads a live
+// fan-out as finished: polling stops and the run looks frozen.
+const terminalAiJobStatuses = ["completed", "failed", "cancelled"];
+
+/** Reports whether an AI job can still change state without a new request. */
+export function aiJobActive(status: string | null | undefined) {
+  return Boolean(status) && !terminalAiJobStatuses.includes(status ?? "");
+}
+
+const findingSeverities = ["critical", "high", "medium", "low"] as const;
+const findingCategories = [
+  "bug",
+  "security",
+  "performance",
+  "maintainability",
+  "test",
+  "style",
+  "documentation",
+  "other",
+] as const;
+
+// Four severities, not the three the explain path renders. `critical` and
+// `high` both have to read as blocking without collapsing into one colour, so
+// critical is filled and high is only tinted.
+const findingSeverityStyle: Record<string, string> = {
+  critical:
+    "border-red-500/45 bg-red-500/15 text-red-700 dark:border-red-300/35 dark:text-red-200",
+  high: "border-amber-500/40 bg-amber-400/10 text-amber-800 dark:border-amber-300/30 dark:text-amber-200",
+  medium: "border-cyan/30 bg-cyan/[.08] text-cyan",
+  low: "border-line bg-surface-subtle text-mist",
+};
+
+/**
+ * Explains, per finding state, why a finding cannot become a review comment.
+ *
+ * `review_comment.unitId` and `review_comment.line` are both `notNull`, so a
+ * finding that never resolved to a line inside a review unit is structurally
+ * unpublishable. It is still shown: a discard the reader cannot see is
+ * indistinguishable from a finding the reviewer never made.
+ */
+const unpublishableFindingReason: Record<string, string> = {
+  unanchored: "No line in this revision matched the quoted code",
+  out_of_scope: "Anchored outside the lines this pull request changed",
+  ungrounded: "The agent never proved it read the code it reported on",
+  refuted: "A verification pass could not reproduce this",
+};
+
+const deepReviewTerminalCopy: Record<
+  string,
+  { label: string; detail: string }
+> = {
+  complete: { label: "Complete", detail: "Every selected file was reviewed." },
+  partial: {
+    label: "Partial",
+    detail: "Some selected files were never reviewed.",
+  },
+  failed: { label: "Failed", detail: "No selected file was reviewed." },
+  skipped: {
+    label: "Skipped",
+    detail: "Nothing in this revision was eligible for review.",
+  },
+};
+
+const reviewFailureClassCopy: Record<string, string> = {
+  provider: "The model provider failed or refused the request.",
+  timeout: "A file reviewer ran out of time.",
+  budget: "The run reached its token or cost ceiling.",
+  cancelled: "The run was cancelled.",
+  tool_limit: "A file reviewer exhausted its tool turns.",
+  unknown: "The cause was not classified.",
+};
+
+const deepReviewItemStateCopy: Record<string, string> = {
+  selected: "Pending",
+  completed: "Reviewed",
+  reused: "Reused",
+  waived: "Waived",
+  failed: "Failed",
+};
+
+/** Counts findings per facet value so a filter can hide empty options. */
+export function deepReviewFacetCounts<Key extends string>(
+  findings: readonly { severity: string; category: string }[],
+  facet: "severity" | "category",
+  values: readonly Key[],
+) {
+  return values.map((value) => ({
+    value,
+    count: findings.filter((finding) => finding[facet] === value).length,
+  }));
+}
+
+/** Renders one deep-review finding with its severity, category, and verdict. */
+export function DeepReviewFindingCard({
+  finding,
+  onOpen,
+  onPublish,
+  providerName,
+  published,
+  publishing,
+}: {
+  finding: DeepReviewFinding;
+  onOpen?: () => void;
+  onPublish?: () => void;
+  providerName: string;
+  published: boolean;
+  publishing: boolean;
+}) {
+  // The read path already decides publishability against the same predicate
+  // the publish mutation enforces; restating it here would let the button and
+  // the server disagree.
+  const blocked = finding.publishable
+    ? undefined
+    : (unpublishableFindingReason[finding.state] ??
+      "Not anchored to a reviewable line");
+  const locations = finding.locations;
+  const where = finding.path
+    ? `${finding.path}${finding.startLine ? `:${finding.startLine}` : ""}`
+    : locations.length > 0
+      ? `${locations.length} ${locations.length === 1 ? "location" : "locations"}`
+      : "Across this pull request";
+  return (
+    <article
+      className={cn(
+        "rounded-xl border border-line bg-surface/55 p-3",
+        // A withheld finding stays legible but must not read as advice the
+        // reviewer is expected to act on.
+        blocked && "opacity-70",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span
+          className={cn(
+            "inline-flex items-center rounded-md border px-1.5 py-0.5 text-[9px] font-semibold tracking-wider uppercase",
+            findingSeverityStyle[finding.severity] ??
+              findingSeverityStyle.low ??
+              "",
+          )}
+        >
+          {finding.severity}
+        </span>
+        <span className="text-fog border-line bg-surface-subtle inline-flex items-center rounded-md border px-1.5 py-0.5 text-[9px] tracking-wider uppercase">
+          {finding.category}
+        </span>
+        {finding.verdict === "not_refuted" && (
+          <span className="text-lime inline-flex items-center gap-1 text-[9px]">
+            <ShieldCheck className="size-3" aria-hidden="true" />
+            Verified
+          </span>
+        )}
+      </div>
+      {finding.contentAvailable ? (
+        <>
+          <p className="text-cloud mt-2 text-xs font-medium">{finding.title}</p>
+          <p className="text-fog mt-1 truncate font-mono text-[9px]">{where}</p>
+          <p className="text-mist mt-2 text-[11px] leading-5">{finding.body}</p>
+        </>
+      ) : (
+        <>
+          <p className="text-mist mt-2 text-xs font-medium italic">
+            This finding could not be decrypted
+          </p>
+          <p className="text-fog mt-1 truncate font-mono text-[9px]">{where}</p>
+        </>
+      )}
+      {finding.suggestionCode && (
+        <pre className="bg-code text-mist mt-2 overflow-x-auto rounded-lg border border-line p-2 font-mono text-[10px] leading-4">
+          {finding.suggestionCode}
+        </pre>
+      )}
+      {locations.length > 0 && (
+        <ul className="text-fog mt-2 grid gap-0.5 font-mono text-[9px]">
+          {locations.map((location) => (
+            <li
+              key={`${location.path}-${location.startLine ?? 0}`}
+              className="truncate"
+            >
+              {location.path}
+              {location.startLine ? `:${location.startLine}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+      {blocked ? (
+        <p className="text-fog border-line mt-2.5 rounded-lg border border-dashed px-2 py-1.5 text-[10px] leading-4">
+          Not publishable · {blocked}
+          {finding.verdictReason ? ` — ${finding.verdictReason}` : ""}
+        </p>
+      ) : (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          {onOpen && (
+            <button
+              type="button"
+              onClick={onOpen}
+              className="text-violet hover:bg-violet/[.07] inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[10px] transition"
+            >
+              <FileCode2 className="size-3" />
+              Open in code
+            </button>
+          )}
+          {published ? (
+            <Badge className="border-lime/20 bg-lime/8 text-lime px-2 py-0.5 text-[10px]">
+              Published
+            </Badge>
+          ) : (
+            onPublish && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-7 px-2 text-[10px]"
+                disabled={publishing || !finding.contentAvailable}
+                onClick={onPublish}
+              >
+                {publishing ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : (
+                  <Send className="size-3" />
+                )}
+                {publishing ? "Posting…" : `Post to ${providerName}`}
+              </Button>
+            )
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
 
 /** Derives live concept progress from the canonical atomic-unit ledger. */
 function liveConceptStatus(
@@ -414,6 +646,9 @@ export function ReviewWorkspace({
   const [hierarchyOpen, setHierarchyOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [aiReviewDialogOpen, setAiReviewDialogOpen] = useState(false);
+  const [findingSeverityFilter, setFindingSeverityFilter] = useState("all");
+  const [findingCategoryFilter, setFindingCategoryFilter] = useState("all");
+  const [coverageOpen, setCoverageOpen] = useState(false);
   const [aiQuestionLine, setAiQuestionLine] = useState<number>();
   const [aiQuestionThreadId, setAiQuestionThreadId] = useState<string>();
   const [focusAiQuestionComposer, setFocusAiQuestionComposer] = useState(false);
@@ -1689,13 +1924,16 @@ export function ReviewWorkspace({
     onError: (error) => toast.error(error.message),
   });
   const aiConfiguration = api.ai.configuration.useQuery();
+  // Absent, never present-and-erroring: until the query resolves the account is
+  // treated as unentitled, so no affordance renders that `ai.start` would then
+  // refuse.
+  const deepReviewAvailable =
+    aiConfiguration.data?.deepReviewAvailable ?? false;
   const pullRequestReview = api.ai.reviewStatus.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
       refetchInterval: (query) =>
-        ["queued", "running"].includes(query.state.data?.status ?? "")
-          ? 2_000
-          : false,
+        aiJobActive(query.state.data?.status) ? 2_000 : false,
     },
   );
   const explanationRunning =
@@ -2405,7 +2643,7 @@ export function ReviewWorkspace({
   });
   const reviewRunning =
     startPullRequestReview.isPending ||
-    ["queued", "running"].includes(pullRequestReview.data?.status ?? "");
+    aiJobActive(pullRequestReview.data?.status);
   const aiUsage = api.ai.usage.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
@@ -2415,10 +2653,21 @@ export function ReviewWorkspace({
           : false,
     },
   );
+  // Coverage and findings are their own query rather than fields on
+  // `ai.reviewStatus`: that one polls every two seconds, and carrying the whole
+  // finding tree on it would refetch every finding twice a second.
+  const deepReview = api.review.deepReviewFindings.useQuery(
+    { pullRequestId: initialData.pullRequest.id },
+    { refetchInterval: reviewRunning ? 4_000 : false },
+  );
   const pullReviewRequested = useRef(false);
   useEffect(() => {
+    // The automatic review trigger is entirely client-side; there is no server
+    // counterpart. Ungated, an unentitled account with the preference on gets a
+    // refused mutation on every pull-request page load.
     if (
-      aiConfiguration.data?.reviewPullRequests &&
+      aiConfiguration.data?.deepReviewAvailable &&
+      aiConfiguration.data.reviewPullRequests &&
       aiConfiguration.data.mode !== "off" &&
       !pullRequestReview.isLoading &&
       !pullRequestReview.data &&
@@ -2432,6 +2681,7 @@ export function ReviewWorkspace({
       });
     }
   }, [
+    aiConfiguration.data?.deepReviewAvailable,
     aiConfiguration.data?.mode,
     aiConfiguration.data?.reviewPullRequests,
     initialData.pullRequest.id,
@@ -2463,11 +2713,15 @@ export function ReviewWorkspace({
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [importPreview]);
   useEffect(() => {
-    if (pullRequestReview.data?.status === "completed") {
-      void discussion.refetch();
-      void aiUsage.refetch();
-    }
-  }, [aiUsage, discussion, pullRequestReview.data?.status]);
+    // A failed or cancelled parent still owns coverage rows and whatever its
+    // children surfaced before the run stopped, so every terminal status pulls
+    // the tree once, not just `completed`.
+    const status = pullRequestReview.data?.status;
+    if (!status || aiJobActive(status)) return;
+    void discussion.refetch();
+    void aiUsage.refetch();
+    void deepReview.refetch();
+  }, [aiUsage, deepReview, discussion, pullRequestReview.data?.status]);
   useEffect(() => {
     if (aiStatus.data?.status === "completed") {
       void aiUsage.refetch();
@@ -3168,7 +3422,12 @@ export function ReviewWorkspace({
   function renderAiActionButtons() {
     const aiDisabled = aiConfiguration.data?.mode === "off";
     return (
-      <div className="grid w-full grid-cols-2 gap-2">
+      <div
+        className={cn(
+          "grid w-full gap-2",
+          deepReviewAvailable ? "grid-cols-2" : "grid-cols-1",
+        )}
+      >
         <Button
           type="button"
           variant="secondary"
@@ -3183,27 +3442,301 @@ export function ReviewWorkspace({
             className="ml-auto hidden sm:inline-flex"
           />
         </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          className="min-w-0 px-2.5"
-          disabled={aiDisabled || reviewRunning}
-          onClick={() => setAiReviewDialogOpen(true)}
-        >
-          {reviewRunning ? (
-            <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
-          ) : (
-            <Sparkles className="size-3.5 shrink-0" />
-          )}
-          <span className="truncate">
-            {reviewRunning ? "Reviewing…" : "Review"}
-          </span>
-          <ShortcutHint
-            shortcut={reviewShortcuts.reviewPullRequest}
-            className="ml-auto hidden sm:inline-flex"
-          />
-        </Button>
+        {deepReviewAvailable && (
+          <Button
+            type="button"
+            variant="secondary"
+            className="min-w-0 px-2.5"
+            disabled={aiDisabled || reviewRunning}
+            onClick={() => setAiReviewDialogOpen(true)}
+          >
+            {reviewRunning ? (
+              <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5 shrink-0" />
+            )}
+            <span className="truncate">
+              {reviewRunning ? "Reviewing…" : "Review"}
+            </span>
+            <ShortcutHint
+              shortcut={reviewShortcuts.reviewPullRequest}
+              className="ml-auto hidden sm:inline-flex"
+            />
+          </Button>
+        )}
       </div>
+    );
+  }
+
+  /** Renders the deep review's terminal state, coverage, and findings. */
+  function renderDeepReviewPanel() {
+    const run = deepReview.data;
+    if (!run) {
+      return reviewRunning ? (
+        <section
+          aria-label="Deep review"
+          className="mt-5 border-t border-line pt-4"
+        >
+          <p className="text-violet text-[10px] leading-4">
+            Deep review is starting. Coverage appears once the file plan is
+            sealed.
+          </p>
+        </section>
+      ) : null;
+    }
+    const findings = run.findings;
+    const visibleFindings = findings.filter(
+      (finding) =>
+        (findingSeverityFilter === "all" ||
+          finding.severity === findingSeverityFilter) &&
+        (findingCategoryFilter === "all" ||
+          finding.category === findingCategoryFilter),
+    );
+    const running = aiJobActive(run.status);
+    const terminal = run.terminalState
+      ? deepReviewTerminalCopy[run.terminalState]
+      : undefined;
+    // The run failed when coverage says so, or when the parent job itself died
+    // before it could record a terminal state at all.
+    const runFailed = run.terminalState === "failed" || run.status === "failed";
+    const reviewed = run.coverage.completed + run.coverage.reused;
+    return (
+      <section
+        aria-label="Deep review"
+        className="mt-5 border-t border-line pt-4"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
+            Deep review
+          </p>
+          {running ? (
+            <span className="text-violet inline-flex items-center gap-1.5 text-[10px]">
+              <LoaderCircle className="size-3 animate-spin" />
+              {run.status.replace(/_/g, " ")}
+            </span>
+          ) : (
+            terminal && (
+              <Badge
+                className={cn(
+                  "px-2 py-0.5 text-[9px] tracking-wider uppercase",
+                  runFailed &&
+                    "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-200",
+                  run.terminalState === "partial" &&
+                    "border-amber-500/35 bg-amber-400/10 text-amber-800 dark:text-amber-200",
+                  run.terminalState === "complete" &&
+                    "border-lime/25 bg-lime/[.08] text-lime",
+                )}
+              >
+                {terminal.label}
+              </Badge>
+            )
+          )}
+        </div>
+
+        {!running && runFailed && (
+          <div
+            role="status"
+            className="mt-3 rounded-lg border border-red-500/20 bg-red-400/10 p-3 text-red-700 dark:border-red-300/15 dark:text-red-200"
+          >
+            <p className="text-xs font-medium">Deep review failed</p>
+            <p className="mt-1 text-[11px] leading-5 opacity-80">
+              {/* The classified cause is the specific one; `run.error` is the
+                  fallback for a parent that died before finalize could set a
+                  class, routed through the same remediation copy the explain
+                  panel uses. */}
+              {(run.runFailureClass
+                ? reviewFailureClassCopy[run.runFailureClass]
+                : undefined) ??
+                (run.error
+                  ? aiErrorPresentation(run.error).detail
+                  : "No selected file was reviewed.")}
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={reviewRunning}
+              onClick={() => setAiReviewDialogOpen(true)}
+              className="mt-2 h-7 border border-red-500/15 px-2.5 text-[10px] text-current hover:bg-red-500/10"
+            >
+              <RefreshCw className="size-3" />
+              Run it again
+            </Button>
+          </div>
+        )}
+        {!running &&
+          !runFailed &&
+          terminal &&
+          run.terminalState !== "complete" && (
+            <p className="text-mist mt-2 text-[11px] leading-5">
+              {terminal.detail}
+            </p>
+          )}
+
+        <button
+          type="button"
+          aria-expanded={coverageOpen}
+          onClick={() => setCoverageOpen((open) => !open)}
+          className="text-mist hover:bg-surface-subtle hover:text-cloud mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[10px] transition"
+        >
+          {coverageOpen ? (
+            <ChevronDown className="size-3" />
+          ) : (
+            <ChevronRight className="size-3" />
+          )}
+          <span>
+            Coverage {reviewed}/{run.coverage.total}{" "}
+            {run.coverage.total === 1 ? "unit" : "units"}
+            {run.coverage.failed > 0 ? ` · ${run.coverage.failed} failed` : ""}
+            {run.coverage.waived > 0 ? ` · ${run.coverage.waived} waived` : ""}
+          </span>
+        </button>
+        {coverageOpen && (
+          <ul className="mt-1 grid gap-0.5">
+            {run.items.map((item) => (
+              <li
+                key={item.id}
+                className="flex items-start justify-between gap-2 rounded-lg px-2 py-1"
+              >
+                <span className="min-w-0">
+                  <span className="text-mist block truncate font-mono text-[9px]">
+                    {item.kind === "survey" ? "Whole pull request" : item.path}
+                  </span>
+                  {item.reason && (
+                    <span className="text-fog mt-0.5 block text-[9px] leading-4">
+                      {item.reason}
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={cn(
+                    "text-fog shrink-0 text-[9px]",
+                    item.state === "failed" && "text-red-700 dark:text-red-200",
+                  )}
+                >
+                  {deepReviewItemStateCopy[item.state] ?? item.state}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {findings.length === 0 ? (
+          !running && (
+            <p className="text-mist mt-3 text-[11px] leading-5">
+              No findings were surfaced.
+            </p>
+          )
+        ) : (
+          <>
+            {/* Category first: a forty-finding run is triaged by "show me
+                security only" long before it is triaged by severity. */}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <label className="text-fog grid gap-1 text-[9px]">
+                Category
+                <select
+                  aria-label="Filter findings by category"
+                  value={findingCategoryFilter}
+                  onChange={(event) =>
+                    setFindingCategoryFilter(event.target.value)
+                  }
+                  className="bg-surface text-cloud h-8 rounded-lg border border-line px-2 text-[10px] outline-none"
+                >
+                  <option value="all">All ({findings.length})</option>
+                  {deepReviewFacetCounts(
+                    findings,
+                    "category",
+                    findingCategories,
+                  )
+                    .filter(({ count }) => count > 0)
+                    .map(({ value, count }) => (
+                      <option key={value} value={value}>
+                        {value} ({count})
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="text-fog grid gap-1 text-[9px]">
+                Severity
+                <select
+                  aria-label="Filter findings by severity"
+                  value={findingSeverityFilter}
+                  onChange={(event) =>
+                    setFindingSeverityFilter(event.target.value)
+                  }
+                  className="bg-surface text-cloud h-8 rounded-lg border border-line px-2 text-[10px] outline-none"
+                >
+                  <option value="all">All ({findings.length})</option>
+                  {deepReviewFacetCounts(
+                    findings,
+                    "severity",
+                    findingSeverities,
+                  )
+                    .filter(({ count }) => count > 0)
+                    .map(({ value, count }) => (
+                      <option key={value} value={value}>
+                        {value} ({count})
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {visibleFindings.map((finding) => {
+                const unitIndex = finding.unitId
+                  ? units.findIndex(({ id }) => id === finding.unitId)
+                  : -1;
+                // `review_comment` has no finding id: publication is keyed on
+                // (aiJobId, aiFindingIndex), and the deep-review path writes
+                // the run-wide `orderIndex` into that column.
+                const published =
+                  discussion.data?.comments.some(
+                    (comment) =>
+                      comment.aiJobId === run.jobId &&
+                      comment.aiFindingIndex === finding.orderIndex &&
+                      comment.status === "published",
+                  ) ?? false;
+                const target =
+                  finding.publishable &&
+                  finding.unitId !== null &&
+                  finding.startLine !== null
+                    ? { unitId: finding.unitId, line: finding.startLine }
+                    : undefined;
+                return (
+                  <DeepReviewFindingCard
+                    key={finding.id}
+                    finding={finding}
+                    providerName={providerLabel(
+                      initialData.pullRequest.provider,
+                    )}
+                    published={published}
+                    publishing={
+                      publishComment.isPending &&
+                      publishComment.variables?.aiFindingId === finding.id
+                    }
+                    onOpen={
+                      unitIndex >= 0 ? () => selectUnit(unitIndex) : undefined
+                    }
+                    onPublish={
+                      target &&
+                      (() =>
+                        publishComment.mutate({
+                          ...target,
+                          aiJobId: run.jobId,
+                          aiFindingId: finding.id,
+                        }))
+                    }
+                  />
+                );
+              })}
+              {visibleFindings.length === 0 && (
+                <p className="text-mist text-[11px] leading-5">
+                  No finding matches this filter.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </section>
     );
   }
 
@@ -3224,6 +3757,19 @@ export function ReviewWorkspace({
       ),
     [activeIndex, selectUnit, units],
   );
+  const reviewPullRequestCommand: CommandCenterItem = {
+    id: "review-pull-request-with-ai",
+    label: "Review the full pull request",
+    description:
+      aiConfiguration.data?.mode === "off"
+        ? "Enable AI assistance in settings first"
+        : "Inspect every changed file and surface actionable findings",
+    group: "Review actions",
+    icon: <Sparkles className="size-4" />,
+    shortcut: reviewShortcuts.reviewPullRequest,
+    disabled: reviewRunning || aiConfiguration.data?.mode === "off",
+    onSelect: () => setAiReviewDialogOpen(true),
+  };
   const reviewCommands: CommandCenterItem[] = [
     {
       id: "toggle-review-path",
@@ -3376,19 +3922,10 @@ export function ReviewWorkspace({
         activeUnit.kind === "binary",
       onSelect: openAiQuestion,
     },
-    {
-      id: "review-pull-request-with-ai",
-      label: "Review the full pull request",
-      description:
-        aiConfiguration.data?.mode === "off"
-          ? "Enable AI assistance in settings first"
-          : "Inspect every changed file and surface actionable findings",
-      group: "Review actions",
-      icon: <Sparkles className="size-4" />,
-      shortcut: reviewShortcuts.reviewPullRequest,
-      disabled: reviewRunning || aiConfiguration.data?.mode === "off",
-      onSelect: () => setAiReviewDialogOpen(true),
-    },
+    // Omitted rather than disabled when the plan cannot run a deep review:
+    // `useCommandCenterBindings` reads this same array, so leaving the entry in
+    // would keep its keyboard shortcut live for an account `ai.start` refuses.
+    ...(deepReviewAvailable ? [reviewPullRequestCommand] : []),
     {
       id: "comment-on-line",
       label: "Comment on a line",
@@ -5205,14 +5742,7 @@ export function ReviewWorkspace({
                   </Button>
                 </div>
               )}
-            {["queued", "running"].includes(
-              pullRequestReview.data?.status ?? "",
-            ) && (
-              <p className="text-violet mt-4 text-[10px] leading-4">
-                AI review is {pullRequestReview.data?.status}. Findings will
-                appear directly beneath their relevant code lines.
-              </p>
-            )}
+            {renderDeepReviewPanel()}
             {aiUsage.data && (
               <section
                 aria-label="AI usage for this pull request"
