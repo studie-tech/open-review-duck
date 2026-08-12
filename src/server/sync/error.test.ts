@@ -138,4 +138,26 @@ describe("persisted sync errors", () => {
       "GitLab synchronization failed. Check the provider connection and try again.",
     );
   });
+
+  it("does not read a bound-parameter placeholder as a rejected credential", () => {
+    // A rejected statement numbers its parameters into the hundreds, and $401
+    // is the status of nothing. Reading one as a credential failure sends a
+    // reviewer to reconnect a connection that is working.
+    expect(
+      persistedSyncErrorMessage(
+        "azure_devops",
+        'Failed query: insert into "open_review_duck_review_unit" values (default, $399, $400, $401, $402)',
+      ),
+    ).toBe(
+      "Azure DevOps synchronization failed. Check the provider connection and try again.",
+    );
+  });
+
+  it("still reads a status the provider actually reported", () => {
+    expect(
+      persistedSyncErrorMessage("github", "ProviderError: 401 Unauthorized"),
+    ).toBe(
+      "GitHub rejected the connected token. Reconnect the provider with a valid token.",
+    );
+  });
 });
