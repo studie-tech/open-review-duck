@@ -3067,13 +3067,33 @@ function rubyReviewCandidates(
     ownName: string;
   }> = [];
   /** Adds a Ruby candidate with an explicit semantic range. */
+  /**
+   * Extends a statement over the heredoc text it opened.
+   *
+   * Ruby places a heredoc's body after the statement that introduces it rather
+   * than inside it, so a constant assigned one ended at the `<<~SQL` and left
+   * its own text behind as a range belonging to nothing.
+   */
+  const throughHeredocBody = (node: SyntaxNode) => {
+    let end = node.endIndex;
+    for (
+      let sibling = node.nextNamedSibling;
+      sibling?.type === "heredoc_body" &&
+      source.slice(end, sibling.startIndex).trim() === "";
+      sibling = sibling.nextNamedSibling
+    ) {
+      end = sibling.endIndex;
+    }
+    return end;
+  };
+  /** Records one Ruby declaration, documentation and heredoc text included. */
   const add = (
     node: SyntaxNode,
     kind: UnitKind,
     name: string,
     ownName: string,
     start = rubyDocumentationStart(source, node),
-    end = node.endIndex,
+    end = throughHeredocBody(node),
   ) => {
     const unit = makeRawRangeUnit(file, "ruby", kind, name, start, end);
     unit.complexity = complexity(node);
