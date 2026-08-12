@@ -1,30 +1,60 @@
-CREATE TYPE "public"."ai_completion_reason" AS ENUM('answered', 'investigation_limit', 'quota_limit', 'cost_limit', 'cancelled', 'provider_failure', 'deep_review_partial', 'deep_review_skipped');--> statement-breakpoint
-CREATE TYPE "public"."ai_job_kind" AS ENUM('explain', 'review', 'review_file', 'review_survey', 'semantic_cluster');--> statement-breakpoint
-CREATE TYPE "public"."ai_job_status" AS ENUM('queued', 'running', 'waiting_for_provider', 'streaming', 'completed', 'failed', 'cancelled');--> statement-breakpoint
-CREATE TYPE "public"."ai_mode" AS ENUM('off', 'on_demand', 'automatic');--> statement-breakpoint
-CREATE TYPE "public"."anchor_side" AS ENUM('current', 'previous');--> statement-breakpoint
-CREATE TYPE "public"."anchor_tier" AS ENUM('unit_current', 'changed_current', 'file_current', 'file_previous', 'relocated', 'ambiguous', 'none');--> statement-breakpoint
-CREATE TYPE "public"."deep_review_finding_state" AS ENUM('submitted', 'anchored', 'unanchored', 'out_of_scope', 'ungrounded', 'refuted', 'merged', 'dropped');--> statement-breakpoint
-CREATE TYPE "public"."deep_review_item_state" AS ENUM('selected', 'completed', 'reused', 'failed', 'waived');--> statement-breakpoint
-CREATE TYPE "public"."deep_review_terminal_state" AS ENUM('complete', 'partial', 'failed', 'skipped');--> statement-breakpoint
-CREATE TYPE "public"."deep_review_verdict" AS ENUM('unverified', 'not_refuted', 'refuted');--> statement-breakpoint
-CREATE TYPE "public"."finding_category" AS ENUM('bug', 'security', 'performance', 'maintainability', 'test', 'style', 'documentation', 'other');--> statement-breakpoint
-CREATE TYPE "public"."finding_severity" AS ENUM('critical', 'high', 'medium', 'low');--> statement-breakpoint
-CREATE TYPE "public"."provider" AS ENUM('github', 'gitlab', 'azure_devops');--> statement-breakpoint
-CREATE TYPE "public"."pull_request_state" AS ENUM('open', 'merged', 'closed', 'draft');--> statement-breakpoint
-CREATE TYPE "public"."repository_intake_mode" AS ENUM('manual', 'assigned', 'all');--> statement-breakpoint
-CREATE TYPE "public"."review_comment_source" AS ENUM('user', 'ai');--> statement-breakpoint
-CREATE TYPE "public"."review_comment_status" AS ENUM('publishing', 'published', 'failed');--> statement-breakpoint
-CREATE TYPE "public"."review_concept_layout_source" AS ENUM('deterministic', 'manual', 'ai');--> statement-breakpoint
-CREATE TYPE "public"."review_failure_class" AS ENUM('provider', 'timeout', 'budget', 'cancelled', 'tool_limit', 'unknown');--> statement-breakpoint
-CREATE TYPE "public"."review_queue_source" AS ENUM('manual', 'assigned', 'all');--> statement-breakpoint
-CREATE TYPE "public"."review_queue_state" AS ENUM('active', 'removed');--> statement-breakpoint
-CREATE TYPE "public"."semantic_artifact_status" AS ENUM('uploading', 'validating', 'ready', 'rejected', 'deleting');--> statement-breakpoint
-CREATE TYPE "public"."source_blob_state" AS ENUM('uploading', 'ready', 'failed', 'deleting');--> statement-breakpoint
-CREATE TYPE "public"."source_change_type" AS ENUM('added', 'modified', 'deleted', 'renamed');--> statement-breakpoint
-CREATE TYPE "public"."source_storage" AS ENUM('uploadthing', 'local');--> statement-breakpoint
-CREATE TYPE "public"."symbol_kind" AS ENUM('constant', 'variable', 'function', 'method', 'class', 'module', 'test', 'test_suite', 'test_hook', 'binary', 'file');--> statement-breakpoint
-CREATE TYPE "public"."workflow_run_status" AS ENUM('queued', 'running', 'completed', 'failed', 'cancelled');--> statement-breakpoint
+-- Foreign keys are emitted after every index because drizzle-kit orders
+-- composite keys ahead of the unique indexes they reference, which
+-- Postgres rejects with 42830 on a fresh database.
+CREATE TYPE "public"."ai_completion_reason" AS ENUM('answered', 'investigation_limit', 'quota_limit', 'cost_limit', 'cancelled', 'provider_failure', 'deep_review_partial', 'deep_review_skipped');
+--> statement-breakpoint
+CREATE TYPE "public"."ai_job_kind" AS ENUM('explain', 'review', 'review_file', 'review_survey', 'semantic_cluster');
+--> statement-breakpoint
+CREATE TYPE "public"."ai_job_status" AS ENUM('queued', 'running', 'waiting_for_provider', 'streaming', 'completed', 'failed', 'cancelled');
+--> statement-breakpoint
+CREATE TYPE "public"."ai_mode" AS ENUM('off', 'on_demand', 'automatic');
+--> statement-breakpoint
+CREATE TYPE "public"."anchor_side" AS ENUM('current', 'previous');
+--> statement-breakpoint
+CREATE TYPE "public"."anchor_tier" AS ENUM('unit_current', 'changed_current', 'file_current', 'file_previous', 'relocated', 'ambiguous', 'none');
+--> statement-breakpoint
+CREATE TYPE "public"."deep_review_finding_state" AS ENUM('submitted', 'anchored', 'unanchored', 'out_of_scope', 'ungrounded', 'refuted', 'merged', 'dropped');
+--> statement-breakpoint
+CREATE TYPE "public"."deep_review_item_state" AS ENUM('selected', 'completed', 'reused', 'failed', 'waived');
+--> statement-breakpoint
+CREATE TYPE "public"."deep_review_terminal_state" AS ENUM('complete', 'partial', 'failed', 'skipped');
+--> statement-breakpoint
+CREATE TYPE "public"."deep_review_verdict" AS ENUM('unverified', 'not_refuted', 'refuted');
+--> statement-breakpoint
+CREATE TYPE "public"."finding_category" AS ENUM('bug', 'security', 'performance', 'maintainability', 'test', 'style', 'documentation', 'other');
+--> statement-breakpoint
+CREATE TYPE "public"."finding_severity" AS ENUM('critical', 'high', 'medium', 'low');
+--> statement-breakpoint
+CREATE TYPE "public"."provider" AS ENUM('github', 'gitlab', 'azure_devops');
+--> statement-breakpoint
+CREATE TYPE "public"."pull_request_state" AS ENUM('open', 'merged', 'closed', 'draft');
+--> statement-breakpoint
+CREATE TYPE "public"."repository_intake_mode" AS ENUM('manual', 'assigned', 'all');
+--> statement-breakpoint
+CREATE TYPE "public"."review_comment_source" AS ENUM('user', 'ai');
+--> statement-breakpoint
+CREATE TYPE "public"."review_comment_status" AS ENUM('publishing', 'published', 'failed');
+--> statement-breakpoint
+CREATE TYPE "public"."review_concept_layout_source" AS ENUM('deterministic', 'manual', 'ai');
+--> statement-breakpoint
+CREATE TYPE "public"."review_failure_class" AS ENUM('provider', 'timeout', 'budget', 'cancelled', 'tool_limit', 'unknown');
+--> statement-breakpoint
+CREATE TYPE "public"."review_queue_source" AS ENUM('manual', 'assigned', 'all');
+--> statement-breakpoint
+CREATE TYPE "public"."review_queue_state" AS ENUM('active', 'removed');
+--> statement-breakpoint
+CREATE TYPE "public"."semantic_artifact_status" AS ENUM('uploading', 'validating', 'ready', 'rejected', 'deleting');
+--> statement-breakpoint
+CREATE TYPE "public"."source_blob_state" AS ENUM('uploading', 'ready', 'failed', 'deleting');
+--> statement-breakpoint
+CREATE TYPE "public"."source_change_type" AS ENUM('added', 'modified', 'deleted', 'renamed');
+--> statement-breakpoint
+CREATE TYPE "public"."source_storage" AS ENUM('uploadthing', 'local');
+--> statement-breakpoint
+CREATE TYPE "public"."symbol_kind" AS ENUM('constant', 'variable', 'function', 'method', 'class', 'module', 'test', 'test_suite', 'test_hook', 'binary', 'file');
+--> statement-breakpoint
+CREATE TYPE "public"."workflow_run_status" AS ENUM('queued', 'running', 'completed', 'failed', 'cancelled');
+--> statement-breakpoint
 CREATE TABLE "open_review_duck_ai_job_chunk" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"jobId" uuid NOT NULL,
@@ -700,169 +730,334 @@ CREATE TABLE "open_review_duck_workspace" (
 	CONSTRAINT "open_review_duck_workspace_slug_unique" UNIQUE("slug")
 );
 --> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job_chunk" ADD CONSTRAINT "open_review_duck_ai_job_chunk_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job_evidence" ADD CONSTRAINT "open_review_duck_ai_job_evidence_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job_evidence" ADD CONSTRAINT "open_review_duck_ai_job_evidence_snapshotFileId_open_review_duck_snapshot_file_id_fk" FOREIGN KEY ("snapshotFileId") REFERENCES "public"."open_review_duck_snapshot_file"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job_evidence" ADD CONSTRAINT "open_review_duck_ai_job_evidence_sourceBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("sourceBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job_tool_call" ADD CONSTRAINT "open_review_duck_ai_job_tool_call_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job_turn" ADD CONSTRAINT "open_review_duck_ai_job_turn_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_workflowRunId_open_review_duck_workflow_run_id_fk" FOREIGN KEY ("workflowRunId") REFERENCES "public"."open_review_duck_workflow_run"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "ai_job_parent_fk" FOREIGN KEY ("parentJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_preference" ADD CONSTRAINT "open_review_duck_ai_preference_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_findingId_open_review_duck_ai_review_finding_id_fk" FOREIGN KEY ("findingId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_evidenceId_open_review_duck_ai_job_evidence_id_fk" FOREIGN KEY ("evidenceId") REFERENCES "public"."open_review_duck_ai_job_evidence"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding_location" ADD CONSTRAINT "open_review_duck_ai_review_finding_location_findingId_open_review_duck_ai_review_finding_id_fk" FOREIGN KEY ("findingId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_itemId_open_review_duck_ai_review_item_id_fk" FOREIGN KEY ("itemId") REFERENCES "public"."open_review_duck_ai_review_item"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "ai_review_finding_merged_fk" FOREIGN KEY ("mergedIntoId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_parentJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("parentJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_childJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("childJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_stream_lease" ADD CONSTRAINT "open_review_duck_ai_stream_lease_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_stream_lease" ADD CONSTRAINT "open_review_duck_ai_stream_lease_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_usage" ADD CONSTRAINT "open_review_duck_ai_usage_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_usage" ADD CONSTRAINT "open_review_duck_ai_usage_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_usage_ledger" ADD CONSTRAINT "open_review_duck_ai_usage_ledger_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_usage_ledger" ADD CONSTRAINT "open_review_duck_ai_usage_ledger_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_credential_audit_event" ADD CONSTRAINT "open_review_duck_credential_audit_event_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_credential_audit_event" ADD CONSTRAINT "open_review_duck_credential_audit_event_actorId_open_review_duck_user_id_fk" FOREIGN KEY ("actorId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_local_ai_configuration" ADD CONSTRAINT "open_review_duck_local_ai_configuration_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_local_credential" ADD CONSTRAINT "open_review_duck_local_credential_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_local_session" ADD CONSTRAINT "open_review_duck_local_session_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_managed_ai_credential" ADD CONSTRAINT "open_review_duck_managed_ai_credential_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_oauth_credential" ADD CONSTRAINT "open_review_duck_oauth_credential_connectionId_open_review_duck_provider_connection_id_fk" FOREIGN KEY ("connectionId") REFERENCES "public"."open_review_duck_provider_connection"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_oauth_state" ADD CONSTRAINT "open_review_duck_oauth_state_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_provider_connection" ADD CONSTRAINT "open_review_duck_provider_connection_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_provider_connection" ADD CONSTRAINT "open_review_duck_provider_connection_localCredentialId_open_review_duck_local_credential_id_fk" FOREIGN KEY ("localCredentialId") REFERENCES "public"."open_review_duck_local_credential"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_provider_pat_credential" ADD CONSTRAINT "open_review_duck_provider_pat_credential_connectionId_open_review_duck_provider_connection_id_fk" FOREIGN KEY ("connectionId") REFERENCES "public"."open_review_duck_provider_connection"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_provider_webhook" ADD CONSTRAINT "open_review_duck_provider_webhook_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_pull_request" ADD CONSTRAINT "open_review_duck_pull_request_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_repository" ADD CONSTRAINT "open_review_duck_repository_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_repository" ADD CONSTRAINT "open_review_duck_repository_connectionId_open_review_duck_provider_connection_id_fk" FOREIGN KEY ("connectionId") REFERENCES "public"."open_review_duck_provider_connection"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_repository" ADD CONSTRAINT "open_review_duck_repository_intakeOwnerId_open_review_duck_user_id_fk" FOREIGN KEY ("intakeOwnerId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_comment" ADD CONSTRAINT "open_review_duck_review_comment_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_comment" ADD CONSTRAINT "open_review_duck_review_comment_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_comment" ADD CONSTRAINT "open_review_duck_review_comment_aiJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("aiJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_dependency" ADD CONSTRAINT "open_review_duck_review_concept_dependency_layoutId_open_review_duck_review_concept_layout_id_fk" FOREIGN KEY ("layoutId") REFERENCES "public"."open_review_duck_review_concept_layout"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_dependency" ADD CONSTRAINT "open_review_duck_review_concept_dependency_conceptId_layoutId_open_review_duck_review_concept_id_layoutId_fk" FOREIGN KEY ("conceptId","layoutId") REFERENCES "public"."open_review_duck_review_concept"("id","layoutId") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_dependency" ADD CONSTRAINT "open_review_duck_review_concept_dependency_dependencyId_layoutId_open_review_duck_review_concept_id_layoutId_fk" FOREIGN KEY ("dependencyId","layoutId") REFERENCES "public"."open_review_duck_review_concept"("id","layoutId") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_layout" ADD CONSTRAINT "open_review_duck_review_concept_layout_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_layout" ADD CONSTRAINT "open_review_duck_review_concept_layout_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_layoutId_open_review_duck_review_concept_layout_id_fk" FOREIGN KEY ("layoutId") REFERENCES "public"."open_review_duck_review_concept_layout"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_conceptId_layoutId_open_review_duck_review_concept_id_layoutId_fk" FOREIGN KEY ("conceptId","layoutId") REFERENCES "public"."open_review_duck_review_concept"("id","layoutId") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_layoutId_snapshotId_open_review_duck_review_concept_layout_id_snapshotId_fk" FOREIGN KEY ("layoutId","snapshotId") REFERENCES "public"."open_review_duck_review_concept_layout"("id","snapshotId") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_unitId_snapshotId_open_review_duck_review_unit_id_snapshotId_fk" FOREIGN KEY ("unitId","snapshotId") REFERENCES "public"."open_review_duck_review_unit"("id","snapshotId") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_concept" ADD CONSTRAINT "open_review_duck_review_concept_layoutId_open_review_duck_review_concept_layout_id_fk" FOREIGN KEY ("layoutId") REFERENCES "public"."open_review_duck_review_concept_layout"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_queue_item" ADD CONSTRAINT "open_review_duck_review_queue_item_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_queue_item" ADD CONSTRAINT "open_review_duck_review_queue_item_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_session" ADD CONSTRAINT "open_review_duck_review_session_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_session" ADD CONSTRAINT "open_review_duck_review_session_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_session" ADD CONSTRAINT "open_review_duck_review_session_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_snapshot" ADD CONSTRAINT "open_review_duck_review_snapshot_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_unit_dependency" ADD CONSTRAINT "open_review_duck_review_unit_dependency_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_unit_dependency" ADD CONSTRAINT "open_review_duck_review_unit_dependency_dependencyId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("dependencyId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_snapshotFileId_open_review_duck_snapshot_file_id_fk" FOREIGN KEY ("snapshotFileId") REFERENCES "public"."open_review_duck_snapshot_file"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_currentBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("currentBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_previousBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("previousBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_wait" ADD CONSTRAINT "open_review_duck_review_wait_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_review_wait" ADD CONSTRAINT "open_review_duck_review_wait_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_semantic_artifact" ADD CONSTRAINT "open_review_duck_semantic_artifact_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_semantic_artifact" ADD CONSTRAINT "open_review_duck_semantic_artifact_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_semantic_artifact" ADD CONSTRAINT "open_review_duck_semantic_artifact_sourceBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("sourceBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_semantic_upload_credential" ADD CONSTRAINT "open_review_duck_semantic_upload_credential_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sign_off" ADD CONSTRAINT "open_review_duck_sign_off_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sign_off" ADD CONSTRAINT "open_review_duck_sign_off_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_snapshot_file" ADD CONSTRAINT "open_review_duck_snapshot_file_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_snapshot_file" ADD CONSTRAINT "open_review_duck_snapshot_file_currentBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("currentBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_snapshot_file" ADD CONSTRAINT "open_review_duck_snapshot_file_previousBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("previousBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_source_blob" ADD CONSTRAINT "open_review_duck_source_blob_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sync_queue_request" ADD CONSTRAINT "open_review_duck_sync_queue_request_syncRunId_open_review_duck_sync_run_id_fk" FOREIGN KEY ("syncRunId") REFERENCES "public"."open_review_duck_sync_run"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sync_queue_request" ADD CONSTRAINT "open_review_duck_sync_queue_request_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_workflowRunId_open_review_duck_workflow_run_id_fk" FOREIGN KEY ("workflowRunId") REFERENCES "public"."open_review_duck_workflow_run"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_workflow_run" ADD CONSTRAINT "open_review_duck_workflow_run_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_workspace_member" ADD CONSTRAINT "open_review_duck_workspace_member_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_workspace_member" ADD CONSTRAINT "open_review_duck_workspace_member_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "open_review_duck_workspace" ADD CONSTRAINT "open_review_duck_workspace_ownerId_open_review_duck_user_id_fk" FOREIGN KEY ("ownerId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "ai_job_chunk_sequence_idx" ON "open_review_duck_ai_job_chunk" USING btree ("jobId","sequence");--> statement-breakpoint
-CREATE UNIQUE INDEX "ai_job_evidence_range_idx" ON "open_review_duck_ai_job_evidence" USING btree ("jobId","sourceBlobId","startByte","endByte");--> statement-breakpoint
-CREATE INDEX "ai_job_evidence_path_idx" ON "open_review_duck_ai_job_evidence" USING btree ("jobId","path");--> statement-breakpoint
-CREATE UNIQUE INDEX "ai_job_tool_call_id_idx" ON "open_review_duck_ai_job_tool_call" USING btree ("jobId","toolCallId");--> statement-breakpoint
-CREATE INDEX "ai_job_tool_turn_idx" ON "open_review_duck_ai_job_tool_call" USING btree ("jobId","turnSequence");--> statement-breakpoint
-CREATE UNIQUE INDEX "ai_job_turn_sequence_idx" ON "open_review_duck_ai_job_turn" USING btree ("jobId","sequence");--> statement-breakpoint
-CREATE INDEX "ai_job_review_lookup_idx" ON "open_review_duck_ai_job" USING btree ("pullRequestId","snapshotId","userId","kind","createdAt");--> statement-breakpoint
-CREATE INDEX "ai_job_unit_idx" ON "open_review_duck_ai_job" USING btree ("unitId");--> statement-breakpoint
-CREATE INDEX "ai_job_snapshot_idx" ON "open_review_duck_ai_job" USING btree ("snapshotId");--> statement-breakpoint
-CREATE INDEX "ai_job_parent_idx" ON "open_review_duck_ai_job" USING btree ("parentJobId");--> statement-breakpoint
-CREATE INDEX "ai_review_finding_evidence_idx" ON "open_review_duck_ai_review_finding_evidence" USING btree ("evidenceId");--> statement-breakpoint
-CREATE INDEX "ai_review_finding_location_idx" ON "open_review_duck_ai_review_finding_location" USING btree ("findingId");--> statement-breakpoint
-CREATE INDEX "ai_review_finding_item_idx" ON "open_review_duck_ai_review_finding" USING btree ("itemId");--> statement-breakpoint
-CREATE INDEX "ai_review_finding_job_idx" ON "open_review_duck_ai_review_finding" USING btree ("jobId");--> statement-breakpoint
-CREATE INDEX "ai_review_finding_state_idx" ON "open_review_duck_ai_review_finding" USING btree ("itemId","state");--> statement-breakpoint
-CREATE UNIQUE INDEX "ai_review_item_path_idx" ON "open_review_duck_ai_review_item" USING btree ("parentJobId","path");--> statement-breakpoint
-CREATE INDEX "ai_review_item_reuse_idx" ON "open_review_duck_ai_review_item" USING btree ("workspaceId","fingerprint");--> statement-breakpoint
-CREATE INDEX "ai_review_item_state_idx" ON "open_review_duck_ai_review_item" USING btree ("parentJobId","state");--> statement-breakpoint
-CREATE INDEX "ai_stream_lease_user_idx" ON "open_review_duck_ai_stream_lease" USING btree ("userId","expiresAt");--> statement-breakpoint
-CREATE INDEX "ai_stream_lease_expiry_idx" ON "open_review_duck_ai_stream_lease" USING btree ("expiresAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "ai_usage_ledger_job_kind_idx" ON "open_review_duck_ai_usage_ledger" USING btree ("jobId","kind");--> statement-breakpoint
-CREATE INDEX "ai_usage_ledger_workspace_month_idx" ON "open_review_duck_ai_usage_ledger" USING btree ("workspaceId","month");--> statement-breakpoint
-CREATE INDEX "credential_audit_workspace_idx" ON "open_review_duck_credential_audit_event" USING btree ("workspaceId","createdAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "local_credential_fingerprint_idx" ON "open_review_duck_local_credential" USING btree ("workspaceId","kind","fingerprint");--> statement-breakpoint
-CREATE INDEX "local_session_user_idx" ON "open_review_duck_local_session" USING btree ("userId","expiresAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "managed_ai_credential_workspace_provider_idx" ON "open_review_duck_managed_ai_credential" USING btree ("workspaceId","provider");--> statement-breakpoint
-CREATE INDEX "oauth_expiry_idx" ON "open_review_duck_oauth_credential" USING btree ("expiresAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "connection_credential_idx" ON "open_review_duck_provider_connection" USING btree ("workspaceId","provider","credentialFingerprint");--> statement-breakpoint
-CREATE UNIQUE INDEX "github_app_installation_idx" ON "open_review_duck_provider_connection" USING btree ("installationId");--> statement-breakpoint
-CREATE INDEX "provider_webhook_provider_idx" ON "open_review_duck_provider_webhook" USING btree ("provider");--> statement-breakpoint
-CREATE UNIQUE INDEX "pull_request_external_idx" ON "open_review_duck_pull_request" USING btree ("repositoryId","externalId");--> statement-breakpoint
-CREATE INDEX "pull_request_state_idx" ON "open_review_duck_pull_request" USING btree ("repositoryId","state");--> statement-breakpoint
-CREATE UNIQUE INDEX "repository_external_idx" ON "open_review_duck_repository" USING btree ("workspaceId","connectionId","externalId");--> statement-breakpoint
-CREATE INDEX "review_comment_unit_idx" ON "open_review_duck_review_comment" USING btree ("unitId","createdAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_comment_ai_finding_idx" ON "open_review_duck_review_comment" USING btree ("aiJobId","aiFindingIndex");--> statement-breakpoint
-CREATE INDEX "review_concept_dependency_dependency_idx" ON "open_review_duck_review_concept_dependency" USING btree ("dependencyId");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_baseline_idx" ON "open_review_duck_review_concept_layout" USING btree ("snapshotId") WHERE "open_review_duck_review_concept_layout"."userId" is null;--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_personal_idx" ON "open_review_duck_review_concept_layout" USING btree ("snapshotId","userId") WHERE "open_review_duck_review_concept_layout"."userId" is not null;--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_layout_scope_idx" ON "open_review_duck_review_concept_layout" USING btree ("id","snapshotId");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_membership_idx" ON "open_review_duck_review_concept_member" USING btree ("layoutId","unitId");--> statement-breakpoint
-CREATE INDEX "review_concept_member_order_idx" ON "open_review_duck_review_concept_member" USING btree ("conceptId","memberOrder");--> statement-breakpoint
-CREATE INDEX "review_concept_member_unit_idx" ON "open_review_duck_review_concept_member" USING btree ("unitId");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_key_idx" ON "open_review_duck_review_concept" USING btree ("layoutId","stableKey");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_order_idx" ON "open_review_duck_review_concept" USING btree ("layoutId","reviewOrder");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_concept_scope_idx" ON "open_review_duck_review_concept" USING btree ("id","layoutId");--> statement-breakpoint
-CREATE INDEX "review_queue_user_state_idx" ON "open_review_duck_review_queue_item" USING btree ("userId","state","updatedAt");--> statement-breakpoint
-CREATE INDEX "review_session_active_idx" ON "open_review_duck_review_session" USING btree ("pullRequestId","snapshotId","userId","completedAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "snapshot_version_idx" ON "open_review_duck_review_snapshot" USING btree ("pullRequestId","version");--> statement-breakpoint
-CREATE INDEX "review_unit_dependency_dependency_idx" ON "open_review_duck_review_unit_dependency" USING btree ("dependencyId");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_unit_key_idx" ON "open_review_duck_review_unit" USING btree ("snapshotId","stableKey");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_unit_scope_idx" ON "open_review_duck_review_unit" USING btree ("id","snapshotId");--> statement-breakpoint
-CREATE INDEX "review_order_idx" ON "open_review_duck_review_unit" USING btree ("snapshotId","reviewOrder");--> statement-breakpoint
-CREATE INDEX "review_unit_snapshot_file_idx" ON "open_review_duck_review_unit" USING btree ("snapshotFileId");--> statement-breakpoint
-CREATE INDEX "review_unit_current_blob_idx" ON "open_review_duck_review_unit" USING btree ("currentBlobId");--> statement-breakpoint
-CREATE INDEX "review_unit_previous_blob_idx" ON "open_review_duck_review_unit" USING btree ("previousBlobId");--> statement-breakpoint
-CREATE UNIQUE INDEX "review_wait_unit_user_idx" ON "open_review_duck_review_wait" USING btree ("unitId","userId");--> statement-breakpoint
-CREATE INDEX "review_wait_user_date_idx" ON "open_review_duck_review_wait" USING btree ("userId","waitingSince");--> statement-breakpoint
-CREATE UNIQUE INDEX "semantic_artifact_revision_idx" ON "open_review_duck_semantic_artifact" USING btree ("repositoryId","commitSha");--> statement-breakpoint
-CREATE INDEX "semantic_upload_repository_idx" ON "open_review_duck_semantic_upload_credential" USING btree ("repositoryId");--> statement-breakpoint
-CREATE INDEX "sign_off_unit_user_idx" ON "open_review_duck_sign_off" USING btree ("unitId","userId");--> statement-breakpoint
-CREATE INDEX "sign_off_user_date_idx" ON "open_review_duck_sign_off" USING btree ("userId","signedOffAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "snapshot_file_path_idx" ON "open_review_duck_snapshot_file" USING btree ("snapshotId","path");--> statement-breakpoint
-CREATE INDEX "snapshot_file_current_blob_idx" ON "open_review_duck_snapshot_file" USING btree ("currentBlobId");--> statement-breakpoint
-CREATE INDEX "snapshot_file_previous_blob_idx" ON "open_review_duck_snapshot_file" USING btree ("previousBlobId");--> statement-breakpoint
-CREATE UNIQUE INDEX "source_blob_digest_idx" ON "open_review_duck_source_blob" USING btree ("workspaceId","digest");--> statement-breakpoint
-CREATE INDEX "source_blob_state_idx" ON "open_review_duck_source_blob" USING btree ("state","updatedAt");--> statement-breakpoint
-CREATE INDEX "sync_run_repository_idx" ON "open_review_duck_sync_run" USING btree ("repositoryId","pullRequestNumber","createdAt");--> statement-breakpoint
-CREATE INDEX "sync_run_workspace_idx" ON "open_review_duck_sync_run" USING btree ("workspaceId","status","createdAt");--> statement-breakpoint
-CREATE UNIQUE INDEX "webhook_delivery_provider_idx" ON "open_review_duck_webhook_delivery" USING btree ("provider","deliveryId");--> statement-breakpoint
-CREATE INDEX "webhook_delivery_expiry_idx" ON "open_review_duck_webhook_delivery" USING btree ("expiresAt");--> statement-breakpoint
-CREATE INDEX "workflow_run_target_idx" ON "open_review_duck_workflow_run" USING btree ("kind","targetId","createdAt");--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_chunk_sequence_idx" ON "open_review_duck_ai_job_chunk" USING btree ("jobId","sequence");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_evidence_range_idx" ON "open_review_duck_ai_job_evidence" USING btree ("jobId","sourceBlobId","startByte","endByte");
+--> statement-breakpoint
+CREATE INDEX "ai_job_evidence_path_idx" ON "open_review_duck_ai_job_evidence" USING btree ("jobId","path");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_tool_call_id_idx" ON "open_review_duck_ai_job_tool_call" USING btree ("jobId","toolCallId");
+--> statement-breakpoint
+CREATE INDEX "ai_job_tool_turn_idx" ON "open_review_duck_ai_job_tool_call" USING btree ("jobId","turnSequence");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_turn_sequence_idx" ON "open_review_duck_ai_job_turn" USING btree ("jobId","sequence");
+--> statement-breakpoint
+CREATE INDEX "ai_job_review_lookup_idx" ON "open_review_duck_ai_job" USING btree ("pullRequestId","snapshotId","userId","kind","createdAt");
+--> statement-breakpoint
+CREATE INDEX "ai_job_unit_idx" ON "open_review_duck_ai_job" USING btree ("unitId");
+--> statement-breakpoint
+CREATE INDEX "ai_job_snapshot_idx" ON "open_review_duck_ai_job" USING btree ("snapshotId");
+--> statement-breakpoint
+CREATE INDEX "ai_job_parent_idx" ON "open_review_duck_ai_job" USING btree ("parentJobId");
+--> statement-breakpoint
+CREATE INDEX "ai_review_finding_evidence_idx" ON "open_review_duck_ai_review_finding_evidence" USING btree ("evidenceId");
+--> statement-breakpoint
+CREATE INDEX "ai_review_finding_location_idx" ON "open_review_duck_ai_review_finding_location" USING btree ("findingId");
+--> statement-breakpoint
+CREATE INDEX "ai_review_finding_item_idx" ON "open_review_duck_ai_review_finding" USING btree ("itemId");
+--> statement-breakpoint
+CREATE INDEX "ai_review_finding_job_idx" ON "open_review_duck_ai_review_finding" USING btree ("jobId");
+--> statement-breakpoint
+CREATE INDEX "ai_review_finding_state_idx" ON "open_review_duck_ai_review_finding" USING btree ("itemId","state");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_review_item_path_idx" ON "open_review_duck_ai_review_item" USING btree ("parentJobId","path");
+--> statement-breakpoint
+CREATE INDEX "ai_review_item_reuse_idx" ON "open_review_duck_ai_review_item" USING btree ("workspaceId","fingerprint");
+--> statement-breakpoint
+CREATE INDEX "ai_review_item_state_idx" ON "open_review_duck_ai_review_item" USING btree ("parentJobId","state");
+--> statement-breakpoint
+CREATE INDEX "ai_stream_lease_user_idx" ON "open_review_duck_ai_stream_lease" USING btree ("userId","expiresAt");
+--> statement-breakpoint
+CREATE INDEX "ai_stream_lease_expiry_idx" ON "open_review_duck_ai_stream_lease" USING btree ("expiresAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_usage_ledger_job_kind_idx" ON "open_review_duck_ai_usage_ledger" USING btree ("jobId","kind");
+--> statement-breakpoint
+CREATE INDEX "ai_usage_ledger_workspace_month_idx" ON "open_review_duck_ai_usage_ledger" USING btree ("workspaceId","month");
+--> statement-breakpoint
+CREATE INDEX "credential_audit_workspace_idx" ON "open_review_duck_credential_audit_event" USING btree ("workspaceId","createdAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "local_credential_fingerprint_idx" ON "open_review_duck_local_credential" USING btree ("workspaceId","kind","fingerprint");
+--> statement-breakpoint
+CREATE INDEX "local_session_user_idx" ON "open_review_duck_local_session" USING btree ("userId","expiresAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "managed_ai_credential_workspace_provider_idx" ON "open_review_duck_managed_ai_credential" USING btree ("workspaceId","provider");
+--> statement-breakpoint
+CREATE INDEX "oauth_expiry_idx" ON "open_review_duck_oauth_credential" USING btree ("expiresAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "connection_credential_idx" ON "open_review_duck_provider_connection" USING btree ("workspaceId","provider","credentialFingerprint");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "github_app_installation_idx" ON "open_review_duck_provider_connection" USING btree ("installationId");
+--> statement-breakpoint
+CREATE INDEX "provider_webhook_provider_idx" ON "open_review_duck_provider_webhook" USING btree ("provider");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "pull_request_external_idx" ON "open_review_duck_pull_request" USING btree ("repositoryId","externalId");
+--> statement-breakpoint
+CREATE INDEX "pull_request_state_idx" ON "open_review_duck_pull_request" USING btree ("repositoryId","state");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "repository_external_idx" ON "open_review_duck_repository" USING btree ("workspaceId","connectionId","externalId");
+--> statement-breakpoint
+CREATE INDEX "review_comment_unit_idx" ON "open_review_duck_review_comment" USING btree ("unitId","createdAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_comment_ai_finding_idx" ON "open_review_duck_review_comment" USING btree ("aiJobId","aiFindingIndex");
+--> statement-breakpoint
+CREATE INDEX "review_concept_dependency_dependency_idx" ON "open_review_duck_review_concept_dependency" USING btree ("dependencyId");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_baseline_idx" ON "open_review_duck_review_concept_layout" USING btree ("snapshotId") WHERE "open_review_duck_review_concept_layout"."userId" is null;
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_personal_idx" ON "open_review_duck_review_concept_layout" USING btree ("snapshotId","userId") WHERE "open_review_duck_review_concept_layout"."userId" is not null;
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_layout_scope_idx" ON "open_review_duck_review_concept_layout" USING btree ("id","snapshotId");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_membership_idx" ON "open_review_duck_review_concept_member" USING btree ("layoutId","unitId");
+--> statement-breakpoint
+CREATE INDEX "review_concept_member_order_idx" ON "open_review_duck_review_concept_member" USING btree ("conceptId","memberOrder");
+--> statement-breakpoint
+CREATE INDEX "review_concept_member_unit_idx" ON "open_review_duck_review_concept_member" USING btree ("unitId");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_key_idx" ON "open_review_duck_review_concept" USING btree ("layoutId","stableKey");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_order_idx" ON "open_review_duck_review_concept" USING btree ("layoutId","reviewOrder");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_concept_scope_idx" ON "open_review_duck_review_concept" USING btree ("id","layoutId");
+--> statement-breakpoint
+CREATE INDEX "review_queue_user_state_idx" ON "open_review_duck_review_queue_item" USING btree ("userId","state","updatedAt");
+--> statement-breakpoint
+CREATE INDEX "review_session_active_idx" ON "open_review_duck_review_session" USING btree ("pullRequestId","snapshotId","userId","completedAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "snapshot_version_idx" ON "open_review_duck_review_snapshot" USING btree ("pullRequestId","version");
+--> statement-breakpoint
+CREATE INDEX "review_unit_dependency_dependency_idx" ON "open_review_duck_review_unit_dependency" USING btree ("dependencyId");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_unit_key_idx" ON "open_review_duck_review_unit" USING btree ("snapshotId","stableKey");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_unit_scope_idx" ON "open_review_duck_review_unit" USING btree ("id","snapshotId");
+--> statement-breakpoint
+CREATE INDEX "review_order_idx" ON "open_review_duck_review_unit" USING btree ("snapshotId","reviewOrder");
+--> statement-breakpoint
+CREATE INDEX "review_unit_snapshot_file_idx" ON "open_review_duck_review_unit" USING btree ("snapshotFileId");
+--> statement-breakpoint
+CREATE INDEX "review_unit_current_blob_idx" ON "open_review_duck_review_unit" USING btree ("currentBlobId");
+--> statement-breakpoint
+CREATE INDEX "review_unit_previous_blob_idx" ON "open_review_duck_review_unit" USING btree ("previousBlobId");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "review_wait_unit_user_idx" ON "open_review_duck_review_wait" USING btree ("unitId","userId");
+--> statement-breakpoint
+CREATE INDEX "review_wait_user_date_idx" ON "open_review_duck_review_wait" USING btree ("userId","waitingSince");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "semantic_artifact_revision_idx" ON "open_review_duck_semantic_artifact" USING btree ("repositoryId","commitSha");
+--> statement-breakpoint
+CREATE INDEX "semantic_upload_repository_idx" ON "open_review_duck_semantic_upload_credential" USING btree ("repositoryId");
+--> statement-breakpoint
+CREATE INDEX "sign_off_unit_user_idx" ON "open_review_duck_sign_off" USING btree ("unitId","userId");
+--> statement-breakpoint
+CREATE INDEX "sign_off_user_date_idx" ON "open_review_duck_sign_off" USING btree ("userId","signedOffAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "snapshot_file_path_idx" ON "open_review_duck_snapshot_file" USING btree ("snapshotId","path");
+--> statement-breakpoint
+CREATE INDEX "snapshot_file_current_blob_idx" ON "open_review_duck_snapshot_file" USING btree ("currentBlobId");
+--> statement-breakpoint
+CREATE INDEX "snapshot_file_previous_blob_idx" ON "open_review_duck_snapshot_file" USING btree ("previousBlobId");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "source_blob_digest_idx" ON "open_review_duck_source_blob" USING btree ("workspaceId","digest");
+--> statement-breakpoint
+CREATE INDEX "source_blob_state_idx" ON "open_review_duck_source_blob" USING btree ("state","updatedAt");
+--> statement-breakpoint
+CREATE INDEX "sync_run_repository_idx" ON "open_review_duck_sync_run" USING btree ("repositoryId","pullRequestNumber","createdAt");
+--> statement-breakpoint
+CREATE INDEX "sync_run_workspace_idx" ON "open_review_duck_sync_run" USING btree ("workspaceId","status","createdAt");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "webhook_delivery_provider_idx" ON "open_review_duck_webhook_delivery" USING btree ("provider","deliveryId");
+--> statement-breakpoint
+CREATE INDEX "webhook_delivery_expiry_idx" ON "open_review_duck_webhook_delivery" USING btree ("expiresAt");
+--> statement-breakpoint
+CREATE INDEX "workflow_run_target_idx" ON "open_review_duck_workflow_run" USING btree ("kind","targetId","createdAt");
+--> statement-breakpoint
 CREATE INDEX "workspace_member_user_idx" ON "open_review_duck_workspace_member" USING btree ("userId");
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job_chunk" ADD CONSTRAINT "open_review_duck_ai_job_chunk_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job_evidence" ADD CONSTRAINT "open_review_duck_ai_job_evidence_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job_evidence" ADD CONSTRAINT "open_review_duck_ai_job_evidence_snapshotFileId_open_review_duck_snapshot_file_id_fk" FOREIGN KEY ("snapshotFileId") REFERENCES "public"."open_review_duck_snapshot_file"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job_evidence" ADD CONSTRAINT "open_review_duck_ai_job_evidence_sourceBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("sourceBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job_tool_call" ADD CONSTRAINT "open_review_duck_ai_job_tool_call_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job_turn" ADD CONSTRAINT "open_review_duck_ai_job_turn_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "open_review_duck_ai_job_workflowRunId_open_review_duck_workflow_run_id_fk" FOREIGN KEY ("workflowRunId") REFERENCES "public"."open_review_duck_workflow_run"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "ai_job_parent_fk" FOREIGN KEY ("parentJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_preference" ADD CONSTRAINT "open_review_duck_ai_preference_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_findingId_open_review_duck_ai_review_finding_id_fk" FOREIGN KEY ("findingId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_evidenceId_open_review_duck_ai_job_evidence_id_fk" FOREIGN KEY ("evidenceId") REFERENCES "public"."open_review_duck_ai_job_evidence"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding_location" ADD CONSTRAINT "open_review_duck_ai_review_finding_location_findingId_open_review_duck_ai_review_finding_id_fk" FOREIGN KEY ("findingId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_itemId_open_review_duck_ai_review_item_id_fk" FOREIGN KEY ("itemId") REFERENCES "public"."open_review_duck_ai_review_item"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "ai_review_finding_merged_fk" FOREIGN KEY ("mergedIntoId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_parentJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("parentJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_childJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("childJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_stream_lease" ADD CONSTRAINT "open_review_duck_ai_stream_lease_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_stream_lease" ADD CONSTRAINT "open_review_duck_ai_stream_lease_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_usage" ADD CONSTRAINT "open_review_duck_ai_usage_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_usage" ADD CONSTRAINT "open_review_duck_ai_usage_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_usage_ledger" ADD CONSTRAINT "open_review_duck_ai_usage_ledger_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_usage_ledger" ADD CONSTRAINT "open_review_duck_ai_usage_ledger_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_credential_audit_event" ADD CONSTRAINT "open_review_duck_credential_audit_event_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_credential_audit_event" ADD CONSTRAINT "open_review_duck_credential_audit_event_actorId_open_review_duck_user_id_fk" FOREIGN KEY ("actorId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_local_ai_configuration" ADD CONSTRAINT "open_review_duck_local_ai_configuration_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_local_credential" ADD CONSTRAINT "open_review_duck_local_credential_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_local_session" ADD CONSTRAINT "open_review_duck_local_session_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_managed_ai_credential" ADD CONSTRAINT "open_review_duck_managed_ai_credential_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_oauth_credential" ADD CONSTRAINT "open_review_duck_oauth_credential_connectionId_open_review_duck_provider_connection_id_fk" FOREIGN KEY ("connectionId") REFERENCES "public"."open_review_duck_provider_connection"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_oauth_state" ADD CONSTRAINT "open_review_duck_oauth_state_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_provider_connection" ADD CONSTRAINT "open_review_duck_provider_connection_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_provider_connection" ADD CONSTRAINT "open_review_duck_provider_connection_localCredentialId_open_review_duck_local_credential_id_fk" FOREIGN KEY ("localCredentialId") REFERENCES "public"."open_review_duck_local_credential"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_provider_pat_credential" ADD CONSTRAINT "open_review_duck_provider_pat_credential_connectionId_open_review_duck_provider_connection_id_fk" FOREIGN KEY ("connectionId") REFERENCES "public"."open_review_duck_provider_connection"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_provider_webhook" ADD CONSTRAINT "open_review_duck_provider_webhook_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_pull_request" ADD CONSTRAINT "open_review_duck_pull_request_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository" ADD CONSTRAINT "open_review_duck_repository_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository" ADD CONSTRAINT "open_review_duck_repository_connectionId_open_review_duck_provider_connection_id_fk" FOREIGN KEY ("connectionId") REFERENCES "public"."open_review_duck_provider_connection"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository" ADD CONSTRAINT "open_review_duck_repository_intakeOwnerId_open_review_duck_user_id_fk" FOREIGN KEY ("intakeOwnerId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_comment" ADD CONSTRAINT "open_review_duck_review_comment_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_comment" ADD CONSTRAINT "open_review_duck_review_comment_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_comment" ADD CONSTRAINT "open_review_duck_review_comment_aiJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("aiJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_dependency" ADD CONSTRAINT "open_review_duck_review_concept_dependency_layoutId_open_review_duck_review_concept_layout_id_fk" FOREIGN KEY ("layoutId") REFERENCES "public"."open_review_duck_review_concept_layout"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_dependency" ADD CONSTRAINT "open_review_duck_review_concept_dependency_conceptId_layoutId_open_review_duck_review_concept_id_layoutId_fk" FOREIGN KEY ("conceptId","layoutId") REFERENCES "public"."open_review_duck_review_concept"("id","layoutId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_dependency" ADD CONSTRAINT "open_review_duck_review_concept_dependency_dependencyId_layoutId_open_review_duck_review_concept_id_layoutId_fk" FOREIGN KEY ("dependencyId","layoutId") REFERENCES "public"."open_review_duck_review_concept"("id","layoutId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_layout" ADD CONSTRAINT "open_review_duck_review_concept_layout_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_layout" ADD CONSTRAINT "open_review_duck_review_concept_layout_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_layoutId_open_review_duck_review_concept_layout_id_fk" FOREIGN KEY ("layoutId") REFERENCES "public"."open_review_duck_review_concept_layout"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_conceptId_layoutId_open_review_duck_review_concept_id_layoutId_fk" FOREIGN KEY ("conceptId","layoutId") REFERENCES "public"."open_review_duck_review_concept"("id","layoutId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_layoutId_snapshotId_open_review_duck_review_concept_layout_id_snapshotId_fk" FOREIGN KEY ("layoutId","snapshotId") REFERENCES "public"."open_review_duck_review_concept_layout"("id","snapshotId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept_member" ADD CONSTRAINT "open_review_duck_review_concept_member_unitId_snapshotId_open_review_duck_review_unit_id_snapshotId_fk" FOREIGN KEY ("unitId","snapshotId") REFERENCES "public"."open_review_duck_review_unit"("id","snapshotId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_concept" ADD CONSTRAINT "open_review_duck_review_concept_layoutId_open_review_duck_review_concept_layout_id_fk" FOREIGN KEY ("layoutId") REFERENCES "public"."open_review_duck_review_concept_layout"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_queue_item" ADD CONSTRAINT "open_review_duck_review_queue_item_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_queue_item" ADD CONSTRAINT "open_review_duck_review_queue_item_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_session" ADD CONSTRAINT "open_review_duck_review_session_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_session" ADD CONSTRAINT "open_review_duck_review_session_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_session" ADD CONSTRAINT "open_review_duck_review_session_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_snapshot" ADD CONSTRAINT "open_review_duck_review_snapshot_pullRequestId_open_review_duck_pull_request_id_fk" FOREIGN KEY ("pullRequestId") REFERENCES "public"."open_review_duck_pull_request"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_unit_dependency" ADD CONSTRAINT "open_review_duck_review_unit_dependency_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_unit_dependency" ADD CONSTRAINT "open_review_duck_review_unit_dependency_dependencyId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("dependencyId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_snapshotFileId_open_review_duck_snapshot_file_id_fk" FOREIGN KEY ("snapshotFileId") REFERENCES "public"."open_review_duck_snapshot_file"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_currentBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("currentBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_unit" ADD CONSTRAINT "open_review_duck_review_unit_previousBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("previousBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_wait" ADD CONSTRAINT "open_review_duck_review_wait_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_review_wait" ADD CONSTRAINT "open_review_duck_review_wait_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_semantic_artifact" ADD CONSTRAINT "open_review_duck_semantic_artifact_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_semantic_artifact" ADD CONSTRAINT "open_review_duck_semantic_artifact_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_semantic_artifact" ADD CONSTRAINT "open_review_duck_semantic_artifact_sourceBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("sourceBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_semantic_upload_credential" ADD CONSTRAINT "open_review_duck_semantic_upload_credential_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sign_off" ADD CONSTRAINT "open_review_duck_sign_off_unitId_open_review_duck_review_unit_id_fk" FOREIGN KEY ("unitId") REFERENCES "public"."open_review_duck_review_unit"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sign_off" ADD CONSTRAINT "open_review_duck_sign_off_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_snapshot_file" ADD CONSTRAINT "open_review_duck_snapshot_file_snapshotId_open_review_duck_review_snapshot_id_fk" FOREIGN KEY ("snapshotId") REFERENCES "public"."open_review_duck_review_snapshot"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_snapshot_file" ADD CONSTRAINT "open_review_duck_snapshot_file_currentBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("currentBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_snapshot_file" ADD CONSTRAINT "open_review_duck_snapshot_file_previousBlobId_open_review_duck_source_blob_id_fk" FOREIGN KEY ("previousBlobId") REFERENCES "public"."open_review_duck_source_blob"("id") ON DELETE restrict ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_source_blob" ADD CONSTRAINT "open_review_duck_source_blob_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sync_queue_request" ADD CONSTRAINT "open_review_duck_sync_queue_request_syncRunId_open_review_duck_sync_run_id_fk" FOREIGN KEY ("syncRunId") REFERENCES "public"."open_review_duck_sync_run"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sync_queue_request" ADD CONSTRAINT "open_review_duck_sync_queue_request_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_repositoryId_open_review_duck_repository_id_fk" FOREIGN KEY ("repositoryId") REFERENCES "public"."open_review_duck_repository"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_sync_run" ADD CONSTRAINT "open_review_duck_sync_run_workflowRunId_open_review_duck_workflow_run_id_fk" FOREIGN KEY ("workflowRunId") REFERENCES "public"."open_review_duck_workflow_run"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_workflow_run" ADD CONSTRAINT "open_review_duck_workflow_run_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_workspace_member" ADD CONSTRAINT "open_review_duck_workspace_member_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_workspace_member" ADD CONSTRAINT "open_review_duck_workspace_member_userId_open_review_duck_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_workspace" ADD CONSTRAINT "open_review_duck_workspace_ownerId_open_review_duck_user_id_fk" FOREIGN KEY ("ownerId") REFERENCES "public"."open_review_duck_user"("id") ON DELETE cascade ON UPDATE no action;
