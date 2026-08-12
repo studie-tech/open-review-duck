@@ -193,3 +193,36 @@ describe("a definition written as a run of clauses", () => {
     expect(units).toHaveLength(2);
   });
 });
+
+describe("a Ruby statement that opens a heredoc", () => {
+  it("reaches the end of the text it introduced", () => {
+    // Ruby puts a heredoc's body after the statement rather than inside it, so
+    // the constant ended at the `<<~SQL` and its own text was swept up as a
+    // range belonging to nothing.
+    const units = analyzeFiles([
+      {
+        path: "query.rb",
+        content:
+          "QUERY = <<~SQL\n  select 1\n  from ducks\nSQL\n\ndef run\n  QUERY\nend\n",
+        changeType: "added",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units.map(({ name }) => name)).toEqual(["QUERY", "#run"]);
+    expect(units[0]).toMatchObject({ startLine: 1, endLine: 4 });
+    expect(units[0]?.source).toContain("from ducks");
+  });
+
+  it("keeps two heredocs in two declarations", () => {
+    const units = analyzeFiles([
+      {
+        path: "queries.rb",
+        content: "A = <<~X\n  one\nX\n\nB = <<~Y\n  two\nY\n",
+        changeType: "added",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units.map(({ name }) => name)).toEqual(["A", "B"]);
+    expect(units[1]).toMatchObject({ startLine: 5, endLine: 7 });
+  });
+});
