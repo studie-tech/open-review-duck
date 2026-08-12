@@ -11,3 +11,8 @@ Postgres World packages (Apache-2.0), UploadThing SDKs (MIT), Sentry SDKs
 their distributed upstream licenses, Hono (MIT), Zod (MIT), and Valibot (MIT).
 ReviewDuck does not relicense third-party works; consult the release SBOM and
 the corresponding upstream package for exact versions and license text.
+
+ReviewDuck also vendors the code-review rulebooks and their path-matching map
+from Alibaba's Open Code Review (Apache-2.0) under
+`src/server/review/deep/rulebooks/`. That directory carries the Apache-2.0
+license text and a NOTICE recording the upstream commit and every modification.

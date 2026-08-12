@@ -1,0 +1,27 @@
+The Markdown rulebooks in ./docs and system-rules.json in this directory are
+derived from the Open Code Review project:
+
+    https://github.com/alibaba/open-code-review
+    Copyright 2026 alibaba/open-code-review Contributors
+    Licensed under the Apache License, Version 2.0 (see ./LICENSE)
+
+Vendored from commit 552dc95147f8379a0d2bbbbd97632ffaa23a1c14 on 2026-08-12,
+from internal/config/rules/rule_docs/ and internal/config/rules/system_rules.json.
+
+Modifications by ReviewDuck:
+  - system_rules.json was renamed to system-rules.json to match this
+    repository's file naming. Its contents are unmodified.
+  - The 35 Markdown rulebooks in ./docs are unmodified.
+
+The upstream Markdown files carry no per-file copyright or SPDX headers; this
+NOTICE is the attribution for all of them.
+
+ReviewDuck as a whole is licensed under AGPL-3.0-only. Apache-2.0 is one-way
+compatible with AGPL-3.0, so this material may be incorporated here; the
+combined work is distributed under AGPL-3.0-only.
+
+This NOTICE satisfies Apache-2.0 section 4(a) (License copy), 4(b) (modified
+files carry prominent notices), and 4(c) (retention of attribution notices;
+none exist in the source files). No NOTICE file was present in the upstream
+repository at the vendored commit, so section 4(d) imposes no further
+obligation.

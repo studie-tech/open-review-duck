@@ -91,6 +91,8 @@ export const aiModeEnum = pgEnum("ai_mode", ["off", "on_demand", "automatic"]);
 export const aiJobKindEnum = pgEnum("ai_job_kind", [
   "explain",
   "review",
+  "review_file",
+  "review_survey",
   "semantic_cluster",
 ]);
 export const reviewConceptLayoutSourceEnum = pgEnum(
@@ -113,7 +115,74 @@ export const aiCompletionReasonEnum = pgEnum("ai_completion_reason", [
   "cost_limit",
   "cancelled",
   "provider_failure",
+  "deep_review_partial",
+  "deep_review_skipped",
 ]);
+
+// The finding taxonomy is adopted from alibaba/open-code-review, whose vendored
+// rulebooks are written against exactly these severities and categories. Storing
+// anything narrower would need a lossy translation between what a rulebook
+// instructs and what a finding records.
+export const findingSeverityEnum = pgEnum("finding_severity", [
+  "critical",
+  "high",
+  "medium",
+  "low",
+]);
+export const findingCategoryEnum = pgEnum("finding_category", [
+  "bug",
+  "security",
+  "performance",
+  "maintainability",
+  "test",
+  "style",
+  "documentation",
+  "other",
+]);
+export const deepReviewItemStateEnum = pgEnum("deep_review_item_state", [
+  "selected",
+  "completed",
+  "reused",
+  "failed",
+  "waived",
+]);
+export const reviewFailureClassEnum = pgEnum("review_failure_class", [
+  "provider",
+  "timeout",
+  "budget",
+  "cancelled",
+  "tool_limit",
+  "unknown",
+]);
+export const deepReviewTerminalStateEnum = pgEnum(
+  "deep_review_terminal_state",
+  ["complete", "partial", "failed", "skipped"],
+);
+export const deepReviewFindingStateEnum = pgEnum("deep_review_finding_state", [
+  "submitted",
+  "anchored",
+  "unanchored",
+  "out_of_scope",
+  "ungrounded",
+  "refuted",
+  "merged",
+  "dropped",
+]);
+export const deepReviewVerdictEnum = pgEnum("deep_review_verdict", [
+  "unverified",
+  "not_refuted",
+  "refuted",
+]);
+export const anchorTierEnum = pgEnum("anchor_tier", [
+  "unit_current",
+  "changed_current",
+  "file_current",
+  "file_previous",
+  "relocated",
+  "ambiguous",
+  "none",
+]);
+export const anchorSideEnum = pgEnum("anchor_side", ["current", "previous"]);
 export const reviewCommentSourceEnum = pgEnum("review_comment_source", [
   "user",
   "ai",
@@ -947,6 +1016,16 @@ export const aiJobs = createTable(
      * clustering run has neither, so the check refused every one of them.
      */
     layoutKey: text(),
+    /**
+     * The deep-review parent this job belongs to, null on the parent itself.
+     *
+     * Partitioning the four durability tables by jobId already isolates each
+     * child transcript, so a child needs no sequence banding of its own.
+     */
+    parentJobId: uuid(),
+    ruleConfigDigest: varchar({ length: 64 }),
+    deepReviewTerminalState: deepReviewTerminalStateEnum(),
+    runFailureClass: reviewFailureClassEnum(),
     agentVersion: integer().notNull().default(1),
     status: aiJobStatusEnum().notNull().default("queued"),
     workflowRunId: uuid().references(() => workflowRuns.id, {
@@ -1019,6 +1098,12 @@ export const aiJobs = createTable(
     // not use it and scanned every job row for each unit it removed.
     index("ai_job_unit_idx").on(t.unitId),
     index("ai_job_snapshot_idx").on(t.snapshotId),
+    foreignKey({
+      columns: [t.parentJobId],
+      foreignColumns: [t.id],
+      name: "ai_job_parent_fk",
+    }).onDelete("cascade"),
+    index("ai_job_parent_idx").on(t.parentJobId),
   ],
 );
 
@@ -1110,6 +1195,138 @@ export const aiJobEvidence = createTable(
       t.endByte,
     ),
     index("ai_job_evidence_path_idx").on(t.jobId, t.path),
+  ],
+);
+
+/**
+ * The sealed coverage denominator: one row per file the run committed to
+ * reviewing, written before any concurrency exists.
+ *
+ * Freezing the set up front is what lets a run report `partial` truthfully. A
+ * denominator that could still grow while agents were running would make every
+ * completeness claim a guess.
+ */
+export const aiReviewItems = createTable(
+  "ai_review_item",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    parentJobId: uuid()
+      .notNull()
+      .references(() => aiJobs.id, { onDelete: "cascade" }),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    childJobId: uuid().references(() => aiJobs.id, { onDelete: "set null" }),
+    path: text().notNull(),
+    changeType: varchar({ length: 24 }).notNull(),
+    changedLineCount: integer().notNull().default(0),
+    state: deepReviewItemStateEnum().notNull().default("selected"),
+    failureClass: reviewFailureClassEnum(),
+    reason: text(),
+    fingerprint: varchar({ length: 64 }).notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("ai_review_item_path_idx").on(t.parentJobId, t.path),
+    index("ai_review_item_reuse_idx").on(t.workspaceId, t.fingerprint),
+    index("ai_review_item_state_idx").on(t.parentJobId, t.state),
+  ],
+);
+
+/**
+ * One reported finding, retained whatever becomes of it.
+ *
+ * A refuted or ungrounded finding keeps its row so a discard stays auditable
+ * rather than silently vanishing. Content is vault-sealed because
+ * `existingCode` is a verbatim source excerpt, and every other column in this
+ * schema holding model-visible repository content is sealed too.
+ */
+export const aiReviewFindings = createTable(
+  "ai_review_finding",
+  {
+    id: varchar({ length: 64 }).primaryKey(),
+    itemId: uuid()
+      .notNull()
+      .references(() => aiReviewItems.id, { onDelete: "cascade" }),
+    jobId: uuid()
+      .notNull()
+      .references(() => aiJobs.id, { onDelete: "cascade" }),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // Null for a cross-file survey finding, which names its locations in
+    // ai_review_finding_location instead.
+    path: text(),
+    severity: findingSeverityEnum().notNull(),
+    category: findingCategoryEnum().notNull(),
+    encryptedContent: text().notNull(),
+    state: deepReviewFindingStateEnum().notNull().default("submitted"),
+    verdict: deepReviewVerdictEnum().notNull().default("unverified"),
+    verdictReason: text(),
+    anchorTier: anchorTierEnum(),
+    anchorSide: anchorSideEnum(),
+    startLine: integer(),
+    endLine: integer(),
+    anchorAmbiguous: boolean().notNull().default(false),
+    unitId: uuid().references(() => reviewUnits.id, { onDelete: "set null" }),
+    mergedIntoId: varchar({ length: 64 }),
+    orderIndex: integer(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("ai_review_finding_item_idx").on(t.itemId),
+    index("ai_review_finding_job_idx").on(t.jobId),
+    index("ai_review_finding_state_idx").on(t.itemId, t.state),
+    foreignKey({
+      columns: [t.mergedIntoId],
+      foreignColumns: [t.id],
+      name: "ai_review_finding_merged_fk",
+    }).onDelete("set null"),
+  ],
+);
+
+/**
+ * The per-file locations of a cross-file finding.
+ *
+ * A survey finding spans files by construction, so it anchors once per named
+ * location and surfaces on the first that resolves.
+ */
+export const aiReviewFindingLocations = createTable(
+  "ai_review_finding_location",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    findingId: varchar({ length: 64 })
+      .notNull()
+      .references(() => aiReviewFindings.id, { onDelete: "cascade" }),
+    path: text().notNull(),
+    encryptedExistingCode: text().notNull(),
+    anchorTier: anchorTierEnum(),
+    anchorSide: anchorSideEnum(),
+    startLine: integer(),
+    endLine: integer(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ai_review_finding_location_idx").on(t.findingId)],
+);
+
+/** Ties a finding to the byte ranges its agent provably read. */
+export const aiReviewFindingEvidence = createTable(
+  "ai_review_finding_evidence",
+  {
+    findingId: varchar({ length: 64 })
+      .notNull()
+      .references(() => aiReviewFindings.id, { onDelete: "cascade" }),
+    evidenceId: uuid()
+      .notNull()
+      .references(() => aiJobEvidence.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.findingId, t.evidenceId] }),
+    index("ai_review_finding_evidence_idx").on(t.evidenceId),
   ],
 );
 

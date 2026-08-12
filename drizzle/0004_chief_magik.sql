@@ -1,1 +1,0 @@
-ALTER TABLE "open_review_duck_provider_connection" ADD COLUMN "credentialStatus" varchar(24) DEFAULT 'active' NOT NULL;
