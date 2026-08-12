@@ -12,6 +12,7 @@ import {
 import type { db as database } from "~/server/db";
 import type { ReviewQueueSource } from "~/server/review/queue";
 import { aiJobWorkflow } from "./ai-job";
+import { pullRequestReviewWorkflow } from "./pull-request-review";
 import { ensureWorkflowRunLink } from "./run-link";
 import { syncPullRequestWorkflow } from "./sync-pull-request";
 
@@ -187,7 +188,15 @@ export async function startAiJob(db: Database, jobId: string) {
       .update(aiJobs)
       .set({ status: "waiting_for_provider" })
       .where(eq(aiJobs.id, job.id));
-    return { shouldStart: true as const, jobId, workflowRunId: null };
+    return {
+      shouldStart: true as const,
+      jobId,
+      workflowRunId: null,
+      // A deep review keeps the parent's identity exactly as the read paths
+      // already hardcode it, so the pair is the discriminator rather than a
+      // new column: a whole-pull-request review carries no unit.
+      isDeepReview: job.kind === "review" && job.unitId === null,
+    };
   });
 
   if (!reservation.shouldStart) {
@@ -199,7 +208,9 @@ export async function startAiJob(db: Database, jobId: string) {
 
   let run: Awaited<ReturnType<typeof start>>;
   try {
-    run = await start(aiJobWorkflow, [jobId]);
+    run = reservation.isDeepReview
+      ? await start(pullRequestReviewWorkflow, [jobId])
+      : await start(aiJobWorkflow, [jobId]);
   } catch (cause) {
     const { failAiJob } = await import("~/server/ai/agent-loop");
     await failAiJob(db, jobId, cause);
