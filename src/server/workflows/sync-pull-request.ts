@@ -3,9 +3,29 @@ import { getWorkflowMetadata } from "workflow";
 import { syncQueueRequests, syncRuns, workflowRuns } from "@/drizzle/schema";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import { db } from "~/server/db";
+import { ProviderError } from "~/server/providers/types";
 import { assignPullRequestToQueue } from "~/server/review/queue";
+import { reviewSyncFailureDetails } from "~/server/sync/error";
 import { syncPullRequest } from "~/server/sync/service";
 import { ensureWorkflowRunLink } from "./run-link";
+
+/**
+ * Names the failure a run ended on without keeping the query that carried it.
+ *
+ * A rejected statement arrives wrapped in an error whose message is the whole
+ * statement and every value bound to it: private source, at a size the column
+ * recording it was never meant to hold. The cause underneath that wrapper is
+ * the part that says what actually went wrong, and it is the part a reviewer's
+ * guidance can be read from. A provider failure already arrives named and
+ * bounded, and the status it carries is what that guidance turns on, so it is
+ * kept exactly as the provider stated it.
+ */
+function synchronizationFailureText(cause: unknown) {
+  if (cause instanceof ProviderError) return cause.message.slice(0, 300);
+  if (!(cause instanceof Error)) return "Synchronization failed";
+  const { message, code } = reviewSyncFailureDetails(cause);
+  return code ? `${message} (${code})` : message;
+}
 
 /** Durably synchronizes one pull request using identifier-only workflow state. */
 export async function syncPullRequestWorkflow(syncId: string) {
@@ -14,9 +34,11 @@ export async function syncPullRequestWorkflow(syncId: string) {
   try {
     return await executeSynchronization(syncId, workflowRunId);
   } catch (cause) {
-    const error =
-      cause instanceof Error ? cause.message : "Synchronization failed";
-    await recordTerminalSynchronizationFailure(syncId, workflowRunId, error);
+    await recordTerminalSynchronizationFailure(
+      syncId,
+      workflowRunId,
+      synchronizationFailureText(cause),
+    );
     throw cause;
   }
 }
@@ -122,8 +144,7 @@ async function executeSynchronization(syncId: string, providerRunId: string) {
       unitCount: result.unitCount,
     };
   } catch (cause) {
-    const error =
-      cause instanceof Error ? cause.message : "Synchronization failed";
+    const error = synchronizationFailureText(cause);
     await db
       .update(syncRuns)
       .set({ status: "failed", error, completedAt: new Date() })
