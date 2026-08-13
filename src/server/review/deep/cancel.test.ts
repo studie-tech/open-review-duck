@@ -3,11 +3,15 @@ import { aiReviewItems } from "@/drizzle/schema";
 
 const mocks = vi.hoisted(() => ({ finalizeDeepReview: vi.fn() }));
 
-vi.mock("./finalize", () => ({
+// Only the closing call is replaced: the lock key stays real, so the two paths
+// are proved to contend for the same lock rather than for a stub of it.
+vi.mock("./finalize", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./finalize")>()),
   finalizeDeepReview: mocks.finalizeDeepReview,
 }));
 
 import { cancelDeepReviewTree, deepReviewIsCancelled } from "./cancel";
+import { deepReviewTreeLockKey } from "./finalize";
 
 interface FakeJob {
   id: string;
@@ -93,6 +97,13 @@ describe("cancelDeepReviewTree", () => {
         }),
       },
     ]);
+  });
+
+  it("sweeps under the lock every closer of the tree contends for", async () => {
+    const { db, locks } = createFakeDb([]);
+    await cancelDeepReviewTree(db, "parent-1");
+
+    expect(JSON.stringify(locks)).toContain(deepReviewTreeLockKey("parent-1"));
   });
 
   it("finalizes afterwards so the coverage partition closes", async () => {

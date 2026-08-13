@@ -135,6 +135,36 @@ export function aiJobActive(status: string | null | undefined) {
   return Boolean(status) && !terminalAiJobStatuses.includes(status ?? "");
 }
 
+interface RefetchableQuery {
+  refetch: () => unknown;
+}
+
+/** Pulls the review tree once the pull-request review reaches a terminal status. */
+export function useTerminalReviewRefetch(
+  status: string | null | undefined,
+  queries: {
+    aiUsage: RefetchableQuery;
+    deepReview: RefetchableQuery;
+    discussion: RefetchableQuery;
+  },
+) {
+  // A query result is a new object on every render, so the effect hangs off the
+  // observer-bound `refetch` methods instead: those keep their identity, and
+  // depending on the results themselves refetches on every keystroke.
+  const { refetch: refetchAiUsage } = queries.aiUsage;
+  const { refetch: refetchDeepReview } = queries.deepReview;
+  const { refetch: refetchDiscussion } = queries.discussion;
+  useEffect(() => {
+    // A failed or cancelled parent still owns coverage rows and whatever its
+    // children surfaced before the run stopped, so every terminal status pulls
+    // the tree once, not just `completed`.
+    if (!status || aiJobActive(status)) return;
+    void refetchDiscussion();
+    void refetchAiUsage();
+    void refetchDeepReview();
+  }, [refetchAiUsage, refetchDeepReview, refetchDiscussion, status]);
+}
+
 const findingSeverities = ["critical", "high", "medium", "low"] as const;
 const findingCategories = [
   "bug",
@@ -3262,21 +3292,17 @@ export function ReviewWorkspace({
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [importPreview]);
-  useEffect(() => {
-    // A failed or cancelled parent still owns coverage rows and whatever its
-    // children surfaced before the run stopped, so every terminal status pulls
-    // the tree once, not just `completed`.
-    const status = pullRequestReview.data?.status;
-    if (!status || aiJobActive(status)) return;
-    void discussion.refetch();
-    void aiUsage.refetch();
-    void deepReview.refetch();
-  }, [aiUsage, deepReview, discussion, pullRequestReview.data?.status]);
+  useTerminalReviewRefetch(pullRequestReview.data?.status, {
+    aiUsage,
+    deepReview,
+    discussion,
+  });
+  const { refetch: refetchAiUsage } = aiUsage;
   useEffect(() => {
     if (aiStatus.data?.status === "completed") {
-      void aiUsage.refetch();
+      void refetchAiUsage();
     }
-  }, [aiStatus.data?.status, aiUsage]);
+  }, [aiStatus.data?.status, refetchAiUsage]);
   const autoRequested = useRef(new Set<string>());
   useEffect(() => {
     if (

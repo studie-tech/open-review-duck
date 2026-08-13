@@ -1163,6 +1163,18 @@ export interface SideBySideUnitDiffHandle {
 const FINDING_LINE_HIGHLIGHT =
   "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]";
 
+/**
+ * Reports whether a highlighted line is the review line a row stands for.
+ */
+function highlightsReviewLine(
+  highlightedLine: number | undefined,
+  reviewLine: number | undefined,
+) {
+  // A context row has no review line and an unset highlight has no line
+  // either, so an unguarded equality would paint every context row.
+  return highlightedLine !== undefined && highlightedLine === reviewLine;
+}
+
 interface SideBySideUnitDiffProps {
   previousSource: string;
   currentSource: string;
@@ -1623,9 +1635,11 @@ export const SideBySideUnitDiff = forwardRef<
                     : "bg-surface-subtle/20",
                   interactive &&
                     "cursor-pointer transition hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                  findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
-                  selectedLine === reviewLine && "bg-violet/[.055]",
-                  keyboardLine === reviewLine &&
+                  highlightsReviewLine(findingLine, reviewLine) &&
+                    FINDING_LINE_HIGHLIGHT,
+                  highlightsReviewLine(selectedLine, reviewLine) &&
+                    "bg-violet/[.055]",
+                  highlightsReviewLine(keyboardLine, reviewLine) &&
                     "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
                   isContextRow &&
                     "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
@@ -1907,9 +1921,11 @@ export const SideBySideUnitDiff = forwardRef<
                 <div
                   className={cn(
                     "grid grid-cols-[42px_42px_minmax(0,1fr)]",
-                    findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
-                    selectedLine === reviewLine && "bg-violet/[.055]",
-                    keyboardLine === reviewLine &&
+                    highlightsReviewLine(findingLine, reviewLine) &&
+                      FINDING_LINE_HIGHLIGHT,
+                    highlightsReviewLine(selectedLine, reviewLine) &&
+                      "bg-violet/[.055]",
+                    highlightsReviewLine(keyboardLine, reviewLine) &&
                       "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
                   )}
                 >

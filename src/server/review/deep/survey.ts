@@ -358,6 +358,7 @@ export function deepReviewSurveyTools(context: DeepReviewSurveyToolContext) {
                   .values({
                     id: locationId,
                     findingId: id,
+                    position: locationIndex,
                     path: location.path,
                     encryptedExistingCode: await sealVaultSecret(
                       {
@@ -519,7 +520,10 @@ export async function validateDeepReviewSurveyFindings(
         aiReviewFindingLocations.findingId,
         findings.map((finding) => finding.id),
       ),
-    );
+    )
+    // The finding surfaces on the first location that resolves, so the read
+    // has to hand them back in the order the model named them.
+    .orderBy(aiReviewFindingLocations.position);
   const evidence = await evidenceRangesByBlob(db, input.job.id);
   const units = await input.repository.units();
   const byFinding = new Map<string, SurveyLocationAnchor[]>();

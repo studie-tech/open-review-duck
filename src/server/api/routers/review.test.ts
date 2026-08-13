@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { describe, expect, it } from "vitest";
+import { aiReviewFindingLocations } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { DEEP_REVIEW_SURVEY_ITEM_PATH } from "~/server/review/deep/survey";
 import { sealVaultSecret } from "~/server/security/vault";
@@ -110,8 +111,10 @@ async function finding(seed: FindingSeed) {
 function createReadDb(state: {
   items: ReturnType<typeof item>[];
   findings: Awaited<ReturnType<typeof finding>>[];
+  /** Seeded in heap order, which the double only sorts when asked to. */
   locations: {
     findingId: string;
+    position: number;
     path: string;
     anchorTier: string | null;
     anchorSide: string | null;
@@ -137,9 +140,16 @@ function createReadDb(state: {
       },
       aiReviewFindingLocations: {
         /** Returns the cross-file locations, counting the read. */
-        findMany: async () => {
+        findMany: async (args?: { orderBy?: readonly unknown[] }) => {
           reads.locations += 1;
-          return state.locations;
+          const rows = args?.orderBy?.includes(
+            aiReviewFindingLocations.position,
+          )
+            ? [...state.locations].sort((a, b) => a.position - b.position)
+            : state.locations;
+          // `position` orders the read without joining the payload, so the
+          // double drops it exactly as the query's `columns` does.
+          return rows.map(({ position: _position, ...row }) => row);
         },
       },
       reviewComments: {
@@ -257,7 +267,7 @@ describe("deep review read path", () => {
     );
   });
 
-  it("attaches each cross-file location to the finding that named it", async () => {
+  it("attaches each cross-file location to its finding, in the named order", async () => {
     const { db } = createReadDb({
       items: [
         item({
@@ -280,25 +290,38 @@ describe("deep review read path", () => {
       locations: [
         {
           findingId: "f-survey",
-          path: "src/alpha.ts",
-          anchorTier: "file_current",
+          position: 1,
+          path: "src/beta.ts",
+          anchorTier: "unit_current",
           anchorSide: "current",
-          startLine: 4,
-          endLine: 4,
+          startLine: 9,
+          endLine: 9,
         },
         {
           findingId: "f-other",
+          position: 0,
           path: "src/ignored.ts",
           anchorTier: null,
           anchorSide: null,
           startLine: null,
           endLine: null,
         },
+        {
+          findingId: "f-survey",
+          position: 0,
+          path: "src/alpha.ts",
+          anchorTier: "file_current",
+          anchorSide: "current",
+          startLine: 4,
+          endLine: 4,
+        },
       ],
     });
 
     const run = await deepReviewRunPayload(db, job);
 
+    // The client holds an open location by its index, so the payload has to
+    // list them in the order the survey named them.
     expect(run.findings[0]?.locations).toEqual([
       {
         path: "src/alpha.ts",
@@ -306,6 +329,13 @@ describe("deep review read path", () => {
         anchorSide: "current",
         startLine: 4,
         endLine: 4,
+      },
+      {
+        path: "src/beta.ts",
+        anchorTier: "unit_current",
+        anchorSide: "current",
+        startLine: 9,
+        endLine: 9,
       },
     ]);
   });

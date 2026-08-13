@@ -36,9 +36,6 @@ type ReviewParentJob = typeof aiJobs.$inferSelect;
  */
 const DEFAULT_MAX_SOURCE_BYTES = 2 << 20;
 
-/** How many changed files one sealed plan will look at. */
-const MAX_PLAN_FILES = 5_000;
-
 /** The parent columns a child job copies instead of re-resolving. */
 export type ReviewChildJobParent = Pick<
   ReviewParentJob,
@@ -278,10 +275,12 @@ function readySourceBlob(blobs: Map<string, BlobRow>, id: string | null) {
 
 /** Loads the snapshot's changed files with the blobs they resolve to. */
 async function loadPlanFiles(reader: Reader, snapshotId: string) {
+  // Deliberately unlimited: this read is the coverage denominator, so a row
+  // left behind here is a file that is neither reviewed nor recorded as
+  // waived while the run still reports having covered everything.
   const files = await reader.query.snapshotFiles.findMany({
     where: eq(snapshotFiles.snapshotId, snapshotId),
     orderBy: [asc(snapshotFiles.path)],
-    limit: MAX_PLAN_FILES,
   });
   const blobIds = [
     ...new Set(

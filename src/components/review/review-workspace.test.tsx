@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouterOutputs } from "~/trpc/react";
@@ -11,6 +11,7 @@ import {
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
   groupDeepReviewFindings,
+  useTerminalReviewRefetch,
 } from "./review-workspace";
 
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
@@ -109,6 +110,51 @@ describe("aiJobActive", () => {
     expect(aiJobActive(undefined)).toBe(false);
     expect(aiJobActive(null)).toBe(false);
     expect(aiJobActive("")).toBe(false);
+  });
+});
+
+describe("useTerminalReviewRefetch", () => {
+  const refetch = {
+    aiUsage: vi.fn(),
+    deepReview: vi.fn(),
+    discussion: vi.fn(),
+  };
+
+  /** Renders the hook the way a rerendering view does: with fresh results. */
+  function renderTerminalRefetch(status: string) {
+    return renderHook(
+      ({ status: current }: { status: string }) =>
+        useTerminalReviewRefetch(current, {
+          aiUsage: { refetch: refetch.aiUsage },
+          deepReview: { refetch: refetch.deepReview },
+          discussion: { refetch: refetch.discussion },
+        }),
+      { initialProps: { status } },
+    );
+  }
+
+  it("pulls the tree once however often the view rerenders", () => {
+    // Typing in the composer rerenders the workspace, and every render hands
+    // the hook new query objects, so identity alone must not trigger a pull.
+    const { rerender } = renderTerminalRefetch("completed");
+    rerender({ status: "completed" });
+    rerender({ status: "completed" });
+
+    expect(refetch.discussion).toHaveBeenCalledOnce();
+    expect(refetch.aiUsage).toHaveBeenCalledOnce();
+    expect(refetch.deepReview).toHaveBeenCalledOnce();
+  });
+
+  it("waits for a terminal status and pulls again for the next run", () => {
+    const { rerender } = renderTerminalRefetch("running");
+    expect(refetch.deepReview).not.toHaveBeenCalled();
+
+    rerender({ status: "failed" });
+    expect(refetch.deepReview).toHaveBeenCalledOnce();
+
+    rerender({ status: "queued" });
+    rerender({ status: "completed" });
+    expect(refetch.deepReview).toHaveBeenCalledTimes(2);
   });
 });
 

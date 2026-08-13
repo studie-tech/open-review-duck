@@ -171,6 +171,7 @@ CREATE TABLE "open_review_duck_ai_review_finding_evidence" (
 CREATE TABLE "open_review_duck_ai_review_finding_location" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"findingId" varchar(64) NOT NULL,
+	"position" integer NOT NULL,
 	"path" text NOT NULL,
 	"encryptedExistingCode" text NOT NULL,
 	"anchorTier" "anchor_tier",
@@ -752,7 +753,7 @@ CREATE INDEX "ai_job_parent_idx" ON "open_review_duck_ai_job" USING btree ("pare
 --> statement-breakpoint
 CREATE INDEX "ai_review_finding_evidence_idx" ON "open_review_duck_ai_review_finding_evidence" USING btree ("evidenceId");
 --> statement-breakpoint
-CREATE INDEX "ai_review_finding_location_idx" ON "open_review_duck_ai_review_finding_location" USING btree ("findingId");
+CREATE UNIQUE INDEX "ai_review_finding_location_idx" ON "open_review_duck_ai_review_finding_location" USING btree ("findingId","position");
 --> statement-breakpoint
 CREATE INDEX "ai_review_finding_item_idx" ON "open_review_duck_ai_review_finding" USING btree ("itemId");
 --> statement-breakpoint

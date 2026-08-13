@@ -20,6 +20,7 @@ import { type FindingSeverity, orderFindings } from "./findings";
 import { sanitizeReason } from "./redaction";
 
 type Database = typeof database;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * The finding states a reviewer is shown, and therefore the ones that rank.
@@ -276,6 +277,11 @@ export function deepReviewSummary(input: {
   }
 }
 
+/** Names the advisory lock every closer of one review tree contends for. */
+export function deepReviewTreeLockKey(parentJobId: string) {
+  return `deep-review:cancel:${parentJobId}`;
+}
+
 /**
  * Closes one deep-review run: sweeps coverage, settles the tree, and accepts.
  *
@@ -296,109 +302,122 @@ export async function finalizeDeepReview(
     throw new Error("finalizeDeepReview requires a deep review parent job");
   }
 
-  const sweep = deepReviewSweepFailure(options);
-  const swept = await db
-    .update(aiReviewItems)
-    .set({
-      state: "failed",
-      failureClass: sweep.failureClass,
-      reason: sweep.reason,
-    })
-    .where(
-      and(
-        eq(aiReviewItems.parentJobId, parentJobId),
-        eq(aiReviewItems.state, "selected"),
-      ),
-    )
-    .returning({ id: aiReviewItems.id });
-
-  const items: CoverageRow[] = await db.query.aiReviewItems.findMany({
-    columns: { id: true, path: true, state: true, failureClass: true },
-    where: eq(aiReviewItems.parentJobId, parentJobId),
-  });
-
-  const partitionErrors = coveragePartitionErrors({
-    selectedCount: options.expectedItemCount ?? items.length,
-    items,
-  });
-  if (partitionErrors.length > 0) {
-    throw new Error(
-      `Deep review coverage does not partition the sealed plan: ${partitionErrors.join("; ")}`,
+  const closed = await db.transaction(async (tx) => {
+    // One closer per tree. Cancellation sweeps the same items, and the usage
+    // rollup is a read of every child followed by a write of their sum, so
+    // every closer takes this one lock: without it a cancellation sweep lands
+    // between another closer's read and its write, and the run reports a
+    // coverage reason and a settled total that no longer describe the tree.
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${deepReviewTreeLockKey(parentJobId)}))`,
     );
-  }
+    const sweep = deepReviewSweepFailure(options);
+    const swept = await tx
+      .update(aiReviewItems)
+      .set({
+        state: "failed",
+        failureClass: sweep.failureClass,
+        reason: sweep.reason,
+      })
+      .where(
+        and(
+          eq(aiReviewItems.parentJobId, parentJobId),
+          eq(aiReviewItems.state, "selected"),
+        ),
+      )
+      .returning({ id: aiReviewItems.id });
 
-  const surfaced = await surfacedFindings(
-    db,
-    items.map((item) => item.id),
-  );
-  const ordered = orderFindings(surfaced);
-  for (const [orderIndex, finding] of ordered.entries()) {
-    await db
-      .update(aiReviewFindings)
-      .set({ orderIndex })
-      .where(eq(aiReviewFindings.id, finding.id));
-  }
-
-  const usage = await rollUpTreeUsage(db, parentJobId);
-
-  const terminalState = deepReviewTerminalState(items);
-  const runFailureClass = deepReviewRunFailureClass({
-    runFailure: options.runFailure,
-    terminalState,
-    items,
-  });
-  const coverage = deepReviewCoverage(items);
-  const completionReason = deepReviewCompletionReason(terminalState);
-  await db
-    .update(aiJobs)
-    .set({ deepReviewTerminalState: terminalState, runFailureClass })
-    .where(eq(aiJobs.id, parentJobId));
-
-  const summary =
-    options.summary ??
-    deepReviewSummary({
-      terminalState,
-      coverage,
-      findingCount: ordered.length,
+    const items: CoverageRow[] = await tx.query.aiReviewItems.findMany({
+      columns: { id: true, path: true, state: true, failureClass: true },
+      where: eq(aiReviewItems.parentJobId, parentJobId),
     });
+
+    const partitionErrors = coveragePartitionErrors({
+      selectedCount: options.expectedItemCount ?? items.length,
+      items,
+    });
+    if (partitionErrors.length > 0) {
+      throw new Error(
+        `Deep review coverage does not partition the sealed plan: ${partitionErrors.join("; ")}`,
+      );
+    }
+
+    const surfaced = await surfacedFindings(
+      tx,
+      items.map((item) => item.id),
+    );
+    const ordered = orderFindings(surfaced);
+    for (const [orderIndex, finding] of ordered.entries()) {
+      await tx
+        .update(aiReviewFindings)
+        .set({ orderIndex })
+        .where(eq(aiReviewFindings.id, finding.id));
+    }
+
+    const usage = await rollUpTreeUsage(tx, parentJobId);
+
+    const terminalState = deepReviewTerminalState(items);
+    const runFailureClass = deepReviewRunFailureClass({
+      runFailure: options.runFailure,
+      terminalState,
+      items,
+    });
+    const coverage = deepReviewCoverage(items);
+    const completionReason = deepReviewCompletionReason(terminalState);
+    await tx
+      .update(aiJobs)
+      .set({ deepReviewTerminalState: terminalState, runFailureClass })
+      .where(eq(aiJobs.id, parentJobId));
+
+    const summary =
+      options.summary ??
+      deepReviewSummary({
+        terminalState,
+        coverage,
+        findingCount: ordered.length,
+      });
+    return {
+      terminalState,
+      runFailureClass,
+      completionReason,
+      coverage,
+      sweptCount: swept.length,
+      surfacedFindingCount: ordered.length,
+      usage,
+      summary,
+    };
+  });
+
   // Findings live in `ai_review_finding`, which the read path joins through
   // `parentJobId`; duplicating them here would give the UI two sources of
   // truth and make the replay comparison depend on finding ordering twice.
+  // Acceptance sits outside the lock deliberately: it is one-shot on a null
+  // result, so a closer that lost the race has nothing left to disagree about.
   const accepted = await acceptAiJobResult(db, parentJobId, {
-    summary,
+    summary: closed.summary,
     annotations: [],
     findings: [],
   });
-  if (accepted && completionReason !== "answered") {
+  if (accepted && closed.completionReason !== "answered") {
     // `acceptAiJobResult` writes `answered`, and its signature does not admit
     // the deep-review reasons, so the precise reason is patched on top of an
     // acceptance we already know landed.
     await db
       .update(aiJobs)
-      .set({ completionReason })
+      .set({ completionReason: closed.completionReason })
       .where(and(eq(aiJobs.id, parentJobId), eq(aiJobs.status, "completed")));
   }
 
-  return {
-    terminalState,
-    runFailureClass,
-    completionReason,
-    coverage,
-    sweptCount: swept.length,
-    surfacedFindingCount: ordered.length,
-    usage,
-    summary,
-    accepted,
-  };
+  return { ...closed, accepted };
 }
 
 /** Loads the reviewer-visible findings of a run in one indexed read. */
 async function surfacedFindings(
-  db: Database,
+  tx: Transaction,
   itemIds: readonly string[],
 ): Promise<SurfacedFinding[]> {
   if (itemIds.length === 0) return [];
-  return await db
+  return await tx
     .select({
       id: aiReviewFindings.id,
       severity: aiReviewFindings.severity,
@@ -425,8 +444,8 @@ async function surfacedFindings(
  * makes no model calls of its own, and including the row the rollup is written
  * back onto would double the total on every replayed finalize.
  */
-async function rollUpTreeUsage(db: Database, parentJobId: string) {
-  const rows = await db
+async function rollUpTreeUsage(tx: Transaction, parentJobId: string) {
+  const rows = await tx
     .select({
       inputTokens: sql`coalesce(sum(${aiJobs.inputTokens}), 0)`,
       outputTokens: sql`coalesce(sum(${aiJobs.outputTokens}), 0)`,
@@ -438,7 +457,7 @@ async function rollUpTreeUsage(db: Database, parentJobId: string) {
     .from(aiJobs)
     .where(eq(aiJobs.parentJobId, parentJobId));
   const usage = deepReviewTreeUsage(rows);
-  await db
+  await tx
     .update(aiJobs)
     .set({
       inputTokens: usage.input,
@@ -449,6 +468,8 @@ async function rollUpTreeUsage(db: Database, parentJobId: string) {
       actualMicroUsd: usage.microUsd,
     })
     .where(eq(aiJobs.id, parentJobId));
-  await settleAiJobQuota(db, parentJobId, usage);
+  // Settled under the same lock as the read above, so the settlement can never
+  // record a total the parent's own usage columns have already outgrown.
+  await settleAiJobQuota(tx, parentJobId, usage);
   return usage;
 }
