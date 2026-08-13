@@ -1140,6 +1140,20 @@ one deep source path pushed every row past the panel edge.
   whole tree's tokens rather than its own zero.
 - **Isolation.** One file's provider failure never failed the run.
 
+### A robustness gap the run exposed
+
+`finalizeDeepReview` is itself a step of `pullRequestReviewWorkflow`. When the
+workflow's step jobs exhaust their retries — three consecutive 500s from the
+step endpoint did it here — the tree is left permanently non-terminal: children
+stay `queued`, items stay `selected`, and the run that is supposed to close the
+partition is the very thing that died. Nothing reaps it.
+
+`pruneStaleAiReservations` is the natural owner, but §6.12 already requires it to
+skip parents with live descendants, and by that predicate these descendants look
+alive forever. It needs a second condition: a parent whose workflow run is dead
+and whose children have made no progress past `AI_MAX_DURATION_MS` should be
+swept to `failed` and settled, exactly as the cancel path does.
+
 ### Still open
 
 - **Cost is not captured.** `actualMicroUsd` settles at 0 because OpenRouter
