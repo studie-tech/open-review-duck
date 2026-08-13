@@ -1,4 +1,9 @@
-import { createCipheriv, createHmac, randomBytes, randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createHmac,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import pg from "pg";
 
 const VERSION = "vault-v1";
@@ -54,7 +59,8 @@ try {
     `select id from open_review_duck_workspace order by "createdAt" limit 1`,
   );
   const workspaceId = workspace.rows[0]?.id;
-  if (!workspaceId) throw new Error("No workspace found; run the bootstrap first");
+  if (!workspaceId)
+    throw new Error("No workspace found; run the bootstrap first");
 
   const recordId = randomUUID();
   const encryptedConfiguration = await sealVaultSecret(
