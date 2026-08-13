@@ -2,6 +2,101 @@ interface ReviewNavigationUnit {
   status: "pending" | "signed_off" | "changed" | "waiting";
 }
 
+/**
+ * Explains, per finding state, why a finding cannot become a review comment.
+ *
+ * `review_comment.unitId` and `review_comment.line` are both `notNull`, so a
+ * finding that never resolved to a line inside a review unit is structurally
+ * unpublishable. It is still shown: a discard the reader cannot see is
+ * indistinguishable from a finding the reviewer never made.
+ */
+export const unpublishableFindingReason: Record<string, string> = {
+  unanchored: "No line in this revision matched the quoted code",
+  out_of_scope: "Anchored outside the lines this pull request changed",
+  ungrounded: "The agent never proved it read the code it reported on",
+  refuted: "A verification pass could not reproduce this",
+};
+
+export type DeepReviewFindingTarget =
+  | { kind: "line"; unitIndex: number; line: number }
+  | { kind: "unit"; unitIndex: number }
+  | { kind: "nowhere"; reason: string };
+
+interface DeepReviewFindingLocation {
+  path: string;
+  startLine: number | null;
+}
+
+interface TargetableDeepReviewFinding {
+  unitId: string | null;
+  path: string | null;
+  startLine: number | null;
+  state: string;
+  locations: readonly DeepReviewFindingLocation[];
+}
+
+interface TargetableReviewUnit {
+  id: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+}
+
+/** Resolves one path-and-line pair against the units of this revision. */
+function reviewUnitTargetForPath(
+  location: DeepReviewFindingLocation,
+  units: readonly TargetableReviewUnit[],
+): DeepReviewFindingTarget | undefined {
+  const line = location.startLine;
+  if (line !== null) {
+    const containing = units.findIndex(
+      (unit) =>
+        unit.path === location.path &&
+        unit.startLine <= line &&
+        line <= unit.endLine,
+    );
+    if (containing >= 0) return { kind: "line", unitIndex: containing, line };
+  }
+  // The line is outside every unit of this file, so the file itself is the
+  // most specific honest destination: no amber line is lit on code the
+  // finding does not actually accuse.
+  const unitIndex = units.findIndex((unit) => unit.path === location.path);
+  return unitIndex >= 0 ? { kind: "unit", unitIndex } : undefined;
+}
+
+/** Resolves where opening a deep-review finding sends the code pane. */
+export function deepReviewFindingTarget(
+  finding: TargetableDeepReviewFinding,
+  units: readonly TargetableReviewUnit[],
+  locationIndex = 0,
+): DeepReviewFindingTarget {
+  // A `unitId` from an earlier revision no longer names a unit; failing to
+  // match here is what lets the path rule below rescue the click rather than
+  // dead-end it.
+  const anchoredIndex = finding.unitId
+    ? units.findIndex((unit) => unit.id === finding.unitId)
+    : -1;
+  if (anchoredIndex >= 0) {
+    return finding.startLine !== null
+      ? { kind: "line", unitIndex: anchoredIndex, line: finding.startLine }
+      : { kind: "unit", unitIndex: anchoredIndex };
+  }
+
+  const location =
+    finding.path !== null
+      ? { path: finding.path, startLine: finding.startLine }
+      : finding.locations[locationIndex];
+  const resolved = location && reviewUnitTargetForPath(location, units);
+  if (resolved) return resolved;
+
+  return {
+    kind: "nowhere",
+    reason:
+      unpublishableFindingReason[finding.state] ??
+      "This finding never resolved to a line in this revision",
+  };
+}
+
 export interface IndexedReviewUnit<T extends ReviewNavigationUnit> {
   unit: T;
   index: number;

@@ -118,8 +118,10 @@ function createReadDb(state: {
     startLine: number | null;
     endLine: number | null;
   }[];
+  /** The published comments of this run, already filtered as the query is. */
+  comments?: { aiFindingIndex: number | null }[];
 }) {
-  const reads = { findings: 0, locations: 0 };
+  const reads = { comments: 0, findings: 0, locations: 0 };
   const db = {
     query: {
       aiReviewItems: {
@@ -138,6 +140,13 @@ function createReadDb(state: {
         findMany: async () => {
           reads.locations += 1;
           return state.locations;
+        },
+      },
+      reviewComments: {
+        /** Returns this run's published comments, counting the read. */
+        findMany: async () => {
+          reads.comments += 1;
+          return state.comments ?? [];
         },
       },
     },
@@ -377,8 +386,53 @@ describe("deep review read path", () => {
     const run = await deepReviewRunPayload(db, job);
 
     expect(run.findings).toEqual([]);
-    expect(reads).toEqual({ findings: 0, locations: 0 });
+    expect(reads).toEqual({ comments: 0, findings: 0, locations: 0 });
     expect(run.terminalState).toBe("partial");
+  });
+
+  it("reports a published finding in a file the reviewer is not reading", async () => {
+    // The payload is run-wide, unlike `unitDiscussion`: a findings list has to
+    // mark the beta finding as published while alpha is the open unit.
+    const { db } = createReadDb({
+      items: [
+        item({ id: "item-alpha", path: "src/alpha.ts", state: "completed" }),
+        item({ id: "item-beta", path: "src/beta.ts", state: "completed" }),
+      ],
+      findings: [
+        await finding({ id: "f-alpha", orderIndex: 0 }),
+        await finding({
+          id: "f-beta",
+          itemId: "item-beta",
+          path: "src/beta.ts",
+          orderIndex: 1,
+          unitId: "00000000-0000-4000-8000-0000000000ee",
+        }),
+        await finding({ id: "f-unranked", orderIndex: null }),
+      ],
+      locations: [],
+      comments: [{ aiFindingIndex: 1 }],
+    });
+
+    const run = await deepReviewRunPayload(db, job);
+
+    expect(run.publishedFindingIds).toEqual(["f-beta"]);
+  });
+
+  it("leaves an unranked finding out of the published set", async () => {
+    // `aiFindingIndex` is nullable for a hand-written comment, and `orderIndex`
+    // is null until finalize, so neither null may match the other.
+    const { db } = createReadDb({
+      items: [
+        item({ id: "item-alpha", path: "src/alpha.ts", state: "completed" }),
+      ],
+      findings: [await finding({ id: "f-unranked", orderIndex: null })],
+      locations: [],
+      comments: [{ aiFindingIndex: null }],
+    });
+
+    const run = await deepReviewRunPayload(db, job);
+
+    expect(run.publishedFindingIds).toEqual([]);
   });
 });
 

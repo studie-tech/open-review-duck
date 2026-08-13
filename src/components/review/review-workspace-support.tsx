@@ -95,6 +95,8 @@ export const reviewShortcuts = {
   toggleInsightsPanel: [{ key: "g", mod: true }],
   nextPending: [{ key: "n" }],
   nextReview: [{ key: "n", shift: true }],
+  nextFinding: [{ key: "]" }],
+  previousFinding: [{ key: "[" }],
   search: [{ key: "f" }],
   askAi: [{ key: "e" }],
   reviewPullRequest: [{ key: "a" }],
@@ -1153,6 +1155,14 @@ export interface SideBySideUnitDiffHandle {
   revealContext: (direction: -1 | 1) => boolean;
 }
 
+/**
+ * Amber already means "AI review finding" everywhere else in the workspace, so
+ * a finding line stays legible as a claim rather than reading as the cyan line
+ * picker, the violet composer, an addition or a deletion.
+ */
+const FINDING_LINE_HIGHLIGHT =
+  "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]";
+
 interface SideBySideUnitDiffProps {
   previousSource: string;
   currentSource: string;
@@ -1167,6 +1177,7 @@ interface SideBySideUnitDiffProps {
   currentFocusEndLine?: number | null;
   selectedLine?: number;
   keyboardLine?: number;
+  findingLine?: number;
   onSelectReviewLine: (line: number) => void;
   renderLineDetails?: (line: number) => ReactNode;
 }
@@ -1215,6 +1226,7 @@ export const SideBySideUnitDiff = forwardRef<
     currentFocusEndLine,
     selectedLine,
     keyboardLine,
+    findingLine,
     onSelectReviewLine,
     renderLineDetails,
   },
@@ -1611,6 +1623,7 @@ export const SideBySideUnitDiff = forwardRef<
                     : "bg-surface-subtle/20",
                   interactive &&
                     "cursor-pointer transition hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                  findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                   selectedLine === reviewLine && "bg-violet/[.055]",
                   keyboardLine === reviewLine &&
                     "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
@@ -1777,6 +1790,7 @@ export const SideBySideUnitDiff = forwardRef<
                   onClick={() => onSelectReviewLine(reviewLine)}
                   className={cn(
                     "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] bg-red-400/[.07] text-left transition hover:bg-red-400/[.12] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                     selectedLine === reviewLine && "bg-violet/[.055]",
                     keyboardLine === reviewLine &&
                       "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
@@ -1851,6 +1865,7 @@ export const SideBySideUnitDiff = forwardRef<
                     "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                     (row.kind === "added" || row.kind === "modified") &&
                       "bg-addition/[.085] hover:bg-addition/[.13]",
+                    findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                     selectedLine === reviewLine && "bg-violet/[.055]",
                     keyboardLine === reviewLine &&
                       "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
@@ -1892,6 +1907,7 @@ export const SideBySideUnitDiff = forwardRef<
                 <div
                   className={cn(
                     "grid grid-cols-[42px_42px_minmax(0,1fr)]",
+                    findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                     selectedLine === reviewLine && "bg-violet/[.055]",
                     keyboardLine === reviewLine &&
                       "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
@@ -1946,6 +1962,7 @@ export const SideBySideUnitDiff = forwardRef<
                         onClick={() => onSelectReviewLine(reviewLine)}
                         className={cn(
                           "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/[.07] text-left transition hover:bg-red-400/[.12] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                          findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                           selectedLine === reviewLine && "bg-violet/[.055]",
                           keyboardLine === reviewLine &&
                             "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
@@ -1988,6 +2005,7 @@ export const SideBySideUnitDiff = forwardRef<
                         onClick={() => onSelectReviewLine(reviewLine)}
                         className={cn(
                           "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/[.085] text-left transition hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                          findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                           selectedLine === reviewLine && "bg-violet/[.055]",
                           keyboardLine === reviewLine &&
                             "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",

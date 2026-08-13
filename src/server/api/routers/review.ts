@@ -465,6 +465,33 @@ export async function deepReviewRunPayload(
     }),
   );
 
+  // `review_comment` has no column for a finding id: publication is keyed on
+  // (aiJobId, aiFindingIndex), and the deep-review path writes the run-wide
+  // `orderIndex` into that column. Reading it for the whole run is what lets a
+  // findings list tell the truth about every file at once; the per-unit
+  // discussion read can only answer for the unit that happens to be open.
+  const publishedComments =
+    findings.length === 0
+      ? []
+      : await db.query.reviewComments.findMany({
+          columns: { aiFindingIndex: true },
+          where: and(
+            eq(reviewComments.aiJobId, job.id),
+            eq(reviewComments.status, "published"),
+          ),
+        });
+  const publishedRanks = new Set(
+    publishedComments.flatMap((comment) =>
+      comment.aiFindingIndex === null ? [] : [comment.aiFindingIndex],
+    ),
+  );
+  const publishedFindingIds = findings
+    .filter(
+      (finding) =>
+        finding.orderIndex !== null && publishedRanks.has(finding.orderIndex),
+    )
+    .map(({ id }) => id);
+
   return {
     jobId: job.id,
     status: job.status,
@@ -490,6 +517,7 @@ export async function deepReviewRunPayload(
         return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
       }),
     findings,
+    publishedFindingIds,
   };
 }
 
