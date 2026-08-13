@@ -3623,110 +3623,122 @@ export function ReviewWorkspace({
             ))}
           </ul>
         )}
-        findings.length === 0 ? ( !running && (
-        <p className="text-mist mt-3 text-[11px] leading-5">
-          No findings were surfaced.
-        </p>
-        ) ) : (
-        <>
-          {/* Category first: a forty-finding run is triaged by "show me
+        {findings.length === 0 ? (
+          !running && (
+            <p className="text-mist mt-3 text-[11px] leading-5">
+              No findings were surfaced.
+            </p>
+          )
+        ) : (
+          <>
+            {/* Category first: a forty-finding run is triaged by "show me
                 security only" long before it is triaged by severity. */}
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <label className="text-fog grid gap-1 text-[9px]">
-              Category
-              <select
-                aria-label="Filter findings by category"
-                value={findingCategoryFilter}
-                onChange={(event) =>
-                  setFindingCategoryFilter(event.target.value)
-                }
-                className="bg-surface text-cloud h-8 rounded-lg border border-line px-2 text-[10px] outline-none"
-              >
-                <option value="all">All ({findings.length})</option>
-                {deepReviewFacetCounts(findings, "category", findingCategories)
-                  .filter(({ count }) => count > 0)
-                  .map(({ value, count }) => (
-                    <option key={value} value={value}>
-                      {value} ({count})
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label className="text-fog grid gap-1 text-[9px]">
-              Severity
-              <select
-                aria-label="Filter findings by severity"
-                value={findingSeverityFilter}
-                onChange={(event) =>
-                  setFindingSeverityFilter(event.target.value)
-                }
-                className="bg-surface text-cloud h-8 rounded-lg border border-line px-2 text-[10px] outline-none"
-              >
-                <option value="all">All ({findings.length})</option>
-                {deepReviewFacetCounts(findings, "severity", findingSeverities)
-                  .filter(({ count }) => count > 0)
-                  .map(({ value, count }) => (
-                    <option key={value} value={value}>
-                      {value} ({count})
-                    </option>
-                  ))}
-              </select>
-            </label>
-          </div>
-          <div className="mt-3 grid gap-2">
-            {visibleFindings.map((finding) => {
-              const unitIndex = finding.unitId
-                ? units.findIndex(({ id }) => id === finding.unitId)
-                : -1;
-              // `review_comment` has no finding id: publication is keyed on
-              // (aiJobId, aiFindingIndex), and the deep-review path writes
-              // the run-wide `orderIndex` into that column.
-              const published =
-                discussion.data?.comments.some(
-                  (comment) =>
-                    comment.aiJobId === run.jobId &&
-                    comment.aiFindingIndex === finding.orderIndex &&
-                    comment.status === "published",
-                ) ?? false;
-              const target =
-                finding.publishable &&
-                finding.unitId !== null &&
-                finding.startLine !== null
-                  ? { unitId: finding.unitId, line: finding.startLine }
-                  : undefined;
-              return (
-                <DeepReviewFindingCard
-                  key={finding.id}
-                  finding={finding}
-                  providerName={providerLabel(initialData.pullRequest.provider)}
-                  published={published}
-                  publishing={
-                    publishComment.isPending &&
-                    publishComment.variables?.aiFindingId === finding.id
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <label className="text-fog grid gap-1 text-[9px]">
+                Category
+                <select
+                  aria-label="Filter findings by category"
+                  value={findingCategoryFilter}
+                  onChange={(event) =>
+                    setFindingCategoryFilter(event.target.value)
                   }
-                  onOpen={
-                    unitIndex >= 0 ? () => selectUnit(unitIndex) : undefined
+                  className="bg-surface text-cloud h-8 rounded-lg border border-line px-2 text-[10px] outline-none"
+                >
+                  <option value="all">All ({findings.length})</option>
+                  {deepReviewFacetCounts(
+                    findings,
+                    "category",
+                    findingCategories,
+                  )
+                    .filter(({ count }) => count > 0)
+                    .map(({ value, count }) => (
+                      <option key={value} value={value}>
+                        {value} ({count})
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="text-fog grid gap-1 text-[9px]">
+                Severity
+                <select
+                  aria-label="Filter findings by severity"
+                  value={findingSeverityFilter}
+                  onChange={(event) =>
+                    setFindingSeverityFilter(event.target.value)
                   }
-                  onPublish={
-                    target &&
-                    (() =>
-                      publishComment.mutate({
-                        ...target,
-                        aiJobId: run.jobId,
-                        aiFindingId: finding.id,
-                      }))
-                  }
-                />
-              );
-            })}
-            {visibleFindings.length === 0 && (
-              <p className="text-mist text-[11px] leading-5">
-                No finding matches this filter.
-              </p>
-            )}
-          </div>
-        </>
-        )
+                  className="bg-surface text-cloud h-8 rounded-lg border border-line px-2 text-[10px] outline-none"
+                >
+                  <option value="all">All ({findings.length})</option>
+                  {deepReviewFacetCounts(
+                    findings,
+                    "severity",
+                    findingSeverities,
+                  )
+                    .filter(({ count }) => count > 0)
+                    .map(({ value, count }) => (
+                      <option key={value} value={value}>
+                        {value} ({count})
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {visibleFindings.map((finding) => {
+                const unitIndex = finding.unitId
+                  ? units.findIndex(({ id }) => id === finding.unitId)
+                  : -1;
+                // `review_comment` has no finding id: publication is keyed on
+                // (aiJobId, aiFindingIndex), and the deep-review path writes
+                // the run-wide `orderIndex` into that column.
+                const published =
+                  discussion.data?.comments.some(
+                    (comment) =>
+                      comment.aiJobId === run.jobId &&
+                      comment.aiFindingIndex === finding.orderIndex &&
+                      comment.status === "published",
+                  ) ?? false;
+                const target =
+                  finding.publishable &&
+                  finding.unitId !== null &&
+                  finding.startLine !== null
+                    ? { unitId: finding.unitId, line: finding.startLine }
+                    : undefined;
+                return (
+                  <DeepReviewFindingCard
+                    key={finding.id}
+                    finding={finding}
+                    providerName={providerLabel(
+                      initialData.pullRequest.provider,
+                    )}
+                    published={published}
+                    publishing={
+                      publishComment.isPending &&
+                      publishComment.variables?.aiFindingId === finding.id
+                    }
+                    onOpen={
+                      unitIndex >= 0 ? () => selectUnit(unitIndex) : undefined
+                    }
+                    onPublish={
+                      target &&
+                      (() =>
+                        publishComment.mutate({
+                          ...target,
+                          aiJobId: run.jobId,
+                          aiFindingId: finding.id,
+                        }))
+                    }
+                  />
+                );
+              })}
+              {visibleFindings.length === 0 && (
+                <p className="text-mist text-[11px] leading-5">
+                  No finding matches this filter.
+                </p>
+              )}
+            </div>
+          </>
+        )}
       </section>
     );
   }
