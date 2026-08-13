@@ -572,6 +572,34 @@ export async function executeReviewSurveyTurn(
   return await executeDeepReviewTurn(db, input, "survey");
 }
 
+/**
+ * The instruction that closes a file, sent only on the agent's last turn.
+ *
+ * Investigation is open-ended and the model will always find one more thing
+ * worth reading, so the turn budget alone does not produce a conclusion. This
+ * says the budget is spent and pairs with a tool set that can only conclude.
+ */
+const FINAL_TURN_PROMPT =
+  "This is your final turn for this file; no further investigation is possible. Report every defect you have already established with report_finding, quoting the exact existing code for each, then call finish_file. If you found nothing you can support with evidence, call finish_file with no findings.";
+
+/**
+ * Narrows a tool set to the calls that can end a file's review.
+ *
+ * Removing the investigation tools on the last turn is what makes the closing
+ * instruction binding rather than advisory.
+ */
+function closingTools(tools: ToolSet): ToolSet {
+  return Object.fromEntries(
+    Object.entries(tools).filter(
+      ([name]) =>
+        name === "report_finding" ||
+        name === "report_survey_finding" ||
+        name === "finish_file" ||
+        name === "finish_survey",
+    ),
+  );
+}
+
 /** Drives one durable turn of whichever review agent owns the child job. */
 async function executeDeepReviewTurn(
   db: Database,
@@ -610,7 +638,23 @@ async function executeDeepReviewTurn(
   if (!parent) throw new Error("Deep review parent job not found");
 
   const usage = await readDeepReviewRunUsage(db, job.parentJobId);
-  const stop = deepReviewRunStop({ parent, usage });
+  // The per-job ceiling in `env` was sized for one agent reviewing one unit.
+  // A fan-out shares it across every file, so a flat 256 would starve the tail
+  // of a large pull request: the ceiling scales with the sealed denominator.
+  const selectedFiles = await db.$count(
+    aiReviewItems,
+    eq(aiReviewItems.parentJobId, job.parentJobId),
+  );
+  const stop = deepReviewRunStop({
+    parent,
+    usage,
+    limits: {
+      maxToolCalls: Math.max(
+        env.AI_MAX_TOOL_CALLS,
+        selectedFiles * env.DEEP_REVIEW_TOOL_CALLS_PER_FILE,
+      ),
+    },
+  });
   if (stop) {
     return await closeItem(db, {
       job,
@@ -722,8 +766,12 @@ async function runAgentTurn(
   }
 
   const semaphore = boundedSemaphore(DEEP_REVIEW_TOOL_SLOTS);
+  // On its last turn the agent must conclude. Left with the investigation
+  // tools it will keep investigating and run out of budget having reported
+  // nothing, which is exactly what a whole first run of this reviewer did.
+  const finalTurn = turnIndex + 1 >= maxTurns;
   let finished = false;
-  const tools = agent.buildTools({
+  const allTools = agent.buildTools({
     execute: (invocation) =>
       semaphore.run(() => persistToolCall(db, job, turnIndex, invocation)),
     // Charged against the tree, not this child: the byte ceiling bounds how
@@ -736,11 +784,14 @@ async function runAgentTurn(
     },
   });
 
+  const tools = finalTurn ? closingTools(allTools) : allTools;
   const result = await observeOperation(agent.operation, "ai.model", () =>
     generateText({
       model: resolved.model,
       system: agent.systemPrompt,
-      messages,
+      messages: finalTurn
+        ? [...messages, { role: "user" as const, content: FINAL_TURN_PROMPT }]
+        : messages,
       tools,
       stopWhen: stepCountIs(1),
       maxRetries: 0,

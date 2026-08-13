@@ -111,6 +111,14 @@ export const env = createEnv({
       .default(4),
     // Concurrent tool bodies inside one file scout, multiplied by the slots
     // above when sizing DATABASE_POOL_MAX.
+    // Sized per file rather than per run: the ceiling bounds how much of a
+    // repository one review exposes, and that scales with the files reviewed.
+    DEEP_REVIEW_TOOL_CALLS_PER_FILE: z.coerce
+      .number()
+      .int()
+      .min(4)
+      .max(200)
+      .default(25),
     DEEP_REVIEW_TOOL_SLOTS: z.coerce.number().int().min(1).max(16).default(4),
     // Durable model turns one file scout may take; each turn is its own step,
     // so a crash resumes at a turn boundary instead of restarting the file.
@@ -205,6 +213,8 @@ export const env = createEnv({
     AI_MAX_SOURCE_BYTES: process.env.AI_MAX_SOURCE_BYTES,
     AI_MAX_DURATION_MS: process.env.AI_MAX_DURATION_MS,
     DEEP_REVIEW_EXECUTION_SLOTS: process.env.DEEP_REVIEW_EXECUTION_SLOTS,
+    DEEP_REVIEW_TOOL_CALLS_PER_FILE:
+      process.env.DEEP_REVIEW_TOOL_CALLS_PER_FILE,
     DEEP_REVIEW_TOOL_SLOTS: process.env.DEEP_REVIEW_TOOL_SLOTS,
     DEEP_REVIEW_FILE_MAX_TURNS: process.env.DEEP_REVIEW_FILE_MAX_TURNS,
     DEEP_REVIEW_PLAN_LINE_THRESHOLD:
