@@ -13,6 +13,12 @@ Modifications by ReviewDuck:
     repository's file naming. Its contents are unmodified.
   - The 35 Markdown rulebooks in ./docs are unmodified.
 
+Two constants in ../selection.ts are also derived from the same project, from
+internal/config/allowlist/ at the commit above:
+  - SUPPORTED_REVIEW_EXTENSIONS, from its reviewable-extension allowlist.
+  - DEFAULT_REVIEW_EXCLUDE_PATTERNS, from default_exclude_patterns.json.
+Both are reproduced as data, lowercased and undotted to suit this codebase.
+
 The upstream Markdown files carry no per-file copyright or SPDX headers; this
 NOTICE is the attribution for all of them.
 

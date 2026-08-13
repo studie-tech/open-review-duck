@@ -66,18 +66,18 @@ type ReviewItem = typeof aiReviewItems.$inferSelect;
 /**
  * How many durable model turns one file scout may take.
  *
- * OCR's per-file budget, and the reason the workflow drives the loop rather
- * than the agent: each turn is its own durable step, so a crashed process
- * resumes at the turn boundary instead of restarting the file.
+ * The workflow drives the loop rather than the agent so that each turn is its
+ * own durable step: a crashed process resumes at the turn boundary instead of
+ * restarting the file.
  */
 export const DEEP_REVIEW_FILE_MAX_TURNS = env.DEEP_REVIEW_FILE_MAX_TURNS;
 
 /**
  * The changed-line count above which a file earns a pre-scan planning call.
  *
- * OCR's own gate, kept because it improves the result rather than to save a
- * call: a severity-biased plan over a three-line change has nothing to rank,
- * and its output is noise the scout then has to discount.
+ * The gate improves the result rather than saving a call: a severity-biased
+ * plan over a three-line change has nothing to rank, and its output is noise
+ * the scout then has to discount.
  */
 export const DEEP_REVIEW_PLAN_LINE_THRESHOLD =
   env.DEEP_REVIEW_PLAN_LINE_THRESHOLD;
@@ -667,9 +667,9 @@ async function executeDeepReviewTurn(
   if (!parent) throw new Error("Deep review parent job not found");
 
   const usage = await readDeepReviewRunUsage(db, job.parentJobId);
-  // The per-job ceiling in `env` was sized for one agent reviewing one unit.
-  // A fan-out shares it across every file, so a flat 256 would starve the tail
-  // of a large pull request: the ceiling scales with the sealed denominator.
+  // The per-job tool ceiling is shared across every file in the run, so a flat
+  // limit would starve the tail of a large pull request. It scales with the
+  // sealed denominator instead.
   const selectedFiles = await db.$count(
     aiReviewItems,
     eq(aiReviewItems.parentJobId, job.parentJobId),

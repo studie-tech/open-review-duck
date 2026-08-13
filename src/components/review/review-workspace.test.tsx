@@ -7,9 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   aiJobActive,
-  deepReviewFacetCounts,
   DeepReviewFindingRow,
   DeepReviewInlineFinding,
+  deepReviewFacetCounts,
   groupDeepReviewFindings,
 } from "./review-workspace";
 
@@ -90,8 +90,8 @@ afterEach(() => {
 describe("aiJobActive", () => {
   it("keeps polling every non-terminal status, not only queued and running", () => {
     // A deep-review parent sits in `waiting_for_provider` from `startAiJob`
-    // until seal-plan, so the old ["queued", "running"] predicate reported a
-    // live fan-out as finished.
+    // until seal-plan, so a predicate narrower than this reports a live
+    // fan-out as finished.
     for (const status of [
       "queued",
       "running",
@@ -265,9 +265,8 @@ describe("DeepReviewInlineFinding", () => {
   });
 
   it("shows the code the agent claims to have read", () => {
-    // Fetched by the read path and displayed nowhere before this card: a
-    // mismatch with the lines just above it is the reader's one check on an
-    // ungrounded claim.
+    // A mismatch between the quoted snippet and the lines just above it is
+    // the reader's one check on an ungrounded claim.
     renderCard({
       finding: finding({ existingCode: "const total = rows.length;" }),
     });

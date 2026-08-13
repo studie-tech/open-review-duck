@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import languageManifest from "../../../tree-sitter-languages.json";
 import { treeSitterLanguageFixtures } from "~/test/tree-sitter-language-fixtures";
+import languageManifest from "../../../tree-sitter-languages.json";
 import { analyzeFiles } from "./engine";
 import { languageAdapterForPath } from "./parsers";
 import { semanticSymbolOccurrences } from "./parsers/tree-sitter-adapter";
