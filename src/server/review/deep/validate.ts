@@ -341,7 +341,7 @@ export async function validateFileFindings(
     evidenceRanges,
   };
 
-  const groundedLinks: { findingId: string; evidenceId: string }[] = [];
+  const groundedLinks: (typeof aiReviewFindingEvidence.$inferInsert)[] = [];
   const refutable: {
     id: string;
     content: string;
@@ -433,7 +433,13 @@ export async function validateFileFindings(
       continue;
     }
     for (const row of overlappingEvidence(sideEvidence, anchor)) {
-      groundedLinks.push({ findingId: finding.id, evidenceId: row.id });
+      // The link carries the job because grounding means this agent read this
+      // range: the database checks the finding and the range against it.
+      groundedLinks.push({
+        findingId: finding.id,
+        evidenceId: row.id,
+        jobId: input.job.id,
+      });
     }
     refutable.push({
       id: finding.id,

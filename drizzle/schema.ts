@@ -1104,6 +1104,10 @@ export const aiJobs = createTable(
       name: "ai_job_parent_fk",
     }).onDelete("cascade"),
     index("ai_job_parent_idx").on(t.parentJobId),
+    // A coverage item carries the parent it belongs to and names the child that
+    // reviews it. That pair is only checkable if the run a child belongs to can
+    // be reached through the child itself.
+    uniqueIndex("ai_job_parent_scope_idx").on(t.id, t.parentJobId),
   ],
 );
 
@@ -1195,6 +1199,9 @@ export const aiJobEvidence = createTable(
       t.endByte,
     ),
     index("ai_job_evidence_path_idx").on(t.jobId, t.path),
+    // A finding grounds itself on the ranges its own agent read, so the job a
+    // range was recorded under has to be reachable through the range itself.
+    uniqueIndex("ai_job_evidence_job_scope_idx").on(t.id, t.jobId),
   ],
 );
 
@@ -1234,6 +1241,18 @@ export const aiReviewItems = createTable(
     uniqueIndex("ai_review_item_path_idx").on(t.parentJobId, t.path),
     index("ai_review_item_reuse_idx").on(t.workspaceId, t.fingerprint),
     index("ai_review_item_state_idx").on(t.parentJobId, t.state),
+    // Reaching the child job through the parent the item already claims is what
+    // keeps a run's denominator its own: an item cannot hand its file to an
+    // agent running under a different review. A waived item names no child, and
+    // MATCH SIMPLE leaves a pair with a null in it unchecked, so only an item
+    // that actually claims an agent is held to the run it belongs to.
+    foreignKey({
+      columns: [t.childJobId, t.parentJobId],
+      foreignColumns: [aiJobs.id, aiJobs.parentJobId],
+    }).onDelete("cascade"),
+    // A finding names the job that produced it, and that claim is only
+    // trustworthy if the item's own agent can be reached through the pair.
+    uniqueIndex("ai_review_item_child_scope_idx").on(t.id, t.childJobId),
   ],
 );
 
@@ -1286,6 +1305,17 @@ export const aiReviewFindings = createTable(
       foreignColumns: [t.id],
       name: "ai_review_finding_merged_fk",
     }).onDelete("set null"),
+    // A finding is only as trustworthy as the agent that reported it, so the
+    // job it names has to be the very agent its item claims. Reaching the item
+    // through that pair is what stops one file's agent from filing against
+    // another file, and stops a finding from outliving the item's agent.
+    foreignKey({
+      columns: [t.itemId, t.jobId],
+      foreignColumns: [aiReviewItems.id, aiReviewItems.childJobId],
+    }).onDelete("cascade"),
+    // Evidence links carry the job as well, and that copy is only trustworthy
+    // if it can be tied back to the finding.
+    uniqueIndex("ai_review_finding_job_scope_idx").on(t.id, t.jobId),
   ],
 );
 
@@ -1322,16 +1352,30 @@ export const aiReviewFindingLocations = createTable(
 export const aiReviewFindingEvidence = createTable(
   "ai_review_finding_evidence",
   {
-    findingId: varchar({ length: 64 })
+    findingId: varchar({ length: 64 }).notNull(),
+    evidenceId: uuid().notNull(),
+    // Grounding means one agent read the range it cites. Carrying the job lets
+    // both ends be reached through it, so a link cannot ground a finding on
+    // text a different agent read.
+    jobId: uuid()
       .notNull()
-      .references(() => aiReviewFindings.id, { onDelete: "cascade" }),
-    evidenceId: uuid()
-      .notNull()
-      .references(() => aiJobEvidence.id, { onDelete: "cascade" }),
+      .references(() => aiJobs.id, { onDelete: "cascade" }),
   },
   (t) => [
     primaryKey({ columns: [t.findingId, t.evidenceId] }),
     index("ai_review_finding_evidence_idx").on(t.evidenceId),
+    // The primary key leads with findingId and the other index covers evidence,
+    // so neither serves a job delete: without this one the referential trigger
+    // scans every link row for each job a snapshot prune removes.
+    index("ai_review_finding_evidence_job_idx").on(t.jobId),
+    foreignKey({
+      columns: [t.findingId, t.jobId],
+      foreignColumns: [aiReviewFindings.id, aiReviewFindings.jobId],
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.evidenceId, t.jobId],
+      foreignColumns: [aiJobEvidence.id, aiJobEvidence.jobId],
+    }).onDelete("cascade"),
   ],
 );
 

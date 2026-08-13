@@ -165,6 +165,7 @@ CREATE TABLE "open_review_duck_ai_preference" (
 CREATE TABLE "open_review_duck_ai_review_finding_evidence" (
 	"findingId" varchar(64) NOT NULL,
 	"evidenceId" uuid NOT NULL,
+	"jobId" uuid NOT NULL,
 	CONSTRAINT "open_review_duck_ai_review_finding_evidence_findingId_evidenceId_pk" PRIMARY KEY("findingId","evidenceId")
 );
 --> statement-breakpoint
@@ -737,6 +738,8 @@ CREATE UNIQUE INDEX "ai_job_evidence_range_idx" ON "open_review_duck_ai_job_evid
 --> statement-breakpoint
 CREATE INDEX "ai_job_evidence_path_idx" ON "open_review_duck_ai_job_evidence" USING btree ("jobId","path");
 --> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_evidence_job_scope_idx" ON "open_review_duck_ai_job_evidence" USING btree ("id","jobId");
+--> statement-breakpoint
 CREATE UNIQUE INDEX "ai_job_tool_call_id_idx" ON "open_review_duck_ai_job_tool_call" USING btree ("jobId","toolCallId");
 --> statement-breakpoint
 CREATE INDEX "ai_job_tool_turn_idx" ON "open_review_duck_ai_job_tool_call" USING btree ("jobId","turnSequence");
@@ -751,7 +754,11 @@ CREATE INDEX "ai_job_snapshot_idx" ON "open_review_duck_ai_job" USING btree ("sn
 --> statement-breakpoint
 CREATE INDEX "ai_job_parent_idx" ON "open_review_duck_ai_job" USING btree ("parentJobId");
 --> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_parent_scope_idx" ON "open_review_duck_ai_job" USING btree ("id","parentJobId");
+--> statement-breakpoint
 CREATE INDEX "ai_review_finding_evidence_idx" ON "open_review_duck_ai_review_finding_evidence" USING btree ("evidenceId");
+--> statement-breakpoint
+CREATE INDEX "ai_review_finding_evidence_job_idx" ON "open_review_duck_ai_review_finding_evidence" USING btree ("jobId");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "ai_review_finding_location_idx" ON "open_review_duck_ai_review_finding_location" USING btree ("findingId","position");
 --> statement-breakpoint
@@ -761,11 +768,15 @@ CREATE INDEX "ai_review_finding_job_idx" ON "open_review_duck_ai_review_finding"
 --> statement-breakpoint
 CREATE INDEX "ai_review_finding_state_idx" ON "open_review_duck_ai_review_finding" USING btree ("itemId","state");
 --> statement-breakpoint
+CREATE UNIQUE INDEX "ai_review_finding_job_scope_idx" ON "open_review_duck_ai_review_finding" USING btree ("id","jobId");
+--> statement-breakpoint
 CREATE UNIQUE INDEX "ai_review_item_path_idx" ON "open_review_duck_ai_review_item" USING btree ("parentJobId","path");
 --> statement-breakpoint
 CREATE INDEX "ai_review_item_reuse_idx" ON "open_review_duck_ai_review_item" USING btree ("workspaceId","fingerprint");
 --> statement-breakpoint
 CREATE INDEX "ai_review_item_state_idx" ON "open_review_duck_ai_review_item" USING btree ("parentJobId","state");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_review_item_child_scope_idx" ON "open_review_duck_ai_review_item" USING btree ("id","childJobId");
 --> statement-breakpoint
 CREATE INDEX "ai_stream_lease_user_idx" ON "open_review_duck_ai_stream_lease" USING btree ("userId","expiresAt");
 --> statement-breakpoint
@@ -903,9 +914,11 @@ ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "ai_job_parent_fk" FOREIGN 
 --> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_preference" ADD CONSTRAINT "open_review_duck_ai_preference_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_findingId_open_review_duck_ai_review_finding_id_fk" FOREIGN KEY ("findingId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_evidenceId_open_review_duck_ai_job_evidence_id_fk" FOREIGN KEY ("evidenceId") REFERENCES "public"."open_review_duck_ai_job_evidence"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_findingId_jobId_open_review_duck_ai_review_finding_id_jobId_fk" FOREIGN KEY ("findingId","jobId") REFERENCES "public"."open_review_duck_ai_review_finding"("id","jobId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding_evidence" ADD CONSTRAINT "open_review_duck_ai_review_finding_evidence_evidenceId_jobId_open_review_duck_ai_job_evidence_id_jobId_fk" FOREIGN KEY ("evidenceId","jobId") REFERENCES "public"."open_review_duck_ai_job_evidence"("id","jobId") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_review_finding_location" ADD CONSTRAINT "open_review_duck_ai_review_finding_location_findingId_open_review_duck_ai_review_finding_id_fk" FOREIGN KEY ("findingId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
@@ -919,11 +932,15 @@ ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duc
 --> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "ai_review_finding_merged_fk" FOREIGN KEY ("mergedIntoId") REFERENCES "public"."open_review_duck_ai_review_finding"("id") ON DELETE set null ON UPDATE no action;
 --> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_finding" ADD CONSTRAINT "open_review_duck_ai_review_finding_itemId_jobId_open_review_duck_ai_review_item_id_childJobId_fk" FOREIGN KEY ("itemId","jobId") REFERENCES "public"."open_review_duck_ai_review_item"("id","childJobId") ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_parentJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("parentJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_workspaceId_open_review_duck_workspace_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."open_review_duck_workspace"("id") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_childJobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("childJobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_review_item" ADD CONSTRAINT "open_review_duck_ai_review_item_childJobId_parentJobId_open_review_duck_ai_job_id_parentJobId_fk" FOREIGN KEY ("childJobId","parentJobId") REFERENCES "public"."open_review_duck_ai_job"("id","parentJobId") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "open_review_duck_ai_stream_lease" ADD CONSTRAINT "open_review_duck_ai_stream_lease_jobId_open_review_duck_ai_job_id_fk" FOREIGN KEY ("jobId") REFERENCES "public"."open_review_duck_ai_job"("id") ON DELETE cascade ON UPDATE no action;
 --> statement-breakpoint
