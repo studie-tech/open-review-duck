@@ -1,5 +1,5 @@
 {
-  "id": "e34a0b47-1c82-4171-aeae-c3b8a27e0a8c",
+  "id": "e9cceb36-b7b6-4742-8ee5-42b158e9d689",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -215,6 +215,27 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ai_job_evidence_job_scope_idx": {
+          "name": "ai_job_evidence_job_scope_idx",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -843,6 +864,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ai_job_parent_scope_idx": {
+          "name": "ai_job_parent_scope_idx",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "parentJobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1060,6 +1102,12 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
+        },
+        "jobId": {
+          "name": "jobId",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -1077,15 +1125,30 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ai_review_finding_evidence_job_idx": {
+          "name": "ai_review_finding_evidence_job_idx",
+          "columns": [
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "open_review_duck_ai_review_finding_evidence_findingId_open_review_duck_ai_review_finding_id_fk": {
-          "name": "open_review_duck_ai_review_finding_evidence_findingId_open_review_duck_ai_review_finding_id_fk",
+        "open_review_duck_ai_review_finding_evidence_jobId_open_review_duck_ai_job_id_fk": {
+          "name": "open_review_duck_ai_review_finding_evidence_jobId_open_review_duck_ai_job_id_fk",
           "tableFrom": "open_review_duck_ai_review_finding_evidence",
-          "tableTo": "open_review_duck_ai_review_finding",
+          "tableTo": "open_review_duck_ai_job",
           "columnsFrom": [
-            "findingId"
+            "jobId"
           ],
           "columnsTo": [
             "id"
@@ -1093,15 +1156,32 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "open_review_duck_ai_review_finding_evidence_evidenceId_open_review_duck_ai_job_evidence_id_fk": {
-          "name": "open_review_duck_ai_review_finding_evidence_evidenceId_open_review_duck_ai_job_evidence_id_fk",
+        "open_review_duck_ai_review_finding_evidence_findingId_jobId_open_review_duck_ai_review_finding_id_jobId_fk": {
+          "name": "open_review_duck_ai_review_finding_evidence_findingId_jobId_open_review_duck_ai_review_finding_id_jobId_fk",
+          "tableFrom": "open_review_duck_ai_review_finding_evidence",
+          "tableTo": "open_review_duck_ai_review_finding",
+          "columnsFrom": [
+            "findingId",
+            "jobId"
+          ],
+          "columnsTo": [
+            "id",
+            "jobId"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_ai_review_finding_evidence_evidenceId_jobId_open_review_duck_ai_job_evidence_id_jobId_fk": {
+          "name": "open_review_duck_ai_review_finding_evidence_evidenceId_jobId_open_review_duck_ai_job_evidence_id_jobId_fk",
           "tableFrom": "open_review_duck_ai_review_finding_evidence",
           "tableTo": "open_review_duck_ai_job_evidence",
           "columnsFrom": [
-            "evidenceId"
+            "evidenceId",
+            "jobId"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "jobId"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -1420,6 +1500,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ai_review_finding_job_scope_idx": {
+          "name": "ai_review_finding_job_scope_idx",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "jobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1486,6 +1587,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_ai_review_finding_itemId_jobId_open_review_duck_ai_review_item_id_childJobId_fk": {
+          "name": "open_review_duck_ai_review_finding_itemId_jobId_open_review_duck_ai_review_item_id_childJobId_fk",
+          "tableFrom": "open_review_duck_ai_review_finding",
+          "tableTo": "open_review_duck_ai_review_item",
+          "columnsFrom": [
+            "itemId",
+            "jobId"
+          ],
+          "columnsTo": [
+            "id",
+            "childJobId"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -1648,6 +1764,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ai_review_item_child_scope_idx": {
+          "name": "ai_review_item_child_scope_idx",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "childJobId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1688,6 +1825,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "open_review_duck_ai_review_item_childJobId_parentJobId_open_review_duck_ai_job_id_parentJobId_fk": {
+          "name": "open_review_duck_ai_review_item_childJobId_parentJobId_open_review_duck_ai_job_id_parentJobId_fk",
+          "tableFrom": "open_review_duck_ai_review_item",
+          "tableTo": "open_review_duck_ai_job",
+          "columnsFrom": [
+            "childJobId",
+            "parentJobId"
+          ],
+          "columnsTo": [
+            "id",
+            "parentJobId"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

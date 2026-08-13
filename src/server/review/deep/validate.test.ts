@@ -117,10 +117,16 @@ interface RecordedUpdate {
   values: Record<string, unknown>;
 }
 
+interface EvidenceLink {
+  findingId: string;
+  evidenceId: string;
+  jobId: string;
+}
+
 /** Builds the smallest database double the validation path exercises. */
 function fakeDatabase(rows: readonly FindingRow[]) {
   const updates: RecordedUpdate[] = [];
-  const links: { findingId: string; evidenceId: string }[] = [];
+  const links: EvidenceLink[] = [];
   const db = {
     select: () => ({
       from: () => ({
@@ -141,7 +147,7 @@ function fakeDatabase(rows: readonly FindingRow[]) {
       }),
     }),
     insert: () => ({
-      values: (rowsToInsert: { findingId: string; evidenceId: string }[]) => ({
+      values: (rowsToInsert: EvidenceLink[]) => ({
         onConflictDoNothing: async () => {
           links.push(...rowsToInsert);
         },
@@ -438,7 +444,9 @@ describe("evidence gate", () => {
       state: "anchored",
       anchorSide: "previous",
     });
-    expect(links).toEqual([{ findingId: "f1", evidenceId: "ev-previous" }]);
+    expect(links).toEqual([
+      { findingId: "f1", evidenceId: "ev-previous", jobId },
+    ]);
   });
 
   it("fails closed when the side's blob id is unknown", async () => {
