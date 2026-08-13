@@ -319,4 +319,19 @@ describe("classifyReviewItemError", () => {
     error.cause = error;
     expect(classifyReviewItemError(error)).toBe("unknown");
   });
+  it("classifies a transport failure to the provider as provider", () => {
+    // Observed live: a single review lost one file to this, and the child job
+    // recorded provider_failure while the item recorded unknown.
+    expect(
+      classifyReviewItemError(
+        new Error(
+          "8021E6EE01000000:error:0A0003FC:SSL routines:ssl3_read_bytes:ssl/tls alert bad record mac",
+        ),
+      ),
+    ).toBe("provider");
+    expect(classifyReviewItemError(new Error("write EPIPE"))).toBe("provider");
+    expect(classifyReviewItemError(new Error("getaddrinfo ENOTFOUND"))).toBe(
+      "provider",
+    );
+  });
 });
