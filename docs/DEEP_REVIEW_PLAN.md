@@ -1,6 +1,7 @@
 # Deep Review: a fan-out PR reviewer with OCR parity
 
-Status: **proposal, awaiting owner review.** Nothing in `src/` has been changed.
+Status: **implemented and validated against a live pull request.** The design
+below is what shipped; §15 records what running it changed.
 
 This plan describes a new ReviewDuck reviewer — "deep review" — that reaches feature
 parity with [alibaba/open-code-review](https://github.com/alibaba/open-code-review)
@@ -1082,3 +1083,67 @@ Because this plan **ports mechanisms and vendors data rather than linking a bina
 obligations are §4(a)–(c) as handled in §8.2. Contributing anything back upstream would
 require signing Alibaba's CLA; that is a reason to prefer our own implementation over a
 fork we would need to maintain patches against.
+
+---
+
+## 15. What the first live run changed
+
+Validated against `studie-tech/TheNinjaRPG#1370` — 55 changed files, 423 review
+units, 21,348 additions. Five defects only a real run could surface.
+
+**The agent never concluded.** Every file used all three turns investigating and
+reported nothing: 6.7M tokens, zero findings, `report_finding` never called once
+across 27 completed files. Investigation is open-ended and the model always finds
+one more thing worth reading, so a turn budget alone does not produce a
+conclusion. The final turn now carries only the tools that can *end* a review
+plus an instruction saying the budget is spent — the tool restriction is what
+makes the instruction binding rather than advisory.
+
+**The tool ceiling was sized for one agent.** `AI_MAX_TOOL_CALLS` is per job.
+Shared across a fan-out, the first 27 files spent the whole 256 and the remaining
+28 failed `tool_limit` without being reviewed. It now scales with the sealed
+denominator via `DEEP_REVIEW_TOOL_CALLS_PER_FILE`, because what the ceiling
+bounds is repository exposure, and that grows with the files under review.
+
+**Every category collapsed into `other`.** The tool takes a free string so an
+unknown category degrades a finding rather than failing the call — but the model
+reports `correctness`, `validation` and `vulnerability`, none of which are
+category names. All 10 early findings landed in `other` and the category filter
+had nothing to filter. Near-misses now map to the category they plainly mean.
+
+**A TLS blip lost a file permanently.** One `ssl3_read_bytes ... bad record mac`
+threw a turn, and the durable step turned that into a permanent failure. The
+child recorded `provider_failure` while the item recorded `unknown`. Transport
+failures now classify as `provider` and a turn retries them with a widening
+pause; budget, cancellation and timeout are decisions, not blips, and still fail
+on the first answer.
+
+**Two UI defects.** Coverage counted "units" when it meant files — a unit is a
+symbol, and this pull request has 423 of them across 56 files. And the coverage
+list sat in an implicit grid track, which takes the width of its widest item, so
+one deep source path pushed every row past the panel edge.
+
+### What held up unchanged
+
+- **Coverage algebra.** The truncated first run reported `partial` with
+  `deep_review_partial`, and 27 completed + 28 failed + 1 waived partitioned the
+  56 sealed items exactly.
+- **Anchoring.** Every finding resolved at `unit_current` with a real line range
+  and zero ambiguous anchors — the model quotes code inside the unit it is
+  reviewing, so the first tier catches it. The `changed_current`, `file_current`,
+  `file_previous` and `relocated` fallbacks were never exercised in the wild.
+- **The evidence gate.** Three findings the agent could not prove it had read
+  were held at `ungrounded`, surfaced read-only rather than dropped.
+- **Fail-closed publishing.** 32 findings were publishable by design and the UI
+  rendered exactly 32 publish actions; the 3 ungrounded ones carried none.
+- **Usage rollup.** Children hold no reservation, and the parent settled with the
+  whole tree's tokens rather than its own zero.
+- **Isolation.** One file's provider failure never failed the run.
+
+### Still open
+
+- **Cost is not captured.** `actualMicroUsd` settles at 0 because OpenRouter
+  returns cost only when the request asks for it; the token counts are right.
+- **Input cost is high.** ~180k input tokens per file at three turns, against
+  ~20k output. The transcript is re-sent whole each turn, so the plan pre-pass
+  and rulebook are paid for repeatedly.
