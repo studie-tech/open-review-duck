@@ -459,6 +459,7 @@ import { reviewSessionMachine } from "./review-session-machine";
 import {
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
+  conceptMembersInReadingOrder,
   ExplanationLoader,
   INITIAL_PATH_ITEMS,
   InlineAiQuestion,
@@ -466,7 +467,6 @@ import {
   PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
   providerLabel,
-  conceptMembersInReadingOrder,
   ReviewConceptMemberHeader,
   ReviewConceptMemberPreview,
   ReviewHierarchyDialog,
@@ -3584,8 +3584,11 @@ export function ReviewWorkspace({
             <ChevronRight className="size-3" />
           )}
           <span>
+            {/* Files, not units. A unit is a symbol, and this workspace shows
+                423 of them across 56 files, so "units" here read as a much
+                smaller review than the one actually running. */}
             Coverage {reviewed}/{run.coverage.total}{" "}
-            {run.coverage.total === 1 ? "unit" : "units"}
+            {run.coverage.total === 1 ? "file" : "files"}
             {run.coverage.failed > 0 ? ` · ${run.coverage.failed} failed` : ""}
             {run.coverage.waived > 0 ? ` · ${run.coverage.waived} waived` : ""}
           </span>

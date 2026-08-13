@@ -45,11 +45,55 @@ export function normalizeFindingSeverity(value: unknown): FindingSeverity {
 /** Degrades an unrecognized category to `other`, never rejecting the finding. */
 export function normalizeFindingCategory(value: unknown): FindingCategory {
   if (typeof value !== "string") return "other";
-  const normalized = value.trim().toLowerCase();
-  return categoryValues.has(normalized)
-    ? (normalized as FindingCategory)
-    : "other";
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (categoryValues.has(normalized)) return normalized as FindingCategory;
+  return categorySynonyms[normalized] ?? "other";
 }
+
+/**
+ * Near-misses for the eight categories, mapped rather than discarded.
+ *
+ * The tool schema takes a free string so an unrecognised category degrades a
+ * finding instead of failing the call. Models reach for words like
+ * `correctness` and `validation` that carry the same meaning as a category we
+ * do have, and dropping every one of them into `other` empties the category
+ * filter of the value it exists for.
+ */
+const categorySynonyms: Readonly<Record<string, FindingCategory>> = {
+  correctness: "bug",
+  logic: "bug",
+  defect: "bug",
+  error_handling: "bug",
+  concurrency: "bug",
+  race_condition: "bug",
+  data_loss: "bug",
+  vulnerability: "security",
+  validation: "security",
+  input_validation: "security",
+  authorization: "security",
+  authentication: "security",
+  injection: "security",
+  secrets: "security",
+  efficiency: "performance",
+  scalability: "performance",
+  memory: "performance",
+  readability: "maintainability",
+  design: "maintainability",
+  duplication: "maintainability",
+  complexity: "maintainability",
+  naming: "maintainability",
+  dead_code: "maintainability",
+  testing: "test",
+  test_coverage: "test",
+  tests: "test",
+  formatting: "style",
+  docs: "documentation",
+  comment: "documentation",
+  comments: "documentation",
+};
 
 /** Ranks severities from 0 for `critical` to 3 for `low`, worst surfaced first. */
 export function findingSeverityRank(severity: FindingSeverity): number {
