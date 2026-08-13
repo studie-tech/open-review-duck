@@ -65,6 +65,11 @@ describe("review shortcuts", () => {
     expect(reviewShortcuts.previousConcept).toEqual([{ key: "ArrowLeft" }]);
     expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[jk]"/);
   });
+
+  it("steps through review findings on the bracket keys", () => {
+    expect(reviewShortcuts.nextFinding).toEqual([{ key: "]" }]);
+    expect(reviewShortcuts.previousFinding).toEqual([{ key: "[" }]);
+  });
 });
 
 describe("ReviewConceptMemberPreview", () => {
@@ -865,6 +870,93 @@ describe("SideBySideUnitDiff", () => {
     expect(addedLine).toHaveTextContent("const added = true;");
     await user.click(addedLine);
     expect(selectLine).toHaveBeenCalledWith(18);
+  });
+
+  it("paints the finding line amber in the added-only pane", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={"const added = true;\nreturn added;"}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={18}
+        findingLine={18}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Comment on current line 18" }),
+    ).toHaveClass(
+      "bg-amber-400/[.09]",
+      "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+    );
+    expect(
+      screen.getByRole("button", { name: "Comment on current line 19" }),
+    ).not.toHaveClass("bg-amber-400/[.09]");
+  });
+
+  it("paints the finding line amber on the current side of the split", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        findingLine={12}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    // Both the wide and the narrow layout render the row, so every match has
+    // to carry the highlight or the finding is invisible at one width.
+    const findingRows = screen.getAllByRole("button", {
+      name: "Comment on current line 12",
+    });
+    expect(findingRows.length).toBeGreaterThan(0);
+    for (const row of findingRows) {
+      expect(row).toHaveClass(
+        "bg-amber-400/[.09]",
+        "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+      );
+    }
+    for (const row of screen.getAllByRole("button", {
+      name: "Comment on current line 13",
+    })) {
+      expect(row).not.toHaveClass("bg-amber-400/[.09]");
+    }
+  });
+
+  it("paints the finding line amber on the deleted side of the split", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const removed = true;\nconst retained = true;"}
+        currentSource={
+          "const inserted = true;\nconst removed = true;\nconst retained = true;"
+        }
+        language="typescript"
+        previousStartLine={8}
+        currentStartLine={8}
+        previousFocusStartLine={8}
+        previousFocusEndLine={8}
+        currentFocusStartLine={null}
+        currentFocusEndLine={null}
+        findingLine={8}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const deletedRows = screen.getAllByRole("button", {
+      name: "Comment on deleted line 8",
+    });
+    expect(deletedRows.length).toBeGreaterThan(0);
+    for (const row of deletedRows) {
+      expect(row).toHaveClass(
+        "bg-amber-400/[.09]",
+        "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+      );
+    }
   });
 
   it("marks pure-addition review scope and dims revealed context", async () => {

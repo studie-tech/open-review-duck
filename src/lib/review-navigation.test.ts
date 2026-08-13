@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReviewHierarchy,
   createReviewNavigationHistory,
+  deepReviewFindingTarget,
   deletedFileSignOffUnits,
   nextPendingReviewIndex,
   nextPendingReviewIndexPreferring,
@@ -12,6 +13,7 @@ import {
   reviewNavigationHistoryTarget,
   reviewPathSearchMatches,
   reviewPathSections,
+  unpublishableFindingReason,
 } from "./review-navigation";
 
 describe("nextPendingReviewIndex", () => {
@@ -337,5 +339,130 @@ describe("review navigation history", () => {
 
     expect(branched.unitIds).toEqual(["unit-a", "unit-b", "unit-x"]);
     expect(reviewNavigationHistoryTarget(branched, 1)).toBeUndefined();
+  });
+});
+
+describe("deepReviewFindingTarget", () => {
+  const units = [
+    { id: "unit-a", path: "src/app.ts", startLine: 1, endLine: 40 },
+    { id: "unit-b", path: "src/app.ts", startLine: 41, endLine: 90 },
+    { id: "unit-c", path: "src/queue.ts", startLine: 1, endLine: 30 },
+  ];
+
+  /** Builds a finding with only the fields the resolver reads. */
+  function finding(
+    overrides: Partial<Parameters<typeof deepReviewFindingTarget>[0]>,
+  ) {
+    return {
+      unitId: null,
+      path: null,
+      startLine: null,
+      state: "anchored",
+      locations: [],
+      ...overrides,
+    };
+  }
+
+  it("sends an anchored publishable finding to its own line", () => {
+    expect(
+      deepReviewFindingTarget(
+        finding({ unitId: "unit-b", path: "src/app.ts", startLine: 52 }),
+        units,
+      ),
+    ).toEqual({ kind: "line", unitIndex: 1, line: 52 });
+  });
+
+  it("opens the file's unit when a finding has a path but no line", () => {
+    expect(
+      deepReviewFindingTarget(
+        finding({ path: "src/queue.ts", state: "unanchored" }),
+        units,
+      ),
+    ).toEqual({ kind: "unit", unitIndex: 2 });
+  });
+
+  it("lights the line of an out_of_scope finding that falls inside a unit", () => {
+    expect(
+      deepReviewFindingTarget(
+        finding({ path: "src/app.ts", startLine: 44, state: "out_of_scope" }),
+        units,
+      ),
+    ).toEqual({ kind: "line", unitIndex: 1, line: 44 });
+  });
+
+  it("resolves each location of a survey finding by index", () => {
+    const survey = finding({
+      state: "unanchored",
+      locations: [
+        { path: "src/app.ts", startLine: 12 },
+        { path: "src/queue.ts", startLine: 7 },
+      ],
+    });
+
+    expect(deepReviewFindingTarget(survey, units, 0)).toEqual({
+      kind: "line",
+      unitIndex: 0,
+      line: 12,
+    });
+    expect(deepReviewFindingTarget(survey, units, 1)).toEqual({
+      kind: "line",
+      unitIndex: 2,
+      line: 7,
+    });
+  });
+
+  it("reports nowhere when no location names a reviewed file", () => {
+    expect(
+      deepReviewFindingTarget(
+        finding({
+          state: "survey",
+          locations: [{ path: "src/deleted.ts", startLine: 4 }],
+        }),
+        units,
+      ),
+    ).toEqual({
+      kind: "nowhere",
+      reason: "This finding never resolved to a line in this revision",
+    });
+  });
+
+  it("falls through to the path rule when the unitId is from an older revision", () => {
+    expect(
+      deepReviewFindingTarget(
+        finding({ unitId: "unit-gone", path: "src/app.ts", startLine: 20 }),
+        units,
+      ),
+    ).toEqual({ kind: "line", unitIndex: 0, line: 20 });
+  });
+
+  it("explains an ungrounded finding that names no file at all", () => {
+    expect(
+      deepReviewFindingTarget(finding({ state: "ungrounded" }), units),
+    ).toEqual({
+      kind: "nowhere",
+      reason: unpublishableFindingReason.ungrounded,
+    });
+  });
+
+  it("never returns undefined, so a click always has an outcome", () => {
+    const inputs = [
+      finding({ unitId: "unit-a", startLine: 3 }),
+      finding({ unitId: "unit-a" }),
+      finding({ unitId: "unit-gone" }),
+      finding({ path: "src/app.ts", startLine: 900, state: "out_of_scope" }),
+      finding({ path: "src/nowhere.ts", startLine: 1, state: "refuted" }),
+      finding({ locations: [{ path: "src/app.ts", startLine: null }] }),
+      finding({ state: "ungrounded" }),
+    ];
+
+    for (const input of inputs) {
+      for (const locationIndex of [0, 1, -1]) {
+        for (const scope of [units, []]) {
+          const target = deepReviewFindingTarget(input, scope, locationIndex);
+          expect(target).toBeDefined();
+          expect(["line", "unit", "nowhere"]).toContain(target.kind);
+        }
+      }
+    }
   });
 });
