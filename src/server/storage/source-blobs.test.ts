@@ -286,6 +286,62 @@ describe("source blob pruning", () => {
     expect(mocks.put).not.toHaveBeenCalled();
   });
 
+  it("dates the upload lease from the claim rather than the call", async () => {
+    // Reaching a claim costs a probe of the store, and a contended digest costs
+    // the wait for it as well. A lease stamped on the way in is already part
+    // spent by the time the row carries it.
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    mocks.remove.mockReset();
+    const bytes = new TextEncoder().encode("slow to reach the claim");
+    const probeMilliseconds = 300;
+    mocks.read.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, probeMilliseconds));
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+    mocks.put.mockResolvedValue({
+      storage: "local",
+      objectKey: "objects/restored",
+    });
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/missing",
+      digest: sourceDigest(bytes),
+    };
+    const claimed = {
+      ...existing,
+      state: "uploading",
+      objectKey: null,
+      uploadLeaseToken: "lease",
+    };
+    const returning = vi
+      .fn()
+      .mockResolvedValueOnce([claimed])
+      .mockResolvedValueOnce([{ ...claimed, state: "ready" }]);
+    const leases: Date[] = [];
+    const set = vi.fn((values: { uploadLeaseExpiresAt?: Date | null }) => {
+      if (values.uploadLeaseExpiresAt) leases.push(values.uploadLeaseExpiresAt);
+      return { where: vi.fn(() => ({ returning })) };
+    });
+    const database = {
+      query: { sourceBlobs: { findFirst: vi.fn(async () => existing) } },
+      update: vi.fn(() => ({ set })),
+    };
+
+    const startedAt = Date.now();
+    await persistSourceBlob(database as never, {
+      workspaceId: "workspace",
+      bytes,
+    });
+
+    const [lease] = leases;
+    expect(lease?.getTime() ?? 0).toBeGreaterThan(
+      startedAt + 4 * 60_000 + probeMilliseconds - 50,
+    );
+  });
+
   it("keeps the object a writer that took the lease stored under the same key", async () => {
     // Both writers derive one key from the content, so the object this call
     // uploaded is the object the row now names. Cleaning up after a lost lease
