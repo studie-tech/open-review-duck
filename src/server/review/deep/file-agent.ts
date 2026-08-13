@@ -91,6 +91,9 @@ export const DEEP_REVIEW_PLAN_LINE_THRESHOLD =
  */
 export const DEEP_REVIEW_TOOL_SLOTS = env.DEEP_REVIEW_TOOL_SLOTS;
 
+/** How many times one turn may retry a purely transport-level failure. */
+const DEEP_REVIEW_PROVIDER_ATTEMPTS = 3;
+
 /** The reason recorded on an item whose scout used every turn it was given. */
 const TURN_LIMIT_REASON = "turn_limit";
 
@@ -600,6 +603,32 @@ function closingTools(tools: ToolSet): ToolSet {
   );
 }
 
+/**
+ * Retries a model call only when the transport, not the model, failed.
+ *
+ * `generateText` runs with `maxRetries: 0` because the durable layer owns
+ * retries — but a thrown turn fails its file permanently, and a live run lost
+ * one to a single TLS record error. Budget, cancellation and timeout stops are
+ * decisions rather than blips, so only `provider` is worth another attempt.
+ */
+async function withTransientRetry<T>(
+  operation: () => Promise<T>,
+  attempts = DEEP_REVIEW_PROVIDER_ATTEMPTS,
+): Promise<T> {
+  let lastCause: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (cause) {
+      lastCause = cause;
+      if (classifyReviewItemError(cause) !== "provider") throw cause;
+      if (attempt === attempts - 1) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * 2 ** attempt));
+    }
+  }
+  throw lastCause;
+}
+
 /** Drives one durable turn of whichever review agent owns the child job. */
 async function executeDeepReviewTurn(
   db: Database,
@@ -786,20 +815,22 @@ async function runAgentTurn(
 
   const tools = finalTurn ? closingTools(allTools) : allTools;
   const result = await observeOperation(agent.operation, "ai.model", () =>
-    generateText({
-      model: resolved.model,
-      system: agent.systemPrompt,
-      messages: finalTurn
-        ? [...messages, { role: "user" as const, content: FINAL_TURN_PROMPT }]
-        : messages,
-      tools,
-      stopWhen: stepCountIs(1),
-      maxRetries: 0,
-      maxOutputTokens: turnBudget.maxOutputTokens,
-      timeout: Math.min(MAX_TURN_TIMEOUT_MS, env.AI_MAX_DURATION_MS),
-      providerOptions: resolved.providerOptions,
-      telemetry: { isEnabled: false },
-    }),
+    withTransientRetry(() =>
+      generateText({
+        model: resolved.model,
+        system: agent.systemPrompt,
+        messages: finalTurn
+          ? [...messages, { role: "user" as const, content: FINAL_TURN_PROMPT }]
+          : messages,
+        tools,
+        stopWhen: stepCountIs(1),
+        maxRetries: 0,
+        maxOutputTokens: turnBudget.maxOutputTokens,
+        timeout: Math.min(MAX_TURN_TIMEOUT_MS, env.AI_MAX_DURATION_MS),
+        providerOptions: resolved.providerOptions,
+        telemetry: { isEnabled: false },
+      }),
+    ),
   );
   const sequenceStart = messages.length;
   for (const [offset, message] of result.responseMessages.entries()) {
