@@ -61,7 +61,7 @@ try {
             f.verdict, f."anchorTier", f."anchorSide", f."startLine", f."endLine",
             f."encryptedContent"
        from open_review_duck_ai_review_finding f
-      order by f."orderIndex" nulls last, f."createdAt" limit 25`,
+      order by f."orderIndex" nulls last, f."createdAt" limit 200`,
   );
   for (const row of rows) {
     const body = JSON.parse(
