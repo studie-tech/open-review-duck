@@ -201,7 +201,22 @@ export async function persistSourceBlob(
       )
       .returning();
     if (!ready) {
-      await store.delete(stored.objectKey);
+      // The lease is gone, so someone else holds this digest now. A store that
+      // can name a key before the write derives it from the content, and that
+      // writer therefore stored the very object this call did: removing it
+      // would leave a ready row naming nothing. Only an object no row can
+      // reach is this call's to remove, and pruning collects whatever is left.
+      const holder = await db.query.sourceBlobs.findFirst({
+        where: and(
+          eq(sourceBlobs.workspaceId, input.workspaceId),
+          eq(sourceBlobs.digest, digest),
+        ),
+      });
+      const reachable =
+        holder &&
+        (holder.objectKey === stored.objectKey ||
+          store.customId?.(putInput) === stored.objectKey);
+      if (!reachable) await store.delete(stored.objectKey);
       throw new Error("Source upload lease expired before completion");
     }
     return ready;

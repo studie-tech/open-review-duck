@@ -3,10 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   put: vi.fn(),
   read: vi.fn(),
+  remove: vi.fn(),
   sourceObjectStore: vi.fn(async () => ({
     kind: "local",
+    // The local store names an object after the content it holds, so every
+    // writer of one digest derives the same key.
+    customId: ({
+      workspaceId,
+      digest,
+    }: {
+      workspaceId: string;
+      digest: string;
+    }) => `${workspaceId}/${digest.slice(0, 2)}/${digest}`,
     put: mocks.put,
     read: mocks.read,
+    delete: mocks.remove,
   })),
 }));
 
@@ -273,5 +284,102 @@ describe("source blob pruning", () => {
     ).resolves.toMatchObject({ state: "ready", objectKey: "objects/shared" });
     // The winner stored the object, so the waiter must not store it again.
     expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("keeps the object a writer that took the lease stored under the same key", async () => {
+    // Both writers derive one key from the content, so the object this call
+    // uploaded is the object the row now names. Cleaning up after a lost lease
+    // must not take it, or the ready row is left naming nothing.
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    mocks.remove.mockReset();
+    const bytes = new TextEncoder().encode("stored by two writers");
+    const digest = sourceDigest(bytes);
+    const objectKey = `workspace/${digest.slice(0, 2)}/${digest}`;
+    mocks.put.mockResolvedValue({ storage: "local", objectKey });
+    const abandoned = {
+      id: "blob-id",
+      state: "failed" as const,
+      digest,
+      uploadLeaseExpiresAt: null,
+    };
+    const claimed = {
+      ...abandoned,
+      state: "uploading",
+      uploadLeaseToken: "lease",
+    };
+    const takenOver = { ...claimed, state: "ready", objectKey };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(abandoned)
+      .mockResolvedValueOnce(abandoned)
+      .mockResolvedValue(takenOver);
+    const returning = vi
+      .fn()
+      .mockResolvedValueOnce([claimed])
+      .mockResolvedValueOnce([]);
+    const database = {
+      query: { sourceBlobs: { findFirst } },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(async () => []),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning })),
+        })),
+      })),
+    };
+
+    await expect(
+      persistSourceBlob(database as never, { workspaceId: "workspace", bytes }),
+    ).rejects.toThrow("Source upload lease expired before completion");
+    expect(mocks.remove).not.toHaveBeenCalled();
+  });
+
+  it("removes an uploaded object no row is left to name", async () => {
+    // Nothing holds the digest once the row is gone, so this upload is the
+    // only reference to the object and nothing else will collect it.
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    mocks.remove.mockReset();
+    const bytes = new TextEncoder().encode("orphaned by pruning");
+    const digest = sourceDigest(bytes);
+    const objectKey = `workspace/${digest.slice(0, 2)}/${digest}`;
+    mocks.put.mockResolvedValue({ storage: "local", objectKey });
+    const claimed = {
+      id: "blob-id",
+      state: "uploading",
+      digest,
+      uploadLeaseToken: "lease",
+    };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue(undefined);
+    const returning = vi.fn().mockResolvedValueOnce([]);
+    const database = {
+      query: { sourceBlobs: { findFirst } },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(async () => [claimed]),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning })),
+        })),
+      })),
+    };
+
+    await expect(
+      persistSourceBlob(database as never, { workspaceId: "workspace", bytes }),
+    ).rejects.toThrow("Source upload lease expired before completion");
+    expect(mocks.remove).toHaveBeenCalledWith(objectKey);
   });
 });
