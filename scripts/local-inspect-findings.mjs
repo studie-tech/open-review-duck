@@ -45,7 +45,11 @@ try {
     );
     for (const row of rows) {
       const raw = openVaultSecret(
-        { workspaceId: row.workspaceId, recordId: row.id, provider: "ai-tool-input" },
+        {
+          workspaceId: row.workspaceId,
+          recordId: row.id,
+          provider: "ai-tool-input",
+        },
         row.encryptedInput,
       );
       const parsed = JSON.parse(raw);
@@ -66,7 +70,11 @@ try {
   for (const row of rows) {
     const body = JSON.parse(
       openVaultSecret(
-        { workspaceId: row.workspaceId, recordId: row.id, provider: "ai-review-finding" },
+        {
+          workspaceId: row.workspaceId,
+          recordId: row.id,
+          provider: "ai-review-finding",
+        },
         row.encryptedContent,
       ),
     );
