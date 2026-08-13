@@ -37,7 +37,15 @@ export async function persistSourceBlob(
     workspaceId: input.workspaceId,
   };
   const uploadLeaseToken = randomUUID();
-  const uploadClaim = {
+  /**
+   * Describes this call's claim, dated where the claim lands.
+   *
+   * Reaching a claim costs a probe of the store and, when another writer holds
+   * the digest, as much as the whole wait for it. A lease stamped on the way in
+   * is already part spent by the time a row carries it, and the writer it
+   * belongs to loses it that much sooner.
+   */
+  const uploadClaim = () => ({
     state: "uploading" as const,
     storage: store.kind,
     objectKey: null,
@@ -48,7 +56,7 @@ export async function persistSourceBlob(
     error: null,
     uploadLeaseToken,
     uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
-  };
+  });
   /** Reuses a ready row only when its immutable object still exists. */
   const reuseReadyBlob = async (blob: typeof sourceBlobs.$inferSelect) => {
     if (blob.storage !== store.kind || !blob.objectKey) return undefined;
@@ -79,7 +87,7 @@ export async function persistSourceBlob(
   const claimReadyBlob = async (id: string) => {
     const [claimed] = await db
       .update(sourceBlobs)
-      .set(uploadClaim)
+      .set(uploadClaim())
       .where(and(eq(sourceBlobs.id, id), eq(sourceBlobs.state, "ready")))
       .returning();
     return claimed;
@@ -89,16 +97,9 @@ export async function persistSourceBlob(
     const [inserted] = await db
       .insert(sourceBlobs)
       .values({
+        ...uploadClaim(),
         workspaceId: input.workspaceId,
         digest,
-        storage: store.kind,
-        state: "uploading",
-        byteLength: input.bytes.byteLength,
-        encoding: input.encoding ?? "utf-8",
-        mediaType: input.mediaType ?? "application/octet-stream",
-        customId: store.customId?.(putInput),
-        uploadLeaseToken,
-        uploadLeaseExpiresAt: new Date(Date.now() + UPLOAD_LEASE_MILLISECONDS),
       })
       .onConflictDoNothing({
         target: [sourceBlobs.workspaceId, sourceBlobs.digest],
@@ -110,7 +111,7 @@ export async function persistSourceBlob(
   const claimAbandonedBlob = async (id: string) => {
     const [reclaimed] = await db
       .update(sourceBlobs)
-      .set(uploadClaim)
+      .set(uploadClaim())
       .where(
         and(
           eq(sourceBlobs.id, id),
