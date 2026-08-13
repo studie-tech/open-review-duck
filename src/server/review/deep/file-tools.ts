@@ -102,8 +102,16 @@ export const deepReviewReportFindingSchema = z.object({
         existing_code: z.string().min(1).max(MAX_SNIPPET_LENGTH),
         // Free strings, normalized after the fact: an unknown severity must
         // degrade the finding, never fail the whole tool call.
-        severity: z.string().max(32),
-        category: z.string().max(32),
+        severity: z
+          .string()
+          .max(32)
+          .describe("One of: critical, high, medium, low."),
+        category: z
+          .string()
+          .max(32)
+          .describe(
+            "One of: bug, security, performance, maintainability, test, style, documentation, other.",
+          ),
         suggestion_code: z.string().max(MAX_SNIPPET_LENGTH).optional(),
       }),
     )

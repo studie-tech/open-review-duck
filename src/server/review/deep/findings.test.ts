@@ -60,9 +60,18 @@ describe("normalizeFindingCategory", () => {
   });
 
   it("degrades an unrecognized category to other instead of rejecting it", () => {
-    expect(normalizeFindingCategory("vulnerability")).toBe("other");
-    expect(normalizeFindingCategory("correctness")).toBe("other");
+    expect(normalizeFindingCategory("architecture")).toBe("other");
     expect(normalizeFindingCategory("")).toBe("other");
+  });
+
+  it("maps a near-miss category rather than emptying it into other", () => {
+    // Observed from a real run: the model reaches for these words, and letting
+    // every one of them fall into `other` leaves the category filter useless.
+    expect(normalizeFindingCategory("correctness")).toBe("bug");
+    expect(normalizeFindingCategory("validation")).toBe("security");
+    expect(normalizeFindingCategory("vulnerability")).toBe("security");
+    expect(normalizeFindingCategory("Race Condition")).toBe("bug");
+    expect(normalizeFindingCategory("error-handling")).toBe("bug");
   });
 
   it("degrades a non-string category to other", () => {
