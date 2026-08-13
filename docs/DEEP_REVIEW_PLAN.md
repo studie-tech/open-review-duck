@@ -1123,6 +1123,26 @@ symbol, and this pull request has 423 of them across 56 files. And the coverage
 list sat in an implicit grid track, which takes the width of its widest item, so
 one deep source path pushed every row past the panel edge.
 
+### The completed run
+
+54 of 56 files reviewed, 1 waived (`README.md`, unsupported extension), 1 failed
+on a provider fault. Terminal state `partial` with `deep_review_partial`, which
+is what a run that did not cover everything should say. 5.0M tokens.
+
+41 findings: 2 critical, 4 high, 13 medium, 22 low. 33 anchored and unrefuted, 4
+anchored but unverified, 3 held at `ungrounded`, 1 at `out_of_scope`. Every
+finding carried an `orderIndex`, so finalize ran and froze the surfacing order.
+The survey agent produced 4 cross-file findings — the class OCR structurally
+cannot report.
+
+The best of them, and a fair test of whether any of this was worth building:
+*"Quest.retryDelay column never added by this migration"*, critical, anchored to
+`0025_dear_lucky_pierre.sql:41`. The migration adds `attemptDelay`, while the
+Drizzle model and three call sites — `periodCapReached`, `isAvailableUserQuests`
+and the completion CAS — all read `quest.retryDelay`. Finding it took reading the
+migration, searching the repository for the symbol, and connecting a schema to
+the code that depends on it.
+
 ### What held up unchanged
 
 - **Coverage algebra.** The truncated first run reported `partial` with
