@@ -3,9 +3,9 @@ import {
   compactSideBySideDiff,
   currentChangedLineIndexes,
   focusedRowRegions,
+  focusedRowSpan,
   sideBySideDiff,
   sourceByteOffsetLine,
-  focusedRowSpan,
   sourceEndLine,
   sourceStartLine,
 } from "./side-by-side-diff";

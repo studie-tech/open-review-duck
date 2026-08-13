@@ -198,10 +198,10 @@ function groupSignature(memberIds: readonly string[]): string {
 /**
  * Reports every assertion that makes a whole proposed grouping unusable.
  *
- * The partition rules are OCR's all-or-nothing discipline
- * (`internal/scan/agent.go:986-999`). The two caps are ours: a response putting
- * every id in one group is a perfectly valid partition, and accepting it would
- * suppress the entire review behind a single merged finding.
+ * Grouping is all-or-nothing: a response is rejected whole rather than applied
+ * in part. The size and path caps matter because a response putting every id in
+ * one group is a perfectly valid partition, and accepting it would suppress the
+ * entire review behind a single merged finding.
  */
 export function deepReviewDedupeErrors(
   input: DeepReviewDedupeValidationInput,

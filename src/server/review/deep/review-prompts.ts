@@ -2,8 +2,8 @@ import { escapePromptXml } from "~/config/prompts";
 
 /**
  * Substituted for the pre-scan plan when the file is small or the plan call
- * failed. OCR leaked a raw `{{plan_guidance}}` token here because it tried to
- * regex the block away; a literal sentinel cannot leak.
+ * failed. A literal sentinel is used rather than stripping the block out of the
+ * prompt, because a failed strip leaks its own placeholder to the model.
  */
 export const DEEP_REVIEW_NO_PLAN_SENTINEL =
   "(no pre-scan plan; review the entire file as usual)";

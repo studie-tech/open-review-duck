@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { modalSurfaceClassName } from "~/components/ui/modal-surface";
 import {
   commandMenuShortcut,
   formatShortcut,
@@ -18,7 +19,6 @@ import {
   matchesShortcutStroke,
   shortcutHelpShortcut,
 } from "~/lib/keyboard-shortcuts";
-import { modalSurfaceClassName } from "~/components/ui/modal-surface";
 import { cn } from "~/lib/utils";
 
 export type CommandCenterItem = {

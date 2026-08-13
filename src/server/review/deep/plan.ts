@@ -27,11 +27,12 @@ type BlobRow = typeof sourceBlobs.$inferSelect;
 type ReviewParentJob = typeof aiJobs.$inferSelect;
 
 /**
- * The per-file source ceiling, matching OCR's 2 MiB scan default
- * (`internal/scan/provider.go:36`). It is a property of the plan rather than
- * of the run, so it is not `AI_MAX_SOURCE_BYTES` — that one bounds the bytes a
- * whole investigation may read, and using it here would admit a single file
- * large enough to exhaust the run on its own.
+ * The per-file source ceiling.
+ *
+ * A property of the plan rather than of the run, so it is deliberately not
+ * `AI_MAX_SOURCE_BYTES` — that bounds the bytes a whole investigation may read,
+ * and using it here would admit a single file large enough to exhaust the run
+ * on its own.
  */
 const DEFAULT_MAX_SOURCE_BYTES = 2 << 20;
 

@@ -110,7 +110,7 @@ describe("deep review file selection", () => {
     ).toBe("no_source");
   });
 
-  it("reviews an extensionless script, as OCR does", () => {
+  it("reviews an extensionless script", () => {
     for (const path of ["Makefile", "Dockerfile", "scripts/release"]) {
       expect(reviewExclusionReason(candidate({ path }), options)).toBeNull();
     }
@@ -229,7 +229,7 @@ describe("deep review path classification", () => {
     }
   });
 
-  it("reviews hand-written test source, unlike OCR", () => {
+  it("reviews hand-written test source", () => {
     for (const path of [
       "src/server/review/deep/selection.test.ts",
       "internal/agent/preview_test.go",
@@ -243,7 +243,7 @@ describe("deep review path classification", () => {
 });
 
 describe("deep review allowlist corpus", () => {
-  it("carries the OCR extension allowlist, lowercase and undotted", () => {
+  it("carries the extension allowlist, lowercase and undotted", () => {
     expect(SUPPORTED_REVIEW_EXTENSIONS.size).toBe(86);
     for (const extension of ["go", "ts", "tsx", "ets", "nimble", "bicep"]) {
       expect(SUPPORTED_REVIEW_EXTENSIONS.has(extension)).toBe(true);
@@ -253,7 +253,7 @@ describe("deep review allowlist corpus", () => {
     }
   });
 
-  it("carries every OCR exclude pattern verbatim", () => {
+  it("carries every exclude pattern verbatim", () => {
     expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toHaveLength(31);
     expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toContain("**/*_test.go");
     expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toContain(

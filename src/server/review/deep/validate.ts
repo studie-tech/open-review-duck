@@ -185,7 +185,7 @@ function findingText(content: FindingContent): string {
   return content.body ? `${content.title}\n\n${content.body}` : content.title;
 }
 
-/** Extracts the first fenced code block, mirroring OCR's `extractCodeBlock`. */
+/** Extracts the first fenced code block from a model response. */
 export function extractCodeBlock(text: string): string {
   const trimmed = text.trim();
   const open = trimmed.indexOf("```");
@@ -380,8 +380,7 @@ export async function validateFileFindings(
       if (attempt) {
         const retry = resolveAnchor({ ...anchorable, existingCode: attempt });
         if (isLocated(retry)) {
-          // OCR's swap-and-restore (internal/diff/relocation.go:66-77): the
-          // re-extraction only survives if it anchors, so a failed rewrite
+          // A re-extraction only survives if it anchors, so a failed rewrite
           // never replaces the model's actual claim.
           existingCode = attempt;
           anchor = { ...retry, tier: "relocated" };

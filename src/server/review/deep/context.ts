@@ -171,11 +171,11 @@ export function clearDeepReviewContexts(): void {
 /**
  * Returns the one repository context shared by every child of a run.
  *
- * `createAiRepositoryContext` memoizes its file tree per instance and the
- * single-agent loop builds a new instance every turn, so a fan-out over
- * fifty-four files would issue a recursive tree request per child per turn.
- * The cache stores the in-flight promise, so children dispatched in parallel
- * wait on one build instead of racing to duplicate it.
+ * `createAiRepositoryContext` memoizes its file tree per instance, so building
+ * one per child per turn would issue a recursive tree request against the
+ * provider for every file in the run. The cache stores the in-flight promise,
+ * so children dispatched in parallel wait on one build instead of racing to
+ * duplicate it.
  */
 export async function createDeepReviewContext(
   db: Database,

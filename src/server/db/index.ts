@@ -17,11 +17,10 @@ const pool =
   new Pool(
     nodePostgresPoolConfig({
       connectionString: env.DATABASE_URL,
-      // The old fixed 5 was sized for an app whose heaviest AI operation was a
-      // single agent. Deep review fans out across files, each holding its own
-      // statements, so the pool is sized to the reviewer instead. Development
-      // stays smaller by default but honours the same setting, because a
-      // fan-out cannot be exercised locally against two connections.
+      // Sized to the review fan-out: every file under review holds its own
+      // statements, so the pool has to cover the widest wave plus the status
+      // polling and the maintenance cron. Development honours the same setting
+      // so a fan-out can be exercised locally.
       max:
         env.NODE_ENV === "production"
           ? env.DATABASE_POOL_MAX

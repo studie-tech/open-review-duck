@@ -42,7 +42,7 @@ export interface ReviewSelection {
   waived: WaivedReviewFile[];
 }
 
-/** The extensions a deep review will read, ported from OCR's allowlist. */
+/** The extensions a deep review will read. See ./rulebooks/NOTICE. */
 export const SUPPORTED_REVIEW_EXTENSIONS: ReadonlySet<string> = new Set([
   "java",
   "kt",
@@ -132,7 +132,7 @@ export const SUPPORTED_REVIEW_EXTENSIONS: ReadonlySet<string> = new Set([
   "nimble",
 ]);
 
-/** OCR's default exclude globs, reproduced verbatim as the pattern corpus. */
+/** The default exclude globs. See ./rulebooks/NOTICE. */
 export const DEFAULT_REVIEW_EXCLUDE_PATTERNS: readonly string[] = [
   "**/*_test.go",
   "**/src/test/java/**/*.java",
@@ -279,9 +279,9 @@ export function isVendoredPath(path: string) {
  *
  * The ladder order is behaviour, not preference: binary before no_source so a
  * blobless image is reported as an image, extension before path so an excluded
- * `.txt` fixture is reported by its type. Two deliberate divergences from OCR:
- * a deleted file is reviewed from its previous revision, so `no_source` means
- * neither revision has source; and there is no file cap, so no cap reason.
+ * `.txt` fixture is reported by its type. A deleted file is reviewed from its
+ * previous revision, so `no_source` means neither revision has source, and
+ * coverage is uncapped, so there is no cap reason.
  */
 export function reviewExclusionReason(
   file: ReviewCandidateFile,
@@ -292,7 +292,8 @@ export function reviewExclusionReason(
   const path = normalizePath(file.path);
   const extension = pathExtension(path);
   // An extensionless path is a Makefile, a Dockerfile or a shell script, all
-  // of which OCR reviews; only a known-unreviewable extension is refused.
+  // of which are worth reviewing; only a known-unreviewable extension is
+  // refused.
   if (extension !== null && !SUPPORTED_REVIEW_EXTENSIONS.has(extension)) {
     return "unsupported_extension";
   }

@@ -10,15 +10,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
+  conceptMembersInReadingOrder,
   InlineAiQuestion,
   ProviderConversation,
-  conceptMembersInReadingOrder,
   ProviderConversationHistory,
   ReviewConceptMemberPreview,
   rememberAiConversationVisibility,
