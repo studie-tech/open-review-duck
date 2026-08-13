@@ -118,7 +118,11 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
     },
     aiReviewItems: { findMany: async () => [...rowsOf(aiReviewItems)] },
     reviewSnapshots: { findFirst: async () => rowsOf(reviewSnapshots)[0] },
-    snapshotFiles: { findMany: async () => [...rowsOf(snapshotFiles)] },
+    snapshotFiles: {
+      /** Honours `limit`, so a capped read shows up as a missing file. */
+      findMany: async (args?: { limit?: number }) =>
+        rowsOf(snapshotFiles).slice(0, args?.limit),
+    },
     sourceBlobs: { findMany: async () => [...rowsOf(sourceBlobs)] },
   };
   /** Appends rows, honouring the one unique index the plan relies on. */
@@ -247,6 +251,21 @@ describe("sealReviewPlan", () => {
     expect(plan.surveyJobId).toBe(
       children.find((job) => job.kind === "review_survey")?.id,
     );
+  });
+
+  it("seals every changed file of a very large pull request", async () => {
+    const files = Array.from({ length: 5_001 }, (_, index) => ({
+      path: `src/file-${String(index).padStart(5, "0")}.ts`,
+    }));
+    const fake = createFakeDatabase(files);
+
+    const plan = await sealReviewPlan(fake.db, PARENT_ID);
+
+    expect(plan.itemCount).toBe(files.length);
+    expect(plan.selectedCount).toBe(files.length);
+    expect(fake.items()).toHaveLength(files.length);
+    const last = files.at(-1)?.path;
+    expect(plan.items.some((item) => item.path === last)).toBe(true);
   });
 
   it("takes the advisory lock before it writes anything", async () => {

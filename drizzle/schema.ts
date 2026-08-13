@@ -1293,7 +1293,9 @@ export const aiReviewFindings = createTable(
  * The per-file locations of a cross-file finding.
  *
  * A survey finding spans files by construction, so it anchors once per named
- * location and surfaces on the first that resolves.
+ * location and surfaces on the first that resolves. `position` preserves the
+ * order the model named them in, which decides which location resolves first
+ * and therefore where the finding surfaces.
  */
 export const aiReviewFindingLocations = createTable(
   "ai_review_finding_location",
@@ -1302,6 +1304,7 @@ export const aiReviewFindingLocations = createTable(
     findingId: varchar({ length: 64 })
       .notNull()
       .references(() => aiReviewFindings.id, { onDelete: "cascade" }),
+    position: integer().notNull(),
     path: text().notNull(),
     encryptedExistingCode: text().notNull(),
     anchorTier: anchorTierEnum(),
@@ -1310,7 +1313,9 @@ export const aiReviewFindingLocations = createTable(
     endLine: integer(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("ai_review_finding_location_idx").on(t.findingId)],
+  (t) => [
+    uniqueIndex("ai_review_finding_location_idx").on(t.findingId, t.position),
+  ],
 );
 
 /** Ties a finding to the byte ranges its agent provably read. */

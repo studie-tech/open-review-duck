@@ -469,9 +469,15 @@ export async function createAiJob(
   });
 }
 
-/** Atomically releases a quota reservation and records terminal usage. */
+/**
+ * Atomically releases a quota reservation and records terminal usage.
+ *
+ * A transaction handle is admitted so a caller that already holds a lock can
+ * settle without leaving it; on that handle the block below is a savepoint,
+ * which is as atomic as the top-level transaction it nests in.
+ */
 export async function settleAiJobQuota(
-  db: Database,
+  db: Database | Transaction,
   jobId: string,
   usage?: TokenUsage,
 ) {

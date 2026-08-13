@@ -959,6 +959,78 @@ describe("SideBySideUnitDiff", () => {
     }
   });
 
+  it("leaves context rows unpainted while no finding is open", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <SideBySideUnitDiff
+        previousSource={"const before = true;\nconst after = true;"}
+        currentSource={
+          "const before = true;\nconst added = true;\nreturn added;\nconst after = true;"
+        }
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={null}
+        previousFocusEndLine={null}
+        currentFocusStartLine={2}
+        currentFocusEndLine={3}
+        selectedLine={2}
+        keyboardLine={2}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Show 1 lines above" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Show 1 lines below" }),
+    );
+
+    expect(
+      container.querySelectorAll('[data-review-scope="context"]'),
+    ).toHaveLength(2);
+    // A context row carries no review line, so it must not claim the amber bar
+    // that only an open finding earns.
+    expect(
+      container.querySelectorAll('[class*="rgb(245_158_11"]'),
+    ).toHaveLength(0);
+  });
+
+  it("leaves unchanged context rows unpainted in the narrow layout", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <SideBySideUnitDiff
+        previousSource={
+          "const before = true;\nconst removed = true;\nconst after = true;"
+        }
+        currentSource={
+          "const before = true;\nconst changed = true;\nconst after = true;"
+        }
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusRanges={[{ startLine: 2, endLine: 2 }]}
+        currentFocusRanges={[{ startLine: 2, endLine: 2 }]}
+        selectedLine={2}
+        keyboardLine={2}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Show 1 lines above" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Show 1 lines below" }),
+    );
+
+    expect(container).toHaveTextContent("const before = true;");
+    expect(
+      container.querySelectorAll('[class*="rgb(245_158_11"]'),
+    ).toHaveLength(0);
+  });
+
   it("marks pure-addition review scope and dims revealed context", async () => {
     const user = userEvent.setup();
     const { container } = render(

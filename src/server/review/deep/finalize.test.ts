@@ -15,6 +15,7 @@ vi.mock("~/server/ai/service", () => ({
   settleAiJobQuota: mocks.settleAiJobQuota,
 }));
 
+import { cancelDeepReviewTree } from "./cancel";
 import {
   deepReviewCompletionReason,
   deepReviewCoverage,
@@ -58,6 +59,9 @@ interface RecordedUpdate {
 /** Builds the smallest database double the finalize path actually exercises. */
 function createFakeDb(state: FakeState) {
   const updates: RecordedUpdate[] = [];
+  const locks: unknown[] = [];
+  const order: string[] = [];
+  let held: Promise<unknown> = Promise.resolve();
 
   /** Resolves either as a promise or through a `.returning()` continuation. */
   const settled = <T>(rows: T[]) => {
@@ -77,11 +81,39 @@ function createFakeDb(state: FakeState) {
         findMany: async () => state.items,
       },
     },
+    /** Records the tree lock a closing transaction takes before it writes. */
+    execute: async (statement: unknown) => {
+      locks.push(statement);
+      order.push("lock");
+      return [];
+    },
+    /**
+     * Runs one transaction at a time against the same rows.
+     *
+     * The queue stands in for the advisory lock the closers contend for: a
+     * transaction that has started runs to its commit before the next begins,
+     * so a closer that takes no lock is the only one that can interleave.
+     */
+    transaction: async <T>(run: (tx: unknown) => Promise<T>) => {
+      const previous = held;
+      /** Hands the queue to the next transaction at this one's commit. */
+      let commit = () => {};
+      held = new Promise<void>((resolve) => {
+        commit = resolve;
+      });
+      await previous;
+      try {
+        return await run(db);
+      } finally {
+        commit();
+      }
+    },
     update(table: unknown) {
       return {
         set(values: Record<string, unknown>) {
           if (table === aiReviewItems) {
             updates.push({ table: "aiReviewItems", values });
+            order.push("sweep");
             const swept = state.items.filter(
               (item) => item.state === "selected",
             );
@@ -111,7 +143,7 @@ function createFakeDb(state: FakeState) {
       };
     },
   };
-  return { db: db as never, updates };
+  return { db: db as never, updates, locks, order };
 }
 
 /** Builds one coverage item, defaulting everything the case does not state. */
@@ -456,6 +488,45 @@ describe("finalizeDeepReview", () => {
       "parent-1",
       result.usage,
     );
+  });
+
+  it("takes the tree lock before it rewrites any coverage", async () => {
+    const state: FakeState = {
+      parent,
+      items: [item({ id: "a", state: "selected" })],
+      findings: [],
+      usageRows: [],
+    };
+    const { db, locks, order } = createFakeDb(state);
+    await finalizeDeepReview(db, "parent-1");
+
+    expect(order[0]).toBe("lock");
+    expect(JSON.stringify(locks)).toContain("deep-review:cancel:parent-1");
+  });
+
+  it("keeps a concurrent cancellation's sweep out of its own", async () => {
+    const state: FakeState = {
+      parent,
+      items: [item({ id: "a", state: "selected" })],
+      findings: [],
+      usageRows: [],
+    };
+    const { db } = createFakeDb(state);
+
+    // Both closers address the same tree at once, which is what a cancellation
+    // landing on a run whose finalize step is already executing looks like.
+    await Promise.all([
+      cancelDeepReviewTree(db, "parent-1"),
+      finalizeDeepReview(db, "parent-1"),
+    ]);
+
+    // The cancellation reached the item first, so the reviewer is told the run
+    // was cancelled rather than that it merely ended.
+    expect(state.items[0]).toMatchObject({
+      state: "failed",
+      failureClass: "cancelled",
+      reason: "The review was cancelled before this file was reviewed.",
+    });
   });
 
   it("patches the deep-review completion reason once acceptance lands", async () => {

@@ -429,6 +429,9 @@ export async function deepReviewRunPayload(
             aiReviewFindingLocations.findingId,
             findingRows.map((finding) => finding.id),
           ),
+          // The client holds an open location by its index in this array, so
+          // the order has to be the model's rather than the heap's.
+          orderBy: [aiReviewFindingLocations.position],
         });
 
   const findings = await Promise.all(

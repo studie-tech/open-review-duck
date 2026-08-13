@@ -127,7 +127,21 @@ function fakeDatabase(
     }),
     select: () => ({
       from: (table: unknown) => ({
-        where: async () => rows[tableName(table)] ?? [],
+        where: () => {
+          // The seeds stand in for a heap scan, so a reader that names no
+          // order gets them back exactly as seeded.
+          const seeded = rows[tableName(table)] ?? [];
+          /** Returns the seeded rows, sorted only when the caller orders them. */
+          const read = (order?: unknown) =>
+            order === aiReviewFindingLocations.position
+              ? [...seeded].sort(
+                  (a, b) => Number(a.position) - Number(b.position),
+                )
+              : seeded;
+          return Object.assign(Promise.resolve(read()), {
+            orderBy: (order: unknown) => Promise.resolve(read(order)),
+          });
+        },
       }),
     }),
     update: (table: unknown) => ({
@@ -415,9 +429,11 @@ describe("report_survey_finding", () => {
       (insert) => insert.table === "ai_review_finding_location",
     );
     expect(locations).toHaveLength(2);
-    expect(locations.map((row) => row.values[0]?.path)).toEqual([
-      "src/a.ts",
-      "src/b.ts",
+    expect(
+      locations.map((row) => [row.values[0]?.position, row.values[0]?.path]),
+    ).toEqual([
+      [0, "src/a.ts"],
+      [1, "src/b.ts"],
     ]);
     await expect(
       openVaultSecret(
@@ -494,9 +510,22 @@ describe("validateDeepReviewSurveyFindings", () => {
     ];
     const { database, updates } = fakeDatabase({
       ai_review_finding: [{ id: "finding-1", severity: "critical" }],
+      // Seeded against their positions: the finding surfaces on the first
+      // location that resolves, so only a read ordered by `position` puts
+      // src/a.ts — the one the survey named first — in front.
       ai_review_finding_location: [
-        { ...locations[0], findingId: "finding-1", path: "src/a.ts" },
-        { ...locations[1], findingId: "finding-1", path: "src/b.ts" },
+        {
+          ...locations[1],
+          findingId: "finding-1",
+          position: 1,
+          path: "src/b.ts",
+        },
+        {
+          ...locations[0],
+          findingId: "finding-1",
+          position: 0,
+          path: "src/a.ts",
+        },
       ],
       ai_job_evidence: evidence,
     });

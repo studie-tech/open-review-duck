@@ -3,7 +3,11 @@ import "server-only";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { aiJobs, aiReviewItems } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
-import { type DeepReviewFinalizeResult, finalizeDeepReview } from "./finalize";
+import {
+  type DeepReviewFinalizeResult,
+  deepReviewTreeLockKey,
+  finalizeDeepReview,
+} from "./finalize";
 
 type Database = typeof database;
 
@@ -35,8 +39,10 @@ export async function cancelDeepReviewTree(
   await db.transaction(async (tx) => {
     // One writer per tree: the sweep and the item transition have to agree on
     // what was still live, and a concurrent finalize must not interleave.
+    // `finalizeDeepReview` takes this same lock, so a closer running against
+    // this tree either sees it whole or waits for the commit below.
     await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtext(${`deep-review:cancel:${parentJobId}`}))`,
+      sql`select pg_advisory_xact_lock(hashtext(${deepReviewTreeLockKey(parentJobId)}))`,
     );
     const now = new Date();
     await tx
