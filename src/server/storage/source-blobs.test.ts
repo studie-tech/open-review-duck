@@ -287,59 +287,70 @@ describe("source blob pruning", () => {
   });
 
   it("dates the upload lease from the claim rather than the call", async () => {
-    // Reaching a claim costs a probe of the store, and a contended digest costs
-    // the wait for it as well. A lease stamped on the way in is already part
-    // spent by the time the row carries it.
-    mocks.put.mockReset();
-    mocks.read.mockReset();
-    mocks.remove.mockReset();
-    const bytes = new TextEncoder().encode("slow to reach the claim");
-    const probeMilliseconds = 300;
-    mocks.read.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, probeMilliseconds));
-      throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    });
-    mocks.put.mockResolvedValue({
-      storage: "local",
-      objectKey: "objects/restored",
-    });
-    const existing = {
-      id: "blob-id",
-      state: "ready",
-      storage: "local",
-      objectKey: "objects/missing",
-      digest: sourceDigest(bytes),
-    };
-    const claimed = {
-      ...existing,
-      state: "uploading",
-      objectKey: null,
-      uploadLeaseToken: "lease",
-    };
-    const returning = vi
-      .fn()
-      .mockResolvedValueOnce([claimed])
-      .mockResolvedValueOnce([{ ...claimed, state: "ready" }]);
-    const leases: Date[] = [];
-    const set = vi.fn((values: { uploadLeaseExpiresAt?: Date | null }) => {
-      if (values.uploadLeaseExpiresAt) leases.push(values.uploadLeaseExpiresAt);
-      return { where: vi.fn(() => ({ returning })) };
-    });
-    const database = {
-      query: { sourceBlobs: { findFirst: vi.fn(async () => existing) } },
-      update: vi.fn(() => ({ set })),
+    /**
+     * Reports how much lease a row receives when a probe delays the claim.
+     *
+     * Reaching a claim costs a probe of the store, and a contended digest costs
+     * the wait for it as well. Whatever a lease is worth, the wait in front of
+     * it must not be spent out of it, so a claim reached late has to carry the
+     * same span as one reached at once. Measuring the span the row receives
+     * rather than the moment it expires says that without naming a duration,
+     * and keeps the comparison honest if the lease is ever retuned.
+     */
+    const leaseSpanAfterProbe = async (probeMilliseconds: number) => {
+      mocks.put.mockReset();
+      mocks.read.mockReset();
+      mocks.remove.mockReset();
+      mocks.read.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, probeMilliseconds));
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      });
+      mocks.put.mockResolvedValue({
+        storage: "local",
+        objectKey: "objects/restored",
+      });
+      const bytes = new TextEncoder().encode("reached after a probe");
+      const existing = {
+        id: "blob-id",
+        state: "ready",
+        storage: "local",
+        objectKey: "objects/missing",
+        digest: sourceDigest(bytes),
+      };
+      const claimed = {
+        ...existing,
+        state: "uploading",
+        objectKey: null,
+        uploadLeaseToken: "lease",
+      };
+      const returning = vi
+        .fn()
+        .mockResolvedValueOnce([claimed])
+        .mockResolvedValueOnce([{ ...claimed, state: "ready" }]);
+      const spans: number[] = [];
+      const set = vi.fn((values: { uploadLeaseExpiresAt?: Date | null }) => {
+        if (values.uploadLeaseExpiresAt) {
+          spans.push(values.uploadLeaseExpiresAt.getTime() - Date.now());
+        }
+        return { where: vi.fn(() => ({ returning })) };
+      });
+      const database = {
+        query: { sourceBlobs: { findFirst: vi.fn(async () => existing) } },
+        update: vi.fn(() => ({ set })),
+      };
+
+      await persistSourceBlob(database as never, {
+        workspaceId: "workspace",
+        bytes,
+      });
+      return spans[0] ?? 0;
     };
 
-    const startedAt = Date.now();
-    await persistSourceBlob(database as never, {
-      workspaceId: "workspace",
-      bytes,
-    });
+    const immediate = await leaseSpanAfterProbe(0);
+    const delayed = await leaseSpanAfterProbe(300);
 
-    const [lease] = leases;
-    expect(lease?.getTime() ?? 0).toBeGreaterThan(
-      startedAt + 4 * 60_000 + probeMilliseconds - 50,
-    );
+    // A lease stamped on the way in arrives short by the probe it waited on.
+    expect(delayed).toBeGreaterThan(immediate - 50);
   });
 
   it("keeps the object a writer that took the lease stored under the same key", async () => {
