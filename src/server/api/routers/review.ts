@@ -82,6 +82,7 @@ import {
   startPullRequestSync,
 } from "~/server/workflows/service";
 import {
+  awaitResponseConceptSchema,
   awaitResponseSchema,
   importTargetSchema,
   improveConceptGroupingSchema,
@@ -639,6 +640,38 @@ async function conceptLayoutSnapshotId(
   return layout.snapshotId;
 }
 
+/**
+ * Rejects a snapshot the pull request has already moved past.
+ *
+ * Resolving a concept silently requires the same revision, so asking first
+ * turns the "no such concept" that a stale workspace would otherwise get into
+ * the one instruction that resolves it.
+ */
+async function assertSnapshotIsCurrent(
+  tx: ReviewTransaction,
+  snapshotId: string,
+  message: string,
+) {
+  const [revision] = await tx
+    .select({
+      snapshotHeadSha: reviewSnapshots.headSha,
+      snapshotBaseSha: reviewSnapshots.baseSha,
+      headSha: pullRequests.headSha,
+      baseSha: pullRequests.baseSha,
+    })
+    .from(reviewSnapshots)
+    .innerJoin(pullRequests, eq(reviewSnapshots.pullRequestId, pullRequests.id))
+    .where(eq(reviewSnapshots.id, snapshotId))
+    .limit(1);
+  if (!revision) throw new TRPCError({ code: "NOT_FOUND" });
+  if (
+    revision.snapshotHeadSha !== revision.headSha ||
+    revision.snapshotBaseSha !== revision.baseSha
+  ) {
+    throw new TRPCError({ code: "CONFLICT", message });
+  }
+}
+
 /** Resolves one concept only when it belongs to the reviewer's active layout. */
 async function conceptMembersForMutation(
   tx: ReviewTransaction,
@@ -1159,6 +1192,255 @@ async function finalizeSignOffs(
         .where(eq(reviewSessions.id, updatedSession.id));
     }
   }
+}
+
+/**
+ * Widens a set of units to every member of the concepts holding them.
+ *
+ * A reviewer pauses a concept rather than a unit, so the reply that ends one
+ * member's wait ends the whole concept's: the workspace can only show a
+ * concept as waiting when any member is, and a half-released concept would sit
+ * outside the review path with nothing left to wait for.
+ */
+async function conceptSiblingUnitIds(
+  db: typeof database,
+  userId: string,
+  snapshotId: string,
+  unitIds: string[],
+) {
+  if (unitIds.length === 0) return [];
+  const layouts = await db
+    .select({
+      id: reviewConceptLayouts.id,
+      userId: reviewConceptLayouts.userId,
+    })
+    .from(reviewConceptLayouts)
+    .where(
+      and(
+        eq(reviewConceptLayouts.snapshotId, snapshotId),
+        or(
+          eq(reviewConceptLayouts.userId, userId),
+          isNull(reviewConceptLayouts.userId),
+        ),
+      ),
+    );
+  const active =
+    layouts.find((layout) => layout.userId === userId) ??
+    layouts.find((layout) => layout.userId === null);
+  if (!active) return [];
+  const members = await db
+    .select({
+      conceptId: reviewConceptMembers.conceptId,
+      unitId: reviewConceptMembers.unitId,
+    })
+    .from(reviewConceptMembers)
+    .innerJoin(
+      reviewConcepts,
+      eq(reviewConceptMembers.conceptId, reviewConcepts.id),
+    )
+    .where(eq(reviewConcepts.layoutId, active.id));
+  const released = new Set(unitIds);
+  const releasedConcepts = new Set(
+    members
+      .filter(({ unitId }) => released.has(unitId))
+      .map(({ conceptId }) => conceptId),
+  );
+  return members
+    .filter(({ conceptId }) => releasedConcepts.has(conceptId))
+    .map(({ unitId }) => unitId);
+}
+
+/**
+ * Records one reviewer's wait on every named unit of a single snapshot.
+ *
+ * The provider conversation is read once for the whole set, so pausing a
+ * concept costs the one round trip pausing a single unit already did. A unit
+ * with no thread of its own still gets a wait: what the reviewer paused is the
+ * set, and it comes back as a set once any of its threads moves.
+ */
+async function beginReviewWaits(
+  db: typeof database,
+  userId: string,
+  requested: string[],
+) {
+  const unitIds = [...new Set(requested)];
+  const scopes = await db
+    .select({
+      unitId: reviewUnits.id,
+      path: reviewUnits.path,
+      startLine: reviewUnits.startLine,
+      endLine: reviewUnits.endLine,
+      snapshotId: reviewUnits.snapshotId,
+      snapshotHeadSha: reviewSnapshots.headSha,
+      snapshotBaseSha: reviewSnapshots.baseSha,
+      pullRequestNumber: pullRequests.number,
+      headSha: pullRequests.headSha,
+      baseSha: pullRequests.baseSha,
+      repositoryExternalId: repositories.externalId,
+      provider: providerConnections.provider,
+      connectionId: providerConnections.id,
+    })
+    .from(reviewUnits)
+    .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
+    .innerJoin(pullRequests, eq(reviewSnapshots.pullRequestId, pullRequests.id))
+    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+    .leftJoin(
+      providerConnections,
+      eq(repositories.connectionId, providerConnections.id),
+    )
+    .innerJoin(
+      workspaceMembers,
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
+    )
+    .where(
+      and(
+        inArray(reviewUnits.id, unitIds),
+        eq(workspaceMembers.userId, userId),
+      ),
+    );
+  const units = [
+    ...new Map(scopes.map((scope) => [scope.unitId, scope])).values(),
+  ];
+  const [scope] = units;
+  if (!scope || units.length !== unitIds.length) {
+    throw new TRPCError({ code: "NOT_FOUND" });
+  }
+  if (
+    scope.snapshotHeadSha !== scope.headSha ||
+    scope.snapshotBaseSha !== scope.baseSha
+  ) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Synchronize the pull request before waiting for a response",
+    });
+  }
+  if (!scope.connectionId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Local comments do not have provider response threads",
+    });
+  }
+  const provider = await providerForScope(db, scope.connectionId);
+  let threads: Awaited<ReturnType<typeof provider.listInlineCommentThreads>>;
+  try {
+    threads = await provider.listInlineCommentThreads(
+      scope.repositoryExternalId,
+      scope.pullRequestNumber,
+    );
+  } catch (cause) {
+    throw new TRPCError({
+      code: "BAD_GATEWAY",
+      message: `${scope.provider === "azure_devops" ? "Azure DevOps" : scope.provider === "gitlab" ? "GitLab" : "GitHub"} conversations could not be loaded`,
+      cause,
+    });
+  }
+  const allSnapshotUnits = await db
+    .select({
+      id: reviewUnits.id,
+      path: reviewUnits.path,
+      kind: reviewUnits.kind,
+      startLine: reviewUnits.startLine,
+      endLine: reviewUnits.endLine,
+    })
+    .from(reviewUnits)
+    .where(eq(reviewUnits.snapshotId, scope.snapshotId));
+  const snapshotUnits = allSnapshotUnits.filter(({ kind }) => kind !== "file");
+  const localComments = await db
+    .select({
+      unitId: reviewComments.unitId,
+      providerExternalId: reviewComments.providerExternalId,
+    })
+    .from(reviewComments)
+    .where(
+      and(
+        eq(reviewComments.status, "published"),
+        inArray(
+          reviewComments.unitId,
+          snapshotUnits.map(({ id }) => id),
+        ),
+      ),
+    );
+  const explicitlyAssignedUnitByThreadId = new Map(
+    localComments.flatMap((comment) =>
+      comment.providerExternalId
+        ? [[comment.providerExternalId, comment.unitId] as const]
+        : [],
+    ),
+  );
+  const assignedThreads = assignProviderThreadsToUnits(
+    threads,
+    snapshotUnits,
+    explicitlyAssignedUnitByThreadId,
+  );
+  const waited = units.map((unit) => ({
+    unit,
+    activity: providerActivityForUnit(
+      assignedThreads.filter((thread) => thread.unitId === unit.unitId),
+      unit,
+    ),
+  }));
+  if (waited.every(({ activity }) => activity.providerThreadIds.length === 0)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        unitIds.length === 1
+          ? "This unit needs a live provider conversation before it can await a response"
+          : "This concept needs a live provider conversation before it can await a response",
+    });
+  }
+
+  return db.transaction(async (tx) => {
+    // Sorted, because two reviewers pausing overlapping sets would otherwise
+    // take the same per-unit locks in opposite orders and deadlock.
+    for (const unitId of [...unitIds].sort()) {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`${unitId}:${userId}:wait`}))`,
+      );
+    }
+    await tx
+      .update(signOffs)
+      .set({ invalidatedAt: new Date() })
+      .where(
+        and(
+          inArray(
+            signOffs.unitId,
+            units.map(({ unitId }) => unitId),
+          ),
+          eq(signOffs.userId, userId),
+          isNull(signOffs.invalidatedAt),
+        ),
+      );
+    const waitingSince = new Date();
+    const written: (typeof reviewWaits.$inferSelect)[] = [];
+    for (const { unit, activity } of waited) {
+      const [wait] = await tx
+        .insert(reviewWaits)
+        .values({
+          unitId: unit.unitId,
+          userId,
+          providerThreadIds: activity.providerThreadIds,
+          observedCommentIds: activity.observedCommentIds,
+          waitingSince,
+        })
+        .onConflictDoUpdate({
+          target: [reviewWaits.unitId, reviewWaits.userId],
+          set: {
+            providerThreadIds: activity.providerThreadIds,
+            observedCommentIds: activity.observedCommentIds,
+            waitingSince,
+          },
+        })
+        .returning();
+      if (!wait) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "The waiting state could not be saved",
+        });
+      }
+      written.push(wait);
+    }
+    return written;
+  });
 }
 
 export const reviewRouter = createTRPCRouter({
@@ -2106,8 +2388,7 @@ export const reviewRouter = createTRPCRouter({
           explicitUnitByThreadId,
         );
         const unitById = new Map(units.map((unit) => [unit.id, unit]));
-        const reopenedWaitIds: string[] = [];
-        const reopenedUnitIds: string[] = [];
+        const answeredUnitIds: string[] = [];
         for (const wait of waits) {
           const unit = unitById.get(wait.unitId);
           if (!unit) continue;
@@ -2126,19 +2407,34 @@ export const reviewRouter = createTRPCRouter({
               activity.observedCommentIds,
             )
           ) {
-            reopenedWaitIds.push(wait.id);
-            reopenedUnitIds.push(wait.unitId);
+            answeredUnitIds.push(wait.unitId);
           }
         }
-        if (reopenedWaitIds.length) {
-          await ctx.db
-            .delete(reviewWaits)
-            .where(
-              and(
-                eq(reviewWaits.userId, ctx.auth.userId),
-                inArray(reviewWaits.id, reopenedWaitIds),
+        const released = new Set([
+          ...answeredUnitIds,
+          ...(await conceptSiblingUnitIds(
+            ctx.db,
+            ctx.auth.userId,
+            snapshot.id,
+            answeredUnitIds,
+          )),
+        ]);
+        // A sibling the reviewer never paused is already in the review path,
+        // so only the waits actually held are reported as reopened.
+        const releasedWaits = waits.filter(({ unitId }) =>
+          released.has(unitId),
+        );
+        const reopenedUnitIds = releasedWaits.map(({ unitId }) => unitId);
+        if (releasedWaits.length) {
+          await ctx.db.delete(reviewWaits).where(
+            and(
+              eq(reviewWaits.userId, ctx.auth.userId),
+              inArray(
+                reviewWaits.id,
+                releasedWaits.map(({ id }) => id),
               ),
-            );
+            ),
+          );
         }
         return {
           provider: scope.provider,
@@ -2172,178 +2468,61 @@ export const reviewRouter = createTRPCRouter({
         40,
         60_000,
       );
-      const [scope] = await ctx.db
-        .select({
-          unitId: reviewUnits.id,
-          path: reviewUnits.path,
-          startLine: reviewUnits.startLine,
-          endLine: reviewUnits.endLine,
-          snapshotId: reviewUnits.snapshotId,
-          snapshotHeadSha: reviewSnapshots.headSha,
-          snapshotBaseSha: reviewSnapshots.baseSha,
-          pullRequestNumber: pullRequests.number,
-          headSha: pullRequests.headSha,
-          baseSha: pullRequests.baseSha,
-          repositoryExternalId: repositories.externalId,
-          provider: providerConnections.provider,
-          connectionId: providerConnections.id,
-        })
-        .from(reviewUnits)
-        .innerJoin(
-          reviewSnapshots,
-          eq(reviewUnits.snapshotId, reviewSnapshots.id),
-        )
-        .innerJoin(
-          pullRequests,
-          eq(reviewSnapshots.pullRequestId, pullRequests.id),
-        )
-        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .leftJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
-          workspaceMembers,
-          eq(repositories.workspaceId, workspaceMembers.workspaceId),
-        )
-        .where(
-          and(
-            eq(reviewUnits.id, input.unitId),
-            eq(workspaceMembers.userId, ctx.auth.userId),
-          ),
-        )
-        .limit(1);
-      if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
       await enforceRateLimit(
         ctx.db,
         `review-await-resource:${ctx.auth.userId}:${input.unitId}`,
         20,
         60_000,
       );
-      if (
-        scope.snapshotHeadSha !== scope.headSha ||
-        scope.snapshotBaseSha !== scope.baseSha
-      ) {
+      const [wait] = await beginReviewWaits(ctx.db, ctx.auth.userId, [
+        input.unitId,
+      ]);
+      if (!wait) {
         throw new TRPCError({
-          code: "CONFLICT",
-          message: "Synchronize the pull request before waiting for a response",
+          code: "INTERNAL_SERVER_ERROR",
+          message: "The waiting state could not be saved",
         });
       }
+      return wait;
+    }),
 
-      if (!scope.connectionId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Local comments do not have provider response threads",
-        });
-      }
-      const provider = await providerForScope(ctx.db, scope.connectionId);
-      let threads: Awaited<
-        ReturnType<typeof provider.listInlineCommentThreads>
-      >;
-      try {
-        threads = await provider.listInlineCommentThreads(
-          scope.repositoryExternalId,
-          scope.pullRequestNumber,
+  awaitResponseConcept: protectedProcedure
+    .input(awaitResponseConceptSchema)
+    .mutation(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `review-await:${ctx.auth.userId}`,
+        40,
+        60_000,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `review-await-resource:${ctx.auth.userId}:${input.conceptId}`,
+        20,
+        60_000,
+      );
+      // Resolving the concept takes the layout lock a sign-off takes, so the
+      // members read are one grouping rather than a mix of the layout that is
+      // being replaced alongside it.
+      const concept = await ctx.db.transaction(async (tx) => {
+        const snapshotId = await conceptLayoutSnapshotId(tx, input.layoutId);
+        await lockConceptLayoutScope(tx, ctx.auth.userId, snapshotId);
+        await assertSnapshotIsCurrent(
+          tx,
+          snapshotId,
+          "Synchronize the pull request before waiting for a response",
         );
-      } catch (cause) {
-        throw new TRPCError({
-          code: "BAD_GATEWAY",
-          message: `${scope.provider === "azure_devops" ? "Azure DevOps" : scope.provider === "gitlab" ? "GitLab" : "GitHub"} conversations could not be loaded`,
-          cause,
-        });
-      }
-      const allSnapshotUnits = await ctx.db
-        .select({
-          id: reviewUnits.id,
-          path: reviewUnits.path,
-          kind: reviewUnits.kind,
-          startLine: reviewUnits.startLine,
-          endLine: reviewUnits.endLine,
-        })
-        .from(reviewUnits)
-        .where(eq(reviewUnits.snapshotId, scope.snapshotId));
-      const snapshotUnits = allSnapshotUnits.filter(
-        ({ kind }) => kind !== "file",
-      );
-      const localComments = await ctx.db
-        .select({
-          unitId: reviewComments.unitId,
-          providerExternalId: reviewComments.providerExternalId,
-        })
-        .from(reviewComments)
-        .where(
-          and(
-            eq(reviewComments.status, "published"),
-            inArray(
-              reviewComments.unitId,
-              snapshotUnits.map(({ id }) => id),
-            ),
-          ),
-        );
-      const explicitlyAssignedUnitByThreadId = new Map(
-        localComments.flatMap((comment) =>
-          comment.providerExternalId
-            ? [[comment.providerExternalId, comment.unitId] as const]
-            : [],
-        ),
-      );
-      const assignedThreads = assignProviderThreadsToUnits(
-        threads,
-        snapshotUnits,
-        explicitlyAssignedUnitByThreadId,
-      );
-      const unitThreads = assignedThreads.filter(
-        (thread) => thread.unitId === scope.unitId,
-      );
-      const activity = providerActivityForUnit(unitThreads, scope);
-      if (activity.providerThreadIds.length === 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "This unit needs a live provider conversation before it can await a response",
-        });
-      }
-
-      return ctx.db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${`${scope.unitId}:${ctx.auth.userId}:wait`}))`,
-        );
-        await tx
-          .update(signOffs)
-          .set({ invalidatedAt: new Date() })
-          .where(
-            and(
-              eq(signOffs.unitId, scope.unitId),
-              eq(signOffs.userId, ctx.auth.userId),
-              isNull(signOffs.invalidatedAt),
-            ),
-          );
-        const [wait] = await tx
-          .insert(reviewWaits)
-          .values({
-            unitId: scope.unitId,
-            userId: ctx.auth.userId,
-            providerThreadIds: activity.providerThreadIds,
-            observedCommentIds: activity.observedCommentIds,
-            waitingSince: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: [reviewWaits.unitId, reviewWaits.userId],
-            set: {
-              providerThreadIds: activity.providerThreadIds,
-              observedCommentIds: activity.observedCommentIds,
-              waitingSince: new Date(),
-            },
-          })
-          .returning();
-        if (!wait) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "The waiting state could not be saved",
-          });
-        }
-        return wait;
+        return conceptMembersForMutation(tx, ctx.auth.userId, input);
       });
+      const waits = await beginReviewWaits(
+        ctx.db,
+        ctx.auth.userId,
+        concept.members.map(({ id }) => id),
+      );
+      return {
+        conceptId: concept.conceptId,
+        waitingUnitIds: waits.map(({ unitId }) => unitId),
+      };
     }),
 
   importTarget: protectedProcedure

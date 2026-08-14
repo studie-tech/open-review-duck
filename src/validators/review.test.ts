@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  awaitResponseConceptSchema,
   importTargetSchema,
   MAX_CONCEPT_LAYOUT_MEMBERS,
   providerReviewDecisionSchema,
@@ -273,6 +274,29 @@ describe("personal concept layout validation", () => {
       replacePersonalConceptLayoutSchema.safeParse(
         layout(3, MAX_CONCEPT_LAYOUT_MEMBERS / 2),
       ).success,
+    ).toBe(false);
+  });
+});
+
+describe("concept wait validation", () => {
+  it("names the concept and the layout it was read from", () => {
+    expect(
+      awaitResponseConceptSchema.safeParse({
+        conceptId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        layoutId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+        layoutVersion: 3,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a wait that carries no layout version", () => {
+    // The version is what fails a wait issued against a grouping the reviewer
+    // has since re-cut, so a request without one cannot be honoured.
+    expect(
+      awaitResponseConceptSchema.safeParse({
+        conceptId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        layoutId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
+      }).success,
     ).toBe(false);
   });
 });

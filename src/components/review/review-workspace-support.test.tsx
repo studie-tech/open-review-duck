@@ -182,6 +182,85 @@ describe("ReviewConceptMemberPreview", () => {
     );
   });
 
+  it("lets a reviewer comment on a member card they have not opened", async () => {
+    // Reading a concept means reading every card in it, so a line worth
+    // commenting on is just as likely to sit in a card the reviewer has not
+    // selected as in the open one.
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: "unit-1",
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "const answer = 42;\nreturn answer;",
+            startLine: 10,
+            endLine: 11,
+            language: "typescript",
+            kind: "function",
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Comment on line 11 of example" }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith(11);
+  });
+
+  it("offers no composer on the lines between disjoint review ranges", () => {
+    // The card prints the stored source from its first line, so it runs past
+    // the gaps a disjoint unit leaves; the provider refuses a comment there.
+    render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: "unit-1",
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "const answer = 42;\nconst gap = 0;\nreturn answer;",
+            startLine: 10,
+            endLine: 12,
+            relatedRanges: [
+              { startLine: 10, endLine: 10 },
+              { startLine: 12, endLine: 12 },
+            ],
+            language: "typescript",
+            kind: "function",
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable
+        onSelect={vi.fn()}
+        onCommentLine={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Comment on line 10 of example" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Comment on line 12 of example" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Comment on line 11 of example" }),
+    ).not.toBeInTheDocument();
+  });
+
   it.each(["pending", "partial", "waiting", "changed"])(
     "leaves a %s member unmarked",
     (status) => {

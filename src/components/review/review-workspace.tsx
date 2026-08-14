@@ -762,36 +762,6 @@ function liveConceptStatus(
   return { members, signed, status };
 }
 
-/** Extracts the stored disjoint ranges for one side of a review concept. */
-function relatedReviewRanges(
-  unit: ReviewUnit | undefined,
-  side: "current" | "previous",
-) {
-  if (!unit?.relatedRanges) return undefined;
-  return unit.relatedRanges.flatMap((range) => {
-    const startLine =
-      side === "current" ? range.startLine : range.previousStartLine;
-    const endLine = side === "current" ? range.endLine : range.previousEndLine;
-    return startLine !== undefined && endLine !== undefined
-      ? [{ startLine, endLine }]
-      : [];
-  });
-}
-
-/** Tests a line against disjoint ranges or a unit's contiguous bounds. */
-function lineWithinReviewRanges(
-  line: number,
-  ranges: Array<{ startLine: number; endLine: number }> | undefined,
-  fallbackStart: number,
-  fallbackEnd: number,
-) {
-  return ranges
-    ? ranges.some(
-        ({ startLine, endLine }) => line >= startLine && line <= endLine,
-      )
-    : line >= fallbackStart && line <= fallbackEnd;
-}
-
 /** Clamps a requested line to the closest line in a disjoint review scope. */
 function closestReviewLine(
   line: number,
@@ -853,6 +823,7 @@ import {
   ExplanationLoader,
   INITIAL_PATH_ITEMS,
   InlineAiQuestion,
+  lineWithinReviewRanges,
   PATH_PAGE_SIZE,
   PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
@@ -862,6 +833,7 @@ import {
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewScopeMarker,
+  relatedReviewRanges,
   rememberAiConversationVisibility,
   reviewShortcuts,
   SideBySideUnitDiff,
@@ -1028,6 +1000,10 @@ export function ReviewWorkspace({
   const [insightsPanelCollapsed, setInsightsPanelCollapsed] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [selectedLine, setSelectedLine] = useState<number>();
+  const [pendingCommentLine, setPendingCommentLine] = useState<{
+    line: number;
+    unitId: string;
+  }>();
   const [keyboardLine, setKeyboardLine] = useState<number>();
   const [contextBefore, setContextBefore] = useState(0);
   const [contextAfter, setContextAfter] = useState(0);
@@ -1608,6 +1584,19 @@ export function ReviewWorkspace({
     importPreview?.source ?? "",
     importPreview?.language ?? "text",
   );
+  /** Opens the provider comment composer for one reviewable diff line. */
+  const openInlineComment = useCallback((line: number) => {
+    setKeyboardLine(undefined);
+    setSelectedLine(line);
+    setFeedback("");
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() =>
+        document
+          .getElementById(`review-line-${line}`)
+          ?.scrollIntoView({ block: "center" }),
+      ),
+    );
+  }, []);
   /** Opens one atomic review unit and selects its concept card. */
   const selectUnit = useCallback(
     (index: number) => {
@@ -1631,6 +1620,23 @@ export function ReviewWorkspace({
     },
     [units],
   );
+  /**
+   * Opens the composer on a line a reviewer picked in another member's card.
+   *
+   * The composer, the published threads and the publish call all read the open
+   * unit, so the card the line came from has to open first. Opening it clears
+   * the composer, which is why the line is held here until that unit is the
+   * one on screen rather than passed straight to the composer.
+   */
+  const commentOnMemberLine = useCallback(
+    (unitId: string, line: number) => {
+      const index = unitIndexById.get(unitId) ?? -1;
+      if (index < 0) return;
+      setPendingCommentLine({ unitId, line });
+      selectUnit(index);
+    },
+    [selectUnit, unitIndexById],
+  );
   // Concept members are re-rendered only when their own inputs move, so
   // unrelated workspace state never re-reconciles hundreds of source lines.
   const conceptMemberPreviews = useMemo(
@@ -1647,10 +1653,12 @@ export function ReviewWorkspace({
             hydratedUnitIds.has(member.id)
           }
           onSelect={() => selectUnit(unitIndexById.get(member.id) ?? -1)}
+          onCommentLine={(line) => commentOnMemberLine(member.id, line)}
         />
       )),
     [
       activeConceptMembers,
+      commentOnMemberLine,
       hydratedUnitIds,
       initialData.sourceDelivery,
       selectUnit,
@@ -2544,6 +2552,12 @@ export function ReviewWorkspace({
     ) ?? [];
   const hasLiveConversation =
     activeProviderThreads.length > 0 ||
+    // Waiting pauses the whole concept, so a conversation on any member is one
+    // the concept can wait on — not only the member whose card is open.
+    (providerConversations.data?.threads.some((thread) =>
+      activeConceptMembers.some((member) => member.id === thread.unitId),
+    ) ??
+      false) ||
     (discussion.data?.comments.some(
       (comment) => comment.status === "published",
     ) ??
@@ -2580,35 +2594,50 @@ export function ReviewWorkspace({
       },
     );
   }, [providerConversations.data?.reopenedUnitIds]);
+  /** Moves the named units into the waiting section of the review path. */
+  function markUnitsWaiting(waitingUnitIds: string[], description: string) {
+    const waiting = new Set(waitingUnitIds);
+    setUnits((current) => {
+      const updated = current.map((unit) =>
+        waiting.has(unit.id)
+          ? {
+              ...unit,
+              status: "waiting" as const,
+              waitingSince: new Date(),
+              changedSinceSignOff: false,
+            }
+          : unit,
+      );
+      const nextIndex = nextReviewIndexAfterAction(updated);
+      if (nextIndex >= 0) {
+        setActiveIndex(nextIndex);
+      }
+      setQueueLimit(INITIAL_PATH_ITEMS);
+      setWaitingLimit(INITIAL_PATH_ITEMS);
+      return updated;
+    });
+    setSelectedLine(undefined);
+    setFeedback("");
+    setShowDiff(true);
+    setStartedAt(Date.now());
+    toast.success("Waiting for response", { description });
+  }
   const awaitResponse = api.review.awaitResponse.useMutation({
     onSuccess: () => {
       if (!activeUnit) return;
-      setUnits((current) => {
-        const updated = current.map((unit) =>
-          unit.id === activeUnit.id
-            ? {
-                ...unit,
-                status: "waiting" as const,
-                waitingSince: new Date(),
-                changedSinceSignOff: false,
-              }
-            : unit,
-        );
-        const nextIndex = nextReviewIndexAfterAction(updated);
-        if (nextIndex >= 0) {
-          setActiveIndex(nextIndex);
-        }
-        setQueueLimit(INITIAL_PATH_ITEMS);
-        setWaitingLimit(INITIAL_PATH_ITEMS);
-        return updated;
-      });
-      setSelectedLine(undefined);
-      setFeedback("");
-      setShowDiff(true);
-      setStartedAt(Date.now());
-      toast.success("Waiting for response", {
-        description: `${activeUnit.name} will return to your review path when its code or conversation changes.`,
-      });
+      markUnitsWaiting(
+        [activeUnit.id],
+        `${activeUnit.name} will return to your review path when its code or conversation changes.`,
+      );
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const awaitResponseConcept = api.review.awaitResponseConcept.useMutation({
+    onSuccess: ({ waitingUnitIds }) => {
+      markUnitsWaiting(
+        waitingUnitIds,
+        `${waitingUnitIds.length} ${waitingUnitIds.length === 1 ? "unit" : "units"} in ${activeConcept?.title ?? "this concept"} will return to your review path when the code or conversation changes.`,
+      );
     },
     onError: (error) => toast.error(error.message),
   });
@@ -3279,6 +3308,15 @@ export function ReviewWorkspace({
     setAiQuestionPreviewLine(undefined);
     setAiQuestionDraft("");
   }, [activeUnitId]);
+  // Declared after the reset above so it runs after it in the same commit: a
+  // line picked in another member's card survives the switch that opens it.
+  useEffect(() => {
+    if (!pendingCommentLine || pendingCommentLine.unitId !== activeUnitId) {
+      return;
+    }
+    setPendingCommentLine(undefined);
+    openInlineComment(pendingCommentLine.line);
+  }, [activeUnitId, openInlineComment, pendingCommentLine]);
   useEffect(() => {
     if (selectedLine !== undefined) commentInputRef.current?.focus();
   }, [selectedLine]);
@@ -3396,6 +3434,8 @@ export function ReviewWorkspace({
     !!activeUnit &&
     settledActiveUnitId === activeUnit.id &&
     activeUnit.kind !== "binary";
+  const awaitPending =
+    awaitResponse.isPending || awaitResponseConcept.isPending;
   const canUsePrimaryAction =
     !!activeUnit &&
     (activeConceptSourcesAvailable ||
@@ -3405,9 +3445,17 @@ export function ReviewWorkspace({
     !activeSignOffPending &&
     !undoSignOff.isPending &&
     !undoConcept.isPending &&
-    !awaitResponse.isPending &&
+    !awaitPending &&
     !resetReview.isPending &&
     (activeUnit.status !== "waiting" || hasNextActionableUnit);
+  // A concept is paused as a whole, so a concept already waiting has nothing
+  // left to pause even when the member card in front is not the waiting one.
+  const canAwaitResponse =
+    !!activeUnit &&
+    hasLiveConversation &&
+    (activeConceptProgress?.status ?? activeUnit.status) !== "waiting" &&
+    !awaitPending &&
+    !activeSignOffPending;
 
   /** Shows the review-path panel as a drawer or persistent desktop column. */
   function showPathPanel() {
@@ -3889,6 +3937,20 @@ export function ReviewWorkspace({
     });
   }
 
+  /** Pauses the open review concept, or its one unit outside a layout. */
+  function awaitActiveResponse() {
+    if (!activeUnit || !canAwaitResponse) return;
+    if (activeConcept && initialData.conceptLayout) {
+      awaitResponseConcept.mutate({
+        conceptId: activeConcept.id,
+        layoutId: initialData.conceptLayout.id,
+        layoutVersion: initialData.conceptLayout.version,
+      });
+      return;
+    }
+    awaitResponse.mutate({ unitId: activeUnit.id });
+  }
+
   /** Signs off every outstanding unit from files removed by this pull request. */
   function signOffDeletedFiles() {
     if (!canSignOffDeletedFiles) return;
@@ -3923,20 +3985,6 @@ export function ReviewWorkspace({
       unitId: activeUnit.id,
       sessionId,
     });
-  }
-
-  /** Opens the provider comment composer for one reviewable diff line. */
-  function openInlineComment(line: number) {
-    setKeyboardLine(undefined);
-    setSelectedLine(line);
-    setFeedback("");
-    window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() =>
-        document
-          .getElementById(`review-line-${line}`)
-          ?.scrollIntoView({ block: "center" }),
-      ),
-    );
   }
 
   /** Brings a finding with no line of its own into the code viewport. */
@@ -4739,20 +4787,19 @@ export function ReviewWorkspace({
     },
     {
       id: "await-response",
-      label: "Wait for a response",
-      description: "Pause this unit until its code or conversation changes",
+      label:
+        activeConcept && activeConceptMembers.length > 1
+          ? `Wait for a response (${activeConceptMembers.length})`
+          : "Wait for a response",
+      description:
+        activeConcept && activeConceptMembers.length > 1
+          ? "Pause this concept until its code or conversation changes"
+          : "Pause this unit until its code or conversation changes",
       group: "Review actions",
       icon: <Clock3 className="size-4" />,
       shortcut: reviewShortcuts.awaitResponse,
-      disabled:
-        !activeUnit ||
-        !hasLiveConversation ||
-        activeUnit.status === "waiting" ||
-        awaitResponse.isPending ||
-        activeSignOffPending,
-      onSelect: () => {
-        if (activeUnit) awaitResponse.mutate({ unitId: activeUnit.id });
-      },
+      disabled: !canAwaitResponse,
+      onSelect: awaitActiveResponse,
     },
     {
       id: "sync-provider-data",
@@ -6361,7 +6408,8 @@ export function ReviewWorkspace({
                       )}
                     </Button>
                   )}
-                {activeUnit.status === "waiting" ? (
+                {(activeConceptProgress?.status ?? activeUnit.status) ===
+                "waiting" ? (
                   <Button
                     variant="secondary"
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
@@ -6379,24 +6427,26 @@ export function ReviewWorkspace({
                     <Button
                       variant="secondary"
                       className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                      title={`Pause this unit until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
-                      onClick={() =>
-                        awaitResponse.mutate({ unitId: activeUnit.id })
-                      }
-                      disabled={awaitResponse.isPending || activeSignOffPending}
+                      title={`Pause ${activeConceptMembers.length > 1 ? "this concept" : "this unit"} until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
+                      onClick={awaitActiveResponse}
+                      disabled={!canAwaitResponse}
                     >
-                      {awaitResponse.isPending ? (
+                      {awaitPending ? (
                         <LoaderCircle className="size-4 animate-spin" />
                       ) : (
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {awaitResponse.isPending ? "Saving…" : "Await response"}
+                        {awaitPending
+                          ? "Saving…"
+                          : activeConceptMembers.length > 1
+                            ? `Await concept (${activeConceptMembers.length})`
+                            : "Await response"}
                       </span>
                       <span className="sm:hidden">
-                        {awaitResponse.isPending ? "Saving…" : "Await"}
+                        {awaitPending ? "Saving…" : "Await"}
                       </span>
-                      {!awaitResponse.isPending && (
+                      {!awaitPending && (
                         <ShortcutHint
                           shortcut={reviewShortcuts.awaitResponse}
                           className="hidden sm:inline-flex"
@@ -6415,7 +6465,7 @@ export function ReviewWorkspace({
                       activeSignOffPending ||
                       undoSignOff.isPending ||
                       undoConcept.isPending ||
-                      awaitResponse.isPending
+                      awaitPending
                     }
                   >
                     <Check className="size-4" />
