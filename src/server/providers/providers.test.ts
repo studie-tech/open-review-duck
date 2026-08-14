@@ -1752,6 +1752,43 @@ describe("provider normalization", () => {
     ]);
   });
 
+  it("passes over a comment a retried delete finds already gone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/repositories/42")) {
+          return jsonResponse({
+            id: 42,
+            name: "review",
+            full_name: "acme/review",
+            private: false,
+            html_url: "https://github.com/acme/review",
+            default_branch: "main",
+          });
+        }
+        if (url.includes("/pulls/comments/901")) {
+          return new Response(JSON.stringify({ message: "Not Found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected provider request: ${url}`);
+      }),
+    );
+
+    // A conversation is deleted one comment at a time, so a retry after a
+    // partial failure asks again for comments that already left.
+    await expect(
+      new GitHubProvider("token").deleteInlineComment({
+        repositoryExternalId: "42",
+        pullRequestNumber: 8,
+        threadExternalId: "901",
+        commentExternalId: "901",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("resolves an Azure DevOps conversation as fixed", async () => {
     let patched: string | undefined;
     vi.stubGlobal(

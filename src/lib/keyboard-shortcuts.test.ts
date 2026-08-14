@@ -91,6 +91,10 @@ describe("keyboard shortcuts", () => {
       expect(isActivatableTarget(inputOfType(type))).toBe(true);
     }
 
+    const menuItem = document.createElement("div");
+    menuItem.setAttribute("role", "menuitem");
+    expect(isActivatableTarget(menuItem)).toBe(true);
+
     expect(isActivatableTarget(inputOfType("text"))).toBe(false);
     expect(isActivatableTarget(plainAnchor)).toBe(false);
     expect(isActivatableTarget(document.createElement("div"))).toBe(false);
