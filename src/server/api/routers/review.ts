@@ -325,6 +325,9 @@ async function declaredSymbolInSnapshot(
  */
 const SYMBOL_FILE_CACHE_LIMIT = 12;
 
+/** How many candidate paths one unresolved name may read from the provider. */
+const MAXIMUM_IMPORT_READS = 6;
+
 type FileDeclarations = Map<string, ReturnType<typeof symbolDefinitionOf>>;
 
 const symbolFileCache = new Map<string, FileDeclarations>();
@@ -439,7 +442,10 @@ async function importedSymbolDefinition(
     60_000,
   );
   const provider = await providerForScope(db, scope.connectionId);
-  for (const path of candidates) {
+  // Every extension a specifier could carry is a candidate, and each miss is a
+  // provider request. The ones that resolve are at the front of the list, so a
+  // bound spares the tail without changing what a real import finds.
+  for (const path of candidates.slice(0, MAXIMUM_IMPORT_READS)) {
     let content: string | undefined;
     try {
       content = await provider.getFileContent(

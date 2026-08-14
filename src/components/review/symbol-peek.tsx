@@ -114,6 +114,8 @@ export function useSymbolPeek(enabled: boolean) {
       if (anchored.current === token) return;
       const line = Number(token.getAttribute(SYMBOL_PEEK_LINE_ATTRIBUTE));
       openTimer.current = setTimeout(() => {
+        // The dwell outlives a re-render, which can take the token with it.
+        if (!token.isConnected) return;
         const bounds = token.getBoundingClientRect();
         pinned.current = false;
         anchored.current = token;
@@ -248,8 +250,7 @@ export function SymbolPeekCard({
   const hidden = Math.max(0, lines.length - shown.length);
 
   return (
-    <div
-      role="dialog"
+    <section
       aria-label={`Definition of ${peeked.symbol}`}
       onMouseEnter={() => onHold(true)}
       onMouseLeave={() => onHold(false)}
@@ -328,6 +329,6 @@ export function SymbolPeekCard({
           </button>
         )}
       </footer>
-    </div>
+    </section>
   );
 }
