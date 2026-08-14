@@ -430,6 +430,11 @@ async function declaredSymbolInFile(
       declarations.set(unit.name, symbolDefinitionOf(unit, unit.startLine));
     }
   }
+  // Two hovers on the same file can both miss while the first is still
+  // reading it, and both arrive here. The entry they overwrite has to leave
+  // the total, or it keeps a surplus that eventually empties the ring on
+  // every insert and quietly costs a parse per hover.
+  symbolFileCacheCharacters -= symbolFileCacheWeights.get(key) ?? 0;
   symbolFileCache.set(key, declarations);
   symbolFileCacheCharacters += file.source.length;
   symbolFileCacheWeights.set(key, file.source.length);
