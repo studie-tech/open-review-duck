@@ -1764,12 +1764,14 @@ describe("provider normalization", () => {
 
   it("resolves a GitLab discussion through its discussion route", async () => {
     let resolved: string | undefined;
+    let method: string | undefined;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request, init) => {
         const url = requestUrl(input);
         if (url.includes("/discussions/abc123")) {
           resolved = init?.body?.toString();
+          method = init?.method;
           return jsonResponse({ id: "abc123", notes: [] });
         }
         throw new Error(`Unexpected provider request: ${url}`);
@@ -1783,6 +1785,7 @@ describe("provider normalization", () => {
       resolved: true,
     });
 
+    expect(method).toBe("PUT");
     expect(resolved).toBe(JSON.stringify({ resolved: true }));
   });
 });

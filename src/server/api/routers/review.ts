@@ -319,11 +319,13 @@ async function declaredSymbolInSnapshot(
 /**
  * How many parsed files the symbol lookup keeps declarations for.
  *
- * A reviewer moves between a handful of files, and each entry holds one
- * parse of one immutable snapshot revision, so a small ring is enough to
- * spare the repeat work without holding a workspace of source in memory.
+ * Each entry holds the declarations of one file at one immutable snapshot
+ * revision. One reviewer moves between a handful of files, but the ring is
+ * shared by everyone an instance is serving, so it is sized for several of
+ * them at once rather than for one: too small and concurrent reviewers evict
+ * each other's files and pay for the parse again on the next name.
  */
-const SYMBOL_FILE_CACHE_LIMIT = 12;
+const SYMBOL_FILE_CACHE_LIMIT = 64;
 
 /** How many candidate paths one unresolved name may read from the provider. */
 const MAXIMUM_IMPORT_READS = 6;

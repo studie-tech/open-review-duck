@@ -828,7 +828,8 @@ export class GitHubProvider implements PullRequestProvider {
     }
     // A walk that ran out of pages describes only part of the pull request,
     // and a caller resolving one conversation would read the rest as absent.
-    throw new Error(
+    throw new ProviderError(
+      this.name,
       "GitHub review-thread pagination exceeded its safety limit",
     );
   }
