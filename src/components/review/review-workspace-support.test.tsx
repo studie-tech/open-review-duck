@@ -1000,6 +1000,129 @@ describe("ProviderConversation", () => {
     expect(edit).toHaveBeenCalledWith("906", "Typo here.");
   });
 
+  it("keeps the delete dialog open when the provider refuses", async () => {
+    const deleteThread = vi.fn().mockRejectedValue(new Error("403"));
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "909",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "909",
+              author: "reviewer",
+              body: "Someone else's comment.",
+              createdAt: "2026-07-20T10:00:00Z",
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onDeleteThread: deleteThread })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete this conversation" }),
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /^Delete/,
+      }),
+    );
+
+    expect(deleteThread).toHaveBeenCalledTimes(1);
+    // The mutation owns the message; the dialog stays so the reviewer can retry.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps an edit draft when the provider refuses it", async () => {
+    const edit = vi.fn().mockRejectedValue(new Error("403"));
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "910",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "910",
+              author: "reviewer",
+              body: "Original.",
+              createdAt: "2026-07-20T10:00:00Z",
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onEditComment: edit })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Edit the comment by reviewer" }),
+    );
+    const editor = screen.getByRole("textbox", {
+      name: "Edit the comment by reviewer on GitHub",
+    });
+    await user.clear(editor);
+    await user.type(editor, "Second attempt.");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(edit).toHaveBeenCalledWith("910", "Second attempt.");
+    expect(editor).toHaveValue("Second attempt.");
+  });
+
+  it("survives a refused resolution without an unhandled rejection", async () => {
+    const resolve = vi.fn().mockRejectedValue(new Error("403"));
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "911",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "911",
+              author: "reviewer",
+              body: "Still open.",
+              createdAt: "2026-07-20T10:00:00Z",
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Resolve this conversation" }),
+    );
+
+    expect(resolve).toHaveBeenCalledWith(true);
+    // The header keeps showing the resolution the provider still reports.
+    expect(
+      screen.getByRole("button", { name: "Resolve this conversation" }),
+    ).toBeInTheDocument();
+  });
+
   it("deletes a single comment without touching the conversation", async () => {
     const deleteComment = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
