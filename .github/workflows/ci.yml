@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 
+# The container build keeps its layers and its package store on one sticky disk,
+# which only one run can hold at a time. Two runs on a branch therefore leave the
+# loser building from nothing, so a superseded pull-request run is stopped rather
+# than left to compete with the commit that replaced it. Pushes to main and tags
+# queue instead: those builds are published, and dropping one loses a release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -66,7 +75,9 @@ jobs:
 
   local-container:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 35
+    # Wide enough for a build that starts with nothing cached, which spends
+    # roughly twenty minutes fetching the thousand packages the image installs.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
@@ -79,6 +90,13 @@ jobs:
         with:
           cache-key: open-review-duck/local-appliance
       - name: Build the local appliance
+        # Below the job's own limit on purpose. A job that runs out of time is
+        # killed outright, and the builder then refuses to commit its disk —
+        # "disk may be in a bad state after SIGKILL" — so the layers that build
+        # did manage to produce are thrown away and the next run starts from
+        # nothing all over again. Failing the step instead leaves the cleanup
+        # steps to run, and the next build starts from what this one reached.
+        timeout-minutes: 40
         uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850
         with:
           context: .
