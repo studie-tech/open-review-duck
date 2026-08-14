@@ -3786,7 +3786,11 @@ export function ReviewWorkspace({
   const undoableSignOff = nextUndoableSignOff(signOffUndoHistory, units);
   const canUndoSignOff =
     !!undoableSignOff &&
+    // Both ways a sign-off is saved mark their units optimistically, so undo
+    // waits for the save it would otherwise race: the queue drains unit
+    // sign-offs, and a concept sign-off is one request of its own.
     signOffQueue.ids.size === 0 &&
+    !signOffConcept.isPending &&
     !undoSignOff.isPending &&
     !undoConcept.isPending &&
     !resetReview.isPending;
@@ -4354,9 +4358,28 @@ export function ReviewWorkspace({
     };
   }
 
-  /** Puts the reviewer back in front of the unit a sign-off was made from. */
-  function restoreReviewView(view: ReviewViewSnapshot) {
-    setActiveIndex(view.unitIndex);
+  /**
+   * Puts the reviewer back in front of the unit a sign-off was made from.
+   *
+   * The recorded position is an index into the list as it stood, and a resync
+   * or a regrouping can shorten that list. The units the step named are what
+   * still identify the place, so the index is only honoured while it points at
+   * one of them.
+   */
+  function restoreReviewView(view: ReviewViewSnapshot, unitIds: string[]) {
+    const surviving = unitIds.flatMap((unitId) => {
+      const index = units.findIndex(({ id }) => id === unitId);
+      return index >= 0 ? [index] : [];
+    });
+    setActiveIndex(
+      surviving.includes(view.unitIndex)
+        ? view.unitIndex
+        : (surviving[0] ??
+            Math.min(
+              Math.max(0, view.unitIndex),
+              Math.max(0, units.length - 1),
+            )),
+    );
     if (view.pathSearch.trim()) {
       setPathSearch((current) => (current.trim() ? current : view.pathSearch));
       setSearchLimit(view.searchLimit);
@@ -4387,7 +4410,7 @@ export function ReviewWorkspace({
     if (!undoableSignOff || !canUndoSignOff) return;
     const { entry, remaining } = undoableSignOff;
     setSignOffUndoHistory(remaining);
-    restoreReviewView(entry.view);
+    restoreReviewView(entry.view, entry.unitIds);
     const target = signOffUndoTarget(
       entry,
       initialData.conceptLayout ?? undefined,
