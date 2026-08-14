@@ -798,7 +798,12 @@ export class GitHubProvider implements PullRequestProvider {
       if (failure) throw new ProviderError(this.name, failure);
       const connection: GitHubReviewThreadsConnection | undefined =
         response.data?.node?.pullRequest?.reviewThreads;
-      if (!connection) return threads;
+      if (!connection) {
+        throw new ProviderError(
+          this.name,
+          "GitHub did not report the review threads of this pull request",
+        );
+      }
       for (const thread of connection.nodes) {
         const comment = thread.comments.nodes[0];
         if (!comment) continue;
@@ -821,7 +826,11 @@ export class GitHubProvider implements PullRequestProvider {
       visitedCursors.add(nextCursor);
       cursor = nextCursor;
     }
-    return threads;
+    // A walk that ran out of pages describes only part of the pull request,
+    // and a caller resolving one conversation would read the rest as absent.
+    throw new Error(
+      "GitHub review-thread pagination exceeded its safety limit",
+    );
   }
 
   /**

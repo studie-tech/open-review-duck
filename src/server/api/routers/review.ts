@@ -152,9 +152,12 @@ async function reviewThreadScope(
   action: string,
 ) {
   const scope = await providerScopeForUnit(db, userId, input.unitId);
+  // Two gates, as everywhere else provider work is reached from: what one
+  // reviewer may ask for at all, and what they may ask of one repository.
+  await enforceRateLimit(db, `${action}:${userId}`, 60, 60_000);
   await enforceRateLimit(
     db,
-    `${action}:${userId}:${scope.pullRequestId}`,
+    `${action}-resource:${userId}:${scope.pullRequestId}`,
     30,
     60_000,
   );
