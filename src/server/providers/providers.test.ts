@@ -764,7 +764,14 @@ describe("provider normalization", () => {
                     {
                       isResolved: true,
                       comments: {
-                        nodes: [{ fullDatabaseId: "901" }],
+                        // The connection is not documented to be ordered, so
+                        // this hands back a reply rather than the root.
+                        nodes: [
+                          {
+                            fullDatabaseId: "902",
+                            replyTo: { fullDatabaseId: "901" },
+                          },
+                        ],
                       },
                     },
                   ],

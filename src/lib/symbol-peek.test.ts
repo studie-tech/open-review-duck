@@ -152,11 +152,14 @@ describe("definition card placement", () => {
   });
 
   it("gives a card no room at all rather than a negative height", () => {
+    // A name filling a viewport shorter than the margins leaves nothing on
+    // either side, and the chosen side is the one that must read as zero.
     const placement = peekPlacement(
-      { bottom: 210, left: 10, top: 198 },
-      { height: 200, width: 1400 },
+      { bottom: 20, left: 10, top: 0 },
+      { height: 20, width: 1400 },
     );
 
-    expect(placement.maxHeight).toBeGreaterThanOrEqual(0);
+    expect(placement.placement).toBe("below");
+    expect(placement.maxHeight).toBe(0);
   });
 });

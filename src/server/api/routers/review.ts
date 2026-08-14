@@ -427,9 +427,20 @@ async function importedSymbolDefinition(
       );
     } catch (cause) {
       if (cause instanceof ProviderError && cause.status === 404) continue;
-      return undefined;
+      // A peek must not break the review, so a refused or rate-limited
+      // provider is answered softly — but it is not the same answer as "this
+      // name has no declaration", and an expired token has to be diagnosable.
+      console.error("Symbol definition lookup could not read the source", {
+        path,
+        pullRequestId: scope.pullRequestId,
+        status: cause instanceof ProviderError ? cause.status : undefined,
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+      return { kind: "unresolved" as const, reason: "unavailable" as const };
     }
-    if (content === undefined) return undefined;
+    if (content === undefined) {
+      return { kind: "unresolved" as const, reason: "too_large" as const };
+    }
     const analyzed = analyzeFiles([
       { path, content, changeType: "modified" },
     ]).units;
@@ -3130,6 +3141,7 @@ export const reviewRouter = createTRPCRouter({
       if (!found) {
         return { kind: "unresolved" as const, reason: "not_found" as const };
       }
+      if (found.kind === "unresolved") return found;
       if (
         definitionIsWhereTheNameWasRead(found, {
           line: input.line,
