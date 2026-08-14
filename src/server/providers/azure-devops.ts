@@ -513,8 +513,8 @@ export class AzureDevOpsProvider implements PullRequestProvider {
    * Closes or reopens one Azure DevOps pull-request thread.
    *
    * Azure models resolution as a thread status rather than a flag, and its
-   * "closed" status is the one the pull-request interface offers next to an
-   * active conversation.
+   * "fixed" status is the one its pull-request interface shows as Resolved;
+   * "closed" is a separate outcome there.
    */
   async setInlineThreadResolution(input: {
     repositoryExternalId: string;
@@ -528,7 +528,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       {
         method: "PATCH",
         headers: { ...this.headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ status: input.resolved ? "closed" : "active" }),
+        body: JSON.stringify({ status: input.resolved ? "fixed" : "active" }),
       },
     );
   }
