@@ -72,6 +72,7 @@ import {
   providerCommentBody,
   publicationAttemptKey,
   publishedThreadForComment,
+  rewrittenProviderCommentBody,
   visibleProviderCommentBody,
 } from "~/server/review/comments";
 import { reviewCompletionCounts } from "~/server/review/completion";
@@ -3589,11 +3590,10 @@ export const reviewRouter = createTRPCRouter({
       );
       try {
         const thread = await attachedProviderThread(provider, scope, input);
-        if (
-          !thread.comments.some(
-            ({ externalId }) => externalId === input.commentExternalId,
-          )
-        ) {
+        const edited = thread.comments.find(
+          ({ externalId }) => externalId === input.commentExternalId,
+        );
+        if (!edited) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "That comment is no longer part of this conversation",
@@ -3604,7 +3604,7 @@ export const reviewRouter = createTRPCRouter({
           pullRequestNumber: scope.pullRequestNumber,
           threadExternalId: thread.externalId,
           commentExternalId: input.commentExternalId,
-          body: input.body,
+          body: rewrittenProviderCommentBody(edited.body, input.body),
         });
         const published = publishedCommentId(thread, input.commentExternalId);
         if (published) {

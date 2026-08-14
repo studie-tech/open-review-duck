@@ -6725,7 +6725,7 @@ export function ReviewWorkspace({
                       {isUnitLine && activeUnit.kind !== "binary" ? (
                         <span
                           className={cn(
-                            "flex items-center justify-end gap-1 pr-2.5 text-right text-fog select-none",
+                            "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
                             isChangedLine && "bg-addition/[.11] text-addition",
                           )}
                         >
