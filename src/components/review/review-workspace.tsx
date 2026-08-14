@@ -22,7 +22,6 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
-  RotateCcw,
   Search,
   Send,
   ShieldCheck,
@@ -5707,7 +5706,7 @@ export function ReviewWorkspace({
           }
           className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
         >
-          <RotateCcw className="size-4" />
+          <Undo2 className="size-4" />
           <span className="hidden sm:inline">Undo</span>
           <ShortcutHint
             shortcut={reviewShortcuts.undoSignOff}

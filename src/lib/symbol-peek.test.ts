@@ -145,10 +145,10 @@ describe("definition card placement", () => {
       { height: 200, width: 1400 },
     );
 
-    expect(placement.maxHeight).toBeLessThanOrEqual(200);
-    expect(placement.maxHeight).toBe(
-      placement.placement === "below" ? 200 - 110 - 12 : 94 - 12,
-    );
+    // Below has 78px and above has 82px, so neither reaches the card's
+    // preferred height and the taller side wins.
+    expect(placement.placement).toBe("above");
+    expect(placement.maxHeight).toBe(94 - 12);
   });
 
   it("gives a card no room at all rather than a negative height", () => {

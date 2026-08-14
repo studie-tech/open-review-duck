@@ -636,7 +636,7 @@ async function providerScopeForUnit(
   ) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: "Synchronize the pull request before publishing a comment",
+      message: "Synchronize the pull request before changing its conversations",
     });
   }
   return scope;
@@ -3195,6 +3195,14 @@ export const reviewRouter = createTRPCRouter({
   symbolDefinition: protectedProcedure
     .input(symbolDefinitionSchema)
     .query(async ({ ctx, input }) => {
+      // Ahead of the lookup's own reads: a hover the reviewer is over budget
+      // for should not pay for a scope and a snapshot query first.
+      await enforceRateLimit(
+        ctx.db,
+        `review-symbol:${ctx.auth.userId}`,
+        240,
+        60_000,
+      );
       const [scope] = await ctx.db
         .select({
           pullRequestId: pullRequests.id,
@@ -3214,12 +3222,6 @@ export const reviewRouter = createTRPCRouter({
         .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
         .limit(1);
       if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
-      await enforceRateLimit(
-        ctx.db,
-        `review-symbol:${ctx.auth.userId}`,
-        240,
-        60_000,
-      );
       const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
         where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
         orderBy: [desc(reviewSnapshots.version)],
