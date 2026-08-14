@@ -3,6 +3,12 @@ import { builtinTypes, keywords, type SyntaxToken } from "./highlight-tokens";
 /** Longest excerpt a definition preview shows before the reader scrolls it. */
 export const SYMBOL_PEEK_MAXIMUM_LINES = 18;
 
+/** Width the card is rendered at, and the width its placement is solved for. */
+export const SYMBOL_PEEK_CARD_WIDTH = 460;
+
+/** The shape of a name a definition can be looked up for. */
+export const SYMBOL_PATTERN = "^[A-Za-z_$][\\w$]*$";
+
 /** How long the pointer rests on a name before its definition is fetched. */
 export const SYMBOL_PEEK_HOVER_DELAY_MS = 350;
 
@@ -25,7 +31,7 @@ export const SYMBOL_PEEK_ATTRIBUTE = "data-review-symbol";
  */
 export const SYMBOL_PEEK_LINE_ATTRIBUTE = "data-review-symbol-line";
 
-const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+const IDENTIFIER = new RegExp(SYMBOL_PATTERN);
 const NAMED_CLASSES = new Set(["tok-function", "tok-typeName", ""]);
 
 /**
@@ -85,7 +91,7 @@ export function peekPlacement(
   anchor: { bottom: number; left: number; top: number },
   viewport: { height: number; width: number },
   card: { width: number; minimumHeight: number } = {
-    width: 460,
+    width: SYMBOL_PEEK_CARD_WIDTH,
     minimumHeight: 120,
   },
 ): PeekPlacement {

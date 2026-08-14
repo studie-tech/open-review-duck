@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SYMBOL_PATTERN } from "~/lib/symbol-peek";
 import { supportedLanguages } from "~/server/analysis/types";
 
 export const syncPullRequestSchema = z.object({
@@ -142,7 +143,7 @@ export const symbolDefinitionSchema = z.object({
     .trim()
     .min(1)
     .max(255)
-    .regex(/^[A-Za-z_$][\w$]*$/, "A symbol lookup names one identifier"),
+    .regex(new RegExp(SYMBOL_PATTERN), "A symbol lookup names one identifier"),
   // The line the name was read from, so a declaration that already covers it
   // is recognized as the code in front of the reviewer rather than offered.
   line: z.number().int().positive().optional(),

@@ -12,6 +12,7 @@ import { Badge } from "~/components/ui/badge";
 import {
   peekPlacement,
   SYMBOL_PEEK_ATTRIBUTE,
+  SYMBOL_PEEK_CARD_WIDTH,
   SYMBOL_PEEK_CLOSE_DELAY_MS,
   SYMBOL_PEEK_HOVER_DELAY_MS,
   SYMBOL_PEEK_LINE_ATTRIBUTE,
@@ -260,7 +261,7 @@ export function SymbolPeekCard({
         top: placement.top,
         transform:
           placement.placement === "above" ? "translateY(-100%)" : undefined,
-        width: 460,
+        width: SYMBOL_PEEK_CARD_WIDTH,
       }}
       className="border-cyan/25 bg-panel fixed z-[60] flex max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-xl border font-sans shadow-[0_20px_60px_var(--app-shadow)]"
     >
