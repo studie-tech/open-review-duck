@@ -145,6 +145,52 @@ export function useSymbolPeek(enabled: boolean) {
 }
 
 /**
+ * Says why a lookup came back without a declaration, when that is worth saying.
+ *
+ * A name whose declaration is missing, or is the code already on screen, is
+ * answered with silence: hovering ordinary identifiers must not litter the
+ * diff. A lookup the reviewer asked for that could not be carried out is
+ * different, and reads as "no such symbol" unless it says otherwise.
+ */
+export function symbolPeekNotice(reason: string) {
+  if (reason === "unavailable") {
+    return "This symbol could not be looked up. The provider did not answer.";
+  }
+  if (reason === "too_large") {
+    return "The file that declares this symbol is too large to preview.";
+  }
+  return undefined;
+}
+
+/** Places one short message where a definition card would have gone. */
+export function SymbolPeekMessage({
+  message,
+  peeked,
+}: {
+  message: string;
+  peeked: PeekedSymbol;
+}) {
+  const placement = peekPlacement(peeked.anchor, {
+    height: typeof window === "undefined" ? 800 : window.innerHeight,
+    width: typeof window === "undefined" ? 1200 : window.innerWidth,
+  });
+  return (
+    <p
+      role="status"
+      style={{
+        left: placement.left,
+        top: placement.top,
+        transform:
+          placement.placement === "above" ? "translateY(-100%)" : undefined,
+      }}
+      className="border-line bg-panel text-mist fixed z-[60] max-w-[min(360px,calc(100vw-24px))] rounded-lg border px-3 py-2 font-sans text-[11px] leading-5 shadow-[0_16px_40px_var(--app-shadow)]"
+    >
+      {message}
+    </p>
+  );
+}
+
+/**
  * Shows one symbol's declaration beside the code that uses it.
  *
  * Mounted only once a declaration has been found somewhere the reviewer is

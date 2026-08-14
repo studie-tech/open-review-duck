@@ -990,7 +990,9 @@ describe("ProviderConversation", () => {
     await user.click(
       screen.getByRole("button", { name: "Edit the comment by reviewer" }),
     );
-    const editor = screen.getByRole("textbox");
+    const editor = screen.getByRole("textbox", {
+      name: "Edit the comment by reviewer on GitHub",
+    });
     await user.clear(editor);
     await user.type(editor, "Typo here.");
     await user.click(screen.getByRole("button", { name: "Save" }));
