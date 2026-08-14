@@ -3723,10 +3723,12 @@ export const reviewRouter = createTRPCRouter({
     .input(signOffConceptSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        await lockConceptLayoutScope(
+        const snapshotId = await conceptLayoutSnapshotId(tx, input.layoutId);
+        await lockConceptLayoutScope(tx, ctx.auth.userId, snapshotId);
+        await assertSnapshotIsCurrent(
           tx,
-          ctx.auth.userId,
-          await conceptLayoutSnapshotId(tx, input.layoutId),
+          snapshotId,
+          "Synchronize the pull request before signing off this concept",
         );
         const concept = await conceptMembersForMutation(
           tx,
@@ -3799,10 +3801,12 @@ export const reviewRouter = createTRPCRouter({
     .input(unreviewConceptSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        await lockConceptLayoutScope(
+        const snapshotId = await conceptLayoutSnapshotId(tx, input.layoutId);
+        await lockConceptLayoutScope(tx, ctx.auth.userId, snapshotId);
+        await assertSnapshotIsCurrent(
           tx,
-          ctx.auth.userId,
-          await conceptLayoutSnapshotId(tx, input.layoutId),
+          snapshotId,
+          "Synchronize the pull request before undoing this concept",
         );
         const concept = await conceptMembersForMutation(
           tx,
