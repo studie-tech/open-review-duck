@@ -3576,19 +3576,22 @@ export function ReviewWorkspace({
         : canSignOffUnit;
   const primaryIsContinue =
     activeWaitStatus === "signed_off" || activeWaitStatus === "waiting";
+  // The scope the plain key commits to, named the same way wherever it is
+  // read: the footer, and the command centre entry that carries it.
+  const primaryScopeLabel = primaryIsContinue
+    ? filteredReviewActive
+      ? "Next match"
+      : "Continue"
+    : onLastConceptMember
+      ? `Sign off concept (${activeConceptMembers.length})`
+      : conceptActionAvailable
+        ? "Sign off unit"
+        : "Sign off";
   const primaryActionLabel = signOffConcept.isPending
     ? "Saving concept…"
     : activeSignOffPending
       ? `Saving ${signOffQueueProgress}…`
-      : primaryIsContinue
-        ? filteredReviewActive
-          ? "Next match"
-          : "Continue"
-        : onLastConceptMember
-          ? `Sign off concept (${activeConceptMembers.length})`
-          : conceptActionAvailable
-            ? "Sign off unit"
-            : "Sign off";
+      : primaryScopeLabel;
   // A concept is paused as a whole, so a concept already waiting has nothing
   // left to pause even when the member card in front is not the waiting one.
   const canAwaitResponse =
@@ -4964,15 +4967,20 @@ export function ReviewWorkspace({
     },
     {
       id: "primary-review-action",
-      label:
-        activeWaitStatus === "signed_off" || activeWaitStatus === "waiting"
-          ? filteredReviewActive
-            ? "Continue to next match"
-            : "Continue review"
-          : "Sign off unit",
-      description: filteredReviewActive
-        ? "Continue through the matching review units in planned order"
-        : "Remember this unit at the current revision and open the next one",
+      // The same scope the footer advertises, because this entry carries the
+      // same key: on the last member owed that key commits the concept.
+      label: primaryIsContinue
+        ? filteredReviewActive
+          ? "Continue to next match"
+          : "Continue review"
+        : primaryScopeLabel,
+      description: primaryIsContinue
+        ? filteredReviewActive
+          ? "Continue through the matching review units in planned order"
+          : "Open the next unit that still needs review"
+        : onLastConceptMember
+          ? "Record the last unit this concept is owed, finishing it"
+          : "Remember this unit at the current revision and open the next one",
       group: "Review actions",
       icon: <Check className="size-4" />,
       shortcut: reviewShortcuts.signOff,
@@ -6760,7 +6768,10 @@ export function ReviewWorkspace({
                       className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
                       title={`Pause this unit until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
                       onClick={awaitActiveResponse}
-                      disabled={!canAwaitResponse}
+                      // The unit is the only scope this branch can run, so a
+                      // conversation elsewhere in the concept must not light
+                      // up a button that would then do nothing.
+                      disabled={!canAwaitUnit}
                     >
                       {awaitPending ? (
                         <LoaderCircle className="size-4 animate-spin" />

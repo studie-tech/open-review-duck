@@ -19,6 +19,7 @@ import Link from "next/link";
 import {
   Fragment,
   forwardRef,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -427,6 +428,32 @@ export function SplitActionButton({
 }) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+
+  /** Lists the items a keyboard can actually land on. */
+  const reachableItems = useCallback(
+    () => [
+      ...(menu.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not(:disabled)',
+      ) ?? []),
+    ],
+    [],
+  );
+
+  // The menu is drawn above the buttons that open it, so it also precedes them
+  // in the DOM. Without moving focus into it, opening the menu would leave the
+  // reviewer tabbing backwards to reach what they just asked for.
+  useEffect(() => {
+    if (!open) return;
+    reachableItems()[0]?.focus();
+  }, [open, reachableItems]);
+
+  /** Closes the menu and hands focus back to the control that opened it. */
+  const close = useCallback(() => {
+    setOpen(false);
+    toggle.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -440,7 +467,7 @@ export function SplitActionButton({
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.stopPropagation();
-      setOpen(false);
+      close();
     }
 
     document.addEventListener("pointerdown", closeOnOutsidePointer);
@@ -449,14 +476,29 @@ export function SplitActionButton({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape, true);
     };
-  }, [open]);
+  }, [close, open]);
+
+  /** Walks the arrow keys around the items, as a menu is expected to. */
+  function moveThroughItems(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const items = reachableItems();
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const next =
+      current < 0 ? 0 : (current + step + items.length) % items.length;
+    items[next]?.focus();
+  }
 
   return (
     <div ref={container} className={cn("relative", className)}>
       {open && (
         <div
+          ref={menu}
           role="menu"
           aria-label={menuLabel}
+          onKeyDown={moveThroughItems}
           className="border-line bg-panel absolute right-0 bottom-full z-30 mb-2 w-72 overflow-hidden rounded-xl border p-1 shadow-xl"
         >
           {options.map((option) => (
@@ -466,7 +508,7 @@ export function SplitActionButton({
               role="menuitem"
               disabled={option.disabled}
               onClick={() => {
-                setOpen(false);
+                close();
                 option.onSelect();
               }}
               className="hover:bg-surface-hover flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45"
@@ -504,6 +546,7 @@ export function SplitActionButton({
           )}
         </Button>
         <Button
+          ref={toggle}
           variant={variant}
           aria-label={menuLabel}
           aria-haspopup="menu"

@@ -1466,6 +1466,36 @@ describe("SplitActionButton", () => {
     ).toBeDisabled();
   });
 
+  it("moves focus into the menu and cycles it with the arrow keys", async () => {
+    // The menu is drawn above the buttons and so precedes them in the DOM;
+    // without taking focus, opening it would send a keyboard backwards.
+    renderSplit({});
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose what to sign off" }),
+    );
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(items[1]).toHaveFocus();
+  });
+
+  it("skips an unusable scope when walking the menu", async () => {
+    renderSplit({ unitDisabled: true });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose what to sign off" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: /Sign off concept/ }),
+    ).toHaveFocus();
+  });
+
   it("closes on Escape without letting the workspace see it", async () => {
     const onWorkspaceEscape = vi.fn();
     document.addEventListener("keydown", onWorkspaceEscape);
@@ -1479,6 +1509,9 @@ describe("SplitActionButton", () => {
     expect(
       screen.queryByRole("menu", { name: "Choose what to sign off" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Choose what to sign off" }),
+    ).toHaveFocus();
     document.removeEventListener("keydown", onWorkspaceEscape);
   });
 });
