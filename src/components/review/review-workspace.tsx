@@ -1003,13 +1003,22 @@ export function ReviewWorkspace({
     initialData.sourceDelivery,
     initialData.units,
   ]);
-  const firstPending = Math.max(
-    0,
-    units.findIndex(
-      (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
-    ),
-  );
-  const [activeIndex, setActiveIndex] = useState(firstPending);
+  // The workspace opens on work the reviewer can act on, which rules out a
+  // member left pending inside a concept that is waiting as a whole: opening
+  // there would land them on a concept the review path already shows as
+  // paused, with nothing on it to sign off.
+  const [activeIndex, setActiveIndex] = useState(() => {
+    const paused = pausedConceptUnitIds(initialData.concepts, units);
+    return Math.max(
+      0,
+      units.findIndex(
+        (unit) =>
+          unit.status !== "signed_off" &&
+          unit.status !== "waiting" &&
+          !paused.has(unit.id),
+      ),
+    );
+  });
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [showDiff, setShowDiff] = useState(true);
   const [pathSearch, setPathSearch] = useState("");
@@ -2689,14 +2698,13 @@ export function ReviewWorkspace({
     onError: (error) => toast.error(error.message),
   });
   const releaseReviewWaits = api.review.releaseReviewWaits.useMutation({
-    // A wait the server had already dropped — answered in another tab, or
-    // reopened by a poll this view has not seen — leaves nothing to delete.
-    // The units still come back, because the request says what the reviewer
-    // believes is paused and this is what corrects them.
-    onSuccess: ({ releasedUnitIds }, { unitIds }) => {
-      const released = new Set(
-        releasedUnitIds.length > 0 ? releasedUnitIds : unitIds,
-      );
+    // Every unit the request reached comes back, not only the rows this call
+    // deleted: a wait the server had already dropped — answered in another
+    // tab, or reopened by a poll this view has not seen — leaves nothing to
+    // delete, and reading the deletions alone would leave that member paused
+    // on screen with no row behind it.
+    onSuccess: ({ authorizedUnitIds }) => {
+      const released = new Set(authorizedUnitIds);
       setUnits((current) =>
         current.map((unit) =>
           released.has(unit.id)
