@@ -129,6 +129,7 @@ const MAX_PROVIDER_ITEMS = 20_000;
 export class GitHubProvider implements PullRequestProvider {
   readonly name = "github" as const;
   private readonly headers: HeadersInit;
+  private readonly repositories = new Map<string, Promise<GitHubRepository>>();
   /** Initializes an authenticated provider client. */
   constructor(
     token: string,
@@ -676,11 +677,7 @@ export class GitHubProvider implements PullRequestProvider {
     repositoryExternalId: string,
     commentExternalId: string,
   ) {
-    const repository = await providerFetch<GitHubRepository>(
-      this.name,
-      `${this.apiUrl}/repositories/${repositoryExternalId}`,
-      { headers: this.headers },
-    );
+    const repository = await this.repository(repositoryExternalId);
     const [owner, name] = repository.full_name.split("/");
     if (!owner || !name) {
       throw new ProviderError(
@@ -735,11 +732,7 @@ export class GitHubProvider implements PullRequestProvider {
     pullRequestNumber: number,
   ) {
     const threads = new Map<string, { nodeId: string; resolved: boolean }>();
-    const repository = await providerFetch<GitHubRepository>(
-      this.name,
-      `${this.apiUrl}/repositories/${repositoryExternalId}`,
-      { headers: this.headers },
-    );
+    const repository = await this.repository(repositoryExternalId);
     if (!repository.node_id) {
       throw new ProviderError(
         this.name,
@@ -829,6 +822,29 @@ export class GitHubProvider implements PullRequestProvider {
       cursor = nextCursor;
     }
     return threads;
+  }
+
+  /**
+   * Reads one repository's stable identity once per provider instance.
+   *
+   * A conversation is deleted one comment at a time and each write needs the
+   * repository's owner and name, so without this a five-comment thread would
+   * spend five more requests re-reading facts that cannot change underneath it.
+   */
+  private repository(repositoryExternalId: string) {
+    const cached = this.repositories.get(repositoryExternalId);
+    if (cached) return cached;
+    const pending = providerFetch<GitHubRepository>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}`,
+      { headers: this.headers },
+    ).catch((cause: unknown) => {
+      // A failed read must not be the answer every later caller receives.
+      this.repositories.delete(repositoryExternalId);
+      throw cause;
+    });
+    this.repositories.set(repositoryExternalId, pending);
+    return pending;
   }
 
   /** Fetches file content at a provider revision within the configured size limit. */

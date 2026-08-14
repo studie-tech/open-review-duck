@@ -292,20 +292,21 @@ async function declaredSymbolInSnapshot(
   snapshotId: string,
   input: SymbolDefinitionInput,
 ) {
-  const matches = await hydrateReviewUnits(
-    db,
-    await db.query.reviewUnits.findMany({
-      where: and(
-        eq(reviewUnits.snapshotId, snapshotId),
-        eq(reviewUnits.name, input.symbol),
-        notInArray(reviewUnits.kind, ["file", "module", "binary"]),
-      ),
-      orderBy: [reviewUnits.reviewOrder],
-      limit: 25,
-    }),
-  );
+  const matches = await db.query.reviewUnits.findMany({
+    where: and(
+      eq(reviewUnits.snapshotId, snapshotId),
+      eq(reviewUnits.name, input.symbol),
+      notInArray(reviewUnits.kind, ["file", "module", "binary"]),
+    ),
+    orderBy: [reviewUnits.reviewOrder],
+    limit: 25,
+  });
   const own = matches.filter(({ path }) => path === input.sourcePath);
-  const target = own[0] ?? (matches.length === 1 ? matches[0] : undefined);
+  const chosen = own[0] ?? (matches.length === 1 ? matches[0] : undefined);
+  if (!chosen) return undefined;
+  // Every candidate had to be read to know which one answers; only the one
+  // that does needs its source pulled out of storage.
+  const [target] = await hydrateReviewUnits(db, [chosen]);
   return target
     ? symbolDefinitionOf(target, target.startLine, target.id)
     : undefined;

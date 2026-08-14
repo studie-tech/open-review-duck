@@ -3898,22 +3898,23 @@ export function ReviewWorkspace({
     const center = pane
       ? pane.getBoundingClientRect().top + pane.clientHeight / 2
       : window.innerHeight / 2;
+    // Each line is measured once: a comparator that measured would force a
+    // layout read on every comparison the sort makes.
     const nearest = Array.from(
       document.querySelectorAll<HTMLElement>('[id^="review-line-"]'),
     )
-      .map((element) => ({
-        element,
-        line: Number(element.id.replace("review-line-", "")),
-      }))
-      .filter(({ line }) => Number.isInteger(line) && isPrimaryReviewLine(line))
-      .sort((left, right) => {
-        const leftBounds = left.element.getBoundingClientRect();
-        const rightBounds = right.element.getBoundingClientRect();
-        return (
-          Math.abs(center - (leftBounds.top + leftBounds.height / 2)) -
-          Math.abs(center - (rightBounds.top + rightBounds.height / 2))
-        );
-      })[0]?.line;
+      .flatMap((element) => {
+        const line = Number(element.id.replace("review-line-", ""));
+        if (!Number.isInteger(line) || !isPrimaryReviewLine(line)) return [];
+        const bounds = element.getBoundingClientRect();
+        return [
+          {
+            distance: Math.abs(center - (bounds.top + bounds.height / 2)),
+            line,
+          },
+        ];
+      })
+      .sort((left, right) => left.distance - right.distance)[0]?.line;
     const firstChangedLine = [...changedCurrentLines]
       .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];

@@ -1604,4 +1604,185 @@ describe("provider normalization", () => {
       vote: -10,
     });
   });
+
+  it("resolves a GitHub conversation through its review-thread node", async () => {
+    const requests: Array<{ url: string; body?: string }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init) => {
+      const url = requestUrl(input);
+      requests.push({ url, body: init?.body?.toString() });
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          node_id: "R_kgDOReviewDuck",
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+        });
+      }
+      if (url === "https://api.github.com/graphql") {
+        const body = init?.body?.toString() ?? "";
+        if (body.includes("ReviewDuckSetReviewThreadResolution")) {
+          return jsonResponse({
+            data: { resolveReviewThread: { thread: { isResolved: true } } },
+          });
+        }
+        return jsonResponse({
+          data: {
+            node: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: "PRRT_thread",
+                      isResolved: false,
+                      comments: {
+                        nodes: [{ fullDatabaseId: "901", replyTo: null }],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected provider request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitHubProvider("token").setInlineThreadResolution({
+        repositoryExternalId: "42",
+        pullRequestNumber: 8,
+        threadExternalId: "901",
+        resolved: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    const mutation = requests.at(-1);
+    expect(mutation?.body).toContain("resolveReviewThread");
+    expect(mutation?.body).toContain("PRRT_thread");
+  });
+
+  it("reports a failed thread lookup rather than a missing conversation", async () => {
+    // A refused GraphQL request must not read as "no such conversation".
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/repositories/42")) {
+          return new Response(JSON.stringify({ message: "Bad credentials" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected provider request: ${url}`);
+      }),
+    );
+
+    await expect(
+      new GitHubProvider("token").setInlineThreadResolution({
+        repositoryExternalId: "42",
+        pullRequestNumber: 8,
+        threadExternalId: "901",
+        resolved: true,
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("edits and deletes GitHub review comments on the documented route", async () => {
+    const requests: Array<{ method: string; url: string }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init) => {
+      const url = requestUrl(input);
+      requests.push({ method: init?.method ?? "GET", url });
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+        });
+      }
+      if (url.includes("/repos/acme/review/pulls/comments/901")) {
+        return init?.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : jsonResponse({ id: 901, body: "Rewritten." });
+      }
+      throw new Error(`Unexpected provider request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new GitHubProvider("token");
+    await provider.editInlineComment({
+      repositoryExternalId: "42",
+      commentExternalId: "901",
+      body: "Rewritten.",
+    });
+    await provider.deleteInlineComment({
+      repositoryExternalId: "42",
+      commentExternalId: "901",
+    });
+
+    expect(requests.map(({ method, url }) => `${method} ${url}`)).toEqual([
+      "GET https://api.github.com/repositories/42",
+      "PATCH https://api.github.com/repos/acme/review/pulls/comments/901",
+      "DELETE https://api.github.com/repos/acme/review/pulls/comments/901",
+    ]);
+  });
+
+  it("resolves an Azure DevOps conversation as fixed", async () => {
+    let patched: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init) => {
+        const url = requestUrl(input);
+        if (url.includes("/threads/77")) {
+          patched = init?.body?.toString();
+          return jsonResponse({ id: 77, status: "fixed" });
+        }
+        throw new Error(`Unexpected provider request: ${url}`);
+      }),
+    );
+
+    await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).setInlineThreadResolution({
+      repositoryExternalId: "repo",
+      pullRequestNumber: 12,
+      threadExternalId: "77",
+      resolved: true,
+    });
+
+    expect(patched).toBe(JSON.stringify({ status: "fixed" }));
+  });
+
+  it("resolves a GitLab discussion through its discussion route", async () => {
+    let resolved: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init) => {
+        const url = requestUrl(input);
+        if (url.includes("/discussions/abc123")) {
+          resolved = init?.body?.toString();
+          return jsonResponse({ id: "abc123", notes: [] });
+        }
+        throw new Error(`Unexpected provider request: ${url}`);
+      }),
+    );
+
+    await new GitLabProvider("token").setInlineThreadResolution({
+      repositoryExternalId: "9",
+      pullRequestNumber: 4,
+      threadExternalId: "abc123",
+      resolved: true,
+    });
+
+    expect(resolved).toBe(JSON.stringify({ resolved: true }));
+  });
 });
