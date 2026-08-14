@@ -18,6 +18,7 @@ import {
   aiConversationVisibility,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
+  nextAnchorableLine,
   ProviderConversation,
   ProviderConversationHistory,
   ReviewConceptMemberPreview,
@@ -1352,5 +1353,29 @@ describe("SideBySideUnitDiff", () => {
     if (!deletedLine) throw new Error("Expected a deleted-line action");
     await user.click(deletedLine);
     expect(selectLine).toHaveBeenCalledWith(31);
+  });
+});
+
+describe("nextAnchorableLine", () => {
+  const disjoint = [
+    { startLine: 10, endLine: 11 },
+    { startLine: 20, endLine: 21 },
+  ];
+
+  it("skips the lines between a unit's disjoint ranges", () => {
+    // The picker prints every line in the span, so stepping by one would park
+    // it on a line the provider refuses to anchor a comment to.
+    expect(nextAnchorableLine(11, 1, disjoint, 10, 21)).toBe(20);
+    expect(nextAnchorableLine(20, -1, disjoint, 10, 21)).toBe(11);
+  });
+
+  it("holds the current line at either end of the scope", () => {
+    expect(nextAnchorableLine(21, 1, disjoint, 10, 21)).toBe(21);
+    expect(nextAnchorableLine(10, -1, disjoint, 10, 21)).toBe(10);
+  });
+
+  it("steps one line at a time through a contiguous unit", () => {
+    expect(nextAnchorableLine(10, 1, undefined, 10, 12)).toBe(11);
+    expect(nextAnchorableLine(12, -1, undefined, 10, 12)).toBe(11);
   });
 });
