@@ -1497,21 +1497,31 @@ describe("SplitActionButton", () => {
   });
 
   it("closes on Escape without letting the workspace see it", async () => {
+    // Escape means something to the workspace behind this menu, so closing the
+    // menu must not also cancel whatever sits under it. The key is dispatched
+    // from the focused item rather than the document, because that is the only
+    // path where stopping propagation can be observed at all.
     const onWorkspaceEscape = vi.fn();
     document.addEventListener("keydown", onWorkspaceEscape);
-    renderSplit({});
+    try {
+      renderSplit({});
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Choose what to sign off" }),
-    );
-    fireEvent.keyDown(document, { key: "Escape" });
+      await userEvent.click(
+        screen.getByRole("button", { name: "Choose what to sign off" }),
+      );
+      fireEvent.keyDown(screen.getAllByRole("menuitem")[0] as HTMLElement, {
+        key: "Escape",
+      });
 
-    expect(
-      screen.queryByRole("menu", { name: "Choose what to sign off" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Choose what to sign off" }),
-    ).toHaveFocus();
-    document.removeEventListener("keydown", onWorkspaceEscape);
+      expect(
+        screen.queryByRole("menu", { name: "Choose what to sign off" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Choose what to sign off" }),
+      ).toHaveFocus();
+      expect(onWorkspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", onWorkspaceEscape);
+    }
   });
 });
