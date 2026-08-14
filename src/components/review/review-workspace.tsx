@@ -762,6 +762,30 @@ function liveConceptStatus(
   return { members, signed, status };
 }
 
+/**
+ * Collects the members of every concept that is waiting on a response.
+ *
+ * A concept waits as a whole, but a member can still be left pending inside
+ * one: a synchronization carries only the waits whose code is unchanged, a
+ * regrouping can move a fresh member in, and a wait taken before waiting
+ * covered the concept only ever named a single unit. Reading such a member as
+ * work available sends the reviewer back into a concept the review path
+ * already shows as paused — and, when it is the first one left, back onto the
+ * unit they are already standing on.
+ */
+export function pausedConceptUnitIds(
+  concepts: readonly ReviewConcept[],
+  units: ReviewUnit[],
+) {
+  const unitsById = new Map(units.map((unit) => [unit.id, unit]));
+  const paused = new Set<string>();
+  for (const concept of concepts) {
+    if (liveConceptStatus(concept, unitsById).status !== "waiting") continue;
+    for (const memberId of concept.memberIds) paused.add(memberId);
+  }
+  return paused;
+}
+
 /** Clamps a requested line to the closest line in a disjoint review scope. */
 function closestReviewLine(
   line: number,
@@ -1396,7 +1420,12 @@ export function ReviewWorkspace({
   const revisionPreservedCount = initialData.units.filter(
     ({ status }) => status === "signed_off",
   ).length;
-  const hasNextActionableUnit = nextPendingReviewIndex(units) >= 0;
+  const pausedUnitIds = useMemo(
+    () => pausedConceptUnitIds(initialData.concepts, units),
+    [initialData.concepts, units],
+  );
+  const hasNextActionableUnit =
+    nextPendingReviewIndex(units, (unit) => !pausedUnitIds.has(unit.id)) >= 0;
   const previewHasFileContext = importPreview
     ? fileContexts.some((context) => context.path === importPreview.path)
     : false;
@@ -2135,11 +2164,13 @@ export function ReviewWorkspace({
         description: `${signedUnitIds.length} atomic ${signedUnitIds.length === 1 ? "unit" : "units"} recorded together.`,
       });
       window.requestAnimationFrame(() => {
+        const paused = pausedConceptUnitIds(initialData.concepts, units);
         const next = units.findIndex(
           (unit) =>
             !signedUnitIds.includes(unit.id) &&
             unit.status !== "signed_off" &&
-            unit.status !== "waiting",
+            unit.status !== "waiting" &&
+            !paused.has(unit.id),
         );
         if (next >= 0) selectUnit(next);
       });
@@ -2203,10 +2234,15 @@ export function ReviewWorkspace({
     nextUnits: ReviewUnit[],
     preferred?: (unit: ReviewUnit, index: number) => boolean,
   ) {
+    const paused = pausedConceptUnitIds(initialData.concepts, nextUnits);
+
+    /** Reports whether a unit is work the reviewer can pick up right now. */
+    const available = (unit: ReviewUnit) => !paused.has(unit.id);
     if (pathSearch.trim()) {
       const filteredIndex = nextPendingReviewIndex(
         nextUnits,
         (unit, index) =>
+          available(unit) &&
           reviewPathSearchMatches(unit, pathSearch) &&
           (preferred?.(unit, index) ?? true),
       );
@@ -2215,8 +2251,10 @@ export function ReviewWorkspace({
       setSearchLimit(INITIAL_PATH_ITEMS);
     }
     return preferred
-      ? nextPendingReviewIndexPreferring(nextUnits, preferred)
-      : nextPendingReviewIndex(nextUnits);
+      ? nextPendingReviewIndexPreferring(nextUnits, preferred, (unit) =>
+          available(unit),
+        )
+      : nextPendingReviewIndex(nextUnits, (unit) => available(unit));
   }
 
   /** Completes the current action within the active filter or global path. */
@@ -2647,6 +2685,34 @@ export function ReviewWorkspace({
         waitingUnitIds,
         `${waitingUnitIds.length} ${waitingUnitIds.length === 1 ? "unit" : "units"} in ${paused?.title ?? "this concept"} will return to your review path when the code or conversation changes.`,
       );
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const releaseReviewWaits = api.review.releaseReviewWaits.useMutation({
+    // A wait the server had already dropped — answered in another tab, or
+    // reopened by a poll this view has not seen — leaves nothing to delete.
+    // The units still come back, because the request says what the reviewer
+    // believes is paused and this is what corrects them.
+    onSuccess: ({ releasedUnitIds }, { unitIds }) => {
+      const released = new Set(
+        releasedUnitIds.length > 0 ? releasedUnitIds : unitIds,
+      );
+      setUnits((current) =>
+        current.map((unit) =>
+          released.has(unit.id)
+            ? { ...unit, status: "pending" as const, waitingSince: null }
+            : unit,
+        ),
+      );
+      setQueueLimit(INITIAL_PATH_ITEMS);
+      setWaitingLimit(INITIAL_PATH_ITEMS);
+      setStartedAt(Date.now());
+      toast.success("Back in your review path", {
+        description:
+          released.size === 1
+            ? "The unit no longer waits for a response."
+            : `${released.size} units no longer wait for a response.`,
+      });
     },
     onError: (error) => toast.error(error.message),
   });
@@ -3445,6 +3511,10 @@ export function ReviewWorkspace({
     activeUnit.kind !== "binary";
   const awaitPending =
     awaitResponse.isPending || awaitResponseConcept.isPending;
+  // What is paused is the concept, so every action that turns on "is this
+  // waiting?" asks the concept first and falls back to the unit only when no
+  // layout groups it.
+  const activeWaitStatus = activeConceptProgress?.status ?? activeUnit?.status;
   const canUsePrimaryAction =
     !!activeUnit &&
     (activeConceptSourcesAvailable ||
@@ -3456,15 +3526,35 @@ export function ReviewWorkspace({
     !undoConcept.isPending &&
     !awaitPending &&
     !resetReview.isPending &&
-    (activeUnit.status !== "waiting" || hasNextActionableUnit);
+    // Read off the concept, not the open card: a member left pending inside a
+    // waiting concept cannot be signed off either, so offering the action on
+    // it only produces a keypress that goes nowhere.
+    (activeWaitStatus !== "waiting" || hasNextActionableUnit);
   // A concept is paused as a whole, so a concept already waiting has nothing
   // left to pause even when the member card in front is not the waiting one.
   const canAwaitResponse =
     !!activeUnit &&
     hasLiveConversation &&
-    (activeConceptProgress?.status ?? activeUnit.status) !== "waiting" &&
+    activeWaitStatus !== "waiting" &&
     !awaitPending &&
     !activeSignOffPending;
+  // Only the rows that exist can be given back: a concept can be waiting on
+  // one member's conversation while a synchronization or a regrouping left the
+  // rest of it pending.
+  const heldWaitUnitIds = (
+    activeConceptMembers.length > 0
+      ? activeConceptMembers
+      : activeUnit
+        ? [activeUnit]
+        : []
+  )
+    .filter(({ status }) => status === "waiting")
+    .map(({ id }) => id);
+  const canStopWaiting =
+    activeWaitStatus === "waiting" &&
+    heldWaitUnitIds.length > 0 &&
+    !awaitPending &&
+    !releaseReviewWaits.isPending;
 
   /** Shows the review-path panel as a drawer or persistent desktop column. */
   function showPathPanel() {
@@ -3922,10 +4012,7 @@ export function ReviewWorkspace({
   /** Runs the status-appropriate action for the active review unit. */
   function runPrimaryAction() {
     if (!activeUnit || !canUsePrimaryAction) return;
-    if (
-      activeConceptProgress?.status === "signed_off" ||
-      activeConceptProgress?.status === "waiting"
-    ) {
+    if (activeWaitStatus === "signed_off" || activeWaitStatus === "waiting") {
       continueReview();
       return;
     }
@@ -3972,6 +4059,19 @@ export function ReviewWorkspace({
       })),
       (unit) => unit.changeType !== "deleted",
     );
+  }
+
+  /**
+   * Gives back the waits the open concept is holding.
+   *
+   * A wait ends on its own only when the provider answers or the code moves,
+   * so without this a concept paused by mistake — or answered somewhere the
+   * poll cannot see, such as a thread resolved rather than replied to — stays
+   * out of the review path for good.
+   */
+  function stopWaitingOnActive() {
+    if (!canStopWaiting) return;
+    releaseReviewWaits.mutate({ unitIds: heldWaitUnitIds });
   }
 
   /** Returns the active signed-off unit to the pending review queue. */
@@ -4754,7 +4854,7 @@ export function ReviewWorkspace({
     {
       id: "primary-review-action",
       label:
-        activeUnit?.status === "signed_off" || activeUnit?.status === "waiting"
+        activeWaitStatus === "signed_off" || activeWaitStatus === "waiting"
           ? filteredReviewActive
             ? "Continue to next match"
             : "Continue review"
@@ -4782,17 +4882,28 @@ export function ReviewWorkspace({
       onSelect: signOffDeletedFiles,
     },
     {
+      // One entry rather than two, because the binding runs the first command
+      // its shortcut matches and would stop at a disabled twin. Waiting and
+      // signed off never hold at once, so the state picks the wording.
       id: "unreview-unit",
-      label: "Undo review",
-      description: "Return this unit to the review queue",
+      label: activeWaitStatus === "waiting" ? "Stop waiting" : "Undo review",
+      description:
+        activeWaitStatus === "waiting"
+          ? "Take back the wait and return this work to your review path"
+          : "Return this unit to the review queue",
       group: "Review actions",
       icon: <Undo2 className="size-4" />,
       shortcut: reviewShortcuts.undoReview,
       disabled:
-        activeUnit?.status !== "signed_off" ||
-        activeSignOffPending ||
-        undoSignOff.isPending,
-      onSelect: unreviewActiveUnit,
+        activeWaitStatus === "waiting"
+          ? !canStopWaiting
+          : activeUnit?.status !== "signed_off" ||
+            activeSignOffPending ||
+            undoSignOff.isPending,
+      onSelect:
+        activeWaitStatus === "waiting"
+          ? stopWaitingOnActive
+          : unreviewActiveUnit,
     },
     {
       id: "await-response",
@@ -6407,6 +6518,11 @@ export function ReviewWorkspace({
                   </Button>
                 )}
                 {activeUnit.status === "signed_off" &&
+                  // A member can be signed off inside a concept that is
+                  // waiting on another member. The concept is what is paused,
+                  // so the slot — and the key both would claim — belongs to
+                  // the action that unpauses it.
+                  activeWaitStatus !== "waiting" &&
                   footerSaveState !== "active" && (
                     <Button
                       variant="secondary"
@@ -6433,18 +6549,36 @@ export function ReviewWorkspace({
                       )}
                     </Button>
                   )}
-                {(activeConceptProgress?.status ?? activeUnit.status) ===
-                "waiting" ? (
+                {activeWaitStatus === "waiting" ? (
+                  // The header already says this concept is waiting, so the
+                  // footer spends the slot on the way out of it instead of
+                  // repeating the state as a button nobody can press.
                   <Button
                     variant="secondary"
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                    disabled
+                    title="Take back the wait and return this work to your review path"
+                    onClick={stopWaitingOnActive}
+                    disabled={!canStopWaiting}
                   >
-                    <Clock3 className="size-4" />
+                    {releaseReviewWaits.isPending ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <Clock3 className="size-4" />
+                    )}
                     <span className="hidden sm:inline">
-                      Waiting for response
+                      {releaseReviewWaits.isPending
+                        ? "Resuming…"
+                        : "Stop waiting"}
                     </span>
-                    <span className="sm:hidden">Waiting</span>
+                    <span className="sm:hidden">
+                      {releaseReviewWaits.isPending ? "Resuming…" : "Resume"}
+                    </span>
+                    {!releaseReviewWaits.isPending && (
+                      <ShortcutHint
+                        shortcut={reviewShortcuts.undoReview}
+                        className="hidden sm:inline-flex"
+                      />
+                    )}
                   </Button>
                 ) : (
                   hasLiveConversation &&
@@ -6480,8 +6614,7 @@ export function ReviewWorkspace({
                     </Button>
                   )
                 )}
-                {(activeConceptProgress?.status !== "waiting" ||
-                  hasNextActionableUnit) && (
+                {(activeWaitStatus !== "waiting" || hasNextActionableUnit) && (
                   <Button
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
                     onClick={runPrimaryAction}
@@ -6498,8 +6631,8 @@ export function ReviewWorkspace({
                       ? "Saving concept…"
                       : activeSignOffPending
                         ? `Saving ${signOffQueueProgress}…`
-                        : activeConceptProgress?.status === "signed_off" ||
-                            activeConceptProgress?.status === "waiting"
+                        : activeWaitStatus === "signed_off" ||
+                            activeWaitStatus === "waiting"
                           ? filteredReviewActive
                             ? "Next match"
                             : "Continue"

@@ -113,6 +113,17 @@ export const awaitResponseConceptSchema = signOffConceptSchema.pick({
   layoutVersion: true,
 });
 
+/**
+ * Names the waits one reviewer is taking back.
+ *
+ * The units are named rather than the concept they belong to, because a wait
+ * has to be releasable from a workspace the pull request has already moved
+ * past — the state that most needs the way out.
+ */
+export const releaseReviewWaitsSchema = z.object({
+  unitIds: z.array(z.string().uuid()).min(1).max(1_000),
+});
+
 export const importTargetSchema = z.object({
   pullRequestId: z.string().uuid(),
   sourcePath: z.string().trim().min(1).max(2_000),

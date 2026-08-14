@@ -160,12 +160,26 @@ export function nextPendingReviewIndex<T extends ReviewNavigationUnit>(
   );
 }
 
-/** Prefers one actionable subset, then falls back to canonical review order. */
+/**
+ * Prefers one actionable subset, then falls back to canonical review order.
+ *
+ * `matches` narrows both passes, so a caller that rules a unit out keeps it
+ * ruled out when the preferred subset comes up empty.
+ */
 export function nextPendingReviewIndexPreferring<
   T extends ReviewNavigationUnit,
->(units: T[], preferred: (unit: T, index: number) => boolean) {
-  const preferredIndex = nextPendingReviewIndex(units, preferred);
-  return preferredIndex >= 0 ? preferredIndex : nextPendingReviewIndex(units);
+>(
+  units: T[],
+  preferred: (unit: T, index: number) => boolean,
+  matches: (unit: T, index: number) => boolean = () => true,
+) {
+  const preferredIndex = nextPendingReviewIndex(
+    units,
+    (unit, index) => matches(unit, index) && preferred(unit, index),
+  );
+  return preferredIndex >= 0
+    ? preferredIndex
+    : nextPendingReviewIndex(units, matches);
 }
 
 /** Marks one unit as reviewed locally before its sign-off reaches the server. */

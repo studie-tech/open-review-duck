@@ -88,6 +88,7 @@ import {
   improveConceptGroupingSchema,
   providerReviewDecisionSchema,
   publishReviewCommentSchema,
+  releaseReviewWaitsSchema,
   replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
   reviewUnitSchema,
@@ -2523,6 +2524,61 @@ export const reviewRouter = createTRPCRouter({
         conceptId: concept.conceptId,
         waitingUnitIds: waits.map(({ unitId }) => unitId),
       };
+    }),
+
+  /**
+   * Takes back the waits one reviewer is holding.
+   *
+   * Deliberately free of the revision check every other concept action makes:
+   * a reviewer whose pull request has moved on can neither sign off nor be
+   * answered, so refusing to release here would be the one state with no way
+   * out at all.
+   */
+  releaseReviewWaits: protectedProcedure
+    .input(releaseReviewWaitsSchema)
+    .mutation(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `review-release-wait:${ctx.auth.userId}`,
+        40,
+        60_000,
+      );
+      const accessible = await ctx.db
+        .selectDistinct({ unitId: reviewUnits.id })
+        .from(reviewUnits)
+        .innerJoin(
+          reviewSnapshots,
+          eq(reviewUnits.snapshotId, reviewSnapshots.id),
+        )
+        .innerJoin(
+          pullRequests,
+          eq(reviewSnapshots.pullRequestId, pullRequests.id),
+        )
+        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+        .innerJoin(
+          workspaceMembers,
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
+        )
+        .where(
+          and(
+            inArray(reviewUnits.id, input.unitIds),
+            eq(workspaceMembers.userId, ctx.auth.userId),
+          ),
+        );
+      if (accessible.length === 0) throw new TRPCError({ code: "NOT_FOUND" });
+      const released = await ctx.db
+        .delete(reviewWaits)
+        .where(
+          and(
+            eq(reviewWaits.userId, ctx.auth.userId),
+            inArray(
+              reviewWaits.unitId,
+              accessible.map(({ unitId }) => unitId),
+            ),
+          ),
+        )
+        .returning({ unitId: reviewWaits.unitId });
+      return { releasedUnitIds: released.map(({ unitId }) => unitId) };
     }),
 
   importTarget: protectedProcedure
