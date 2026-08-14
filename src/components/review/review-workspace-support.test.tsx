@@ -1126,7 +1126,10 @@ describe("ProviderConversation", () => {
     expect(
       screen.getByRole("button", { name: "Resolve this conversation" }),
     ).toBeInTheDocument();
-    await waitFor(() => expect(unhandled).not.toHaveBeenCalled());
+    // A negative assertion passes on `waitFor`'s first call, which proves
+    // nothing about an event that would arrive a turn later.
+    await new Promise((done) => window.setTimeout(done, 0));
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
   it("deletes a single comment without touching the conversation", async () => {
