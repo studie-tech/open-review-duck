@@ -90,14 +90,14 @@ export function peekPlacement(
   },
 ): PeekPlacement {
   const margin = 12;
-  const below = viewport.height - anchor.bottom - margin;
-  const above = anchor.top - margin;
+  const below = Math.max(0, viewport.height - anchor.bottom - margin);
+  const above = Math.max(0, anchor.top - margin);
   const placement =
     below >= card.minimumHeight || below >= above ? "below" : "above";
-  const maxHeight = Math.max(
-    card.minimumHeight,
-    placement === "below" ? below : above,
-  );
+  // The card scrolls its own excerpt, so it may be shorter than it wants but
+  // never taller than the side it was placed on: growing past that would put
+  // its own controls off screen.
+  const maxHeight = placement === "below" ? below : above;
   return {
     left: Math.max(
       margin,

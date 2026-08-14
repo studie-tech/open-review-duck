@@ -1549,9 +1549,11 @@ export function AskAiLineButton({
       }}
       className={cn(
         "hover:text-violet grid shrink-0 place-items-center rounded transition-opacity",
+        // The button stays in the tab order while the row is unhovered, so it
+        // has to show itself on focus or the focus ring lands on nothing.
         visible
           ? "text-violet opacity-100"
-          : "opacity-0 group-hover:opacity-100",
+          : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
         className,
       )}
     >
@@ -3035,9 +3037,23 @@ export function ProviderConversationHistory({
 }
 /** Checks whether syntax highlighting supports a language identifier. */
 export function supportedLanguage(language: string) {
-  if (supportedLanguages.includes(language as SupportedLanguage))
-    return language as SupportedLanguage;
+  const known = knownLanguage(language);
+  if (known) return known;
   throw new Error(`Unsupported review language: ${language}`);
+}
+
+/**
+ * Names a language the grammars cover, or nothing.
+ *
+ * `review_unit.language` is stored unconstrained, so a value that predates a
+ * grammar being renamed or removed can reach the client. Callers that only
+ * want to know whether a feature applies ask this rather than the throwing
+ * form, which would take the whole render down with it.
+ */
+export function knownLanguage(language: string) {
+  return supportedLanguages.includes(language as SupportedLanguage)
+    ? (language as SupportedLanguage)
+    : undefined;
 }
 
 /** Renders the explanation loader interface. */

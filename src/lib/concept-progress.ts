@@ -22,7 +22,10 @@ export function conceptStatusFromMembers<Member extends { status: string }>(
   const signed = members.filter(({ status }) => status === "signed_off").length;
   if (members.some(({ status }) => status === "waiting")) return "waiting";
   if (signed === members.length) return "signed_off";
-  if (signed > 0) return "partial";
+  // Code that changed after a sign-off outranks the progress around it: a
+  // member that came back is work the reviewer already believed was done, and
+  // reading it as ordinary partial progress hides that it needs a second look.
   if (members.some(({ status }) => status === "changed")) return "changed";
+  if (signed > 0) return "partial";
   return "pending";
 }

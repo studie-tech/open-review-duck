@@ -34,7 +34,7 @@ export function isActivatableTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      'a[href], button, summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"]',
+      'a[href], button, summary, input[type="button"], input[type="image"], input[type="reset"], input[type="submit"], [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"]',
     ),
   );
 }
