@@ -236,6 +236,57 @@ export function ReviewConceptMemberHeader({
   );
 }
 
+/** Extracts the stored disjoint ranges for one side of a review concept. */
+export function relatedReviewRanges(
+  unit: Pick<ReviewUnit, "relatedRanges"> | undefined,
+  side: "current" | "previous",
+) {
+  if (!unit?.relatedRanges) return undefined;
+  return unit.relatedRanges.flatMap((range) => {
+    const startLine =
+      side === "current" ? range.startLine : range.previousStartLine;
+    const endLine = side === "current" ? range.endLine : range.previousEndLine;
+    return startLine !== undefined && endLine !== undefined
+      ? [{ startLine, endLine }]
+      : [];
+  });
+}
+
+/** Tests a line against disjoint ranges or a unit's contiguous bounds. */
+export function lineWithinReviewRanges(
+  line: number,
+  ranges: Array<{ startLine: number; endLine: number }> | undefined,
+  fallbackStart: number,
+  fallbackEnd: number,
+) {
+  return ranges
+    ? ranges.some(
+        ({ startLine, endLine }) => line >= startLine && line <= endLine,
+      )
+    : line >= fallbackStart && line <= fallbackEnd;
+}
+
+/**
+ * Checks whether a member's own line can carry a provider comment.
+ *
+ * A member card renders the unit's stored source from its first line, so the
+ * numbers it prints run past the gaps between disjoint ranges. The provider
+ * only anchors a comment inside a range, so the lines in those gaps offer no
+ * composer rather than one that fails on publish.
+ */
+export function memberCommentableLine(unit: ReviewUnit, line: number) {
+  if (unit.kind === "binary") return false;
+  return lineWithinReviewRanges(
+    line,
+    relatedReviewRanges(
+      unit,
+      unit.changeType === "deleted" ? "previous" : "current",
+    ),
+    unit.startLine,
+    unit.endLine,
+  );
+}
+
 /**
  * Renders one member's highlighted source.
  *
@@ -244,7 +295,13 @@ export function ReviewConceptMemberHeader({
  * and never spends a grammar parse — or a slot in the bounded highlight cache
  * — on code nobody is looking at.
  */
-function ReviewConceptMemberSource({ unit }: { unit: ReviewUnit }) {
+function ReviewConceptMemberSource({
+  unit,
+  onCommentLine,
+}: {
+  unit: ReviewUnit;
+  onCommentLine?: (line: number) => void;
+}) {
   const source =
     unit.changeType === "deleted"
       ? (unit.previousSource ?? unit.source)
@@ -256,28 +313,45 @@ function ReviewConceptMemberSource({ unit }: { unit: ReviewUnit }) {
     // concept is left and takes two gestures to read one unit. Only long lines
     // scroll, and only sideways.
     <div className="overflow-x-auto py-2">
-      {lines.map((line, lineIndex) => (
-        <div
-          key={`${unit.id}-${lineIndex}`}
-          className="grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
-        >
-          <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-            {unit.startLine + lineIndex}
-          </span>
-          <pre className="syntax-code overflow-visible text-cloud/80">
-            {line.tokens.length
-              ? line.tokens.map((token, tokenIndex) => (
-                  <span
-                    key={`${tokenIndex}-${token.text.length}`}
-                    className={token.className || undefined}
-                  >
-                    {token.text}
-                  </span>
-                ))
-              : " "}
-          </pre>
-        </div>
-      ))}
+      {lines.map((line, lineIndex) => {
+        const lineNumber = unit.startLine + lineIndex;
+        const commentable =
+          Boolean(onCommentLine) && memberCommentableLine(unit, lineNumber);
+        return (
+          <div
+            key={`${unit.id}-${lineIndex}`}
+            className="group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
+          >
+            {commentable ? (
+              <button
+                type="button"
+                aria-label={`Comment on line ${lineNumber} of ${unit.name}`}
+                onClick={() => onCommentLine?.(lineNumber)}
+                className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+              >
+                <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                <span>{lineNumber}</span>
+              </button>
+            ) : (
+              <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                {lineNumber}
+              </span>
+            )}
+            <pre className="syntax-code overflow-visible text-cloud/80">
+              {line.tokens.length
+                ? line.tokens.map((token, tokenIndex) => (
+                    <span
+                      key={`${tokenIndex}-${token.text.length}`}
+                      className={token.className || undefined}
+                    >
+                      {token.text}
+                    </span>
+                  ))
+                : " "}
+            </pre>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -289,12 +363,14 @@ export function ReviewConceptMemberPreview({
   count,
   sourceAvailable,
   onSelect,
+  onCommentLine,
 }: {
   unit: ReviewUnit;
   index: number;
   count: number;
   sourceAvailable: boolean;
   onSelect: () => void;
+  onCommentLine?: (line: number) => void;
 }) {
   // A member already signed off opens closed: its header still says what it
   // is and that it is done, and the code behind it is work the reviewer has
@@ -330,7 +406,7 @@ export function ReviewConceptMemberPreview({
           Binary change · explicit acknowledgement required
         </p>
       ) : (
-        <ReviewConceptMemberSource unit={unit} />
+        <ReviewConceptMemberSource unit={unit} onCommentLine={onCommentLine} />
       )}
     </article>
   );

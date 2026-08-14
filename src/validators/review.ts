@@ -107,6 +107,12 @@ export const improveConceptGroupingSchema = z.object({
 
 export const awaitResponseSchema = reviewUnitSchema;
 
+export const awaitResponseConceptSchema = signOffConceptSchema.pick({
+  conceptId: true,
+  layoutId: true,
+  layoutVersion: true,
+});
+
 export const importTargetSchema = z.object({
   pullRequestId: z.string().uuid(),
   sourcePath: z.string().trim().min(1).max(2_000),
