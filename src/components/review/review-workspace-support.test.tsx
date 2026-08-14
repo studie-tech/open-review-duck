@@ -12,7 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import {
   AI_QUICK_QUESTIONS,
@@ -1087,6 +1087,9 @@ describe("ProviderConversation", () => {
   it("survives a refused resolution without an unhandled rejection", async () => {
     const unhandled = vi.fn();
     window.addEventListener("unhandledrejection", unhandled);
+    onTestFinished(() =>
+      window.removeEventListener("unhandledrejection", unhandled),
+    );
     const resolve = vi.fn().mockRejectedValue(new Error("403"));
     const user = userEvent.setup();
     render(
@@ -1124,7 +1127,6 @@ describe("ProviderConversation", () => {
       screen.getByRole("button", { name: "Resolve this conversation" }),
     ).toBeInTheDocument();
     await waitFor(() => expect(unhandled).not.toHaveBeenCalled());
-    window.removeEventListener("unhandledrejection", unhandled);
   });
 
   it("deletes a single comment without touching the conversation", async () => {
