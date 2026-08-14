@@ -30,7 +30,11 @@ export function rewrittenProviderCommentBody(
   existingBody: string,
   body: string,
 ) {
-  const commentId = COMMENT_MARKER.exec(existingBody)?.[1];
+  // The canonical marker is appended last, so a marker quoted in the comment
+  // text ahead of it must not be the one carried across.
+  const commentId = [...existingBody.matchAll(COMMENT_MARKER_PATTERN)].at(
+    -1,
+  )?.[1];
   return commentId ? providerCommentBody(body, commentId) : body;
 }
 

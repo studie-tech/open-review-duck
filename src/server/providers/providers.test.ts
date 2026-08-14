@@ -1674,6 +1674,19 @@ describe("provider normalization", () => {
       vi.fn(async (input: string | URL | Request) => {
         const url = requestUrl(input);
         if (url.endsWith("/repositories/42")) {
+          return jsonResponse({
+            id: 42,
+            node_id: "R_kgDOReviewDuck",
+            name: "review",
+            full_name: "acme/review",
+            private: false,
+            html_url: "https://github.com/acme/review",
+            default_branch: "main",
+          });
+        }
+        // The walk itself is what fails: its result is what a missing thread
+        // would otherwise be read from.
+        if (url === "https://api.github.com/graphql") {
           return new Response(JSON.stringify({ message: "Bad credentials" }), {
             status: 401,
             headers: { "Content-Type": "application/json" },
