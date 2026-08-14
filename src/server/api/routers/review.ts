@@ -44,6 +44,7 @@ import {
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
+import { definitionIsWhereTheNameWasRead } from "~/lib/symbol-peek";
 import { PAID_AI_FEATURE } from "~/server/ai/plan";
 import {
   proposeSemanticConceptLayout,
@@ -3067,20 +3068,27 @@ export const reviewRouter = createTRPCRouter({
       });
       if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const declared =
+      const found =
         (await declaredSymbolInSnapshot(ctx.db, snapshot.id, input)) ??
-        (await declaredSymbolInFile(ctx.db, snapshot.id, input));
-      if (declared) return declared;
-
-      const imported = await importedSymbolDefinition(
-        ctx.db,
-        { headSha: snapshot.headSha, id: snapshot.id },
-        scope,
-        input,
-      );
-      if (imported) return imported;
-
-      return { kind: "unresolved" as const, reason: "not_found" as const };
+        (await declaredSymbolInFile(ctx.db, snapshot.id, input)) ??
+        (await importedSymbolDefinition(
+          ctx.db,
+          { headSha: snapshot.headSha, id: snapshot.id },
+          scope,
+          input,
+        ));
+      if (!found) {
+        return { kind: "unresolved" as const, reason: "not_found" as const };
+      }
+      if (
+        definitionIsWhereTheNameWasRead(found, {
+          line: input.line,
+          path: input.sourcePath,
+        })
+      ) {
+        return { kind: "unresolved" as const, reason: "self" as const };
+      }
+      return found;
     }),
 
   unitDiscussion: protectedProcedure

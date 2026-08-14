@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, FileCode2, LoaderCircle, X } from "lucide-react";
+import { ArrowUpRight, FileCode2, X } from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   useCallback,
@@ -14,6 +14,7 @@ import {
   SYMBOL_PEEK_ATTRIBUTE,
   SYMBOL_PEEK_CLOSE_DELAY_MS,
   SYMBOL_PEEK_HOVER_DELAY_MS,
+  SYMBOL_PEEK_LINE_ATTRIBUTE,
   SYMBOL_PEEK_MAXIMUM_LINES,
 } from "~/lib/symbol-peek";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
@@ -22,6 +23,7 @@ import { cn } from "~/lib/utils";
 /** The name the pointer is resting on, and where on screen it sits. */
 export interface PeekedSymbol {
   anchor: { bottom: number; left: number; top: number };
+  line?: number;
   symbol: string;
 }
 
@@ -92,6 +94,7 @@ export function useSymbolPeek(enabled: boolean) {
       if (!token || !symbol) return;
       clearTimers();
       if (anchored.current === token) return;
+      const line = Number(token.getAttribute(SYMBOL_PEEK_LINE_ATTRIBUTE));
       openTimer.current = setTimeout(() => {
         const bounds = token.getBoundingClientRect();
         pinned.current = false;
@@ -102,6 +105,7 @@ export function useSymbolPeek(enabled: boolean) {
             left: bounds.left,
             top: bounds.top,
           },
+          line: Number.isInteger(line) && line > 0 ? line : undefined,
           symbol,
         });
       }, SYMBOL_PEEK_HOVER_DELAY_MS);
@@ -140,23 +144,25 @@ export function useSymbolPeek(enabled: boolean) {
   };
 }
 
-/** Shows one symbol's declaration beside the code that uses it. */
+/**
+ * Shows one symbol's declaration beside the code that uses it.
+ *
+ * Mounted only once a declaration has been found somewhere the reviewer is
+ * not already looking, so a name with nothing to add stays quiet instead of
+ * flashing a card that says so.
+ */
 export function SymbolPeekCard({
   definition,
-  loading,
   onClose,
   onHold,
   onOpenUnit,
   peeked,
-  unresolved,
 }: {
-  definition?: SymbolDefinition;
-  loading: boolean;
+  definition: SymbolDefinition;
   onClose: () => void;
   onHold: (held: boolean) => void;
   onOpenUnit?: (unitId: string) => void;
   peeked: PeekedSymbol;
-  unresolved: boolean;
 }) {
   const [viewport, setViewport] = useState({
     height: typeof window === "undefined" ? 800 : window.innerHeight,
@@ -173,10 +179,7 @@ export function SymbolPeekCard({
   }, []);
 
   const placement = peekPlacement(peeked.anchor, viewport);
-  const lines = useHighlightedSource(
-    definition?.source ?? "",
-    definition?.language ?? "text",
-  );
+  const lines = useHighlightedSource(definition.source, definition.language);
   const shown = lines.slice(0, SYMBOL_PEEK_MAXIMUM_LINES);
   const hidden = Math.max(0, lines.length - shown.length);
 
@@ -201,17 +204,9 @@ export function SymbolPeekCard({
         <span className="text-cloud truncate font-mono text-[11px] font-medium">
           {peeked.symbol}
         </span>
-        {definition && (
-          <Badge className="border-cyan/20 bg-cyan/8 text-cyan shrink-0 px-1.5 py-0.5 text-[8px] tracking-wider uppercase">
-            {definition.unitKind.replace("_", " ")}
-          </Badge>
-        )}
-        {loading && (
-          <LoaderCircle
-            className="text-fog size-3 shrink-0 animate-spin"
-            aria-label="Loading the definition"
-          />
-        )}
+        <Badge className="border-cyan/20 bg-cyan/8 text-cyan shrink-0 px-1.5 py-0.5 text-[8px] tracking-wider uppercase">
+          {definition.unitKind.replace("_", " ")}
+        </Badge>
         <button
           type="button"
           aria-label="Close the definition"
@@ -221,65 +216,54 @@ export function SymbolPeekCard({
           <X className="size-3" />
         </button>
       </header>
-      {definition ? (
-        <>
-          <p className="text-fog shrink-0 truncate px-3 py-1.5 font-mono text-[9px]">
-            {definition.path} · lines {definition.startLine}–
-            {definition.endLine}
-          </p>
-          <div className="min-h-0 flex-1 overflow-auto border-t border-line">
-            {shown.map((line, index) => (
-              <div
-                key={`${definition.path}-${definition.startLine + index}`}
-                className={cn(
-                  "grid grid-cols-[44px_1fr] px-2",
-                  definition.focusLine === definition.startLine + index &&
-                    "bg-cyan/[.07]",
-                )}
-              >
-                <span className="text-fog pr-2 text-right font-mono text-[10px] select-none">
-                  {definition.startLine + index}
-                </span>
-                <pre className="syntax-code overflow-visible text-[11px] text-cloud/85">
-                  {line.tokens.length
-                    ? line.tokens.map((token, tokenIndex) => (
-                        <span
-                          key={`${tokenIndex}-${token.text.length}`}
-                          className={token.className || undefined}
-                        >
-                          {token.text}
-                        </span>
-                      ))
-                    : " "}
-                </pre>
-              </div>
-            ))}
-          </div>
-          <footer className="text-fog flex shrink-0 items-center gap-2 border-t border-line bg-surface-subtle/25 px-3 py-1.5 text-[9px]">
-            {hidden > 0 ? <span>{hidden} more lines</span> : <span />}
-            {definition.unitId && onOpenUnit && (
-              <button
-                type="button"
-                onClick={() => {
-                  const unitId = definition.unitId;
-                  if (unitId) onOpenUnit(unitId);
-                  onClose();
-                }}
-                className="text-cyan hover:bg-cyan/[.08] ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 transition"
-              >
-                Open in review
-                <ArrowUpRight className="size-3" />
-              </button>
+      <p className="text-fog shrink-0 truncate px-3 py-1.5 font-mono text-[9px]">
+        {definition.path} · lines {definition.startLine}–{definition.endLine}
+      </p>
+      <div className="min-h-0 flex-1 overflow-auto border-t border-line">
+        {shown.map((line, index) => (
+          <div
+            key={`${definition.path}-${definition.startLine + index}`}
+            className={cn(
+              "grid grid-cols-[44px_1fr] px-2",
+              definition.focusLine === definition.startLine + index &&
+                "bg-cyan/[.07]",
             )}
-          </footer>
-        </>
-      ) : (
-        <p className="text-mist px-3 py-3 text-[11px] leading-5">
-          {unresolved
-            ? "No declaration for this name was found in the reviewed revision."
-            : "Looking for where this name is declared…"}
-        </p>
-      )}
+          >
+            <span className="text-fog pr-2 text-right font-mono text-[10px] select-none">
+              {definition.startLine + index}
+            </span>
+            <pre className="syntax-code overflow-visible text-[11px] text-cloud/85">
+              {line.tokens.length
+                ? line.tokens.map((token, tokenIndex) => (
+                    <span
+                      key={`${tokenIndex}-${token.text.length}`}
+                      className={token.className || undefined}
+                    >
+                      {token.text}
+                    </span>
+                  ))
+                : " "}
+            </pre>
+          </div>
+        ))}
+      </div>
+      <footer className="text-fog flex shrink-0 items-center gap-2 border-t border-line bg-surface-subtle/25 px-3 py-1.5 text-[9px]">
+        {hidden > 0 ? <span>{hidden} more lines</span> : <span />}
+        {definition.unitId && onOpenUnit && (
+          <button
+            type="button"
+            onClick={() => {
+              const unitId = definition.unitId;
+              if (unitId) onOpenUnit(unitId);
+              onClose();
+            }}
+            className="text-cyan hover:bg-cyan/[.08] ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 transition"
+          >
+            Open in review
+            <ArrowUpRight className="size-3" />
+          </button>
+        )}
+      </footer>
     </div>
   );
 }

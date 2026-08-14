@@ -1,5 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { isPeekableToken, peekPlacement } from "./symbol-peek";
+import {
+  definitionIsWhereTheNameWasRead,
+  isPeekableToken,
+  peekPlacement,
+} from "./symbol-peek";
+
+describe("a definition worth showing", () => {
+  const definition = {
+    endLine: 202,
+    path: "src/server/providers/types.ts",
+    startLine: 190,
+  };
+
+  it.each([190, 197, 202])(
+    "says nothing about a name read from its own declaration at line %i",
+    (line) => {
+      expect(
+        definitionIsWhereTheNameWasRead(definition, {
+          line,
+          path: definition.path,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("shows a declaration the reader is somewhere else in the file from", () => {
+    expect(
+      definitionIsWhereTheNameWasRead(definition, {
+        line: 900,
+        path: definition.path,
+      }),
+    ).toBe(false);
+    expect(
+      definitionIsWhereTheNameWasRead(definition, {
+        line: 189,
+        path: definition.path,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a declaration that lives in another file", () => {
+    expect(
+      definitionIsWhereTheNameWasRead(definition, {
+        line: 197,
+        path: "src/server/providers/github.ts",
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a declaration when the reading line is unknown", () => {
+    expect(
+      definitionIsWhereTheNameWasRead(definition, { path: definition.path }),
+    ).toBe(false);
+  });
+});
 
 describe("peekable tokens", () => {
   it.each([
