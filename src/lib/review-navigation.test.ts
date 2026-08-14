@@ -115,6 +115,24 @@ describe("nextPendingReviewIndexPreferring", () => {
       ),
     ).toBe(0);
   });
+
+  it("keeps a ruled-out unit ruled out when the preferred subset is empty", () => {
+    // The fallback used to drop the caller's filter, which handed back the
+    // very unit the caller had excluded — for a paused concept, the one the
+    // reviewer was standing on.
+    const units = [
+      { id: "paused", changeType: "modified", status: "pending" as const },
+      { id: "open", changeType: "deleted", status: "pending" as const },
+    ];
+
+    expect(
+      nextPendingReviewIndexPreferring(
+        units,
+        (unit) => unit.changeType !== "deleted",
+        (unit) => unit.id !== "paused",
+      ),
+    ).toBe(1);
+  });
 });
 
 describe("optimisticallySignOffReviewUnit", () => {

@@ -5,6 +5,7 @@ import {
   MAX_CONCEPT_LAYOUT_MEMBERS,
   providerReviewDecisionSchema,
   publishReviewCommentSchema,
+  releaseReviewWaitsSchema,
   replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
   signOffBatchSchema,
@@ -298,5 +299,23 @@ describe("concept wait validation", () => {
         layoutId: "86f28e99-40ab-4418-933a-48cfd57eb9f5",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("wait release validation", () => {
+  it("accepts the units a reviewer is taking back", () => {
+    expect(
+      releaseReviewWaitsSchema.safeParse({
+        unitIds: ["399ea3a7-2860-4eb9-9243-28627e87898d"],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a release that names nothing", () => {
+    // Releasing every wait a reviewer holds is not what any button asks for,
+    // so an empty list is a bug rather than a wildcard.
+    expect(releaseReviewWaitsSchema.safeParse({ unitIds: [] }).success).toBe(
+      false,
+    );
   });
 });
