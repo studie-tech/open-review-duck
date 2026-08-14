@@ -1126,6 +1126,7 @@ export function ReviewWorkspace({
   const dismissedAiQuestionUnits = useRef(new Set<string>());
   // Units of a multi-unit undo whose own success is not worth a toast.
   const quietUndoUnitIds = useRef(new Set<string>());
+  const undoInFlight = useRef(false);
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
@@ -4417,7 +4418,10 @@ export function ReviewWorkspace({
    * the queue, are dropped instead of replayed.
    */
   async function undoLastSignOff() {
-    if (!undoableSignOff || !canUndoSignOff) return;
+    // A mutation's pending flag only reaches this closure on the next render,
+    // so a held shortcut would otherwise take the same step back twice.
+    if (!undoableSignOff || !canUndoSignOff || undoInFlight.current) return;
+    undoInFlight.current = true;
     const { entry, remaining } = undoableSignOff;
     setSignOffUndoHistory(remaining);
     restoreReviewView(entry.view, entry.unitIds);
@@ -4443,6 +4447,8 @@ export function ReviewWorkspace({
       // history so the reviewer can take it back again rather than being left
       // with a sign-off standing and nothing left to undo it from.
       setSignOffUndoHistory((history) => rememberSignOff(history, entry));
+    } finally {
+      undoInFlight.current = false;
     }
   }
 
