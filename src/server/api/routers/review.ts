@@ -327,8 +327,17 @@ async function declaredSymbolInSnapshot(
  */
 const SYMBOL_FILE_CACHE_LIMIT = 64;
 
-/** How many candidate paths one unresolved name may read from the provider. */
-const MAXIMUM_IMPORT_READS = 6;
+/**
+ * How many candidate paths of each shape one name may read from the provider.
+ *
+ * A specifier without an extension stands for a file under any of its
+ * language's extensions and for a directory's index under each of them, and
+ * every candidate that misses is a request. The two shapes are bounded
+ * separately so a bound can never put a directory import out of reach.
+ */
+const MAXIMUM_IMPORT_READS = 8;
+
+const DIRECTORY_IMPORT = /\/(?:index\.[^./]+|__init__\.py)$/;
 
 type FileDeclarations = Map<string, ReturnType<typeof symbolDefinitionOf>>;
 
@@ -444,10 +453,18 @@ async function importedSymbolDefinition(
     60_000,
   );
   const provider = await providerForScope(db, scope.connectionId);
-  // Every extension a specifier could carry is a candidate, and each miss is a
-  // provider request. The ones that resolve are at the front of the list, so a
-  // bound spares the tail without changing what a real import finds.
-  for (const path of candidates.slice(0, MAXIMUM_IMPORT_READS)) {
+  // A file answers before the directory of the same name, the way the runtime
+  // resolves it, so the two are bounded apart rather than as one list: a flat
+  // bound would spend itself on extensions and never reach an index at all.
+  const reads = [
+    ...candidates
+      .filter((path) => !DIRECTORY_IMPORT.test(path))
+      .slice(0, MAXIMUM_IMPORT_READS),
+    ...candidates
+      .filter((path) => DIRECTORY_IMPORT.test(path))
+      .slice(0, MAXIMUM_IMPORT_READS),
+  ];
+  for (const path of reads) {
     let content: string | undefined;
     try {
       content = await provider.getFileContent(
