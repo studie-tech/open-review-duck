@@ -2578,7 +2578,13 @@ export const reviewRouter = createTRPCRouter({
           ),
         )
         .returning({ unitId: reviewWaits.unitId });
-      return { releasedUnitIds: released.map(({ unitId }) => unitId) };
+      return {
+        // Both, because a request can name a unit whose row another tab or a
+        // poll already removed: it is deleted here by nobody, yet the caller
+        // still believes it is paused and still has to be told otherwise.
+        authorizedUnitIds: accessible.map(({ unitId }) => unitId),
+        releasedUnitIds: released.map(({ unitId }) => unitId),
+      };
     }),
 
   importTarget: protectedProcedure
