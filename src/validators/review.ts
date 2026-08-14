@@ -143,6 +143,9 @@ export const symbolDefinitionSchema = z.object({
     .min(1)
     .max(255)
     .regex(/^[A-Za-z_$][\w$]*$/, "A symbol lookup names one identifier"),
+  // The line the name was read from, so a declaration that already covers it
+  // is recognized as the code in front of the reviewer rather than offered.
+  line: z.number().int().positive().optional(),
   // Set only when the reviewer's file imports the name: the specifier resolves
   // the definition far more precisely than a repository-wide name can.
   specifier: z.string().trim().min(1).max(500).optional(),

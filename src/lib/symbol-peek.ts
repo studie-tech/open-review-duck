@@ -17,6 +17,14 @@ export const SYMBOL_PEEK_CLOSE_DELAY_MS = 180;
 /** The attribute a diff token carries so the pointer can find its name. */
 export const SYMBOL_PEEK_ATTRIBUTE = "data-review-symbol";
 
+/**
+ * The attribute naming the line a peekable token was rendered on.
+ *
+ * A definition is only worth showing when it is somewhere else, so the lookup
+ * has to say where the reviewer is reading the name from.
+ */
+export const SYMBOL_PEEK_LINE_ATTRIBUTE = "data-review-symbol-line";
+
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const NAMED_CLASSES = new Set(["tok-function", "tok-typeName", ""]);
 
@@ -38,6 +46,24 @@ export function isPeekableToken(
   const className = token.className;
   return (
     NAMED_CLASSES.has(className) || className.startsWith("tok-variableName")
+  );
+}
+
+/**
+ * Reports that a declaration is the very code the name was read from.
+ *
+ * Reading a declaration's own name, or a name used inside the body it opens,
+ * has nothing to look up: the answer is the lines already on screen.
+ */
+export function definitionIsWhereTheNameWasRead(
+  definition: { endLine: number; path: string; startLine: number },
+  read: { line?: number; path: string },
+) {
+  return (
+    read.line !== undefined &&
+    definition.path === read.path &&
+    read.line >= definition.startLine &&
+    read.line <= definition.endLine
   );
 }
 

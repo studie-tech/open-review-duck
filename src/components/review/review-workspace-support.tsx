@@ -56,7 +56,11 @@ import {
   focusedRowSpan,
   sideBySideDiff,
 } from "~/lib/side-by-side-diff";
-import { isPeekableToken, SYMBOL_PEEK_ATTRIBUTE } from "~/lib/symbol-peek";
+import {
+  isPeekableToken,
+  SYMBOL_PEEK_ATTRIBUTE,
+  SYMBOL_PEEK_LINE_ATTRIBUTE,
+} from "~/lib/symbol-peek";
 import {
   type HighlightedLine,
   useHighlightedSource,
@@ -1337,15 +1341,20 @@ export function InlineAiQuestion({
 /** Renders reusable syntax-highlighted tokens for static and interactive rows. */
 function HighlightedDiffTokens({
   line,
+  lineNumber,
 }: {
   line: HighlightedLine | undefined;
+  lineNumber?: number;
 }) {
   return line?.tokens.length
     ? line.tokens.map((token, index) =>
         isPeekableToken(token) ? (
           <span
             key={`${index}-${token.text.length}`}
-            {...{ [SYMBOL_PEEK_ATTRIBUTE]: token.text }}
+            {...{
+              [SYMBOL_PEEK_ATTRIBUTE]: token.text,
+              [SYMBOL_PEEK_LINE_ATTRIBUTE]: lineNumber,
+            }}
             className={cn(
               "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
               token.className,
@@ -1366,10 +1375,16 @@ function HighlightedDiffTokens({
 }
 
 /** Renders one syntax-highlighted line without adding a second code block. */
-function HighlightedDiffLine({ line }: { line: HighlightedLine | undefined }) {
+function HighlightedDiffLine({
+  line,
+  lineNumber,
+}: {
+  line: HighlightedLine | undefined;
+  lineNumber?: number;
+}) {
   return (
     <pre className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-      <HighlightedDiffTokens line={line} />
+      <HighlightedDiffTokens line={line} lineNumber={lineNumber} />
     </pre>
   );
 }
@@ -1984,9 +1999,10 @@ export const SideBySideUnitDiff = forwardRef<
                   }
                   data-review-scope={isContextRow ? "context" : "unit"}
                   className={cn(
-                    // Wide enough for the ask affordance that sits over the
-                    // gutter's leading edge beside the comment icon.
-                    "grid w-full grid-cols-[66px_minmax(0,1fr)] text-left",
+                    // Wide enough to hold the ask affordance that sits over
+                    // the gutter's leading edge, a comment icon and a
+                    // four-digit line number without crowding any of them.
+                    "grid w-full grid-cols-[82px_minmax(0,1fr)] text-left",
                     row.kind === "added"
                       ? "bg-addition/[.085]"
                       : "bg-surface-subtle/20",
@@ -2017,7 +2033,10 @@ export const SideBySideUnitDiff = forwardRef<
                     {lineNumber}
                   </span>
                   <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                    <HighlightedDiffTokens line={line} />
+                    <HighlightedDiffTokens
+                      line={line}
+                      lineNumber={lineNumber}
+                    />
                   </span>
                 </LineContainer>
                 {interactive && onAskReviewLine && (
@@ -2238,7 +2257,10 @@ export const SideBySideUnitDiff = forwardRef<
                     {currentLineNumber}
                   </span>
                   <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                    <HighlightedDiffTokens line={currentLine} />
+                    <HighlightedDiffTokens
+                      line={currentLine}
+                      lineNumber={currentLineNumber}
+                    />
                   </span>
                 </div>
               ) : (
@@ -2276,7 +2298,10 @@ export const SideBySideUnitDiff = forwardRef<
                     {currentLineNumber}
                   </span>
                   <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                    <HighlightedDiffTokens line={currentLine} />
+                    <HighlightedDiffTokens
+                      line={currentLine}
+                      lineNumber={currentLineNumber}
+                    />
                   </span>
                 </button>
               )}
@@ -2332,7 +2357,10 @@ export const SideBySideUnitDiff = forwardRef<
                         {currentLineNumber}
                       </span>
                       <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                        <HighlightedDiffTokens line={currentLine} />
+                        <HighlightedDiffTokens
+                          line={currentLine}
+                          lineNumber={currentLineNumber}
+                        />
                       </span>
                     </button>
                   ) : (
@@ -2341,7 +2369,10 @@ export const SideBySideUnitDiff = forwardRef<
                         {currentLineNumber}
                       </span>
                       <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                        <HighlightedDiffTokens line={currentLine} />
+                        <HighlightedDiffTokens
+                          line={currentLine}
+                          lineNumber={currentLineNumber}
+                        />
                       </span>
                     </>
                   )}
@@ -2422,7 +2453,10 @@ export const SideBySideUnitDiff = forwardRef<
                           +
                         </span>
                         <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                          <HighlightedDiffTokens line={currentLine} />
+                          <HighlightedDiffTokens
+                            line={currentLine}
+                            lineNumber={currentLineNumber}
+                          />
                         </span>
                       </button>
                     ) : (
@@ -2434,7 +2468,10 @@ export const SideBySideUnitDiff = forwardRef<
                           +
                         </span>
                         <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                          <HighlightedDiffTokens line={currentLine} />
+                          <HighlightedDiffTokens
+                            line={currentLine}
+                            lineNumber={currentLineNumber}
+                          />
                         </span>
                       </div>
                     ))}

@@ -108,7 +108,11 @@ import {
   type SignOffUndoEntry,
   signOffUndoTarget,
 } from "~/lib/sign-off-undo";
-import { isPeekableToken, SYMBOL_PEEK_ATTRIBUTE } from "~/lib/symbol-peek";
+import {
+  isPeekableToken,
+  SYMBOL_PEEK_ATTRIBUTE,
+  SYMBOL_PEEK_LINE_ATTRIBUTE,
+} from "~/lib/symbol-peek";
 import {
   preloadSyntaxLanguage,
   useHighlightedSource,
@@ -1652,6 +1656,7 @@ export function ReviewWorkspace({
       sourcePath: activeUnit?.path ?? "",
       sourceLanguage: supportedLanguage(activeUnit?.language ?? "text"),
       symbol: peekedSymbol?.symbol ?? "",
+      line: peekedSymbol?.line,
       ...(peekedImport
         ? {
             specifier: peekedImport.specifier,
@@ -6722,7 +6727,10 @@ export function ReviewWorkspace({
                               ) : isPeekableToken(token) ? (
                                 <span
                                   key={`${tokenIndex}-${token.text.length}`}
-                                  {...{ [SYMBOL_PEEK_ATTRIBUTE]: token.text }}
+                                  {...{
+                                    [SYMBOL_PEEK_ATTRIBUTE]: token.text,
+                                    [SYMBOL_PEEK_LINE_ATTRIBUTE]: lineNumber,
+                                  }}
                                   className={cn(
                                     "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
                                     token.className,
@@ -7347,19 +7355,10 @@ export function ReviewWorkspace({
           </div>
         </aside>
 
-        {peekedSymbol && (
+        {peekedSymbol && peekedDefinition.data?.kind === "definition" && (
           <SymbolPeekCard
             peeked={peekedSymbol}
-            definition={
-              peekedDefinition.data?.kind === "definition"
-                ? peekedDefinition.data
-                : undefined
-            }
-            loading={peekedDefinition.isFetching}
-            unresolved={
-              peekedDefinition.isError ||
-              peekedDefinition.data?.kind === "unresolved"
-            }
+            definition={peekedDefinition.data}
             onClose={closeSymbolPeek}
             onHold={holdSymbolPeek}
             onOpenUnit={(unitId) => {
