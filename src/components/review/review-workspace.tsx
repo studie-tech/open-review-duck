@@ -824,6 +824,7 @@ import {
   INITIAL_PATH_ITEMS,
   InlineAiQuestion,
   lineWithinReviewRanges,
+  nextAnchorableLine,
   PATH_PAGE_SIZE,
   PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
@@ -4797,7 +4798,7 @@ export function ReviewWorkspace({
       id: "await-response",
       label:
         activeConcept && activeConceptMembers.length > 1
-          ? `Wait for a response (${activeConceptMembers.length})`
+          ? `Await concept (${activeConceptMembers.length})`
           : "Wait for a response",
       description:
         activeConcept && activeConceptMembers.length > 1
@@ -4884,8 +4885,7 @@ export function ReviewWorkspace({
 
   useEffect(() => {
     if (keyboardLine === undefined || !activeUnit) return;
-    const startLine = activeUnit.startLine;
-    const endLine = activeUnit.endLine;
+    const pickedLine = keyboardLine;
     const target = document.getElementById(`review-line-${keyboardLine}`);
     target?.scrollIntoView({ block: "nearest" });
 
@@ -4895,26 +4895,43 @@ export function ReviewWorkspace({
       if (event.key === "Escape") {
         event.preventDefault();
         setKeyboardLine(undefined);
-      } else if (event.key === "ArrowDown") {
+      } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
         setKeyboardLine((current) =>
-          Math.min((current ?? startLine) + 1, endLine),
-        );
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setKeyboardLine((current) =>
-          Math.max((current ?? startLine) - 1, startLine),
+          nextAnchorableLine(
+            current ?? primaryReviewStart,
+            direction,
+            primaryReviewRanges,
+            primaryReviewStart,
+            primaryReviewEnd,
+          ),
         );
       } else if (event.key === "Enter") {
         event.preventDefault();
-        setSelectedLine(keyboardLine);
+        if (
+          lineWithinReviewRanges(
+            pickedLine,
+            primaryReviewRanges,
+            primaryReviewStart,
+            primaryReviewEnd,
+          )
+        ) {
+          setSelectedLine(pickedLine);
+        }
         setKeyboardLine(undefined);
       }
     }
 
     document.addEventListener("keydown", onLinePickerKeyDown);
     return () => document.removeEventListener("keydown", onLinePickerKeyDown);
-  }, [activeUnit, keyboardLine]);
+  }, [
+    activeUnit,
+    keyboardLine,
+    primaryReviewEnd,
+    primaryReviewRanges,
+    primaryReviewStart,
+  ]);
 
   useEffect(() => {
     // A finding the run dropped or merged on its next poll must not keep a

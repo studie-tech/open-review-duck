@@ -267,6 +267,31 @@ export function lineWithinReviewRanges(
 }
 
 /**
+ * Steps a line picker to the next line a provider comment can anchor to.
+ *
+ * A disjoint unit prints the lines between its ranges but owns none of them,
+ * so moving by one would park the picker on a line that answers a selection
+ * with nothing. The current line is held when the scope has nothing further
+ * in that direction.
+ */
+export function nextAnchorableLine(
+  current: number,
+  direction: -1 | 1,
+  ranges: Array<{ startLine: number; endLine: number }> | undefined,
+  scopeStart: number,
+  scopeEnd: number,
+) {
+  for (
+    let line = current + direction;
+    line >= scopeStart && line <= scopeEnd;
+    line += direction
+  ) {
+    if (lineWithinReviewRanges(line, ranges, scopeStart, scopeEnd)) return line;
+  }
+  return current;
+}
+
+/**
  * Checks whether a member's own line can carry a provider comment.
  *
  * A member card renders the unit's stored source from its first line, so the
