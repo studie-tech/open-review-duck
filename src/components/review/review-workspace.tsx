@@ -4449,6 +4449,9 @@ export function ReviewWorkspace({
       // with a sign-off standing and nothing left to undo it from.
       setSignOffUndoHistory((history) => rememberSignOff(history, entry));
     } finally {
+      // A loop that stopped early would otherwise leave units marked quiet,
+      // and the next undo of one of them would succeed without saying so.
+      quietUndoUnitIds.current.clear();
       undoInFlight.current = false;
     }
   }

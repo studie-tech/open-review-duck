@@ -6,8 +6,8 @@ import type { ProviderReviewThread } from "~/server/providers/types";
 
 type Database = typeof database;
 
-const COMMENT_MARKER_PATTERN =
-  /\n?<!-- reviewduck-comment:([0-9a-f-]{36}) -->/gi;
+const COMMENT_MARKER = /\n?<!-- reviewduck-comment:([0-9a-f-]{36}) -->/i;
+const COMMENT_MARKER_PATTERN = new RegExp(COMMENT_MARKER.source, "gi");
 
 /** Appends an invisible provider-side identifier used to reconcile ambiguous publishes. */
 export function providerCommentBody(body: string, commentId: string) {
@@ -30,9 +30,7 @@ export function rewrittenProviderCommentBody(
   existingBody: string,
   body: string,
 ) {
-  const commentId = /<!-- reviewduck-comment:([0-9a-f-]{36}) -->/i.exec(
-    existingBody,
-  )?.[1];
+  const commentId = COMMENT_MARKER.exec(existingBody)?.[1];
   return commentId ? providerCommentBody(body, commentId) : body;
 }
 
