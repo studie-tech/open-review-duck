@@ -2594,28 +2594,32 @@ export function ReviewWorkspace({
       },
     );
   }, [providerConversations.data?.reopenedUnitIds]);
-  /** Moves the named units into the waiting section of the review path. */
+  /**
+   * Moves the named units into the waiting section of the review path.
+   *
+   * The next index is read off the new list before anything is set, the way
+   * `optimisticallyQueueSignOffs` does: choosing it clears a path filter that
+   * matches nothing any more, which a replayed state updater would repeat.
+   */
   function markUnitsWaiting(waitingUnitIds: string[], description: string) {
     const waiting = new Set(waitingUnitIds);
-    setUnits((current) => {
-      const updated = current.map((unit) =>
-        waiting.has(unit.id)
-          ? {
-              ...unit,
-              status: "waiting" as const,
-              waitingSince: new Date(),
-              changedSinceSignOff: false,
-            }
-          : unit,
-      );
-      const nextIndex = nextReviewIndexAfterAction(updated);
-      if (nextIndex >= 0) {
-        setActiveIndex(nextIndex);
-      }
-      setQueueLimit(INITIAL_PATH_ITEMS);
-      setWaitingLimit(INITIAL_PATH_ITEMS);
-      return updated;
-    });
+    const updated = units.map((unit) =>
+      waiting.has(unit.id)
+        ? {
+            ...unit,
+            status: "waiting" as const,
+            waitingSince: new Date(),
+            changedSinceSignOff: false,
+          }
+        : unit,
+    );
+    const nextIndex = nextReviewIndexAfterAction(updated);
+    setUnits(updated);
+    if (nextIndex >= 0) {
+      setActiveIndex(nextIndex);
+    }
+    setQueueLimit(INITIAL_PATH_ITEMS);
+    setWaitingLimit(INITIAL_PATH_ITEMS);
     setSelectedLine(undefined);
     setFeedback("");
     setShowDiff(true);
@@ -2623,20 +2627,24 @@ export function ReviewWorkspace({
     toast.success("Waiting for response", { description });
   }
   const awaitResponse = api.review.awaitResponse.useMutation({
-    onSuccess: () => {
-      if (!activeUnit) return;
+    // The reviewer may have moved on while the request was in flight, so the
+    // unit that was paused is the one the wait row names, not the open one.
+    onSuccess: (wait) => {
+      const paused = unitsById.get(wait.unitId);
+      if (!paused) return;
       markUnitsWaiting(
-        [activeUnit.id],
-        `${activeUnit.name} will return to your review path when its code or conversation changes.`,
+        [wait.unitId],
+        `${paused.name} will return to your review path when its code or conversation changes.`,
       );
     },
     onError: (error) => toast.error(error.message),
   });
   const awaitResponseConcept = api.review.awaitResponseConcept.useMutation({
-    onSuccess: ({ waitingUnitIds }) => {
+    onSuccess: ({ conceptId, waitingUnitIds }) => {
+      const paused = initialData.concepts.find(({ id }) => id === conceptId);
       markUnitsWaiting(
         waitingUnitIds,
-        `${waitingUnitIds.length} ${waitingUnitIds.length === 1 ? "unit" : "units"} in ${activeConcept?.title ?? "this concept"} will return to your review path when the code or conversation changes.`,
+        `${waitingUnitIds.length} ${waitingUnitIds.length === 1 ? "unit" : "units"} in ${paused?.title ?? "this concept"} will return to your review path when the code or conversation changes.`,
       );
     },
     onError: (error) => toast.error(error.message),
