@@ -634,6 +634,8 @@ export class GitHubProvider implements PullRequestProvider {
   /** Rewrites one GitHub review comment. */
   async editInlineComment(input: {
     repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
     commentExternalId: string;
     body: string;
   }) {
@@ -654,6 +656,8 @@ export class GitHubProvider implements PullRequestProvider {
   /** Deletes one GitHub review comment. */
   async deleteInlineComment(input: {
     repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
     commentExternalId: string;
   }) {
     await providerVoid(

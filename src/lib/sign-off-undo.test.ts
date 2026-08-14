@@ -53,16 +53,17 @@ describe("sign-off undo history", () => {
   });
 
   it("forgets the oldest sign-off once the history is full", () => {
-    const history = Array.from({ length: 40 }).reduce<SignOffUndoEntry[]>(
+    const recorded = MAX_SIGN_OFF_UNDO_ENTRIES + 5;
+    const history = Array.from({ length: recorded }).reduce<SignOffUndoEntry[]>(
       (current, _entry, index) =>
         rememberSignOff(current, unitEntry(`unit-${index}`)),
       [],
     );
 
     expect(history).toHaveLength(MAX_SIGN_OFF_UNDO_ENTRIES);
-    expect(history.at(0)?.label).toBe("unit-39");
+    expect(history.at(0)?.label).toBe(`unit-${recorded - 1}`);
     expect(history.at(-1)?.label).toBe(
-      `unit-${40 - MAX_SIGN_OFF_UNDO_ENTRIES}`,
+      `unit-${recorded - MAX_SIGN_OFF_UNDO_ENTRIES}`,
     );
   });
 

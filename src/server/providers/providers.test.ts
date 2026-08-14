@@ -1720,11 +1720,15 @@ describe("provider normalization", () => {
     const provider = new GitHubProvider("token");
     await provider.editInlineComment({
       repositoryExternalId: "42",
+      pullRequestNumber: 8,
+      threadExternalId: "901",
       commentExternalId: "901",
       body: "Rewritten.",
     });
     await provider.deleteInlineComment({
       repositoryExternalId: "42",
+      pullRequestNumber: 8,
+      threadExternalId: "901",
       commentExternalId: "901",
     });
 
