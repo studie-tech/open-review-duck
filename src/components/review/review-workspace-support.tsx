@@ -103,9 +103,15 @@ export const reviewShortcuts = {
   comment: [{ key: "l" }],
   context: [{ key: "c" }],
   signOff: [{ key: "s" }],
+  // Shift, not the command key: the browser keeps ⌘W for closing the tab and
+  // will not hand it to a page, so a concept chord built on it would shut the
+  // review instead of pausing it. Shift already carries the wider variant of
+  // an action here — deletions, reset, the next review.
+  signOffConcept: [{ key: "s", shift: true }],
   signOffDeletions: [{ key: "d", shift: true }],
   undoReview: [{ key: "u" }],
   awaitResponse: [{ key: "w" }],
+  awaitConcept: [{ key: "w", shift: true }],
   refresh: [{ key: "r" }],
   reset: [{ key: "r", shift: true }],
   loadChanges: [{ key: "r" }],
@@ -377,6 +383,144 @@ function ReviewConceptMemberSource({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+export interface SplitAction {
+  disabled?: boolean;
+  description?: string;
+  label: string;
+  onSelect: () => void;
+  shortcut: KeyboardShortcut;
+}
+
+/**
+ * Renders one action beside the wider one it belongs to.
+ *
+ * A review reads one unit at a time and lands on the concept only at the end,
+ * so the wide action is wrong to press for most of a concept and right at the
+ * end of it. Putting both under one control lets the button advertise the one
+ * that fits where the reviewer is standing, while the other stays one click
+ * away rather than behind a key nobody has met yet.
+ */
+export function SplitActionButton({
+  primary,
+  options,
+  className,
+  icon,
+  label,
+  mobileLabel,
+  menuLabel,
+  pending = false,
+  variant = "primary",
+}: {
+  primary: SplitAction;
+  options: SplitAction[];
+  className?: string;
+  icon: ReactNode;
+  label: string;
+  mobileLabel: string;
+  menuLabel: string;
+  pending?: boolean;
+  variant?: "primary" | "secondary";
+}) {
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    /** Closes the menu for a pointer that lands outside it. */
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    }
+
+    /** Closes the menu without letting Escape reach the workspace. */
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={container} className={cn("relative", className)}>
+      {open && (
+        <div
+          role="menu"
+          aria-label={menuLabel}
+          className="border-line bg-panel absolute right-0 bottom-full z-30 mb-2 w-72 overflow-hidden rounded-xl border p-1 shadow-xl"
+        >
+          {options.map((option) => (
+            <button
+              key={option.label}
+              type="button"
+              role="menuitem"
+              disabled={option.disabled}
+              onClick={() => {
+                setOpen(false);
+                option.onSelect();
+              }}
+              className="hover:bg-surface-hover flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span className="min-w-0">
+                <span className="text-cloud block text-xs font-medium">
+                  {option.label}
+                </span>
+                {option.description && (
+                  <span className="text-fog mt-0.5 block text-[10px] leading-4">
+                    {option.description}
+                  </span>
+                )}
+              </span>
+              <ShortcutHint shortcut={option.shortcut} className="shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex items-stretch">
+        <Button
+          variant={variant}
+          className="h-10 gap-2 rounded-r-none whitespace-nowrap px-3 sm:h-11 sm:px-4"
+          onClick={primary.onSelect}
+          disabled={primary.disabled || pending}
+        >
+          {icon}
+          <span className="hidden sm:inline">{label}</span>
+          <span className="sm:hidden">{mobileLabel}</span>
+          {!pending && (
+            <ShortcutHint
+              shortcut={primary.shortcut}
+              className="hidden sm:inline-flex"
+            />
+          )}
+        </Button>
+        <Button
+          variant={variant}
+          aria-label={menuLabel}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="h-10 rounded-l-none border-l border-l-black/15 px-2 sm:h-11 dark:border-l-white/20"
+          onClick={() => setOpen((current) => !current)}
+          disabled={pending}
+        >
+          <ChevronDown
+            className={cn(
+              "size-3.5 transition-transform",
+              open && "rotate-180",
+            )}
+            aria-hidden="true"
+          />
+        </Button>
+      </div>
     </div>
   );
 }

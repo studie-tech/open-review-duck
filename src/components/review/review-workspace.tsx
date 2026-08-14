@@ -863,6 +863,7 @@ import {
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
+  SplitActionButton,
   showAiStartError,
   supportedLanguage,
   UnitImportContext,
@@ -1964,11 +1965,6 @@ export function ReviewWorkspace({
     void drainSignOffQueue();
   }
 
-  /** Applies one optimistic sign-off through the shared queue. */
-  function optimisticallyQueueSignOff(input: SignOffInput) {
-    optimisticallyQueueSignOffs([input]);
-  }
-
   /** Restores failed optimistic saves and returns focus to the first failure. */
   function restoreFailedSignOffs(
     failures: Array<{
@@ -2598,16 +2594,18 @@ export function ReviewWorkspace({
     providerConversations.data?.threads.filter(
       (thread) => thread.unitId === activeUnit?.id,
     ) ?? [];
-  const hasLiveConversation =
+  const activeUnitHasConversation =
     activeProviderThreads.length > 0 ||
+    (discussion.data?.comments.some(
+      (comment) => comment.status === "published",
+    ) ??
+      false);
+  const hasLiveConversation =
+    activeUnitHasConversation ||
     // Waiting pauses the whole concept, so a conversation on any member is one
     // the concept can wait on — not only the member whose card is open.
     (providerConversations.data?.threads.some((thread) =>
       activeConceptMembers.some((member) => member.id === thread.unitId),
-    ) ??
-      false) ||
-    (discussion.data?.comments.some(
-      (comment) => comment.status === "published",
     ) ??
       false);
   const handledReopenedUnits = useRef(new Set<string>());
@@ -3523,21 +3521,74 @@ export function ReviewWorkspace({
   // waiting?" asks the concept first and falls back to the unit only when no
   // layout groups it.
   const activeWaitStatus = activeConceptProgress?.status ?? activeUnit?.status;
+  // A concept action needs a layout to name, and a concept of one member is
+  // its unit — there the two levels collapse into a single action.
+  const conceptActionAvailable = Boolean(
+    activeConcept &&
+      initialData.conceptLayout &&
+      activeConceptMembers.length > 1,
+  );
+  const outstandingConceptMembers = activeConceptMembers.filter(
+    ({ status }) => status !== "signed_off",
+  );
+  // The last unit owed is where a concept ends, so it is the one place the
+  // wider action is the one to advertise: signing it off finishes the concept
+  // either way, and pausing it pauses everything the concept has left.
+  const onLastConceptMember =
+    conceptActionAvailable &&
+    outstandingConceptMembers.length === 1 &&
+    outstandingConceptMembers[0]?.id === activeUnit?.id;
+  const reviewActionBlocked =
+    !activeUnit ||
+    reviewComplete ||
+    activeWaitStatus === "waiting" ||
+    activeSignOffPending ||
+    undoSignOff.isPending ||
+    undoConcept.isPending ||
+    awaitPending ||
+    resetReview.isPending;
+  // One unit needs only its own source; the concept needs every member's,
+  // because it records all of them at once.
+  const canSignOffUnit =
+    !reviewActionBlocked &&
+    activeSourceAvailable &&
+    activeUnit.status !== "signed_off";
+  const canSignOffConcept =
+    !reviewActionBlocked &&
+    conceptActionAvailable &&
+    activeConceptSourcesAvailable &&
+    activeConceptProgress?.status !== "signed_off";
   const canUsePrimaryAction =
-    !!activeUnit &&
-    (activeConceptSourcesAvailable ||
-      activeConceptProgress?.status === "signed_off" ||
-      activeConceptProgress?.status === "waiting") &&
-    !reviewComplete &&
-    !activeSignOffPending &&
-    !undoSignOff.isPending &&
-    !undoConcept.isPending &&
-    !awaitPending &&
-    !resetReview.isPending &&
-    // Read off the concept, not the open card: a member left pending inside a
-    // waiting concept cannot be signed off either, so offering the action on
-    // it only produces a keypress that goes nowhere.
-    (activeWaitStatus !== "waiting" || hasNextActionableUnit);
+    activeWaitStatus === "signed_off" || activeWaitStatus === "waiting"
+      ? !!activeUnit &&
+        !reviewComplete &&
+        !activeSignOffPending &&
+        !undoSignOff.isPending &&
+        !undoConcept.isPending &&
+        !awaitPending &&
+        !resetReview.isPending &&
+        // Read off the concept, not the open card: a member left pending
+        // inside a waiting concept cannot be signed off either, so offering
+        // the action on it only produces a keypress that goes nowhere.
+        (activeWaitStatus !== "waiting" || hasNextActionableUnit)
+      : onLastConceptMember
+        ? canSignOffConcept
+        : canSignOffUnit;
+  const primaryIsContinue =
+    activeWaitStatus === "signed_off" || activeWaitStatus === "waiting";
+  const primaryActionLabel = signOffConcept.isPending
+    ? "Saving concept…"
+    : activeSignOffPending
+      ? `Saving ${signOffQueueProgress}…`
+      : primaryIsContinue
+        ? filteredReviewActive
+          ? "Next match"
+          : "Continue"
+        : onLastConceptMember
+          ? `Sign off concept (${activeConceptMembers.length})`
+          : conceptActionAvailable
+            ? "Sign off unit"
+            : "Sign off";
   // A concept is paused as a whole, so a concept already waiting has nothing
   // left to pause even when the member card in front is not the waiting one.
   const canAwaitResponse =
@@ -3546,6 +3597,16 @@ export function ReviewWorkspace({
     activeWaitStatus !== "waiting" &&
     !awaitPending &&
     !activeSignOffPending;
+  // The unit-level wait needs a conversation on this unit: the server refuses
+  // a wait with no thread of its own to watch, so offering it on a unit whose
+  // concept is answered elsewhere would only produce an error.
+  const canAwaitUnit = canAwaitResponse && activeUnitHasConversation;
+  const canAwaitConcept = canAwaitResponse && conceptActionAvailable;
+  // Pausing follows the same rule as signing off — the wider scope only where
+  // the concept ends — except that a unit with no conversation of its own has
+  // nothing to wait on, so the concept is the only scope left to offer.
+  const awaitPrimary =
+    onLastConceptMember || !canAwaitUnit ? "concept" : "unit";
   // Only the rows that exist can be given back: a concept can be waiting on
   // one member's conversation while a synchronization or a regrouping left the
   // rest of it pending.
@@ -4024,12 +4085,39 @@ export function ReviewWorkspace({
       continueReview();
       return;
     }
-    if (!activeConcept || !initialData.conceptLayout) {
-      optimisticallyQueueSignOff({
-        unitId: activeUnit.id,
-        sessionId,
-        durationSeconds: Math.round((Date.now() - startedAt) / 1000),
-      });
+    if (onLastConceptMember) {
+      signOffActiveConcept();
+      return;
+    }
+    signOffActiveUnit();
+  }
+
+  /**
+   * Records the open unit and moves on to the next one in its concept.
+   *
+   * The concept is read one member at a time, so the unit the reviewer just
+   * finished is the natural thing to record: the next member is preferred over
+   * the canonical order, which keeps a concept together instead of scattering
+   * a reviewer across the pull request between its members.
+   */
+  function signOffActiveUnit() {
+    if (!activeUnit || !canSignOffUnit) return;
+    const memberIds = new Set(activeConcept?.memberIds ?? []);
+    optimisticallyQueueSignOffs(
+      [
+        {
+          unitId: activeUnit.id,
+          sessionId,
+          durationSeconds: Math.round((Date.now() - startedAt) / 1000),
+        },
+      ],
+      (unit) => memberIds.has(unit.id),
+    );
+  }
+
+  /** Records every member of the open concept in one go. */
+  function signOffActiveConcept() {
+    if (!canSignOffConcept || !activeConcept || !initialData.conceptLayout) {
       return;
     }
     signOffConcept.mutate({
@@ -4041,18 +4129,33 @@ export function ReviewWorkspace({
     });
   }
 
-  /** Pauses the open review concept, or its one unit outside a layout. */
-  function awaitActiveResponse() {
-    if (!activeUnit || !canAwaitResponse) return;
-    if (activeConcept && initialData.conceptLayout) {
-      awaitResponseConcept.mutate({
-        conceptId: activeConcept.id,
-        layoutId: initialData.conceptLayout.id,
-        layoutVersion: initialData.conceptLayout.version,
-      });
+  /** Pauses the open unit until its own conversation moves. */
+  function awaitActiveUnit() {
+    if (!activeUnit || !canAwaitUnit) return;
+    awaitResponse.mutate({ unitId: activeUnit.id });
+  }
+
+  /** Pauses every member of the open concept. */
+  function awaitActiveConcept() {
+    if (!canAwaitConcept || !activeConcept || !initialData.conceptLayout) {
       return;
     }
-    awaitResponse.mutate({ unitId: activeUnit.id });
+    awaitResponseConcept.mutate({
+      conceptId: activeConcept.id,
+      layoutId: initialData.conceptLayout.id,
+      layoutVersion: initialData.conceptLayout.version,
+    });
+  }
+
+  /** Pauses whichever scope the open card sits at the end of. */
+  function awaitActiveResponse() {
+    if (onLastConceptMember || !canAwaitUnit) {
+      if (canAwaitConcept) {
+        awaitActiveConcept();
+        return;
+      }
+    }
+    awaitActiveUnit();
   }
 
   /** Signs off every outstanding unit from files removed by this pull request. */
@@ -4866,15 +4969,25 @@ export function ReviewWorkspace({
           ? filteredReviewActive
             ? "Continue to next match"
             : "Continue review"
-          : "Sign off",
+          : "Sign off unit",
       description: filteredReviewActive
         ? "Continue through the matching review units in planned order"
-        : "Remember this unit at the current revision",
+        : "Remember this unit at the current revision and open the next one",
       group: "Review actions",
       icon: <Check className="size-4" />,
       shortcut: reviewShortcuts.signOff,
       disabled: !canUsePrimaryAction,
       onSelect: runPrimaryAction,
+    },
+    {
+      id: "sign-off-concept",
+      label: `Sign off concept (${activeConceptMembers.length})`,
+      description: "Remember every member of this concept at once",
+      group: "Review actions",
+      icon: <CheckCheck className="size-4" />,
+      shortcut: reviewShortcuts.signOffConcept,
+      disabled: !canSignOffConcept,
+      onSelect: signOffActiveConcept,
     },
     {
       id: "sign-off-deleted-files",
@@ -4915,19 +5028,23 @@ export function ReviewWorkspace({
     },
     {
       id: "await-response",
-      label:
-        activeConcept && activeConceptMembers.length > 1
-          ? `Await concept (${activeConceptMembers.length})`
-          : "Wait for a response",
-      description:
-        activeConcept && activeConceptMembers.length > 1
-          ? "Pause this concept until its code or conversation changes"
-          : "Pause this unit until its code or conversation changes",
+      label: "Await unit",
+      description: "Pause this unit until its code or conversation changes",
       group: "Review actions",
       icon: <Clock3 className="size-4" />,
       shortcut: reviewShortcuts.awaitResponse,
-      disabled: !canAwaitResponse,
-      onSelect: awaitActiveResponse,
+      disabled: !canAwaitUnit,
+      onSelect: awaitActiveUnit,
+    },
+    {
+      id: "await-concept",
+      label: `Await concept (${activeConceptMembers.length})`,
+      description: "Pause this concept until its code or conversation changes",
+      group: "Review actions",
+      icon: <Clock3 className="size-4" />,
+      shortcut: reviewShortcuts.awaitConcept,
+      disabled: !canAwaitConcept,
+      onSelect: awaitActiveConcept,
     },
     {
       id: "sync-provider-data",
@@ -6590,11 +6707,58 @@ export function ReviewWorkspace({
                   </Button>
                 ) : (
                   hasLiveConversation &&
-                  footerSaveState !== "active" && (
+                  footerSaveState !== "active" &&
+                  (conceptActionAvailable ? (
+                    <SplitActionButton
+                      variant="secondary"
+                      icon={
+                        awaitPending ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <Clock3 className="size-4" />
+                        )
+                      }
+                      label={
+                        awaitPending
+                          ? "Saving…"
+                          : awaitPrimary === "concept"
+                            ? `Await concept (${activeConceptMembers.length})`
+                            : "Await unit"
+                      }
+                      mobileLabel={awaitPending ? "Saving…" : "Await"}
+                      menuLabel="Choose what to pause"
+                      pending={awaitPending}
+                      primary={{
+                        disabled: !canAwaitResponse,
+                        label: "Await",
+                        onSelect: awaitActiveResponse,
+                        shortcut:
+                          awaitPrimary === "concept"
+                            ? reviewShortcuts.awaitConcept
+                            : reviewShortcuts.awaitResponse,
+                      }}
+                      options={[
+                        {
+                          description: `Pause this unit until ${providerLabel(initialData.pullRequest.provider)} answers its own conversation`,
+                          disabled: !canAwaitUnit,
+                          label: "Await unit",
+                          onSelect: awaitActiveUnit,
+                          shortcut: reviewShortcuts.awaitResponse,
+                        },
+                        {
+                          description: `Pause all ${activeConceptMembers.length} units until the code or conversation changes`,
+                          disabled: !canAwaitConcept,
+                          label: "Await concept",
+                          onSelect: awaitActiveConcept,
+                          shortcut: reviewShortcuts.awaitConcept,
+                        },
+                      ]}
+                    />
+                  ) : (
                     <Button
                       variant="secondary"
                       className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                      title={`Pause ${activeConceptMembers.length > 1 ? "this concept" : "this unit"} until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
+                      title={`Pause this unit until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
                       onClick={awaitActiveResponse}
                       disabled={!canAwaitResponse}
                     >
@@ -6604,11 +6768,7 @@ export function ReviewWorkspace({
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {awaitPending
-                          ? "Saving…"
-                          : activeConceptMembers.length > 1
-                            ? `Await concept (${activeConceptMembers.length})`
-                            : "Await response"}
+                        {awaitPending ? "Saving…" : "Await response"}
                       </span>
                       <span className="sm:hidden">
                         {awaitPending ? "Saving…" : "Await"}
@@ -6620,42 +6780,61 @@ export function ReviewWorkspace({
                         />
                       )}
                     </Button>
-                  )
+                  ))
                 )}
-                {(activeWaitStatus !== "waiting" || hasNextActionableUnit) && (
-                  <Button
-                    className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
-                    onClick={runPrimaryAction}
-                    disabled={
-                      !canUsePrimaryAction ||
-                      activeSignOffPending ||
-                      undoSignOff.isPending ||
-                      undoConcept.isPending ||
-                      awaitPending
-                    }
-                  >
-                    <Check className="size-4" />
-                    {signOffConcept.isPending
-                      ? "Saving concept…"
-                      : activeSignOffPending
-                        ? `Saving ${signOffQueueProgress}…`
-                        : activeWaitStatus === "signed_off" ||
-                            activeWaitStatus === "waiting"
-                          ? filteredReviewActive
-                            ? "Next match"
-                            : "Continue"
-                          : activeConceptMembers.length > 1
-                            ? `Sign off concept (${activeConceptMembers.length})`
-                            : "Sign off concept"}
-                    {!activeSignOffPending && (
-                      <ShortcutHint
-                        shortcut={reviewShortcuts.signOff}
-                        className="hidden sm:inline-flex"
-                      />
-                    )}
-                    <ChevronRight className="size-3.5" />
-                  </Button>
-                )}
+                {(activeWaitStatus !== "waiting" || hasNextActionableUnit) &&
+                  (conceptActionAvailable && !primaryIsContinue ? (
+                    <SplitActionButton
+                      icon={<Check className="size-4" />}
+                      label={primaryActionLabel}
+                      mobileLabel={
+                        activeSignOffPending ? signOffQueueProgress : "Sign off"
+                      }
+                      menuLabel="Choose what to sign off"
+                      pending={signOffConcept.isPending || activeSignOffPending}
+                      primary={{
+                        disabled: !canUsePrimaryAction,
+                        label: primaryActionLabel,
+                        onSelect: runPrimaryAction,
+                        shortcut: onLastConceptMember
+                          ? reviewShortcuts.signOffConcept
+                          : reviewShortcuts.signOff,
+                      }}
+                      options={[
+                        {
+                          description:
+                            "Record this unit and open the next one in the concept",
+                          disabled: !canSignOffUnit,
+                          label: "Sign off unit",
+                          onSelect: signOffActiveUnit,
+                          shortcut: reviewShortcuts.signOff,
+                        },
+                        {
+                          description: `Record all ${activeConceptMembers.length} units of this concept at once`,
+                          disabled: !canSignOffConcept,
+                          label: "Sign off concept",
+                          onSelect: signOffActiveConcept,
+                          shortcut: reviewShortcuts.signOffConcept,
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Button
+                      className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
+                      onClick={runPrimaryAction}
+                      disabled={!canUsePrimaryAction}
+                    >
+                      <Check className="size-4" />
+                      {primaryActionLabel}
+                      {!activeSignOffPending && (
+                        <ShortcutHint
+                          shortcut={reviewShortcuts.signOff}
+                          className="hidden sm:inline-flex"
+                        />
+                      )}
+                      <ChevronRight className="size-3.5" />
+                    </Button>
+                  ))}
               </div>
             )}
           </div>
