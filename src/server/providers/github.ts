@@ -95,6 +95,7 @@ interface GitHubReviewThreadsConnection {
     comments: {
       nodes: {
         fullDatabaseId: number | string | null;
+        replyTo: { fullDatabaseId: number | string | null } | null;
       }[];
     };
     isResolved: boolean;
@@ -776,6 +777,9 @@ export class GitHubProvider implements PullRequestProvider {
                             comments(first: 1) {
                               nodes {
                                 fullDatabaseId
+                                replyTo {
+                                  fullDatabaseId
+                                }
                               }
                             }
                           }
@@ -803,7 +807,15 @@ export class GitHubProvider implements PullRequestProvider {
         response.data?.node?.pullRequest?.reviewThreads;
       if (!connection) return threads;
       for (const thread of connection.nodes) {
-        const rootId = thread.comments.nodes[0]?.fullDatabaseId;
+        const comment = thread.comments.nodes[0];
+        if (!comment) continue;
+        // Whichever comment the connection hands back names the root: a reply
+        // carries the comment it answers, and the root answers none. Nothing
+        // documents the order, and the REST conversation is keyed by its root,
+        // so a reply arriving first must not become the key.
+        const rootId = comment.replyTo
+          ? comment.replyTo.fullDatabaseId
+          : comment.fullDatabaseId;
         if (rootId === null || rootId === undefined) continue;
         threads.set(String(rootId), {
           nodeId: thread.id,
