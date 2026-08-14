@@ -667,6 +667,10 @@ export class GitHubProvider implements PullRequestProvider {
         input.commentExternalId,
       ),
       { method: "DELETE", headers: this.headers },
+      // A conversation is deleted one comment at a time, so a retry of a
+      // partial delete re-requests comments that already left. Their absence
+      // is the outcome the caller wanted, not a failure to report.
+      [404],
     );
   }
 
@@ -713,8 +717,14 @@ export class GitHubProvider implements PullRequestProvider {
       for (const [rootId, { resolved }] of threads) {
         statuses.set(rootId, resolved ? "resolved" : "open");
       }
-    } catch {
+    } catch (cause) {
       // Resolution metadata is optional; the REST conversation remains usable.
+      // A token that lost the scope for it would otherwise report every
+      // conversation as unknown with nothing said about why.
+      console.warn("GitHub review-thread status enrichment failed", {
+        pullRequestNumber,
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
     }
     return statuses;
   }

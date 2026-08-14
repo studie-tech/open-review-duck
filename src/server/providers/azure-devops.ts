@@ -563,6 +563,10 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       this.name,
       `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}/threads/${encodeURIComponent(input.threadExternalId)}/comments/${encodeURIComponent(input.commentExternalId)}?api-version=7.1`,
       { method: "DELETE", headers: this.headers },
+      // A conversation is deleted one comment at a time, so a retry of a
+      // partial delete re-requests comments that already left. Their absence
+      // is the outcome the caller wanted, not a failure to report.
+      [404],
     );
   }
 
