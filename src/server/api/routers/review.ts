@@ -204,6 +204,24 @@ function providerThreadError(provider: ProviderName, cause: unknown) {
 }
 
 /**
+ * Names the ledger row one comment of a conversation was published as.
+ *
+ * `publishInlineComment` opens a conversation and returns the identifier the
+ * provider gives that conversation: a discussion on GitLab, a thread on Azure
+ * DevOps, and the root comment on GitHub, which is what GitHub keys a thread
+ * by. So the ledger is keyed by conversation, and only the comment a
+ * conversation hangs from is ever a row of it — a reply never is.
+ */
+function publishedCommentId(
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  return thread.comments[0]?.externalId === commentExternalId
+    ? thread.externalId
+    : undefined;
+}
+
+/**
  * Drops the local record of comments that no longer exist at the provider.
  *
  * The ledger of what ReviewDuck published is what marks an AI finding as
@@ -3587,15 +3605,18 @@ export const reviewRouter = createTRPCRouter({
           commentExternalId: input.commentExternalId,
           body: input.body,
         });
-        await ctx.db
-          .update(reviewComments)
-          .set({ body: input.body })
-          .where(
-            and(
-              eq(reviewComments.unitId, input.unitId),
-              eq(reviewComments.providerExternalId, input.commentExternalId),
-            ),
-          );
+        const published = publishedCommentId(thread, input.commentExternalId);
+        if (published) {
+          await ctx.db
+            .update(reviewComments)
+            .set({ body: input.body })
+            .where(
+              and(
+                eq(reviewComments.unitId, input.unitId),
+                eq(reviewComments.providerExternalId, published),
+              ),
+            );
+        }
         return { edited: true };
       } catch (cause) {
         throw providerThreadError(scope.provider, cause);
@@ -3629,9 +3650,12 @@ export const reviewRouter = createTRPCRouter({
           threadExternalId: thread.externalId,
           commentExternalId: input.commentExternalId,
         });
-        await forgetPublishedComments(ctx.db, input.unitId, [
-          input.commentExternalId,
-        ]);
+        const published = publishedCommentId(thread, input.commentExternalId);
+        await forgetPublishedComments(
+          ctx.db,
+          input.unitId,
+          published ? [published] : [],
+        );
         return { deleted: 1 };
       } catch (cause) {
         throw providerThreadError(scope.provider, cause);
@@ -3669,15 +3693,21 @@ export const reviewRouter = createTRPCRouter({
       } catch (cause) {
         // A conversation is deleted one comment at a time, so a failure part
         // way through leaves comments already gone at the provider. The ledger
-        // is what tells the reviewer a comment is still posted, so it gives up
-        // exactly the ones that left before the error is reported.
-        await forgetPublishedComments(ctx.db, input.unitId, removed);
+        // is what tells the reviewer a comment is still posted, so it gives the
+        // conversation up as soon as the comment it hangs from has left.
+        await forgetPublishedComments(
+          ctx.db,
+          input.unitId,
+          removed.some(
+            (externalId) =>
+              publishedCommentId(thread, externalId) !== undefined,
+          )
+            ? [thread.externalId]
+            : [],
+        );
         throw providerThreadError(scope.provider, cause);
       }
-      await forgetPublishedComments(ctx.db, input.unitId, [
-        thread.externalId,
-        ...removed,
-      ]);
+      await forgetPublishedComments(ctx.db, input.unitId, [thread.externalId]);
       return { deleted: removed.length };
     }),
 
