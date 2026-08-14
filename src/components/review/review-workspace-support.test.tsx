@@ -26,6 +26,7 @@ import {
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
+  SplitActionButton,
 } from "./review-workspace-support";
 
 vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
@@ -65,6 +66,15 @@ describe("review shortcuts", () => {
     expect(reviewShortcuts.nextConcept).toEqual([{ key: "ArrowRight" }]);
     expect(reviewShortcuts.previousConcept).toEqual([{ key: "ArrowLeft" }]);
     expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[jk]"/);
+  });
+
+  it("puts the concept variant of an action behind shift", () => {
+    // Not the command key: the browser keeps it for closing the tab and never
+    // hands the chord to the page, so a concept chord built on it would shut
+    // the review down instead of recording it.
+    expect(reviewShortcuts.signOffConcept).toEqual([{ key: "s", shift: true }]);
+    expect(reviewShortcuts.awaitConcept).toEqual([{ key: "w", shift: true }]);
+    expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[sw]","mod"/);
   });
 
   it("steps through review findings on the bracket keys", () => {
@@ -1377,5 +1387,98 @@ describe("nextAnchorableLine", () => {
   it("steps one line at a time through a contiguous unit", () => {
     expect(nextAnchorableLine(10, 1, undefined, 10, 12)).toBe(11);
     expect(nextAnchorableLine(12, -1, undefined, 10, 12)).toBe(11);
+  });
+});
+
+describe("SplitActionButton", () => {
+  /** Renders one split button with both scopes of an action. */
+  function renderSplit(overrides: {
+    unitDisabled?: boolean;
+    onUnit?: () => void;
+    onConcept?: () => void;
+  }) {
+    return render(
+      <SplitActionButton
+        icon={<span />}
+        label="Sign off unit"
+        mobileLabel="Sign off"
+        menuLabel="Choose what to sign off"
+        primary={{
+          label: "Sign off unit",
+          onSelect: overrides.onUnit ?? vi.fn(),
+          shortcut: [{ key: "s" }],
+        }}
+        options={[
+          {
+            disabled: overrides.unitDisabled,
+            label: "Sign off unit",
+            onSelect: overrides.onUnit ?? vi.fn(),
+            shortcut: [{ key: "s" }],
+          },
+          {
+            label: "Sign off concept",
+            onSelect: overrides.onConcept ?? vi.fn(),
+            shortcut: [{ key: "s", shift: true }],
+          },
+        ]}
+      />,
+    );
+  }
+
+  it("keeps the wider scope one click away without opening it first", () => {
+    const onUnit = vi.fn();
+    renderSplit({ onUnit });
+
+    expect(
+      screen.queryByRole("menu", { name: "Choose what to sign off" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Sign off unit/ }));
+    expect(onUnit).toHaveBeenCalledOnce();
+  });
+
+  it("runs the scope chosen from the menu and closes it", async () => {
+    const onConcept = vi.fn();
+    renderSplit({ onConcept });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose what to sign off" }),
+    );
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /Sign off concept/ }),
+    );
+
+    expect(onConcept).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("menu", { name: "Choose what to sign off" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers a scope the reviewer cannot use as unavailable rather than absent", () => {
+    // Seeing why an action is out of reach beats it vanishing: a unit with no
+    // conversation of its own still belongs to a concept that has one.
+    renderSplit({ unitDisabled: true });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose what to sign off" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: /Sign off unit/ }),
+    ).toBeDisabled();
+  });
+
+  it("closes on Escape without letting the workspace see it", async () => {
+    const onWorkspaceEscape = vi.fn();
+    document.addEventListener("keydown", onWorkspaceEscape);
+    renderSplit({});
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose what to sign off" }),
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("menu", { name: "Choose what to sign off" }),
+    ).not.toBeInTheDocument();
+    document.removeEventListener("keydown", onWorkspaceEscape);
   });
 });
