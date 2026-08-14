@@ -2681,6 +2681,17 @@ export function ProviderConversation({
     }
   }
 
+  /** Resolves or reopens the conversation, leaving the error to the mutation. */
+  async function submitResolution(resolve: boolean) {
+    if (managing) return;
+    try {
+      await onResolve(resolve);
+    } catch {
+      // The mutation owns the user-facing error, and the header keeps showing
+      // the resolution the provider still reports.
+    }
+  }
+
   /** Carries out the deletion the reviewer just confirmed. */
   async function confirmDelete() {
     const target = confirmingDelete;
@@ -2750,7 +2761,7 @@ export function ProviderConversation({
                 ? `Reopen this conversation on ${providerLabel(provider)}`
                 : `Resolve this conversation on ${providerLabel(provider)}`
             }
-            onClick={() => void onResolve(!resolved)}
+            onClick={() => void submitResolution(!resolved)}
             className={cn(
               "flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] transition disabled:opacity-50",
               resolved

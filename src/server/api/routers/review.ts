@@ -372,8 +372,13 @@ async function declaredSymbolInFile(
  */
 async function importedSymbolDefinition(
   db: typeof database,
+  userId: string,
   snapshot: { headSha: string; id: string },
-  scope: { connectionId: string | null; repositoryExternalId: string },
+  scope: {
+    connectionId: string | null;
+    pullRequestId: string;
+    repositoryExternalId: string;
+  },
   input: SymbolDefinitionInput,
 ) {
   if (!input.specifier || !scope.connectionId) return undefined;
@@ -400,6 +405,16 @@ async function importedSymbolDefinition(
   const [known] = stored;
   if (known) return symbolDefinitionOf(known, known.startLine, known.id);
 
+  // Only now does a hover become provider traffic, and one unresolved name can
+  // try every extension the specifier could carry. The repository pays for that
+  // fan-out, so it is gated per pull request the way every other
+  // provider-backed procedure in this router is.
+  await enforceRateLimit(
+    db,
+    `review-symbol-resource:${userId}:${scope.pullRequestId}`,
+    30,
+    60_000,
+  );
   const provider = await providerForScope(db, scope.connectionId);
   for (const path of candidates) {
     let content: string | undefined;
@@ -3062,10 +3077,11 @@ export const reviewRouter = createTRPCRouter({
    * Finds where a name used in the reviewed code is declared.
    *
    * A reviewer reading a call has to know what it does, and leaving the review
-   * to find out is the expensive part. Resolution goes from the most precise
-   * evidence to the least: the file's own import of the name, then the
-   * declarations the snapshot already holds, then a parse of the whole file
-   * the name appears in, which is what finds a helper the diff never touched.
+   * to find out is the expensive part. Resolution goes from the cheapest
+   * answer to the dearest: the declarations the snapshot already holds, then a
+   * parse of the file the name appears in, which is what finds a helper the
+   * diff never touched, and only then the file's own import of the name, which
+   * is the one step that can reach the provider.
    */
   symbolDefinition: protectedProcedure
     .input(symbolDefinitionSchema)
@@ -3106,6 +3122,7 @@ export const reviewRouter = createTRPCRouter({
         (await declaredSymbolInFile(ctx.db, snapshot.id, input)) ??
         (await importedSymbolDefinition(
           ctx.db,
+          ctx.auth.userId,
           { headSha: snapshot.headSha, id: snapshot.id },
           scope,
           input,
