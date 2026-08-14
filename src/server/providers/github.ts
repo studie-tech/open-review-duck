@@ -1,5 +1,10 @@
 import { isLikelyBinaryFile } from "~/server/analysis/types";
-import { providerFetch, providerResponse, providerText } from "./http";
+import {
+  providerFetch,
+  providerResponse,
+  providerText,
+  providerVoid,
+} from "./http";
 import { collectProviderSourceFiles } from "./source-budget";
 import {
   type ChangedFilesOptions,
@@ -632,7 +637,10 @@ export class GitHubProvider implements PullRequestProvider {
   }) {
     await providerFetch<GitHubReviewComment>(
       this.name,
-      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/comments/${encodeURIComponent(input.commentExternalId)}`,
+      await this.reviewCommentUrl(
+        input.repositoryExternalId,
+        input.commentExternalId,
+      ),
       {
         method: "PATCH",
         headers: { ...this.headers, "Content-Type": "application/json" },
@@ -646,11 +654,40 @@ export class GitHubProvider implements PullRequestProvider {
     repositoryExternalId: string;
     commentExternalId: string;
   }) {
-    await providerText(
+    await providerVoid(
       this.name,
-      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/comments/${encodeURIComponent(input.commentExternalId)}`,
+      await this.reviewCommentUrl(
+        input.repositoryExternalId,
+        input.commentExternalId,
+      ),
       { method: "DELETE", headers: this.headers },
     );
+  }
+
+  /**
+   * Builds the documented route for editing or deleting one review comment.
+   *
+   * GitHub documents review-comment writes only under `/repos/{owner}/{repo}`,
+   * so the repository's full name is read before the request rather than
+   * relying on the numeric-id form that reads work through.
+   */
+  private async reviewCommentUrl(
+    repositoryExternalId: string,
+    commentExternalId: string,
+  ) {
+    const repository = await providerFetch<GitHubRepository>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}`,
+      { headers: this.headers },
+    );
+    const [owner, name] = repository.full_name.split("/");
+    if (!owner || !name) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not report a full name for this repository",
+      );
+    }
+    return `${this.apiUrl}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/comments/${encodeURIComponent(commentExternalId)}`;
   }
 
   /**
@@ -665,16 +702,19 @@ export class GitHubProvider implements PullRequestProvider {
     repositoryExternalId: string,
     pullRequestNumber: number,
   ) {
-    const threads = await this.getReviewThreads(
-      repositoryExternalId,
-      pullRequestNumber,
-    );
-    return new Map(
-      [...threads].map(([rootId, { resolved }]) => [
-        rootId,
-        resolved ? ("resolved" as const) : ("open" as const),
-      ]),
-    );
+    const statuses = new Map<string, "open" | "resolved">();
+    try {
+      const threads = await this.getReviewThreads(
+        repositoryExternalId,
+        pullRequestNumber,
+      );
+      for (const [rootId, { resolved }] of threads) {
+        statuses.set(rootId, resolved ? "resolved" : "open");
+      }
+    } catch {
+      // Resolution metadata is optional; the REST conversation remains usable.
+    }
+    return statuses;
   }
 
   /**
@@ -683,35 +723,44 @@ export class GitHubProvider implements PullRequestProvider {
    * The REST conversation carries comment ids, and resolving one takes the
    * thread's own GraphQL node id, so the two identities are collected together
    * on the one walk that already had to happen for resolution state.
+   *
+   * Failures are raised rather than absorbed. Only the caller knows whether an
+   * incomplete answer is tolerable: listing conversations can do without
+   * resolution state, but resolving one must not report a thread as missing
+   * when the request for it is what failed.
    */
   private async getReviewThreads(
     repositoryExternalId: string,
     pullRequestNumber: number,
   ) {
     const threads = new Map<string, { nodeId: string; resolved: boolean }>();
-    try {
-      const repository = await providerFetch<GitHubRepository>(
+    const repository = await providerFetch<GitHubRepository>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}`,
+      { headers: this.headers },
+    );
+    if (!repository.node_id) {
+      throw new ProviderError(
         this.name,
-        `${this.apiUrl}/repositories/${repositoryExternalId}`,
-        { headers: this.headers },
+        "GitHub did not report a node identifier for this repository",
       );
-      if (!repository.node_id) return threads;
+    }
 
-      const visitedCursors = new Set<string>();
-      let cursor: string | null = null;
-      for (let page = 0; page < MAX_PROVIDER_PAGES; page++) {
-        const response: GitHubReviewThreadsResponse =
-          await providerFetch<GitHubReviewThreadsResponse>(
-            this.name,
-            this.graphqlUrl(),
-            {
-              method: "POST",
-              headers: {
-                ...this.headers,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                query: `
+    const visitedCursors = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < MAX_PROVIDER_PAGES; page++) {
+      const response: GitHubReviewThreadsResponse =
+        await providerFetch<GitHubReviewThreadsResponse>(
+          this.name,
+          this.graphqlUrl(),
+          {
+            method: "POST",
+            headers: {
+              ...this.headers,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              query: `
                 query ReviewDuckReviewThreads(
                   $repositoryId: ID!
                   $number: Int!
@@ -740,33 +789,32 @@ export class GitHubProvider implements PullRequestProvider {
                   }
                 }
               `,
-                variables: {
-                  repositoryId: repository.node_id,
-                  number: pullRequestNumber,
-                  after: cursor,
-                },
-              }),
-            },
-          );
-        const connection: GitHubReviewThreadsConnection | undefined =
-          response.data?.node?.pullRequest?.reviewThreads;
-        if (!connection) return threads;
-        for (const thread of connection.nodes) {
-          const rootId = thread.comments.nodes[0]?.fullDatabaseId;
-          if (rootId === null || rootId === undefined) continue;
-          threads.set(String(rootId), {
-            nodeId: thread.id,
-            resolved: thread.isResolved,
-          });
-        }
-        if (!connection.pageInfo.hasNextPage) return threads;
-        const nextCursor: string | null = connection.pageInfo.endCursor;
-        if (!nextCursor || visitedCursors.has(nextCursor)) return threads;
-        visitedCursors.add(nextCursor);
-        cursor = nextCursor;
+              variables: {
+                repositoryId: repository.node_id,
+                number: pullRequestNumber,
+                after: cursor,
+              },
+            }),
+          },
+        );
+      const failure = response.errors?.[0]?.message;
+      if (failure) throw new ProviderError(this.name, failure);
+      const connection: GitHubReviewThreadsConnection | undefined =
+        response.data?.node?.pullRequest?.reviewThreads;
+      if (!connection) return threads;
+      for (const thread of connection.nodes) {
+        const rootId = thread.comments.nodes[0]?.fullDatabaseId;
+        if (rootId === null || rootId === undefined) continue;
+        threads.set(String(rootId), {
+          nodeId: thread.id,
+          resolved: thread.isResolved,
+        });
       }
-    } catch {
-      // Resolution metadata is optional; the REST conversation remains usable.
+      if (!connection.pageInfo.hasNextPage) return threads;
+      const nextCursor: string | null = connection.pageInfo.endCursor;
+      if (!nextCursor || visitedCursors.has(nextCursor)) return threads;
+      visitedCursors.add(nextCursor);
+      cursor = nextCursor;
     }
     return threads;
   }

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   commandMenuShortcut,
   formatShortcut,
+  isActivatableTarget,
   isApplePlatform,
   isEditableTarget,
   matchesShortcutStroke,
@@ -65,6 +66,35 @@ describe("keyboard shortcuts", () => {
     expect(isEditableTarget(contentEditable)).toBe(true);
     expect(isEditableTarget(customEditor)).toBe(true);
     expect(isEditableTarget(button)).toBe(false);
+  });
+
+  it("leaves Enter to whatever control already answers it", () => {
+    /** Builds one input of the given type for the activation check. */
+    function inputOfType(type: string) {
+      const element = document.createElement("input");
+      element.setAttribute("type", type);
+      return element;
+    }
+    const link = document.createElement("a");
+    link.setAttribute("href", "/dashboard");
+    const plainAnchor = document.createElement("a");
+    const label = document.createElement("span");
+    document.createElement("button").append(label);
+
+    expect(isActivatableTarget(document.createElement("button"))).toBe(true);
+    expect(isActivatableTarget(document.createElement("summary"))).toBe(true);
+    expect(isActivatableTarget(link)).toBe(true);
+    // The event target is whatever the pointer or focus ring lands on, which
+    // for a labelled control is the text inside it rather than the control.
+    expect(isActivatableTarget(label)).toBe(true);
+    for (const type of ["button", "image", "reset", "submit"]) {
+      expect(isActivatableTarget(inputOfType(type))).toBe(true);
+    }
+
+    expect(isActivatableTarget(inputOfType("text"))).toBe(false);
+    expect(isActivatableTarget(plainAnchor)).toBe(false);
+    expect(isActivatableTarget(document.createElement("div"))).toBe(false);
+    expect(isActivatableTarget(null)).toBe(false);
   });
 
   it("keeps global launchers clear of browser-reserved modifier shortcuts", () => {

@@ -136,4 +136,27 @@ describe("definition card placement", () => {
     expect(placement.placement).toBe("above");
     expect(placement.maxHeight).toBe(222);
   });
+
+  it("never claims more height than the side it was placed on has", () => {
+    // A short viewport with the name near its middle leaves neither side the
+    // card's preferred height; it has to scroll rather than overflow.
+    const placement = peekPlacement(
+      { bottom: 110, left: 10, top: 94 },
+      { height: 200, width: 1400 },
+    );
+
+    expect(placement.maxHeight).toBeLessThanOrEqual(200);
+    expect(placement.maxHeight).toBe(
+      placement.placement === "below" ? 200 - 110 - 12 : 94 - 12,
+    );
+  });
+
+  it("gives a card no room at all rather than a negative height", () => {
+    const placement = peekPlacement(
+      { bottom: 210, left: 10, top: 198 },
+      { height: 200, width: 1400 },
+    );
+
+    expect(placement.maxHeight).toBeGreaterThanOrEqual(0);
+  });
 });

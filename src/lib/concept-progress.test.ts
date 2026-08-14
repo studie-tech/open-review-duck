@@ -41,6 +41,23 @@ describe("concept status", () => {
     );
   });
 
+  it("reports a member that came back ahead of the progress around it", () => {
+    // Partial progress would read as ordinary unfinished work and hide that
+    // one member is code the reviewer already signed off on.
+    expect(conceptStatusFromMembers(members("signed_off", "changed"))).toBe(
+      "changed",
+    );
+    expect(
+      conceptStatusFromMembers(members("signed_off", "changed", "pending")),
+    ).toBe("changed");
+  });
+
+  it("waits on a returning concept whose member is also awaiting a response", () => {
+    expect(conceptStatusFromMembers(members("changed", "waiting"))).toBe(
+      "waiting",
+    );
+  });
+
   it("reports code that changed after a sign-off", () => {
     expect(conceptStatusFromMembers(members("changed", "pending"))).toBe(
       "changed",

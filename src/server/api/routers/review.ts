@@ -294,17 +294,44 @@ async function declaredSymbolInSnapshot(
 }
 
 /**
+ * How many parsed files the symbol lookup keeps declarations for.
+ *
+ * A reviewer moves between a handful of files, and each entry holds one
+ * parse of one immutable snapshot revision, so a small ring is enough to
+ * spare the repeat work without holding a workspace of source in memory.
+ */
+const SYMBOL_FILE_CACHE_LIMIT = 12;
+
+type FileDeclarations = Map<string, ReturnType<typeof symbolDefinitionOf>>;
+
+const symbolFileCache = new Map<string, FileDeclarations>();
+
+/**
  * Parses the whole reviewed file to find a declaration the diff left out.
  *
  * Only changed declarations become review units, so a helper the reviewer is
  * calling is often present in the file and absent from the snapshot's units.
  * The file's stored source is already at hand, so this needs no provider call.
+ *
+ * Peek fires on hover, and one parse answers every name in the file, so the
+ * declarations are kept against the snapshot revision they came from instead
+ * of running the analysis again for the next name on the same line.
  */
 async function declaredSymbolInFile(
   db: typeof database,
   snapshotId: string,
   input: SymbolDefinitionInput,
 ) {
+  const key = `${snapshotId}\0${input.sourcePath}`;
+  const cached = symbolFileCache.get(key);
+  if (cached) {
+    // Re-inserting keeps the files a reviewer is moving between at the end of
+    // the ring, so the one evicted next is the one longest unused.
+    symbolFileCache.delete(key);
+    symbolFileCache.set(key, cached);
+    return cached.get(input.symbol);
+  }
+
   const [file] = await hydrateReviewUnits(
     db,
     await db.query.reviewUnits.findMany({
@@ -317,17 +344,23 @@ async function declaredSymbolInFile(
     }),
   );
   if (!file?.source) return undefined;
-  const declaration = analyzeFiles([
+  const declarations: FileDeclarations = new Map();
+  for (const unit of analyzeFiles([
     { path: input.sourcePath, content: file.source, changeType: "modified" },
-  ]).units.find(
-    (unit) =>
-      unit.name === input.symbol &&
-      unit.kind !== "file" &&
-      unit.kind !== "module",
-  );
-  return declaration
-    ? symbolDefinitionOf(declaration, declaration.startLine)
-    : undefined;
+  ]).units) {
+    if (unit.kind === "file" || unit.kind === "module") continue;
+    // The first declaration of a name wins, the same way a single `find` did.
+    if (!declarations.has(unit.name)) {
+      declarations.set(unit.name, symbolDefinitionOf(unit, unit.startLine));
+    }
+  }
+  symbolFileCache.set(key, declarations);
+  while (symbolFileCache.size > SYMBOL_FILE_CACHE_LIMIT) {
+    const oldest = symbolFileCache.keys().next().value;
+    if (oldest === undefined) break;
+    symbolFileCache.delete(oldest);
+  }
+  return declarations.get(input.symbol);
 }
 
 /**
@@ -3585,11 +3618,16 @@ export const reviewRouter = createTRPCRouter({
         input,
         "review-delete-thread",
       );
+      const thread = await attachedProviderThread(provider, scope, input).catch(
+        (cause: unknown) => {
+          throw providerThreadError(scope.provider, cause);
+        },
+      );
+      // Replies first: no provider lets the comment a conversation hangs
+      // from leave while the conversation still holds answers to it.
+      const ordered = [...thread.comments].reverse();
+      const removed: string[] = [];
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
-        // Replies first: no provider lets the comment a conversation hangs
-        // from leave while the conversation still holds answers to it.
-        const ordered = [...thread.comments].reverse();
         for (const comment of ordered) {
           await provider.deleteInlineComment({
             repositoryExternalId: scope.repositoryExternalId,
@@ -3597,15 +3635,21 @@ export const reviewRouter = createTRPCRouter({
             threadExternalId: thread.externalId,
             commentExternalId: comment.externalId,
           });
+          removed.push(comment.externalId);
         }
-        await forgetPublishedComments(ctx.db, input.unitId, [
-          thread.externalId,
-          ...ordered.map(({ externalId }) => externalId),
-        ]);
-        return { deleted: ordered.length };
       } catch (cause) {
+        // A conversation is deleted one comment at a time, so a failure part
+        // way through leaves comments already gone at the provider. The ledger
+        // is what tells the reviewer a comment is still posted, so it gives up
+        // exactly the ones that left before the error is reported.
+        await forgetPublishedComments(ctx.db, input.unitId, removed);
         throw providerThreadError(scope.provider, cause);
       }
+      await forgetPublishedComments(ctx.db, input.unitId, [
+        thread.externalId,
+        ...removed,
+      ]);
+      return { deleted: removed.length };
     }),
 
   beginSession: protectedProcedure

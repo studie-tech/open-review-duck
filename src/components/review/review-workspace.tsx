@@ -68,7 +68,7 @@ import {
   findImportTargetUnit,
   type ImportReference,
 } from "~/lib/import-navigation";
-import { commandMenuShortcut, formatShortcut } from "~/lib/keyboard-shortcuts";
+import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
 import { hydratePrivateReviewSources } from "~/lib/private-source-client";
 import {
   buildReviewHierarchy,
@@ -857,6 +857,7 @@ import {
   ExplanationLoader,
   INITIAL_PATH_ITEMS,
   InlineAiQuestion,
+  knownLanguage,
   lineWithinReviewRanges,
   nextAnchorableLine,
   PATH_PAGE_SIZE,
@@ -1650,11 +1651,14 @@ export function ReviewWorkspace({
   const peekedImport = peekedSymbol
     ? fileImportReferences.find(({ local }) => local === peekedSymbol.symbol)
     : undefined;
+  // A stored language the grammars no longer cover must not take the render
+  // down: the lookup simply has nothing to resolve against and stays off.
+  const peekedLanguage = knownLanguage(activeUnit?.language ?? "text");
   const peekedDefinition = api.review.symbolDefinition.useQuery(
     {
       pullRequestId: initialData.pullRequest.id,
       sourcePath: activeUnit?.path ?? "",
-      sourceLanguage: supportedLanguage(activeUnit?.language ?? "text"),
+      sourceLanguage: peekedLanguage ?? "text",
       symbol: peekedSymbol?.symbol ?? "",
       line: peekedSymbol?.line,
       ...(peekedImport
@@ -1666,7 +1670,7 @@ export function ReviewWorkspace({
         : {}),
     },
     {
-      enabled: Boolean(peekedSymbol && activeUnit),
+      enabled: Boolean(peekedSymbol && activeUnit && peekedLanguage),
       staleTime: 5 * 60_000,
       retry: false,
     },
@@ -2849,11 +2853,25 @@ export function ReviewWorkspace({
     },
     onError: (error) => toast.error(error.message),
   });
-  const managingThread =
-    setThreadResolution.isPending ||
-    editThreadComment.isPending ||
-    deleteThreadComment.isPending ||
-    deleteThread.isPending;
+  /**
+   * Reports that one named conversation is mid-change.
+   *
+   * Every conversation on the line renders from the same mutations, so the
+   * pending state has to name the thread it belongs to or resolving one would
+   * show the others as busy too.
+   */
+  function managingThread(threadExternalId: string) {
+    return [
+      setThreadResolution,
+      editThreadComment,
+      deleteThreadComment,
+      deleteThread,
+    ].some(
+      (mutation) =>
+        mutation.isPending &&
+        mutation.variables?.threadExternalId === threadExternalId,
+    );
+  }
 
   /** Binds the thread-management mutations to one provider conversation. */
   function providerThreadActions(
@@ -3295,7 +3313,7 @@ export function ReviewWorkspace({
             key={thread.externalId}
             provider={initialData.pullRequest.provider}
             thread={thread}
-            managing={managingThread}
+            managing={managingThread(thread.externalId)}
             replying={
               replyToThread.isPending &&
               replyToThread.variables?.threadExternalId === thread.externalId
@@ -5626,7 +5644,7 @@ export function ReviewWorkspace({
           aria-label="Undo the last sign-off"
           title={
             undoableSignOff
-              ? `Return ${undoableSignOff.entry.label} to the review path (${formatShortcut(reviewShortcuts.undoSignOff).join(" ")})`
+              ? `Return ${undoableSignOff.entry.label} to the review path`
               : "No sign-off from this session left to undo"
           }
           className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
