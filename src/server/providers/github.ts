@@ -1,14 +1,15 @@
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import { providerFetch, providerResponse, providerText } from "./http";
 import { collectProviderSourceFiles } from "./source-budget";
-import type {
-  ChangedFilesOptions,
-  ProviderPullRequestReviewState,
-  ProviderReviewAction,
-  PullRequestListOptions,
-  PullRequestProvider,
-  PullRequestSummary,
-  RepositoryIdentity,
+import {
+  type ChangedFilesOptions,
+  ProviderError,
+  type ProviderPullRequestReviewState,
+  type ProviderReviewAction,
+  type PullRequestListOptions,
+  type PullRequestProvider,
+  type PullRequestSummary,
+  type RepositoryIdentity,
 } from "./types";
 
 interface GitHubRepository {
@@ -85,6 +86,7 @@ interface GitHubReviewComment {
 }
 interface GitHubReviewThreadsConnection {
   nodes: {
+    id: string;
     comments: {
       nodes: {
         fullDatabaseId: number | string | null;
@@ -96,6 +98,14 @@ interface GitHubReviewThreadsConnection {
     endCursor: string | null;
     hasNextPage: boolean;
   };
+}
+
+interface GitHubResolveThreadResponse {
+  data?: {
+    resolveReviewThread?: { thread: { isResolved: boolean } | null } | null;
+    unresolveReviewThread?: { thread: { isResolved: boolean } | null } | null;
+  };
+  errors?: { message: string }[];
 }
 interface GitHubReviewThreadsResponse {
   data?: {
@@ -557,6 +567,93 @@ export class GitHubProvider implements PullRequestProvider {
   }
 
   /**
+   * Resolves or reopens one GitHub review conversation.
+   *
+   * Resolution lives only in the GraphQL review-thread model, so the REST
+   * comment the rest of the application knows a conversation by is translated
+   * to its thread node before the mutation runs.
+   */
+  async setInlineThreadResolution(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    resolved: boolean;
+  }) {
+    const threads = await this.getReviewThreads(
+      input.repositoryExternalId,
+      input.pullRequestNumber,
+    );
+    const nodeId = threads.get(input.threadExternalId)?.nodeId;
+    if (!nodeId) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not report a review thread for this conversation",
+        404,
+      );
+    }
+    const field = input.resolved
+      ? "resolveReviewThread"
+      : "unresolveReviewThread";
+    const response = await providerFetch<GitHubResolveThreadResponse>(
+      this.name,
+      this.graphqlUrl(),
+      {
+        method: "POST",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: `
+            mutation ReviewDuckSetReviewThreadResolution($threadId: ID!) {
+              ${field}(input: { threadId: $threadId }) {
+                thread {
+                  isResolved
+                }
+              }
+            }
+          `,
+          variables: { threadId: nodeId },
+        }),
+      },
+    );
+    const failure = response.errors?.[0]?.message;
+    if (failure) throw new ProviderError(this.name, failure);
+    if (response.data?.[field]?.thread?.isResolved !== input.resolved) {
+      throw new ProviderError(
+        this.name,
+        `GitHub did not ${input.resolved ? "resolve" : "reopen"} this conversation`,
+      );
+    }
+  }
+
+  /** Rewrites one GitHub review comment. */
+  async editInlineComment(input: {
+    repositoryExternalId: string;
+    commentExternalId: string;
+    body: string;
+  }) {
+    await providerFetch<GitHubReviewComment>(
+      this.name,
+      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/comments/${encodeURIComponent(input.commentExternalId)}`,
+      {
+        method: "PATCH",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ body: input.body }),
+      },
+    );
+  }
+
+  /** Deletes one GitHub review comment. */
+  async deleteInlineComment(input: {
+    repositoryExternalId: string;
+    commentExternalId: string;
+  }) {
+    await providerText(
+      this.name,
+      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/comments/${encodeURIComponent(input.commentExternalId)}`,
+      { method: "DELETE", headers: this.headers },
+    );
+  }
+
+  /**
    * Enriches REST review comments with thread resolution state.
    *
    * GitHub exposes comments and replies through REST, but only its GraphQL
@@ -568,14 +665,37 @@ export class GitHubProvider implements PullRequestProvider {
     repositoryExternalId: string,
     pullRequestNumber: number,
   ) {
-    const statuses = new Map<string, "open" | "resolved">();
+    const threads = await this.getReviewThreads(
+      repositoryExternalId,
+      pullRequestNumber,
+    );
+    return new Map(
+      [...threads].map(([rootId, { resolved }]) => [
+        rootId,
+        resolved ? ("resolved" as const) : ("open" as const),
+      ]),
+    );
+  }
+
+  /**
+   * Reads the GraphQL review threads, keyed by their root REST comment.
+   *
+   * The REST conversation carries comment ids, and resolving one takes the
+   * thread's own GraphQL node id, so the two identities are collected together
+   * on the one walk that already had to happen for resolution state.
+   */
+  private async getReviewThreads(
+    repositoryExternalId: string,
+    pullRequestNumber: number,
+  ) {
+    const threads = new Map<string, { nodeId: string; resolved: boolean }>();
     try {
       const repository = await providerFetch<GitHubRepository>(
         this.name,
         `${this.apiUrl}/repositories/${repositoryExternalId}`,
         { headers: this.headers },
       );
-      if (!repository.node_id) return statuses;
+      if (!repository.node_id) return threads;
 
       const visitedCursors = new Set<string>();
       let cursor: string | null = null;
@@ -602,6 +722,7 @@ export class GitHubProvider implements PullRequestProvider {
                       pullRequest(number: $number) {
                         reviewThreads(first: 100, after: $after) {
                           nodes {
+                            id
                             isResolved
                             comments(first: 1) {
                               nodes {
@@ -627,24 +748,27 @@ export class GitHubProvider implements PullRequestProvider {
               }),
             },
           );
-        const threads: GitHubReviewThreadsConnection | undefined =
+        const connection: GitHubReviewThreadsConnection | undefined =
           response.data?.node?.pullRequest?.reviewThreads;
-        if (!threads) return statuses;
-        for (const thread of threads.nodes) {
+        if (!connection) return threads;
+        for (const thread of connection.nodes) {
           const rootId = thread.comments.nodes[0]?.fullDatabaseId;
           if (rootId === null || rootId === undefined) continue;
-          statuses.set(String(rootId), thread.isResolved ? "resolved" : "open");
+          threads.set(String(rootId), {
+            nodeId: thread.id,
+            resolved: thread.isResolved,
+          });
         }
-        if (!threads.pageInfo.hasNextPage) return statuses;
-        const nextCursor: string | null = threads.pageInfo.endCursor;
-        if (!nextCursor || visitedCursors.has(nextCursor)) return statuses;
+        if (!connection.pageInfo.hasNextPage) return threads;
+        const nextCursor: string | null = connection.pageInfo.endCursor;
+        if (!nextCursor || visitedCursors.has(nextCursor)) return threads;
         visitedCursors.add(nextCursor);
         cursor = nextCursor;
       }
     } catch {
       // Resolution metadata is optional; the REST conversation remains usable.
     }
-    return statuses;
+    return threads;
   }
 
   /** Fetches file content at a provider revision within the configured size limit. */

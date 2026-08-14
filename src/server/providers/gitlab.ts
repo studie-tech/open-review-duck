@@ -460,6 +460,57 @@ export class GitLabProvider implements PullRequestProvider {
     return { externalId: String(note.id) };
   }
 
+  /** Resolves or reopens one GitLab merge-request discussion. */
+  async setInlineThreadResolution(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    resolved: boolean;
+  }) {
+    await providerFetch<GitLabDiscussion>(
+      this.name,
+      `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}/discussions/${encodeURIComponent(input.threadExternalId)}`,
+      {
+        method: "PUT",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ resolved: input.resolved }),
+      },
+    );
+  }
+
+  /** Rewrites one note of a GitLab merge-request discussion. */
+  async editInlineComment(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    commentExternalId: string;
+    body: string;
+  }) {
+    await providerFetch<GitLabDiscussionNote>(
+      this.name,
+      `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}/discussions/${encodeURIComponent(input.threadExternalId)}/notes/${encodeURIComponent(input.commentExternalId)}`,
+      {
+        method: "PUT",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ body: input.body }),
+      },
+    );
+  }
+
+  /** Deletes one note of a GitLab merge-request discussion. */
+  async deleteInlineComment(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    commentExternalId: string;
+  }) {
+    await providerVoid(
+      this.name,
+      `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}/discussions/${encodeURIComponent(input.threadExternalId)}/notes/${encodeURIComponent(input.commentExternalId)}`,
+      { method: "DELETE", headers: this.headers },
+    );
+  }
+
   /** Lists and normalizes inline review conversations from the provider. */
   async listInlineCommentThreads(
     repositoryExternalId: string,

@@ -13,6 +13,7 @@ import { modalSurfaceClassName } from "~/components/ui/modal-surface";
 import {
   commandMenuShortcut,
   formatShortcut,
+  isActivatableTarget,
   isApplePlatform,
   isEditableTarget,
   type KeyboardShortcut,
@@ -182,6 +183,12 @@ export function useCommandCenterBindings({
         return;
       }
       if (isEditableTarget(event.target)) {
+        resetPending();
+        return;
+      }
+      // Enter is bound as a page shortcut, and the focused control's own
+      // activation has to keep winning over it.
+      if (event.key === "Enter" && isActivatableTarget(event.target)) {
         resetPending();
         return;
       }

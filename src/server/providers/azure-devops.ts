@@ -509,6 +509,63 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     return { externalId: String(comment.id) };
   }
 
+  /**
+   * Closes or reopens one Azure DevOps pull-request thread.
+   *
+   * Azure models resolution as a thread status rather than a flag, and its
+   * "closed" status is the one the pull-request interface offers next to an
+   * active conversation.
+   */
+  async setInlineThreadResolution(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    resolved: boolean;
+  }) {
+    await providerFetch<AzureThread>(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}/threads/${encodeURIComponent(input.threadExternalId)}?api-version=7.1`,
+      {
+        method: "PATCH",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ status: input.resolved ? "closed" : "active" }),
+      },
+    );
+  }
+
+  /** Rewrites one comment of an Azure DevOps pull-request thread. */
+  async editInlineComment(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    commentExternalId: string;
+    body: string;
+  }) {
+    await providerFetch<AzureThreadComment>(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}/threads/${encodeURIComponent(input.threadExternalId)}/comments/${encodeURIComponent(input.commentExternalId)}?api-version=7.1`,
+      {
+        method: "PATCH",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ content: input.body }),
+      },
+    );
+  }
+
+  /** Deletes one comment of an Azure DevOps pull-request thread. */
+  async deleteInlineComment(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    commentExternalId: string;
+  }) {
+    await providerVoid(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}/threads/${encodeURIComponent(input.threadExternalId)}/comments/${encodeURIComponent(input.commentExternalId)}?api-version=7.1`,
+      { method: "DELETE", headers: this.headers },
+    );
+  }
+
   /** Lists and normalizes inline review conversations from the provider. */
   async listInlineCommentThreads(
     repositoryExternalId: string,

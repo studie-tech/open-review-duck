@@ -24,6 +24,21 @@ export function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+/**
+ * Checks whether Enter already means "activate this" for the focused element.
+ *
+ * A page shortcut bound to a bare Enter would otherwise swallow the activation
+ * of whatever button or link the reviewer has just tabbed to, or clicked.
+ */
+export function isActivatableTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      'a[href], button, summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"]',
+    ),
+  );
+}
+
 /** Checks whether a keyboard event matches a shortcut stroke. */
 export function matchesShortcutStroke(
   event: KeyboardEvent,

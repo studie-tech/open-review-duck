@@ -4,12 +4,16 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleCheck,
+  CircleDot,
   Clock3,
   ExternalLink,
   GitBranch,
   GripVertical,
   LoaderCircle,
+  MessageCircleQuestionMark,
   MessageSquareText,
+  Pencil,
   Send,
   Sparkles,
   Trash2,
@@ -52,6 +56,7 @@ import {
   focusedRowSpan,
   sideBySideDiff,
 } from "~/lib/side-by-side-diff";
+import { isPeekableToken, SYMBOL_PEEK_ATTRIBUTE } from "~/lib/symbol-peek";
 import {
   type HighlightedLine,
   useHighlightedSource,
@@ -102,6 +107,8 @@ export const reviewShortcuts = {
   askAi: [{ key: "e" }],
   reviewPullRequest: [{ key: "a" }],
   comment: [{ key: "l" }],
+  commentHere: [{ key: "Enter" }],
+  undoSignOff: [{ key: "u", mod: true }],
   context: [{ key: "c" }],
   signOff: [{ key: "s" }],
   // Shift, not the command key: the browser keeps ⌘W for closing the tab and
@@ -1334,14 +1341,27 @@ function HighlightedDiffTokens({
   line: HighlightedLine | undefined;
 }) {
   return line?.tokens.length
-    ? line.tokens.map((token, index) => (
-        <span
-          key={`${index}-${token.text.length}`}
-          className={token.className || undefined}
-        >
-          {token.text}
-        </span>
-      ))
+    ? line.tokens.map((token, index) =>
+        isPeekableToken(token) ? (
+          <span
+            key={`${index}-${token.text.length}`}
+            {...{ [SYMBOL_PEEK_ATTRIBUTE]: token.text }}
+            className={cn(
+              "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
+              token.className,
+            )}
+          >
+            {token.text}
+          </span>
+        ) : (
+          <span
+            key={`${index}-${token.text.length}`}
+            className={token.className || undefined}
+          >
+            {token.text}
+          </span>
+        ),
+      )
     : " ";
 }
 
@@ -1479,7 +1499,50 @@ interface SideBySideUnitDiffProps {
   keyboardLine?: number;
   findingLine?: number;
   onSelectReviewLine: (line: number) => void;
+  onAskReviewLine?: (line: number) => void;
   renderLineDetails?: (line: number) => ReactNode;
+}
+
+/**
+ * Opens an AI conversation on the line the reviewer is pointing at.
+ *
+ * It sits beside the comment affordance because the two are the same reach:
+ * a line the reviewer has a question about is as likely as one they have a
+ * remark about, and neither should cost a trip through the line picker.
+ */
+export function AskAiLineButton({
+  className,
+  line,
+  onAsk,
+  visible = false,
+}: {
+  className?: string;
+  line: number;
+  onAsk: (line: number) => void;
+  visible?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`Ask AI about line ${line}`}
+      title="Ask AI about this line"
+      onClick={(event) => {
+        // The gutter and the side-by-side row both answer clicks with the
+        // comment composer, and this button sits inside their hit area.
+        event.stopPropagation();
+        onAsk(line);
+      }}
+      className={cn(
+        "hover:text-violet grid shrink-0 place-items-center rounded transition-opacity",
+        visible
+          ? "text-violet opacity-100"
+          : "opacity-0 group-hover:opacity-100",
+        className,
+      )}
+    >
+      <MessageCircleQuestionMark className="size-3" aria-hidden="true" />
+    </button>
+  );
 }
 
 /** Separates the reviewed unit from surrounding source context. */
@@ -1528,6 +1591,7 @@ export const SideBySideUnitDiff = forwardRef<
     keyboardLine,
     findingLine,
     onSelectReviewLine,
+    onAskReviewLine,
     renderLineDetails,
   },
   ref,
@@ -1903,54 +1967,67 @@ export const SideBySideUnitDiff = forwardRef<
               {startsScope && (
                 <ReviewScopeMarker edge="start" line={scopeStartLine} />
               )}
-              <LineContainer
-                {...(interactive
-                  ? {
-                      type: "button" as const,
-                      "aria-label": `Comment on current line ${reviewLine}`,
-                      title: "Comment on this pull-request line",
-                      onClick: () => onSelectReviewLine(reviewLine),
-                    }
-                  : {})}
-                id={
-                  !rendersLineDetails ? undefined : `review-line-${reviewLine}`
-                }
-                data-review-scope={isContextRow ? "context" : "unit"}
-                className={cn(
-                  "group grid w-full grid-cols-[50px_minmax(0,1fr)] text-left",
-                  row.kind === "added"
-                    ? "bg-addition/[.085]"
-                    : "bg-surface-subtle/20",
-                  interactive &&
-                    "cursor-pointer transition hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                  highlightsReviewLine(findingLine, reviewLine) &&
-                    FINDING_LINE_HIGHLIGHT,
-                  highlightsReviewLine(selectedLine, reviewLine) &&
-                    "bg-violet/[.055]",
-                  highlightsReviewLine(keyboardLine, reviewLine) &&
-                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                  isContextRow &&
-                    "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
-                )}
-              >
-                <span className="flex items-center justify-end gap-1 border-r border-line/60 px-2 text-addition transition select-none group-hover:text-violet">
-                  {interactive && (
-                    <MessageSquareText
-                      className={cn(
-                        "size-3 transition-opacity",
-                        selectedLine === reviewLine ||
-                          keyboardLine === reviewLine
-                          ? "text-cyan opacity-100"
-                          : "opacity-0 group-hover:opacity-100",
-                      )}
-                    />
+              <div className="group relative">
+                <LineContainer
+                  {...(interactive
+                    ? {
+                        type: "button" as const,
+                        "aria-label": `Comment on current line ${reviewLine}`,
+                        title: "Comment on this pull-request line",
+                        onClick: () => onSelectReviewLine(reviewLine),
+                      }
+                    : {})}
+                  id={
+                    !rendersLineDetails
+                      ? undefined
+                      : `review-line-${reviewLine}`
+                  }
+                  data-review-scope={isContextRow ? "context" : "unit"}
+                  className={cn(
+                    // Wide enough for the ask affordance that sits over the
+                    // gutter's leading edge beside the comment icon.
+                    "grid w-full grid-cols-[66px_minmax(0,1fr)] text-left",
+                    row.kind === "added"
+                      ? "bg-addition/[.085]"
+                      : "bg-surface-subtle/20",
+                    interactive &&
+                      "cursor-pointer transition hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    highlightsReviewLine(findingLine, reviewLine) &&
+                      FINDING_LINE_HIGHLIGHT,
+                    highlightsReviewLine(selectedLine, reviewLine) &&
+                      "bg-violet/[.055]",
+                    highlightsReviewLine(keyboardLine, reviewLine) &&
+                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                    isContextRow &&
+                      "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
                   )}
-                  {lineNumber}
-                </span>
-                <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
-                  <HighlightedDiffTokens line={line} />
-                </span>
-              </LineContainer>
+                >
+                  <span className="flex items-center justify-end gap-1 border-r border-line/60 px-2 text-addition transition select-none group-hover:text-violet">
+                    {interactive && (
+                      <MessageSquareText
+                        className={cn(
+                          "size-3 transition-opacity",
+                          selectedLine === reviewLine ||
+                            keyboardLine === reviewLine
+                            ? "text-cyan opacity-100"
+                            : "opacity-0 group-hover:opacity-100",
+                        )}
+                      />
+                    )}
+                    {lineNumber}
+                  </span>
+                  <span className="syntax-code min-w-0 overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80">
+                    <HighlightedDiffTokens line={line} />
+                  </span>
+                </LineContainer>
+                {interactive && onAskReviewLine && (
+                  <AskAiLineButton
+                    className="absolute top-1/2 left-1.5 size-4 -translate-y-1/2"
+                    line={reviewLine}
+                    onAsk={onAskReviewLine}
+                  />
+                )}
+              </div>
               {rendersLineDetails && renderLineDetails?.(reviewLine)}
               {endsScope && (
                 <ReviewScopeMarker edge="end" line={scopeEndLine} />
@@ -2079,11 +2156,18 @@ export const SideBySideUnitDiff = forwardRef<
             <div
               data-review-scope={isContextRow ? "context" : "unit"}
               className={cn(
-                "hidden grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)] sm:grid",
+                "group relative hidden grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)] sm:grid",
                 isContextRow &&
                   "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
               )}
             >
+              {reviewLine !== undefined && onAskReviewLine && (
+                <AskAiLineButton
+                  className="bg-panel/90 absolute top-1/2 right-2 z-10 size-5 -translate-y-1/2 rounded-md border border-line shadow-sm"
+                  line={reviewLine}
+                  onAsk={onAskReviewLine}
+                />
+              )}
               {previousIsReviewLine ? (
                 <button
                   type="button"
@@ -2200,11 +2284,18 @@ export const SideBySideUnitDiff = forwardRef<
             <div
               data-review-scope={isContextRow ? "context" : "unit"}
               className={cn(
-                "sm:hidden",
+                "group relative sm:hidden",
                 isContextRow &&
                   "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
               )}
             >
+              {reviewLine !== undefined && onAskReviewLine && (
+                <AskAiLineButton
+                  className="bg-panel/90 absolute top-1/2 right-2 z-10 size-5 -translate-y-1/2 rounded-md border border-line shadow-sm"
+                  line={reviewLine}
+                  onAsk={onAskReviewLine}
+                />
+              )}
               {row.kind === "unchanged" ? (
                 <div
                   className={cn(
@@ -2470,17 +2561,31 @@ function conversationTimestamp(value: string) {
   }).format(new Date(value));
 }
 
+/** The conversation actions a reviewer may take without leaving ReviewDuck. */
+export interface ProviderConversationActions {
+  onDeleteComment: (commentExternalId: string) => Promise<unknown>;
+  onDeleteThread: () => Promise<unknown>;
+  onEditComment: (commentExternalId: string, body: string) => Promise<unknown>;
+  onReply: (body: string) => Promise<unknown>;
+  onResolve: (resolved: boolean) => Promise<unknown>;
+}
+
 /** Renders the provider conversation interface. */
 export function ProviderConversation({
   className,
+  managing = false,
+  onDeleteComment,
+  onDeleteThread,
+  onEditComment,
   onReply,
+  onResolve,
   provider,
   replying,
   thread,
   publishedByReviewDuck,
-}: {
+}: ProviderConversationActions & {
   className?: string;
-  onReply: (body: string) => Promise<unknown>;
+  managing?: boolean;
   provider: WorkspaceData["pullRequest"]["provider"];
   replying: boolean;
   thread: ProviderConversationThread;
@@ -2489,11 +2594,22 @@ export function ProviderConversation({
   const [expanded, setExpanded] = useState(thread.status !== "resolved");
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
+  const [editing, setEditing] = useState<string>();
+  const [editBody, setEditBody] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState<
+    { kind: "thread" } | { kind: "comment"; externalId: string }
+  >();
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
+  const editInputRef = useRef<HTMLTextAreaElement>(null);
+  const resolved = thread.status === "resolved";
 
   useEffect(() => {
     if (replyOpen) replyInputRef.current?.focus();
   }, [replyOpen]);
+
+  useEffect(() => {
+    if (editing) editInputRef.current?.focus();
+  }, [editing]);
 
   useEffect(() => {
     setExpanded(thread.status !== "resolved");
@@ -2510,6 +2626,33 @@ export function ProviderConversation({
       setReplyOpen(false);
     } catch {
       // The mutation owns the user-facing error; retain the draft for retry.
+    }
+  }
+
+  /** Saves an edited comment, keeping the draft open if the provider says no. */
+  async function submitEdit(commentExternalId: string) {
+    const body = editBody.trim();
+    if (!body || managing) return;
+    try {
+      await onEditComment(commentExternalId, body);
+      setEditing(undefined);
+      setEditBody("");
+    } catch {
+      // The mutation owns the user-facing error; retain the draft for retry.
+    }
+  }
+
+  /** Carries out the deletion the reviewer just confirmed. */
+  async function confirmDelete() {
+    const target = confirmingDelete;
+    if (!target || managing) return;
+    try {
+      await (target.kind === "thread"
+        ? onDeleteThread()
+        : onDeleteComment(target.externalId));
+      setConfirmingDelete(undefined);
+    } catch {
+      // The mutation owns the user-facing error; the dialog stays for a retry.
     }
   }
 
@@ -2554,17 +2697,59 @@ export function ProviderConversation({
             </Badge>
           )}
         </button>
-        {thread.webUrl && (
-          <a
-            href={thread.webUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-mist hover:text-cloud flex shrink-0 items-center gap-1 text-[9px] transition"
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            disabled={managing}
+            aria-label={
+              resolved
+                ? "Reopen this conversation"
+                : "Resolve this conversation"
+            }
+            title={
+              resolved
+                ? `Reopen this conversation on ${providerLabel(provider)}`
+                : `Resolve this conversation on ${providerLabel(provider)}`
+            }
+            onClick={() => void onResolve(!resolved)}
+            className={cn(
+              "flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] transition disabled:opacity-50",
+              resolved
+                ? "text-mist hover:text-cloud hover:bg-surface-subtle"
+                : "text-lime hover:bg-lime/10",
+            )}
           >
-            Open on {providerLabel(provider)}
-            <ExternalLink className="size-3" />
-          </a>
-        )}
+            {resolved ? (
+              <CircleDot className="size-3.5" />
+            ) : (
+              <CircleCheck className="size-3.5" />
+            )}
+            <span className="hidden sm:inline">
+              {resolved ? "Reopen" : "Resolve"}
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={managing}
+            aria-label="Delete this conversation"
+            title={`Delete this conversation on ${providerLabel(provider)}`}
+            onClick={() => setConfirmingDelete({ kind: "thread" })}
+            className="text-mist grid size-6 place-items-center rounded-md transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+          {thread.webUrl && (
+            <a
+              href={thread.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open this conversation on ${providerLabel(provider)}`}
+              className="text-mist hover:text-cloud grid size-6 place-items-center rounded-md transition hover:bg-surface-subtle"
+            >
+              <ExternalLink className="size-3.5" />
+            </a>
+          )}
+        </div>
       </header>
       {expanded && (
         <>
@@ -2573,7 +2758,7 @@ export function ProviderConversation({
               <div
                 key={comment.externalId}
                 className={cn(
-                  "px-4 py-4 sm:px-5",
+                  "group/comment px-4 py-4 sm:px-5",
                   index > 0 && "bg-surface-subtle/45 sm:pl-8",
                 )}
               >
@@ -2591,12 +2776,97 @@ export function ProviderConversation({
                     {conversationTimestamp(comment.createdAt)}
                   </time>
                   {index > 0 && (
-                    <span className="text-cyan ml-auto text-[8px] font-semibold tracking-wider uppercase">
+                    <span className="text-cyan text-[8px] font-semibold tracking-wider uppercase">
                       Reply
                     </span>
                   )}
+                  <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
+                    <button
+                      type="button"
+                      disabled={managing}
+                      aria-label={`Edit the comment by ${comment.author}`}
+                      title="Edit this comment"
+                      onClick={() => {
+                        setEditing(comment.externalId);
+                        setEditBody(comment.body);
+                      }}
+                      className="text-mist hover:text-cyan grid size-6 place-items-center rounded-md transition hover:bg-surface-subtle disabled:opacity-50"
+                    >
+                      <Pencil className="size-3" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={managing}
+                      aria-label={`Delete the comment by ${comment.author}`}
+                      title="Delete this comment"
+                      onClick={() =>
+                        setConfirmingDelete({
+                          kind: "comment",
+                          externalId: comment.externalId,
+                        })
+                      }
+                      className="text-mist grid size-6 place-items-center rounded-md transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  </span>
                 </div>
-                <ProviderCommentBody body={comment.body} />
+                {editing === comment.externalId ? (
+                  <div className="mt-2">
+                    <textarea
+                      ref={editInputRef}
+                      value={editBody}
+                      onChange={(event) => setEditBody(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setEditing(undefined);
+                        } else if (
+                          event.key === "Enter" &&
+                          (event.metaKey || event.ctrlKey)
+                        ) {
+                          event.preventDefault();
+                          void submitEdit(comment.externalId);
+                        }
+                      }}
+                      rows={3}
+                      className="bg-surface text-cloud focus:border-cyan/45 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none"
+                    />
+                    <div className="mt-2 flex items-center justify-end gap-2">
+                      <span className="text-fog mr-auto flex items-center gap-1 text-[9px]">
+                        <ShortcutHint shortcut={reviewShortcuts.postComment} />
+                        save · Esc cancels
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={managing}
+                        onClick={() => setEditing(undefined)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={
+                          managing ||
+                          !editBody.trim() ||
+                          editBody.trim() === comment.body.trim()
+                        }
+                        onClick={() => void submitEdit(comment.externalId)}
+                      >
+                        {managing ? (
+                          <LoaderCircle className="size-3 animate-spin" />
+                        ) : (
+                          <Check className="size-3" />
+                        )}
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <ProviderCommentBody body={comment.body} />
+                )}
               </div>
             ))}
           </div>
@@ -2668,6 +2938,32 @@ export function ProviderConversation({
             )}
           </footer>
         </>
+      )}
+      {confirmingDelete && (
+        <ConfirmationDialog
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          icon={<Trash2 className="text-coral size-5" />}
+          title={
+            confirmingDelete.kind === "thread"
+              ? "Delete this conversation?"
+              : "Delete this comment?"
+          }
+          description={
+            confirmingDelete.kind === "thread"
+              ? `This removes all ${thread.comments.length} ${thread.comments.length === 1 ? "comment" : "comments"} from ${providerLabel(provider)}. It cannot be undone.`
+              : `This removes the comment from ${providerLabel(provider)}. It cannot be undone.`
+          }
+          pending={managing}
+          pendingLabel={
+            <>
+              <LoaderCircle className="size-3 animate-spin" />
+              Deleting…
+            </>
+          }
+          onCancel={() => setConfirmingDelete(undefined)}
+          onConfirm={() => void confirmDelete()}
+        />
       )}
     </article>
   );
