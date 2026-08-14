@@ -822,7 +822,14 @@ export class GitHubProvider implements PullRequestProvider {
       }
       if (!connection.pageInfo.hasNextPage) return threads;
       const nextCursor: string | null = connection.pageInfo.endCursor;
-      if (!nextCursor || visitedCursors.has(nextCursor)) return threads;
+      if (!nextCursor || visitedCursors.has(nextCursor)) {
+        // More pages are promised but none can be asked for, so what was read
+        // describes only part of the pull request.
+        throw new ProviderError(
+          this.name,
+          "GitHub did not return a usable cursor for its review threads",
+        );
+      }
       visitedCursors.add(nextCursor);
       cursor = nextCursor;
     }
