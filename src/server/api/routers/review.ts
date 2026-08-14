@@ -44,7 +44,10 @@ import {
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
-import { definitionIsWhereTheNameWasRead } from "~/lib/symbol-peek";
+import {
+  definitionIsWhereTheNameWasRead,
+  SYMBOL_PEEK_MAXIMUM_LINES,
+} from "~/lib/symbol-peek";
 import { PAID_AI_FEATURE } from "~/server/ai/plan";
 import {
   proposeSemanticConceptLayout,
@@ -328,6 +331,15 @@ async function declaredSymbolInSnapshot(
 const SYMBOL_FILE_CACHE_LIMIT = 64;
 
 /**
+ * How much source the parse cache may hold across every file it remembers.
+ *
+ * Entry count alone bounds nothing useful: sixty-four files at the read limit
+ * is far more memory than sixty-four small ones, and the ring is shared by
+ * everyone an instance serves.
+ */
+const SYMBOL_FILE_CACHE_CHARACTERS = 2_000_000;
+
+/**
  * How many candidate paths of each shape one name may read from the provider.
  *
  * A specifier without an extension stands for a file under any of its
@@ -341,7 +353,34 @@ const DIRECTORY_IMPORT = /\/(?:index\.[^./]+|__init__\.py)$/;
 
 type FileDeclarations = Map<string, ReturnType<typeof symbolDefinitionOf>>;
 
+/**
+ * Narrows a whole file to the lines a definition card can actually show.
+ *
+ * A module answers when no declaration in it does, and the file behind it may
+ * run to the read limit while the card shows under twenty lines. Sending the
+ * rest would spend the payload of every hover on lines nobody reads.
+ */
+function windowedModuleSource<
+  Unit extends { source: string; startLine: number },
+>(unit: Unit, focusLine: number | undefined) {
+  const lines = unit.source.split("\n");
+  const lead = 2;
+  const offset = Math.min(
+    Math.max(0, (focusLine ?? unit.startLine) - unit.startLine - lead),
+    Math.max(0, lines.length - 1),
+  );
+  return {
+    ...unit,
+    source: lines
+      .slice(offset, offset + SYMBOL_PEEK_MAXIMUM_LINES + lead * 2)
+      .join("\n"),
+    startLine: unit.startLine + offset,
+  };
+}
+
 const symbolFileCache = new Map<string, FileDeclarations>();
+const symbolFileCacheWeights = new Map<string, number>();
+let symbolFileCacheCharacters = 0;
 
 /**
  * Parses the whole reviewed file to find a declaration the diff left out.
@@ -392,10 +431,17 @@ async function declaredSymbolInFile(
     }
   }
   symbolFileCache.set(key, declarations);
-  while (symbolFileCache.size > SYMBOL_FILE_CACHE_LIMIT) {
+  symbolFileCacheCharacters += file.source.length;
+  symbolFileCacheWeights.set(key, file.source.length);
+  while (
+    symbolFileCache.size > SYMBOL_FILE_CACHE_LIMIT ||
+    symbolFileCacheCharacters > SYMBOL_FILE_CACHE_CHARACTERS
+  ) {
     const oldest = symbolFileCache.keys().next().value;
     if (oldest === undefined) break;
     symbolFileCache.delete(oldest);
+    symbolFileCacheCharacters -= symbolFileCacheWeights.get(oldest) ?? 0;
+    symbolFileCacheWeights.delete(oldest);
   }
   return declarations.get(input.symbol);
 }
@@ -503,15 +549,14 @@ async function importedSymbolDefinition(
     }
     const module = analyzed.find((unit) => unit.kind === "file");
     if (module) {
-      return symbolDefinitionOf(
-        { ...module, name: imported },
-        findImportedDeclarationLine(
-          module.source,
-          imported,
-          module.language,
-          module.startLine,
-        ),
+      const focusLine = findImportedDeclarationLine(
+        module.source,
+        imported,
+        module.language,
+        module.startLine,
       );
+      const windowed = windowedModuleSource(module, focusLine);
+      return symbolDefinitionOf(windowed, focusLine ?? windowed.startLine);
     }
   }
   return undefined;
