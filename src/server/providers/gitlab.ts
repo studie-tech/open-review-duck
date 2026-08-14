@@ -508,6 +508,10 @@ export class GitLabProvider implements PullRequestProvider {
       this.name,
       `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}/discussions/${encodeURIComponent(input.threadExternalId)}/notes/${encodeURIComponent(input.commentExternalId)}`,
       { method: "DELETE", headers: this.headers },
+      // A conversation is deleted one comment at a time, so a retry of a
+      // partial delete re-requests comments that already left. Their absence
+      // is the outcome the caller wanted, not a failure to report.
+      [404],
     );
   }
 
