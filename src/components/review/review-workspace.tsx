@@ -1661,7 +1661,10 @@ export function ReviewWorkspace({
     : undefined;
   // A stored language the grammars no longer cover must not take the render
   // down: the lookup simply has nothing to resolve against and stays off.
+  // Plain text is covered by name but has no parser behind it, so it has no
+  // declarations to find either.
   const peekedLanguage = knownLanguage(activeUnit?.language ?? "text");
+  const peekable = peekedLanguage !== undefined && peekedLanguage !== "text";
   const peekedDefinition = api.review.symbolDefinition.useQuery(
     {
       pullRequestId: initialData.pullRequest.id,
@@ -1678,7 +1681,7 @@ export function ReviewWorkspace({
         : {}),
     },
     {
-      enabled: Boolean(peekedSymbol && activeUnit && peekedLanguage),
+      enabled: Boolean(peekedSymbol && activeUnit && peekable),
       staleTime: 5 * 60_000,
       retry: false,
     },
