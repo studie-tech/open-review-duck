@@ -75,9 +75,14 @@ jobs:
 
   local-container:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    # Wide enough for a build that starts with nothing cached, which spends
-    # roughly twenty minutes fetching the thousand packages the image installs.
-    timeout-minutes: 50
+    # Sized for the build that starts with nothing on the disk, not the three
+    # minutes a warm one takes: roughly twenty minutes to fetch the thousand
+    # packages the image installs, five to assemble the workflow runtime, and
+    # fifteen or more to compile. Cutting a build short at any level — the job's
+    # limit or a step's — leaves buildkitd running, and the builder then refuses
+    # to commit the disk it was interrupted on. The cold build has to be allowed
+    # to finish, or nothing is ever cached and the next run is cold as well.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
@@ -90,13 +95,6 @@ jobs:
         with:
           cache-key: open-review-duck/local-appliance
       - name: Build the local appliance
-        # Below the job's own limit on purpose. A job that runs out of time is
-        # killed outright, and the builder then refuses to commit its disk —
-        # "disk may be in a bad state after SIGKILL" — so the layers that build
-        # did manage to produce are thrown away and the next run starts from
-        # nothing all over again. Failing the step instead leaves the cleanup
-        # steps to run, and the next build starts from what this one reached.
-        timeout-minutes: 40
         uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850
         with:
           context: .
