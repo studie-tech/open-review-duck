@@ -22,6 +22,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   ShieldCheck,
@@ -60,13 +61,14 @@ import {
   type AiQuestionStreamUpdate,
   consumeAiQuestionStream,
 } from "~/lib/ai-question-stream";
+import { conceptStatusFromMembers } from "~/lib/concept-progress";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
 import {
   findImportedDeclarationLine,
   findImportTargetUnit,
   type ImportReference,
 } from "~/lib/import-navigation";
-import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
+import { commandMenuShortcut, formatShortcut } from "~/lib/keyboard-shortcuts";
 import { hydratePrivateReviewSources } from "~/lib/private-source-client";
 import {
   buildReviewHierarchy,
@@ -99,6 +101,14 @@ import {
   reviewFooterSaveState,
   signOffQueueReducer,
 } from "~/lib/sign-off-queue";
+import {
+  nextUndoableSignOff,
+  type ReviewViewSnapshot,
+  rememberSignOff,
+  type SignOffUndoEntry,
+  signOffUndoTarget,
+} from "~/lib/sign-off-undo";
+import { isPeekableToken, SYMBOL_PEEK_ATTRIBUTE } from "~/lib/symbol-peek";
 import {
   preloadSyntaxLanguage,
   useHighlightedSource,
@@ -750,16 +760,11 @@ function liveConceptStatus(
     .map((id) => unitsById.get(id))
     .filter((unit): unit is ReviewUnit => Boolean(unit));
   const signed = members.filter(({ status }) => status === "signed_off").length;
-  const status = members.some(({ status }) => status === "waiting")
-    ? ("waiting" as const)
-    : signed === members.length && members.length > 0
-      ? ("signed_off" as const)
-      : signed > 0
-        ? ("partial" as const)
-        : members.some(({ status }) => status === "changed")
-          ? ("changed" as const)
-          : ("pending" as const);
-  return { members, signed, status };
+  return {
+    members,
+    signed,
+    status: conceptStatusFromMembers(members, concept.memberIds.length),
+  };
 }
 
 /**
@@ -841,6 +846,7 @@ interface LiveAiQuestion {
 
 import { reviewSessionMachine } from "./review-session-machine";
 import {
+  AskAiLineButton,
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
   conceptMembersInReadingOrder,
@@ -852,6 +858,7 @@ import {
   PATH_PAGE_SIZE,
   PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
+  type ProviderConversationActions,
   providerLabel,
   ReviewConceptMemberHeader,
   ReviewConceptMemberPreview,
@@ -868,6 +875,7 @@ import {
   supportedLanguage,
   UnitImportContext,
 } from "./review-workspace-support";
+import { SymbolPeekCard, useSymbolPeek } from "./symbol-peek";
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -1083,6 +1091,9 @@ export function ReviewWorkspace({
   const [revisionNotice, setRevisionNotice] = useState<{
     previous?: ReviewRevision;
   }>();
+  const [signOffUndoHistory, setSignOffUndoHistory] = useState<
+    SignOffUndoEntry[]
+  >([]);
   const [importPreview, setImportPreview] = useState<ImportPreview>();
   const [resolvingImport, setResolvingImport] = useState<string>();
   const [importReturn, setImportReturn] = useState<{
@@ -1616,9 +1627,44 @@ export function ReviewWorkspace({
     highlightedPreviousRewrite,
     previousRewriteSource,
   ]);
+  const {
+    close: closeSymbolPeek,
+    holdOpen: holdSymbolPeek,
+    peeked: peekedSymbol,
+    peekHandlers,
+  } = useSymbolPeek(activeSourceAvailable);
   const importReferences = useImportReferences(
     displayedSource,
     activeUnit?.language ?? "text",
+  );
+  const fileImportReferences = useImportReferences(
+    activeModule?.source ?? "",
+    activeUnit?.language ?? "text",
+  );
+  // The name may be bound by an import statement the diff does not show, so
+  // the whole file's imports are what say where to look for its declaration.
+  const peekedImport = peekedSymbol
+    ? fileImportReferences.find(({ local }) => local === peekedSymbol.symbol)
+    : undefined;
+  const peekedDefinition = api.review.symbolDefinition.useQuery(
+    {
+      pullRequestId: initialData.pullRequest.id,
+      sourcePath: activeUnit?.path ?? "",
+      sourceLanguage: supportedLanguage(activeUnit?.language ?? "text"),
+      symbol: peekedSymbol?.symbol ?? "",
+      ...(peekedImport
+        ? {
+            specifier: peekedImport.specifier,
+            imported: peekedImport.imported,
+            kind: peekedImport.kind,
+          }
+        : {}),
+    },
+    {
+      enabled: Boolean(peekedSymbol && activeUnit),
+      staleTime: 5 * 60_000,
+      retry: false,
+    },
   );
   const importPreviewLines = useHighlightedSource(
     importPreview?.source ?? "",
@@ -1944,6 +1990,20 @@ export function ReviewWorkspace({
       units,
       queued.map(({ input }) => input.unitId),
     );
+    const first = queued[0];
+    if (first) {
+      setSignOffUndoHistory((history) =>
+        rememberSignOff(history, {
+          kind: "unit",
+          label:
+            queued.length === 1
+              ? first.rollback.unit.name
+              : `${queued.length} units`,
+          unitIds: queued.map(({ input }) => input.unitId),
+          view: reviewViewSnapshot(first.rollback),
+        }),
+      );
+    }
     const nextIndex = nextReviewIndexAfterAction(updated, preferredNextUnit);
     for (const entry of queued) {
       dispatchSignOffQueue({
@@ -2111,9 +2171,11 @@ export function ReviewWorkspace({
       signOffDrainRunning.current = false;
     }
   }
+  // Keyed by the unit the request named rather than the one on screen: undo
+  // reaches back to a sign-off the reviewer has since moved on from.
   const undoSignOff = api.review.unreview.useMutation({
-    onSuccess: ({ unreviewed }) => {
-      if (!activeUnit || !unreviewed) return;
+    onSuccess: ({ unreviewed }, { unitId }) => {
+      if (!unreviewed) return;
       void Promise.all([
         utils.workspace.guidance.invalidate(),
         utils.review.dashboard.invalidate(),
@@ -2121,7 +2183,7 @@ export function ReviewWorkspace({
       ]);
       setUnits((current) =>
         current.map((unit) =>
-          unit.id === activeUnit.id
+          unit.id === unitId
             ? {
                 ...unit,
                 status: "pending" as const,
@@ -2132,7 +2194,7 @@ export function ReviewWorkspace({
       );
       setStartedAt(Date.now());
       toast.success("Marked as not reviewed", {
-        description: `${activeUnit.name} is back in your review queue.`,
+        description: `${units.find(({ id }) => id === unitId)?.name ?? "The unit"} is back in your review queue.`,
       });
     },
     onError: (error) => toast.error(error.message),
@@ -2743,6 +2805,82 @@ export function ReviewWorkspace({
     },
     onError: (error) => toast.error(error.message),
   });
+  const setThreadResolution = api.review.setThreadResolution.useMutation({
+    onSuccess: ({ resolved }) => {
+      toast.success(
+        resolved ? "Conversation resolved" : "Conversation reopened",
+        {
+          description: `The change is live on ${providerLabel(initialData.pullRequest.provider)}.`,
+        },
+      );
+      void providerConversations.refetch();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const editThreadComment = api.review.editThreadComment.useMutation({
+    onSuccess: () => {
+      toast.success("Comment updated", {
+        description: `The new text is live on ${providerLabel(initialData.pullRequest.provider)}.`,
+      });
+      void Promise.all([discussion.refetch(), providerConversations.refetch()]);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const deleteThreadComment = api.review.deleteThreadComment.useMutation({
+    onSuccess: () => {
+      toast.success("Comment deleted", {
+        description: `It is gone from ${providerLabel(initialData.pullRequest.provider)}.`,
+      });
+      void Promise.all([discussion.refetch(), providerConversations.refetch()]);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const deleteThread = api.review.deleteThread.useMutation({
+    onSuccess: ({ deleted }) => {
+      toast.success("Conversation deleted", {
+        description: `${deleted} ${deleted === 1 ? "comment is" : "comments are"} gone from ${providerLabel(initialData.pullRequest.provider)}.`,
+      });
+      void Promise.all([discussion.refetch(), providerConversations.refetch()]);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const managingThread =
+    setThreadResolution.isPending ||
+    editThreadComment.isPending ||
+    deleteThreadComment.isPending ||
+    deleteThread.isPending;
+
+  /** Binds the thread-management mutations to one provider conversation. */
+  function providerThreadActions(
+    unitId: string,
+    threadExternalId: string,
+  ): ProviderConversationActions {
+    return {
+      onDeleteComment: (commentExternalId) =>
+        deleteThreadComment.mutateAsync({
+          unitId,
+          threadExternalId,
+          commentExternalId,
+        }),
+      onDeleteThread: () =>
+        deleteThread.mutateAsync({ unitId, threadExternalId }),
+      onEditComment: (commentExternalId, body) =>
+        editThreadComment.mutateAsync({
+          unitId,
+          threadExternalId,
+          commentExternalId,
+          body,
+        }),
+      onReply: (body) =>
+        replyToThread.mutateAsync({ unitId, threadExternalId, body }),
+      onResolve: (resolved) =>
+        setThreadResolution.mutateAsync({
+          unitId,
+          threadExternalId,
+          resolved,
+        }),
+    };
+  }
 
   /** Renders the open finding inline beside the line it accuses. */
   function renderInlineFindingCard(
@@ -3152,17 +3290,12 @@ export function ReviewWorkspace({
             key={thread.externalId}
             provider={initialData.pullRequest.provider}
             thread={thread}
+            managing={managingThread}
             replying={
               replyToThread.isPending &&
               replyToThread.variables?.threadExternalId === thread.externalId
             }
-            onReply={(body) =>
-              replyToThread.mutateAsync({
-                unitId: activeUnit.id,
-                threadExternalId: thread.externalId,
-                body,
-              })
-            }
+            {...providerThreadActions(activeUnit.id, thread.externalId)}
             publishedByReviewDuck={
               discussion.data?.comments.some(
                 (comment) => comment.providerExternalId === thread.externalId,
@@ -3627,6 +3760,13 @@ export function ReviewWorkspace({
     heldWaitUnitIds.length > 0 &&
     !awaitPending &&
     !releaseReviewWaits.isPending;
+  const undoableSignOff = nextUndoableSignOff(signOffUndoHistory, units);
+  const canUndoSignOff =
+    !!undoableSignOff &&
+    signOffQueue.ids.size === 0 &&
+    !undoSignOff.isPending &&
+    !undoConcept.isPending &&
+    !resetReview.isPending;
 
   /** Shows the review-path panel as a drawer or persistent desktop column. */
   function showPathPanel() {
@@ -3705,36 +3845,69 @@ export function ReviewWorkspace({
   /** Opens an inline question at the visible in-scope line nearest the reader. */
   function openAiQuestion() {
     if (!activeUnit || activeUnit.kind === "binary") return;
-    dismissedAiQuestionUnits.current.delete(activeUnit.id);
+    openAiQuestionAt(centredReviewLine());
+  }
+
+  /**
+   * Names the review line sitting closest to the middle of the code pane.
+   *
+   * Both keyboard entry points anchor themselves here, so asking about a line
+   * and commenting on one land where the reviewer is already reading instead
+   * of wherever the last interaction left a cursor.
+   */
+  function centredReviewLine() {
     const pane = codeScrollRef.current;
     const center = pane
       ? pane.getBoundingClientRect().top + pane.clientHeight / 2
       : window.innerHeight / 2;
-    const candidates = Array.from(
+    const nearest = Array.from(
       document.querySelectorAll<HTMLElement>('[id^="review-line-"]'),
     )
       .map((element) => ({
         element,
         line: Number(element.id.replace("review-line-", "")),
       }))
-      .filter(
-        ({ line }) => Number.isInteger(line) && isPrimaryReviewLine(line),
-      );
-    const nearest = candidates.sort((left, right) => {
-      const leftBounds = left.element.getBoundingClientRect();
-      const rightBounds = right.element.getBoundingClientRect();
-      return (
-        Math.abs(center - (leftBounds.top + leftBounds.height / 2)) -
-        Math.abs(center - (rightBounds.top + rightBounds.height / 2))
-      );
-    })[0]?.line;
+      .filter(({ line }) => Number.isInteger(line) && isPrimaryReviewLine(line))
+      .sort((left, right) => {
+        const leftBounds = left.element.getBoundingClientRect();
+        const rightBounds = right.element.getBoundingClientRect();
+        return (
+          Math.abs(center - (leftBounds.top + leftBounds.height / 2)) -
+          Math.abs(center - (rightBounds.top + rightBounds.height / 2))
+        );
+      })[0]?.line;
     const firstChangedLine = [...changedCurrentLines]
       .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];
+    return nearest ?? firstChangedLine ?? primaryReviewStart;
+  }
+
+  /** Opens the provider comment composer on the line the reviewer is reading. */
+  function openCentredInlineComment() {
+    if (!activeUnit || activeUnit.kind === "binary") return;
+    openInlineComment(
+      closestReviewLine(
+        centredReviewLine(),
+        primaryReviewRanges,
+        primaryReviewStart,
+        primaryReviewEnd,
+      ),
+    );
+  }
+
+  /** Opens the inline AI conversation anchored to one chosen review line. */
+  function openAiQuestionAt(line: number) {
+    if (!activeUnit || activeUnit.kind === "binary") return;
+    dismissedAiQuestionUnits.current.delete(activeUnit.id);
     setSelectedLine(undefined);
     setKeyboardLine(undefined);
     setFocusAiQuestionComposer(true);
-    const nextLine = nearest ?? firstChangedLine ?? primaryReviewStart;
+    const nextLine = closestReviewLine(
+      line,
+      primaryReviewRanges,
+      primaryReviewStart,
+      primaryReviewEnd,
+    );
     const latestLiveThread = liveAiQuestions
       .filter(({ focusLine }) => focusLine === nextLine)
       .at(-1)?.threadId;
@@ -4123,6 +4296,17 @@ export function ReviewWorkspace({
     if (!canSignOffConcept || !activeConcept || !initialData.conceptLayout) {
       return;
     }
+    setSignOffUndoHistory((history) =>
+      rememberSignOff(history, {
+        kind: "concept",
+        conceptId: activeConcept.id,
+        label: activeConcept.title,
+        layoutId: initialData.conceptLayout?.id ?? "",
+        layoutVersion: initialData.conceptLayout?.version ?? 0,
+        unitIds: activeConcept.memberIds,
+        view: reviewViewSnapshot({ unitIndex: activeIndex }),
+      }),
+    );
     signOffConcept.mutate({
       conceptId: activeConcept.id,
       layoutId: initialData.conceptLayout.id,
@@ -4130,6 +4314,68 @@ export function ReviewWorkspace({
       sessionId,
       durationSeconds: Math.round((Date.now() - startedAt) / 1000),
     });
+  }
+
+  /** Captures where the reviewer is, so undoing a sign-off can return there. */
+  function reviewViewSnapshot(
+    at: { unitIndex: number } & Partial<ReviewViewSnapshot>,
+  ): ReviewViewSnapshot {
+    return {
+      contextAfter: at.contextAfter ?? contextAfter,
+      contextBefore: at.contextBefore ?? contextBefore,
+      pathSearch: at.pathSearch ?? pathSearch,
+      scrollTop: at.scrollTop ?? codeScrollRef.current?.scrollTop ?? 0,
+      searchLimit: at.searchLimit ?? searchLimit,
+      showDiff: at.showDiff ?? showDiff,
+      unitIndex: at.unitIndex,
+    };
+  }
+
+  /** Puts the reviewer back in front of the unit a sign-off was made from. */
+  function restoreReviewView(view: ReviewViewSnapshot) {
+    setActiveIndex(view.unitIndex);
+    if (view.pathSearch.trim()) {
+      setPathSearch((current) => (current.trim() ? current : view.pathSearch));
+      setSearchLimit(view.searchLimit);
+    }
+    setShowDiff(view.showDiff);
+    setContextBefore(view.contextBefore);
+    setContextAfter(view.contextAfter);
+    setStartedAt(Date.now());
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => {
+        codeScrollRef.current?.scrollTo({
+          top: view.scrollTop,
+          behavior: "auto",
+        });
+      }),
+    );
+  }
+
+  /**
+   * Takes back the most recent sign-off that still stands.
+   *
+   * Sign-offs are saved through a queue, so undo waits for that queue to
+   * drain rather than racing a save it would have to undo twice. Steps whose
+   * units a resync removed, or which some other action already returned to
+   * the queue, are dropped instead of replayed.
+   */
+  function undoLastSignOff() {
+    if (!undoableSignOff || !canUndoSignOff) return;
+    const { entry, remaining } = undoableSignOff;
+    setSignOffUndoHistory(remaining);
+    restoreReviewView(entry.view);
+    const target = signOffUndoTarget(
+      entry,
+      initialData.conceptLayout ?? undefined,
+    );
+    if (target.kind === "concept") {
+      undoConcept.mutate({ ...target, sessionId });
+      return;
+    }
+    for (const unitId of target.unitIds) {
+      undoSignOff.mutate({ unitId, sessionId });
+    }
   }
 
   /** Pauses the open unit until its own conversation moves. */
@@ -4954,6 +5200,28 @@ export function ReviewWorkspace({
       onSelect: beginKeyboardComment,
     },
     {
+      id: "comment-here",
+      label: "Comment here",
+      description: `Write a ${providerLabel(initialData.pullRequest.provider)} comment on the line in the middle of the view`,
+      group: "Review actions",
+      icon: <MessageSquareText className="size-4" />,
+      shortcut: reviewShortcuts.commentHere,
+      disabled: !activeUnit || activeUnit.kind === "binary",
+      onSelect: openCentredInlineComment,
+    },
+    {
+      id: "undo-sign-off",
+      label: "Undo sign-off",
+      description: undoableSignOff
+        ? `Return ${undoableSignOff.entry.label} to the review path`
+        : "Return the most recent sign-off to the review path",
+      group: "Review actions",
+      icon: <Undo2 className="size-4" />,
+      shortcut: reviewShortcuts.undoSignOff,
+      disabled: !canUndoSignOff,
+      onSelect: undoLastSignOff,
+    },
+    {
       id: "toggle-context",
       label: contextVisible ? "Hide surrounding context" : "Show context",
       description: contextVisible
@@ -5343,6 +5611,25 @@ export function ReviewWorkspace({
                 ? reviewShortcuts.loadChanges
                 : reviewShortcuts.refresh
             }
+            className="hidden 2xl:inline-flex"
+          />
+        </button>
+        <button
+          type="button"
+          onClick={undoLastSignOff}
+          disabled={!canUndoSignOff}
+          aria-label="Undo the last sign-off"
+          title={
+            undoableSignOff
+              ? `Return ${undoableSignOff.entry.label} to the review path (${formatShortcut(reviewShortcuts.undoSignOff).join(" ")})`
+              : "No sign-off from this session left to undo"
+          }
+          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <RotateCcw className="size-4" />
+          <span className="hidden sm:inline">Undo</span>
+          <ShortcutHint
+            shortcut={reviewShortcuts.undoSignOff}
             className="hidden 2xl:inline-flex"
           />
         </button>
@@ -6099,6 +6386,8 @@ export function ReviewWorkspace({
           <div
             ref={codeScrollRef}
             data-code-scroll-pane
+            onScroll={closeSymbolPeek}
+            {...peekHandlers}
             className="min-h-0 flex-1 overflow-auto bg-code py-5 font-mono text-[11px] leading-5 [overflow-anchor:none]"
           >
             {keyboardLine !== undefined && (
@@ -6189,6 +6478,7 @@ export function ReviewWorkspace({
                   keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
                   findingLine={findingLine}
                   onSelectReviewLine={openInlineComment}
+                  onAskReviewLine={openAiQuestionAt}
                   renderLineDetails={renderReviewLineDetails}
                 />
               </div>
@@ -6358,33 +6648,42 @@ export function ReviewWorkspace({
                       )}
                     >
                       {isUnitLine && activeUnit.kind !== "binary" ? (
-                        <button
-                          type="button"
-                          aria-label={`Comment on line ${lineNumber}`}
-                          aria-pressed={selectedLine === lineNumber}
-                          onClick={() => {
-                            setKeyboardLine(undefined);
-                            setSelectedLine((current) =>
-                              current === lineNumber ? undefined : lineNumber,
-                            );
-                            setFeedback("");
-                          }}
+                        <span
                           className={cn(
-                            "hover:text-violet flex items-center justify-end gap-1.5 pr-3 text-right text-fog transition select-none",
+                            "flex items-center justify-end gap-1 pr-2.5 text-right text-fog select-none",
                             isChangedLine && "bg-addition/[.11] text-addition",
                           )}
                         >
-                          <MessageSquareText
-                            className={cn(
-                              "size-3 transition-opacity",
-                              selectedLine === lineNumber ||
-                                keyboardLine === lineNumber
-                                ? "text-cyan opacity-100"
-                                : "opacity-0 group-hover:opacity-100",
-                            )}
+                          <AskAiLineButton
+                            line={lineNumber}
+                            onAsk={openAiQuestionAt}
+                            visible={aiQuestionLine === lineNumber}
                           />
-                          <span>{lineNumber}</span>
-                        </button>
+                          <button
+                            type="button"
+                            aria-label={`Comment on line ${lineNumber}`}
+                            aria-pressed={selectedLine === lineNumber}
+                            onClick={() => {
+                              setKeyboardLine(undefined);
+                              setSelectedLine((current) =>
+                                current === lineNumber ? undefined : lineNumber,
+                              );
+                              setFeedback("");
+                            }}
+                            className="hover:text-violet flex items-center gap-1 transition"
+                          >
+                            <MessageSquareText
+                              className={cn(
+                                "size-3 transition-opacity",
+                                selectedLine === lineNumber ||
+                                  keyboardLine === lineNumber
+                                  ? "text-cyan opacity-100"
+                                  : "opacity-0 group-hover:opacity-100",
+                              )}
+                            />
+                            <span>{lineNumber}</span>
+                          </button>
+                        </span>
                       ) : (
                         <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
                           {lineNumber}
@@ -6420,6 +6719,17 @@ export function ReviewWorkspace({
                                 >
                                   {token.text}
                                 </button>
+                              ) : isPeekableToken(token) ? (
+                                <span
+                                  key={`${tokenIndex}-${token.text.length}`}
+                                  {...{ [SYMBOL_PEEK_ATTRIBUTE]: token.text }}
+                                  className={cn(
+                                    "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
+                                    token.className,
+                                  )}
+                                >
+                                  {token.text}
+                                </span>
                               ) : (
                                 <span
                                   key={`${tokenIndex}-${token.text.length}`}
@@ -7036,6 +7346,28 @@ export function ReviewWorkspace({
             </button>
           </div>
         </aside>
+
+        {peekedSymbol && (
+          <SymbolPeekCard
+            peeked={peekedSymbol}
+            definition={
+              peekedDefinition.data?.kind === "definition"
+                ? peekedDefinition.data
+                : undefined
+            }
+            loading={peekedDefinition.isFetching}
+            unresolved={
+              peekedDefinition.isError ||
+              peekedDefinition.data?.kind === "unresolved"
+            }
+            onClose={closeSymbolPeek}
+            onHold={holdSymbolPeek}
+            onOpenUnit={(unitId) => {
+              const index = units.findIndex((unit) => unit.id === unitId);
+              if (index >= 0) selectUnit(index);
+            }}
+          />
+        )}
 
         <CommandCenter
           commands={reviewCommands}

@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
@@ -20,6 +21,7 @@ import {
   InlineAiQuestion,
   nextAnchorableLine,
   ProviderConversation,
+  type ProviderConversationActions,
   ProviderConversationHistory,
   ReviewConceptMemberPreview,
   rememberAiConversationVisibility,
@@ -762,6 +764,20 @@ describe("AI conversation visibility", () => {
   });
 });
 
+/** Supplies the conversation actions a test does not care about. */
+function conversationActions(
+  overrides: Partial<ProviderConversationActions> = {},
+): ProviderConversationActions {
+  return {
+    onDeleteComment: vi.fn().mockResolvedValue(undefined),
+    onDeleteThread: vi.fn().mockResolvedValue(undefined),
+    onEditComment: vi.fn().mockResolvedValue(undefined),
+    onReply: vi.fn().mockResolvedValue(undefined),
+    onResolve: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
 describe("ProviderConversation", () => {
   it("publishes a reply inside the existing provider thread", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -787,7 +803,7 @@ describe("ProviderConversation", () => {
         }}
         publishedByReviewDuck={false}
         replying={false}
-        onReply={reply}
+        {...conversationActions({ onReply: reply })}
       />,
     );
 
@@ -831,7 +847,7 @@ describe("ProviderConversation", () => {
         }}
         publishedByReviewDuck={false}
         replying={false}
-        onReply={vi.fn()}
+        {...conversationActions()}
       />,
     );
 
@@ -841,6 +857,191 @@ describe("ProviderConversation", () => {
         name: "Collapse GitHub conversation",
       }),
     ).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("resolves an open conversation and reopens a resolved one", async () => {
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const thread = {
+      externalId: "903",
+      path: "src/retry.ts",
+      line: 17,
+      side: "right" as const,
+      status: "open" as const,
+      comments: [
+        {
+          externalId: "903",
+          author: "reviewer",
+          body: "Please rename this.",
+          createdAt: "2026-07-20T10:00:00Z",
+        },
+      ],
+      unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+    };
+    const { rerender } = render(
+      <ProviderConversation
+        provider="github"
+        thread={thread}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Resolve this conversation" }),
+    );
+    expect(resolve).toHaveBeenCalledWith(true);
+
+    rerender(
+      <ProviderConversation
+        provider="github"
+        thread={{ ...thread, status: "resolved" }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onResolve: resolve })}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Reopen this conversation" }),
+    );
+
+    expect(resolve).toHaveBeenLastCalledWith(false);
+  });
+
+  it("confirms before deleting a whole conversation", async () => {
+    const deleteThread = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "904",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "904",
+              author: "reviewer",
+              body: "Never mind, this was wrong.",
+              createdAt: "2026-07-20T10:00:00Z",
+            },
+            {
+              externalId: "905",
+              author: "author",
+              body: "Agreed.",
+              createdAt: "2026-07-20T11:00:00Z",
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onDeleteThread: deleteThread })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete this conversation" }),
+    );
+    expect(deleteThread).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/removes all 2 comments from GitHub/),
+    ).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /^Delete/,
+      }),
+    );
+
+    expect(deleteThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("edits one comment of a conversation in place", async () => {
+    const edit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "906",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "906",
+              author: "reviewer",
+              body: "Tpyo here.",
+              createdAt: "2026-07-20T10:00:00Z",
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onEditComment: edit })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Edit the comment by reviewer" }),
+    );
+    const editor = screen.getByRole("textbox");
+    await user.clear(editor);
+    await user.type(editor, "Typo here.");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(edit).toHaveBeenCalledWith("906", "Typo here.");
+  });
+
+  it("deletes a single comment without touching the conversation", async () => {
+    const deleteComment = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "907",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "907",
+              author: "reviewer",
+              body: "Root comment.",
+              createdAt: "2026-07-20T10:00:00Z",
+            },
+            {
+              externalId: "908",
+              author: "author",
+              body: "Stray reply.",
+              createdAt: "2026-07-20T11:00:00Z",
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onDeleteComment: deleteComment })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete the comment by author" }),
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /^Delete/,
+      }),
+    );
+
+    expect(deleteComment).toHaveBeenCalledWith("908");
   });
 });
 

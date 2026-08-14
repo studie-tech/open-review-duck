@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobs,
@@ -27,6 +38,7 @@ import {
   workflowRuns,
   workspaceMembers,
 } from "@/drizzle/schema";
+import { conceptStatusFromMembers } from "~/lib/concept-progress";
 import {
   findImportedDeclarationLine,
   findImportTargetUnit,
@@ -48,7 +60,11 @@ import { sha256 } from "~/server/analysis/hash";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
-import { ProviderError } from "~/server/providers/types";
+import {
+  ProviderError,
+  type ProviderName,
+  type PullRequestProvider,
+} from "~/server/providers/types";
 import {
   claimCommentForPublicationRetry,
   findEquivalentUserComment,
@@ -84,6 +100,7 @@ import {
 import {
   awaitResponseConceptSchema,
   awaitResponseSchema,
+  editReviewThreadCommentSchema,
   importTargetSchema,
   improveConceptGroupingSchema,
   providerReviewDecisionSchema,
@@ -91,12 +108,16 @@ import {
   releaseReviewWaitsSchema,
   replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
+  resolveReviewThreadSchema,
+  reviewThreadCommentSchema,
+  reviewThreadSchema,
   reviewUnitSchema,
   reviewWorkspaceSchema,
   type SignOffInput,
   signOffBatchSchema,
   signOffConceptSchema,
   signOffSchema,
+  symbolDefinitionSchema,
   syncPullRequestSchema,
   unreviewConceptSchema,
   unreviewSchema,
@@ -114,6 +135,278 @@ async function providerForScope(db: typeof database, connectionId: string) {
   });
   if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
   return providerForConnection(db, connection);
+}
+
+/**
+ * Authorizes and rate-limits one management action on a provider conversation.
+ *
+ * Resolving, editing and deleting all reach the same provider through the same
+ * unit, so they share one gate rather than each restating the lookup.
+ */
+async function reviewThreadScope(
+  db: typeof database,
+  userId: string,
+  input: { unitId: string },
+  action: string,
+) {
+  const scope = await providerScopeForUnit(db, userId, input.unitId);
+  await enforceRateLimit(
+    db,
+    `${action}:${userId}:${scope.pullRequestId}`,
+    30,
+    60_000,
+  );
+  return { provider: await providerForScope(db, scope.connectionId), scope };
+}
+
+/**
+ * Finds the named conversation among those anchored to the reviewed unit.
+ *
+ * A conversation the unit does not own is not the reviewer's to manage from
+ * here, so an id that points elsewhere reads as missing rather than as an
+ * action on some other part of the pull request.
+ */
+async function attachedProviderThread(
+  provider: PullRequestProvider,
+  scope: Awaited<ReturnType<typeof providerScopeForUnit>>,
+  input: { threadExternalId: string },
+) {
+  const thread = (
+    await provider.listInlineCommentThreads(
+      scope.repositoryExternalId,
+      scope.pullRequestNumber,
+    )
+  ).find(
+    (candidate) =>
+      candidate.externalId === input.threadExternalId &&
+      candidate.path === scope.path &&
+      reviewUnitContainsLine(scope, candidate.line),
+  );
+  if (!thread) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message:
+        "This provider conversation is no longer attached to the current review unit",
+    });
+  }
+  return thread;
+}
+
+/** Presents a failed conversation action in the provider's own terms. */
+function providerThreadError(provider: ProviderName, cause: unknown) {
+  if (cause instanceof TRPCError) return cause;
+  return new TRPCError({
+    code: "BAD_REQUEST",
+    message: providerSyncErrorMessage(provider, cause),
+    cause,
+  });
+}
+
+/**
+ * Drops the local record of comments that no longer exist at the provider.
+ *
+ * The ledger of what ReviewDuck published is what marks an AI finding as
+ * posted and hides a duplicate of the provider conversation, so a deleted
+ * comment has to leave it or the reviewer keeps being told it is still there.
+ */
+async function forgetPublishedComments(
+  db: typeof database,
+  unitId: string,
+  providerExternalIds: string[],
+) {
+  if (providerExternalIds.length === 0) return;
+  await db
+    .delete(reviewComments)
+    .where(
+      and(
+        eq(reviewComments.unitId, unitId),
+        inArray(reviewComments.providerExternalId, [
+          ...new Set(providerExternalIds),
+        ]),
+      ),
+    );
+}
+
+type SymbolDefinitionInput = z.infer<typeof symbolDefinitionSchema>;
+
+/** Shapes one declaration as the definition card the reviewer reads. */
+function symbolDefinitionOf(
+  unit: {
+    endLine: number;
+    kind: string;
+    language: string;
+    name: string;
+    path: string;
+    signature?: string | null;
+    source: string;
+    startLine: number;
+  },
+  focusLine: number | undefined,
+  unitId?: string,
+) {
+  const lines = unit.source.split("\n");
+  return {
+    kind: "definition" as const,
+    endLine: unit.startLine + Math.max(0, lines.length - 1),
+    focusLine: focusLine ?? unit.startLine,
+    language: unit.language,
+    name: unit.name,
+    path: unit.path,
+    signature: unit.signature ?? undefined,
+    source: unit.source,
+    startLine: unit.startLine,
+    unitId,
+    unitKind: unit.kind,
+  };
+}
+
+/**
+ * Looks the name up among the declarations the snapshot already stores.
+ *
+ * The reviewed file's own declarations answer first, because a name used in a
+ * file usually belongs to it; a name declared exactly once anywhere else in
+ * the change answers next, and an ambiguous one is left to the file parse
+ * rather than guessed at.
+ */
+async function declaredSymbolInSnapshot(
+  db: typeof database,
+  snapshotId: string,
+  input: SymbolDefinitionInput,
+) {
+  const matches = await hydrateReviewUnits(
+    db,
+    await db.query.reviewUnits.findMany({
+      where: and(
+        eq(reviewUnits.snapshotId, snapshotId),
+        eq(reviewUnits.name, input.symbol),
+        notInArray(reviewUnits.kind, ["file", "module", "binary"]),
+      ),
+      orderBy: [reviewUnits.reviewOrder],
+      limit: 25,
+    }),
+  );
+  const own = matches.filter(({ path }) => path === input.sourcePath);
+  const target = own[0] ?? (matches.length === 1 ? matches[0] : undefined);
+  return target
+    ? symbolDefinitionOf(target, target.startLine, target.id)
+    : undefined;
+}
+
+/**
+ * Parses the whole reviewed file to find a declaration the diff left out.
+ *
+ * Only changed declarations become review units, so a helper the reviewer is
+ * calling is often present in the file and absent from the snapshot's units.
+ * The file's stored source is already at hand, so this needs no provider call.
+ */
+async function declaredSymbolInFile(
+  db: typeof database,
+  snapshotId: string,
+  input: SymbolDefinitionInput,
+) {
+  const [file] = await hydrateReviewUnits(
+    db,
+    await db.query.reviewUnits.findMany({
+      where: and(
+        eq(reviewUnits.snapshotId, snapshotId),
+        eq(reviewUnits.path, input.sourcePath),
+        eq(reviewUnits.kind, "file"),
+      ),
+      limit: 1,
+    }),
+  );
+  if (!file?.source) return undefined;
+  const declaration = analyzeFiles([
+    { path: input.sourcePath, content: file.source, changeType: "modified" },
+  ]).units.find(
+    (unit) =>
+      unit.name === input.symbol &&
+      unit.kind !== "file" &&
+      unit.kind !== "module",
+  );
+  return declaration
+    ? symbolDefinitionOf(declaration, declaration.startLine)
+    : undefined;
+}
+
+/**
+ * Follows the file's own import of a name into the file that declares it.
+ *
+ * Reached only once the change itself has nothing to say about the name, and
+ * only when the reviewer's file names where it came from, so the one provider
+ * read this can cost is spent on a name that has no cheaper answer.
+ */
+async function importedSymbolDefinition(
+  db: typeof database,
+  snapshot: { headSha: string; id: string },
+  scope: { connectionId: string | null; repositoryExternalId: string },
+  input: SymbolDefinitionInput,
+) {
+  if (!input.specifier || !scope.connectionId) return undefined;
+  const imported = input.imported ?? input.symbol;
+  const candidates = importPathCandidates(
+    input.sourcePath,
+    input.specifier,
+    input.sourceLanguage,
+  );
+  if (candidates.length === 0) return undefined;
+
+  const stored = await hydrateReviewUnits(
+    db,
+    await db.query.reviewUnits.findMany({
+      where: and(
+        eq(reviewUnits.snapshotId, snapshot.id),
+        inArray(reviewUnits.path, candidates),
+        eq(reviewUnits.name, imported),
+      ),
+      orderBy: [reviewUnits.reviewOrder],
+      limit: 1,
+    }),
+  );
+  const [known] = stored;
+  if (known) return symbolDefinitionOf(known, known.startLine, known.id);
+
+  const provider = await providerForScope(db, scope.connectionId);
+  for (const path of candidates) {
+    let content: string | undefined;
+    try {
+      content = await provider.getFileContent(
+        scope.repositoryExternalId,
+        path,
+        snapshot.headSha,
+        150_000,
+      );
+    } catch (cause) {
+      if (cause instanceof ProviderError && cause.status === 404) continue;
+      return undefined;
+    }
+    if (content === undefined) return undefined;
+    const analyzed = analyzeFiles([
+      { path, content, changeType: "modified" },
+    ]).units;
+    const declaration = analyzed.find(
+      (unit) =>
+        unit.name === imported &&
+        unit.kind !== "file" &&
+        unit.kind !== "module",
+    );
+    if (declaration) {
+      return symbolDefinitionOf(declaration, declaration.startLine);
+    }
+    const module = analyzed.find((unit) => unit.kind === "file");
+    if (module) {
+      return symbolDefinitionOf(
+        { ...module, name: imported },
+        findImportedDeclarationLine(
+          module.source,
+          imported,
+          module.language,
+          module.startLine,
+        ),
+      );
+    }
+  }
+  return undefined;
 }
 
 /** Checks one provider-side line against a unit's disjoint review ranges. */
@@ -1893,20 +2186,11 @@ export const reviewRouter = createTRPCRouter({
           const signedMemberCount = members.filter(
             ({ status }) => status === "signed_off",
           ).length;
-          const status = members.some(({ status }) => status === "waiting")
-            ? ("waiting" as const)
-            : signedMemberCount === members.length && members.length > 0
-              ? ("signed_off" as const)
-              : signedMemberCount > 0
-                ? ("partial" as const)
-                : members.some(({ status }) => status === "changed")
-                  ? ("changed" as const)
-                  : ("pending" as const);
           return {
             ...concept,
             dependencies: dependenciesByConcept.get(concept.id) ?? [],
             memberIds,
-            status,
+            status: conceptStatusFromMembers(members, memberIds.length),
             signedMemberCount,
           };
         });
@@ -2740,6 +3024,65 @@ export const reviewRouter = createTRPCRouter({
       };
     }),
 
+  /**
+   * Finds where a name used in the reviewed code is declared.
+   *
+   * A reviewer reading a call has to know what it does, and leaving the review
+   * to find out is the expensive part. Resolution goes from the most precise
+   * evidence to the least: the file's own import of the name, then the
+   * declarations the snapshot already holds, then a parse of the whole file
+   * the name appears in, which is what finds a helper the diff never touched.
+   */
+  symbolDefinition: protectedProcedure
+    .input(symbolDefinitionSchema)
+    .query(async ({ ctx, input }) => {
+      const [scope] = await ctx.db
+        .select({
+          pullRequestId: pullRequests.id,
+          repositoryExternalId: repositories.externalId,
+          connectionId: providerConnections.id,
+        })
+        .from(pullRequests)
+        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+        .innerJoin(
+          providerConnections,
+          eq(repositories.connectionId, providerConnections.id),
+        )
+        .innerJoin(
+          workspaceMembers,
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
+        )
+        .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
+        .limit(1);
+      if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
+      await enforceRateLimit(
+        ctx.db,
+        `review-symbol:${ctx.auth.userId}`,
+        240,
+        60_000,
+      );
+      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
+        where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
+        orderBy: [desc(reviewSnapshots.version)],
+      });
+      if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const declared =
+        (await declaredSymbolInSnapshot(ctx.db, snapshot.id, input)) ??
+        (await declaredSymbolInFile(ctx.db, snapshot.id, input));
+      if (declared) return declared;
+
+      const imported = await importedSymbolDefinition(
+        ctx.db,
+        { headSha: snapshot.headSha, id: snapshot.id },
+        scope,
+        input,
+      );
+      if (imported) return imported;
+
+      return { kind: "unresolved" as const, reason: "not_found" as const };
+    }),
+
   unitDiscussion: protectedProcedure
     .input(reviewUnitSchema)
     .query(async ({ ctx, input }) => {
@@ -3095,32 +3438,16 @@ export const reviewRouter = createTRPCRouter({
   replyToThread: protectedProcedure
     .input(replyToReviewThreadSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await providerScopeForUnit(
+      const { provider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
-        input.unitId,
+        input,
+        "review-reply",
       );
-      await enforceRateLimit(
-        ctx.db,
-        `review-reply:${ctx.auth.userId}:${scope.pullRequestId}`,
-        30,
-        60_000,
-      );
-      const provider = await providerForScope(ctx.db, scope.connectionId);
       try {
-        const thread = (
-          await provider.listInlineCommentThreads(
-            scope.repositoryExternalId,
-            scope.pullRequestNumber,
-          )
-        ).find(
-          (candidate) =>
-            candidate.externalId === input.threadExternalId &&
-            candidate.path === scope.path &&
-            reviewUnitContainsLine(scope, candidate.line),
-        );
-        const parentCommentExternalId = thread?.comments[0]?.externalId;
-        if (!thread || !parentCommentExternalId) {
+        const thread = await attachedProviderThread(provider, scope, input);
+        const parentCommentExternalId = thread.comments[0]?.externalId;
+        if (!parentCommentExternalId) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message:
@@ -3135,12 +3462,141 @@ export const reviewRouter = createTRPCRouter({
           body: input.body,
         });
       } catch (cause) {
-        if (cause instanceof TRPCError) throw cause;
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: providerSyncErrorMessage(scope.provider, cause),
-          cause,
+        throw providerThreadError(scope.provider, cause);
+      }
+    }),
+
+  setThreadResolution: protectedProcedure
+    .input(resolveReviewThreadSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { provider, scope } = await reviewThreadScope(
+        ctx.db,
+        ctx.auth.userId,
+        input,
+        "review-resolve-thread",
+      );
+      try {
+        const thread = await attachedProviderThread(provider, scope, input);
+        await provider.setInlineThreadResolution({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          threadExternalId: thread.externalId,
+          resolved: input.resolved,
         });
+        return { resolved: input.resolved };
+      } catch (cause) {
+        throw providerThreadError(scope.provider, cause);
+      }
+    }),
+
+  editThreadComment: protectedProcedure
+    .input(editReviewThreadCommentSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { provider, scope } = await reviewThreadScope(
+        ctx.db,
+        ctx.auth.userId,
+        input,
+        "review-edit-comment",
+      );
+      try {
+        const thread = await attachedProviderThread(provider, scope, input);
+        if (
+          !thread.comments.some(
+            ({ externalId }) => externalId === input.commentExternalId,
+          )
+        ) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "That comment is no longer part of this conversation",
+          });
+        }
+        await provider.editInlineComment({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          threadExternalId: thread.externalId,
+          commentExternalId: input.commentExternalId,
+          body: input.body,
+        });
+        await ctx.db
+          .update(reviewComments)
+          .set({ body: input.body })
+          .where(
+            and(
+              eq(reviewComments.unitId, input.unitId),
+              eq(reviewComments.providerExternalId, input.commentExternalId),
+            ),
+          );
+        return { edited: true };
+      } catch (cause) {
+        throw providerThreadError(scope.provider, cause);
+      }
+    }),
+
+  deleteThreadComment: protectedProcedure
+    .input(reviewThreadCommentSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { provider, scope } = await reviewThreadScope(
+        ctx.db,
+        ctx.auth.userId,
+        input,
+        "review-delete-comment",
+      );
+      try {
+        const thread = await attachedProviderThread(provider, scope, input);
+        if (
+          !thread.comments.some(
+            ({ externalId }) => externalId === input.commentExternalId,
+          )
+        ) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "That comment is no longer part of this conversation",
+          });
+        }
+        await provider.deleteInlineComment({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          threadExternalId: thread.externalId,
+          commentExternalId: input.commentExternalId,
+        });
+        await forgetPublishedComments(ctx.db, input.unitId, [
+          input.commentExternalId,
+        ]);
+        return { deleted: 1 };
+      } catch (cause) {
+        throw providerThreadError(scope.provider, cause);
+      }
+    }),
+
+  deleteThread: protectedProcedure
+    .input(reviewThreadSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { provider, scope } = await reviewThreadScope(
+        ctx.db,
+        ctx.auth.userId,
+        input,
+        "review-delete-thread",
+      );
+      try {
+        const thread = await attachedProviderThread(provider, scope, input);
+        // Replies first: no provider lets the comment a conversation hangs
+        // from leave while the conversation still holds answers to it.
+        const ordered = [...thread.comments].reverse();
+        for (const comment of ordered) {
+          await provider.deleteInlineComment({
+            repositoryExternalId: scope.repositoryExternalId,
+            pullRequestNumber: scope.pullRequestNumber,
+            threadExternalId: thread.externalId,
+            commentExternalId: comment.externalId,
+          });
+        }
+        await forgetPublishedComments(ctx.db, input.unitId, [
+          thread.externalId,
+          ...ordered.map(({ externalId }) => externalId),
+        ]);
+        return { deleted: ordered.length };
+      } catch (cause) {
+        throw providerThreadError(scope.provider, cause);
       }
     }),
 

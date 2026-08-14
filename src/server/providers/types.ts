@@ -172,6 +172,34 @@ export interface PullRequestProvider {
     parentCommentExternalId: string;
     body: string;
   }): Promise<{ externalId: string }>;
+  /** Marks a provider review conversation resolved or open again. */
+  setInlineThreadResolution(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    resolved: boolean;
+  }): Promise<void>;
+  /** Rewrites the body of one comment the reviewer authored. */
+  editInlineComment(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    commentExternalId: string;
+    body: string;
+  }): Promise<void>;
+  /**
+   * Removes one comment from a provider review conversation.
+   *
+   * Deleting every comment of a conversation is how each provider deletes the
+   * conversation itself, so callers order the removals rather than asking for
+   * a separate thread delete that no provider offers.
+   */
+  deleteInlineComment(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    threadExternalId: string;
+    commentExternalId: string;
+  }): Promise<void>;
 }
 
 export class ProviderError extends Error {

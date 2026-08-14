@@ -133,6 +133,23 @@ export const importTargetSchema = z.object({
   kind: z.enum(["default", "module", "named", "namespace"]),
 });
 
+export const symbolDefinitionSchema = z.object({
+  pullRequestId: z.string().uuid(),
+  sourcePath: z.string().trim().min(1).max(2_000),
+  sourceLanguage: z.enum(supportedLanguages),
+  symbol: z
+    .string()
+    .trim()
+    .min(1)
+    .max(255)
+    .regex(/^[A-Za-z_$][\w$]*$/, "A symbol lookup names one identifier"),
+  // Set only when the reviewer's file imports the name: the specifier resolves
+  // the definition far more precisely than a repository-wide name can.
+  specifier: z.string().trim().min(1).max(500).optional(),
+  imported: z.string().trim().min(1).max(255).optional(),
+  kind: z.enum(["default", "module", "named", "namespace"]).optional(),
+});
+
 /**
  * The mutually exclusive ways one publish request may name AI-authored text.
  *
@@ -182,5 +199,22 @@ export const publishReviewCommentSchema = z
 export const replyToReviewThreadSchema = z.object({
   unitId: z.string().uuid(),
   threadExternalId: z.string().trim().min(1).max(500),
+  body: z.string().trim().min(1).max(10_000),
+});
+
+export const reviewThreadSchema = z.object({
+  unitId: z.string().uuid(),
+  threadExternalId: z.string().trim().min(1).max(500),
+});
+
+export const resolveReviewThreadSchema = reviewThreadSchema.extend({
+  resolved: z.boolean(),
+});
+
+export const reviewThreadCommentSchema = reviewThreadSchema.extend({
+  commentExternalId: z.string().trim().min(1).max(500),
+});
+
+export const editReviewThreadCommentSchema = reviewThreadCommentSchema.extend({
   body: z.string().trim().min(1).max(10_000),
 });
