@@ -1003,7 +1003,7 @@ export function InlineAiQuestion({
   return (
     <article
       id="inline-ai-question"
-      className="border-violet/25 bg-panel relative mx-4 my-3 ml-[71px] overflow-hidden rounded-xl border font-sans shadow-[0_14px_40px_var(--app-shadow)]"
+      className="border-violet/25 bg-panel relative mx-4 my-3 ml-[82px] overflow-hidden rounded-xl border font-sans shadow-[0_14px_40px_var(--app-shadow)]"
     >
       <span className="bg-violet absolute inset-y-0 left-0 w-0.5" />
       <header className="flex items-center gap-2 border-b border-violet/15 px-3 py-2">
@@ -1576,7 +1576,7 @@ export function ReviewScopeMarker({
       data-review-scope-edge={edge}
       className="my-2 flex items-center gap-3 px-4 font-sans"
     >
-      <span className="text-cyan w-[55px] shrink-0 text-right text-[9px]">
+      <span className="text-cyan w-[66px] shrink-0 text-right text-[9px]">
         Review scope
       </span>
       <span className="h-px flex-1 bg-cyan/25" />
@@ -2709,7 +2709,7 @@ export function ProviderConversation({
   return (
     <article
       className={cn(
-        "border-cyan/20 bg-panel mx-4 my-2 ml-[71px] overflow-hidden rounded-xl border font-sans shadow-lg",
+        "border-cyan/20 bg-panel mx-4 my-2 ml-[82px] overflow-hidden rounded-xl border font-sans shadow-lg",
         className,
       )}
     >
@@ -2865,6 +2865,7 @@ export function ProviderConversation({
                   <div className="mt-2">
                     <textarea
                       ref={editInputRef}
+                      aria-label={`Edit the comment by ${comment.author} on ${providerLabel(provider)}`}
                       value={editBody}
                       onChange={(event) => setEditBody(event.target.value)}
                       onKeyDown={(event) => {

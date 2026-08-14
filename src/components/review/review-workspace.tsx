@@ -488,7 +488,7 @@ export function DeepReviewFindingChip({
       type="button"
       onClick={onOpen}
       className={cn(
-        "mx-4 my-1 ml-[71px] flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-sans text-[9px] transition hover:brightness-110",
+        "mx-4 my-1 ml-[82px] flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-sans text-[9px] transition hover:brightness-110",
         findingSeverityStyle[finding.severity] ??
           findingSeverityStyle.low ??
           "",
@@ -586,7 +586,7 @@ export function DeepReviewInlineFinding({
       }}
       className={cn(
         "relative mx-4 my-2 overflow-hidden rounded-xl border p-3 font-sans shadow-[0_10px_30px_var(--app-shadow)]",
-        variant === "line" ? "ml-[71px]" : "border-dashed",
+        variant === "line" ? "ml-[82px]" : "border-dashed",
         findingSeverityShell[finding.severity] ?? findingSeverityShell.low,
         // A withheld finding stays fully legible, but its shell must not read
         // as advice the reviewer is expected to put on the pull request.
@@ -880,7 +880,12 @@ import {
   supportedLanguage,
   UnitImportContext,
 } from "./review-workspace-support";
-import { SymbolPeekCard, useSymbolPeek } from "./symbol-peek";
+import {
+  SymbolPeekCard,
+  SymbolPeekMessage,
+  symbolPeekNotice,
+  useSymbolPeek,
+} from "./symbol-peek";
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -1119,6 +1124,8 @@ export function ReviewWorkspace({
   >(undefined);
   const aiQuestionStreams = useRef(new Map<string, AbortController>());
   const dismissedAiQuestionUnits = useRef(new Set<string>());
+  // Units of a multi-unit undo whose own success is not worth a toast.
+  const quietUndoUnitIds = useRef(new Set<string>());
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
@@ -2202,6 +2209,9 @@ export function ReviewWorkspace({
         ),
       );
       setStartedAt(Date.now());
+      // One undo of a many-unit step is one decision, so only the request
+      // that finishes it says so.
+      if (quietUndoUnitIds.current.delete(unitId)) return;
       toast.success("Marked as not reviewed", {
         description: `${units.find(({ id }) => id === unitId)?.name ?? "The unit"} is back in your review queue.`,
       });
@@ -3098,7 +3108,7 @@ export function ReviewWorkspace({
             <article
               id={`ai-explanation-${annotationIndex}`}
               key={`${annotation.line}-${endLine}-${annotation.title}`}
-              className="border-violet/20 bg-violet/[.045] relative mx-4 my-2 ml-[71px] overflow-hidden rounded-xl border p-3 font-sans shadow-[0_10px_30px_var(--app-shadow)]"
+              className="border-violet/20 bg-violet/[.045] relative mx-4 my-2 ml-[82px] overflow-hidden rounded-xl border p-3 font-sans shadow-[0_10px_30px_var(--app-shadow)]"
             >
               <span className="bg-violet absolute inset-y-0 left-0 w-0.5" />
               <div className="flex items-start gap-3">
@@ -3225,7 +3235,7 @@ export function ReviewWorkspace({
                   setAiQuestionThreadId(threadId);
                   setAiQuestionLine(lineNumber);
                 }}
-                className="border-violet/15 bg-violet/[.035] text-violet hover:border-violet/30 hover:bg-violet/[.07] mx-4 my-1 ml-[71px] flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-sans text-[9px] transition"
+                className="border-violet/15 bg-violet/[.035] text-violet hover:border-violet/30 hover:bg-violet/[.07] mx-4 my-1 ml-[82px] flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-sans text-[9px] transition"
               >
                 <Sparkles className="size-3" />
                 AI conversation
@@ -3246,7 +3256,7 @@ export function ReviewWorkspace({
           return (
             <article
               key={`${finding.aiJobId}-${finding.index}`}
-              className="mx-4 my-2 ml-[71px] rounded-xl border border-amber-300/20 bg-surface p-3 font-sans"
+              className="mx-4 my-2 ml-[82px] rounded-xl border border-amber-300/20 bg-surface p-3 font-sans"
             >
               <div className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
                 <div className="min-w-0">
@@ -3329,7 +3339,7 @@ export function ReviewWorkspace({
         {lineComments.map((comment) => (
           <div
             key={comment.id}
-            className="border-cyan/15 bg-cyan/[.035] mx-4 my-2 ml-[71px] rounded-xl border p-3 font-sans"
+            className="border-cyan/15 bg-cyan/[.035] mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans"
           >
             <p className="text-cyan text-[9px] font-semibold tracking-wider uppercase">
               Posted to {providerLabel(initialData.pullRequest.provider)}
@@ -3338,7 +3348,7 @@ export function ReviewWorkspace({
           </div>
         ))}
         {selectedLine === lineNumber && (
-          <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[71px] rounded-xl border p-3 font-sans shadow-xl">
+          <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl">
             <div className="flex min-w-0 items-center justify-between gap-3">
               <p className="text-cloud flex shrink-0 items-center gap-2 text-xs font-medium">
                 <MessageSquareText className="text-cyan size-3.5" />
@@ -4406,7 +4416,7 @@ export function ReviewWorkspace({
    * units a resync removed, or which some other action already returned to
    * the queue, are dropped instead of replayed.
    */
-  function undoLastSignOff() {
+  async function undoLastSignOff() {
     if (!undoableSignOff || !canUndoSignOff) return;
     const { entry, remaining } = undoableSignOff;
     setSignOffUndoHistory(remaining);
@@ -4415,12 +4425,24 @@ export function ReviewWorkspace({
       entry,
       initialData.conceptLayout ?? undefined,
     );
-    if (target.kind === "concept") {
-      undoConcept.mutate({ ...target, sessionId });
-      return;
-    }
-    for (const unitId of target.unitIds) {
-      undoSignOff.mutate({ unitId, sessionId });
+    try {
+      if (target.kind === "concept") {
+        await undoConcept.mutateAsync({ ...target, sessionId });
+        return;
+      }
+      // A concept whose layout was replaced is given back one unit at a time,
+      // and the reviewer asked for one undo, so only the last of them speaks.
+      for (const [index, unitId] of target.unitIds.entries()) {
+        if (index < target.unitIds.length - 1) {
+          quietUndoUnitIds.current.add(unitId);
+        }
+        await undoSignOff.mutateAsync({ unitId, sessionId });
+      }
+    } catch {
+      // The mutation owns the user-facing error. The step goes back on the
+      // history so the reviewer can take it back again rather than being left
+      // with a sign-off standing and nothing left to undo it from.
+      setSignOffUndoHistory((history) => rememberSignOff(history, entry));
     }
   }
 
@@ -6647,7 +6669,7 @@ export function ReviewWorkspace({
                         return (
                           <div
                             key={`${activeUnit.id}-previous-${previousIndex}`}
-                            className="group grid grid-cols-[55px_1fr] border-l-2 border-l-red-400/45 bg-red-400/[.07] px-4 hover:bg-red-400/[.1]"
+                            className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/[.07] px-4 hover:bg-red-400/[.1]"
                           >
                             <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
                               {previousLineNumber}
@@ -6670,7 +6692,7 @@ export function ReviewWorkspace({
                     <div
                       id={`review-line-${lineNumber}`}
                       className={cn(
-                        "group grid grid-cols-[55px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
+                        "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
                         contextVisible &&
                           isUnitLine &&
                           "border-l-cyan/35 bg-cyan/[.012]",
@@ -7396,6 +7418,14 @@ export function ReviewWorkspace({
           </div>
         </aside>
 
+        {peekedSymbol &&
+          peekedDefinition.data?.kind === "unresolved" &&
+          (() => {
+            const message = symbolPeekNotice(peekedDefinition.data.reason);
+            return message ? (
+              <SymbolPeekMessage message={message} peeked={peekedSymbol} />
+            ) : null;
+          })()}
         {peekedSymbol && peekedDefinition.data?.kind === "definition" && (
           <SymbolPeekCard
             peeked={peekedSymbol}
