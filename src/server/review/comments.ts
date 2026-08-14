@@ -19,6 +19,23 @@ export function publicationAttemptKey(commentId: string) {
   return commentId;
 }
 
+/**
+ * Carries an existing comment's publication marker onto its rewritten body.
+ *
+ * The conversation reaches the reviewer with the marker stripped, so an edited
+ * body arrives without it. Losing it would leave the publication unreconcilable
+ * with its local record, which is what stops a retry publishing twice.
+ */
+export function rewrittenProviderCommentBody(
+  existingBody: string,
+  body: string,
+) {
+  const commentId = /<!-- reviewduck-comment:([0-9a-f-]{36}) -->/i.exec(
+    existingBody,
+  )?.[1];
+  return commentId ? providerCommentBody(body, commentId) : body;
+}
+
 /** Removes ReviewDuck's invisible publication marker before rendering a conversation. */
 export function visibleProviderCommentBody(body: string) {
   return body.replace(COMMENT_MARKER_PATTERN, "").trimEnd();

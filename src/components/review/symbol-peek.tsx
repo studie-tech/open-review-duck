@@ -74,6 +74,24 @@ export function useSymbolPeek(enabled: boolean) {
   useEffect(() => clearTimers, [clearTimers]);
 
   useEffect(() => {
+    // Peeking stops with the source it reads, and the card must not outlive
+    // it: switching units unmounts the token it was anchored to, which would
+    // otherwise leave a card pointing at a line that is no longer there.
+    if (!enabled) close();
+  }, [close, enabled]);
+
+  useEffect(() => {
+    if (!peeked) return;
+    const token = anchored.current;
+    if (!token) return;
+    const observer = new MutationObserver(() => {
+      if (!token.isConnected) close();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [close, peeked]);
+
+  useEffect(() => {
     if (!peeked) return;
     /** Dismisses the card on the keystroke that dismisses everything else. */
     function onKeyDown(event: KeyboardEvent) {

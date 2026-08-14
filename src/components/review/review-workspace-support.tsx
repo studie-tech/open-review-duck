@@ -2640,6 +2640,9 @@ export function ProviderConversation({
   >();
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
+  // `managing` only reaches this component on the render after a mutation
+  // starts, so a second activation in the same frame would send twice.
+  const inFlight = useRef(false);
   const resolved = thread.status === "resolved";
 
   useEffect(() => {
@@ -2658,44 +2661,54 @@ export function ProviderConversation({
   /** Publishes the draft while preserving it if the provider rejects the reply. */
   async function submitReply() {
     const body = replyBody.trim();
-    if (!body || replying) return;
+    if (!body || replying || inFlight.current) return;
+    inFlight.current = true;
     try {
       await onReply(body);
       setReplyBody("");
       setReplyOpen(false);
     } catch {
       // The mutation owns the user-facing error; retain the draft for retry.
+    } finally {
+      inFlight.current = false;
     }
   }
 
   /** Saves an edited comment, keeping the draft open if the provider says no. */
   async function submitEdit(commentExternalId: string) {
     const body = editBody.trim();
-    if (!body || managing) return;
+    if (!body || managing || inFlight.current) return;
+    inFlight.current = true;
     try {
       await onEditComment(commentExternalId, body);
       setEditing(undefined);
       setEditBody("");
     } catch {
       // The mutation owns the user-facing error; retain the draft for retry.
+    } finally {
+      inFlight.current = false;
     }
   }
 
   /** Resolves or reopens the conversation, leaving the error to the mutation. */
   async function submitResolution(resolve: boolean) {
-    if (managing) return;
+    if (managing || inFlight.current) return;
+    inFlight.current = true;
     try {
       await onResolve(resolve);
     } catch {
       // The mutation owns the user-facing error, and the header keeps showing
       // the resolution the provider still reports.
+    } finally {
+      inFlight.current = false;
     }
   }
 
   /** Carries out the deletion the reviewer just confirmed. */
   async function confirmDelete() {
     const target = confirmingDelete;
-    if (!target || managing) return;
+    if (!target || managing || inFlight.current) return;
+    inFlight.current = true;
     try {
       await (target.kind === "thread"
         ? onDeleteThread()
@@ -2703,6 +2716,8 @@ export function ProviderConversation({
       setConfirmingDelete(undefined);
     } catch {
       // The mutation owns the user-facing error; the dialog stays for a retry.
+    } finally {
+      inFlight.current = false;
     }
   }
 
