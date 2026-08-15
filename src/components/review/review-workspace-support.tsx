@@ -2644,6 +2644,11 @@ export function ProviderConversation({
   // starts, so a second activation in the same frame would send twice.
   const inFlight = useRef(false);
   const resolved = thread.status === "resolved";
+  // Deleting a conversation takes every comment in it, so one belonging to
+  // someone else puts the whole conversation out of this reviewer's reach.
+  const holdsAnotherReviewersComment = thread.comments.some(
+    ({ publishedByAnotherReviewer }) => publishedByAnotherReviewer,
+  );
 
   useEffect(() => {
     if (replyOpen) replyInputRef.current?.focus();
@@ -2795,11 +2800,15 @@ export function ProviderConversation({
           </button>
           <button
             type="button"
-            disabled={managing}
+            disabled={managing || holdsAnotherReviewersComment}
             aria-label="Delete this conversation"
-            title={`Delete this conversation on ${providerLabel(provider)}`}
+            title={
+              holdsAnotherReviewersComment
+                ? "Another reviewer published a comment in this conversation"
+                : `Delete this conversation on ${providerLabel(provider)}`
+            }
             onClick={() => setConfirmingDelete({ kind: "thread" })}
-            className="text-mist grid size-6 place-items-center rounded-md transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+            className="text-mist grid size-6 place-items-center rounded-md transition hover:bg-red-500/10 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Trash2 className="size-3.5" />
           </button>
@@ -2845,36 +2854,42 @@ export function ProviderConversation({
                       Reply
                     </span>
                   )}
-                  <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
-                    <button
-                      type="button"
-                      disabled={managing}
-                      aria-label={`Edit the comment by ${comment.author}`}
-                      title="Edit this comment"
-                      onClick={() => {
-                        setEditing(comment.externalId);
-                        setEditBody(comment.body);
-                      }}
-                      className="text-mist hover:text-cyan grid size-6 place-items-center rounded-md transition hover:bg-surface-subtle disabled:opacity-50"
-                    >
-                      <Pencil className="size-3" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={managing}
-                      aria-label={`Delete the comment by ${comment.author}`}
-                      title="Delete this comment"
-                      onClick={() =>
-                        setConfirmingDelete({
-                          kind: "comment",
-                          externalId: comment.externalId,
-                        })
-                      }
-                      className="text-mist grid size-6 place-items-center rounded-md transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
-                  </span>
+                  {/* One workspace connection speaks for every member, so
+                      the provider would allow this and only ReviewDuck knows
+                      whose words they are. A control the reviewer may not use
+                      is not offered at all. */}
+                  {!comment.publishedByAnotherReviewer && (
+                    <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
+                      <button
+                        type="button"
+                        disabled={managing}
+                        aria-label={`Edit the comment by ${comment.author}`}
+                        title="Edit this comment"
+                        onClick={() => {
+                          setEditing(comment.externalId);
+                          setEditBody(comment.body);
+                        }}
+                        className="text-mist hover:text-cyan grid size-6 place-items-center rounded-md transition hover:bg-surface-subtle disabled:opacity-50"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={managing}
+                        aria-label={`Delete the comment by ${comment.author}`}
+                        title="Delete this comment"
+                        onClick={() =>
+                          setConfirmingDelete({
+                            kind: "comment",
+                            externalId: comment.externalId,
+                          })
+                        }
+                        className="text-mist grid size-6 place-items-center rounded-md transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </span>
+                  )}
                 </div>
                 {editing === comment.externalId ? (
                   <div className="mt-2">

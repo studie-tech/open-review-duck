@@ -5,8 +5,10 @@ import type { db as database } from "~/server/db";
 import { DEEP_REVIEW_SURVEY_ITEM_PATH } from "~/server/review/deep/survey";
 import { sealVaultSecret } from "~/server/security/vault";
 import {
+  assertCommentIsTheReviewersToChange,
   deepReviewFindingForPublication,
   deepReviewRunPayload,
+  publishedCommentAuthor,
 } from "./review";
 
 const workspaceId = "00000000-0000-4000-8000-0000000000aa";
@@ -568,5 +570,88 @@ describe("deep review publication", () => {
     await expect(deepReviewFindingForPublication(db, request)).rejects.toThrow(
       /could not be read back/,
     );
+  });
+});
+
+describe("who may change a provider comment", () => {
+  const reviewer = "reviewer-one";
+  const colleague = "reviewer-two";
+  const thread = {
+    externalId: "thread-1",
+    comments: [{ externalId: "thread-1" }, { externalId: "reply-9" }],
+  };
+
+  /**
+   * Answers the ownership lookup with whichever rows the clauses would match.
+   *
+   * The double cannot evaluate a drizzle expression, so the test states the
+   * rows the query is expected to find rather than the predicate it built.
+   */
+  function createOwnershipDb(rows: { userId: string }[]) {
+    return {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            /** Returns the seeded owner, as the bounded query would. */
+            limit: async () => rows.slice(0, 1),
+          }),
+        }),
+      }),
+    } as unknown as typeof database;
+  }
+
+  it("names the reviewer a published comment belongs to", async () => {
+    await expect(
+      publishedCommentAuthor(
+        createOwnershipDb([{ userId: colleague }]),
+        unitId,
+        thread,
+        "reply-9",
+      ),
+    ).resolves.toBe(colleague);
+  });
+
+  it("names nobody for a comment ReviewDuck never published", async () => {
+    // A bot's comment, or one written in the provider's own interface, is as
+    // open to change as the provider itself would leave it.
+    await expect(
+      publishedCommentAuthor(createOwnershipDb([]), unitId, thread, "reply-9"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses one reviewer's change to another's comment", async () => {
+    await expect(
+      assertCommentIsTheReviewersToChange(
+        createOwnershipDb([{ userId: colleague }]),
+        reviewer,
+        unitId,
+        thread,
+        "reply-9",
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("allows a reviewer to change their own comment", async () => {
+    await expect(
+      assertCommentIsTheReviewersToChange(
+        createOwnershipDb([{ userId: reviewer }]),
+        reviewer,
+        unitId,
+        thread,
+        "thread-1",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows a comment nobody here published", async () => {
+    await expect(
+      assertCommentIsTheReviewersToChange(
+        createOwnershipDb([]),
+        reviewer,
+        unitId,
+        thread,
+        "reply-9",
+      ),
+    ).resolves.toBeUndefined();
   });
 });
