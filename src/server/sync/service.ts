@@ -38,7 +38,10 @@ import { canCarryReviewWait } from "~/server/review/waiting";
 import { reviewSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
 import { persistSourceBlob } from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "./retention";
-import { assertCompleteChangedFileSet } from "./revision";
+import {
+  assertCompleteChangedFileSet,
+  reviewSnapshotCanBeReused,
+} from "./revision";
 import { persistedUnitSourceRange, previousSourceRange } from "./source-range";
 
 type Database = typeof database;
@@ -73,17 +76,95 @@ export async function syncPullRequest(
   });
   if (!connection) throw new Error("Provider connection not found");
   const provider = await providerForConnection(db, connection);
+  const preexistingSnapshotQuery = observedPullRequest
+    ? db.query.reviewSnapshots.findFirst({
+        where: eq(reviewSnapshots.pullRequestId, observedPullRequest.id),
+        orderBy: [desc(reviewSnapshots.version)],
+      })
+    : Promise.resolve(undefined);
+  let preexistingUnits: (typeof reviewUnits.$inferSelect)[] | undefined;
+  let preexistingSourcesAvailable: boolean | undefined;
   await options?.onProgress?.(SYNC_PROGRESS.fetching);
-  const [remote, files] = await observeOperation(
-    "provider.fetch-pull-request",
+  const [preexistingSnapshot, remote] = await Promise.all([
+    preexistingSnapshotQuery,
+    observeOperation("provider.fetch-pull-request-metadata", "provider", () =>
+      provider.getPullRequest(repository.externalId, number),
+    ),
+  ]);
+
+  // A manual poll is usually a no-op. Confirm that the prepared snapshot is
+  // still renderable, then update provider metadata without downloading and
+  // parsing every changed file again.
+  const retentionCutoff = new Date(
+    Date.now() - repository.sourceRetentionDays * 86_400_000,
+  );
+  if (
+    observedPullRequest &&
+    preexistingSnapshot &&
+    reviewSnapshotCanBeReused(
+      preexistingSnapshot,
+      remote,
+      CURRENT_ANALYSIS_VERSION,
+      retentionCutoff,
+    )
+  ) {
+    [preexistingUnits, preexistingSourcesAvailable] = await Promise.all([
+      db.query.reviewUnits.findMany({
+        where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
+      }),
+      reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id),
+    ]);
+    if (preexistingSourcesAvailable) {
+      const [pullRequest] = await db
+        .update(pullRequests)
+        .set({
+          externalId: remote.externalId,
+          number: remote.number,
+          title: remote.title,
+          description: remote.description,
+          authorLogin: remote.authorLogin,
+          authorAvatarUrl: remote.authorAvatarUrl,
+          sourceBranch: remote.sourceBranch,
+          targetBranch: remote.targetBranch,
+          state: remote.state,
+          webUrl: remote.webUrl,
+          additions: remote.additions,
+          deletions: remote.deletions,
+          changedFiles: remote.changedFiles,
+          lastSyncedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(pullRequests.id, observedPullRequest.id),
+            eq(pullRequests.headSha, remote.headSha),
+            eq(pullRequests.baseSha, remote.baseSha),
+          ),
+        )
+        .returning();
+      if (!pullRequest) {
+        throw new Error(
+          "A newer pull request synchronization completed while metadata was loading; synchronize again",
+        );
+      }
+      return {
+        pullRequest,
+        snapshot: preexistingSnapshot,
+        unitCount: preexistingUnits.filter(({ kind }) => kind !== "file")
+          .length,
+        changedUnitCount: 0,
+        snapshotCreated: false,
+        unsupportedFiles: [],
+      };
+    }
+  }
+
+  const files = await observeOperation(
+    "provider.fetch-pull-request-files",
     "provider",
     () =>
-      Promise.all([
-        provider.getPullRequest(repository.externalId, number),
-        provider.getChangedFiles(repository.externalId, number, {
-          maximumSourceBytes: PULL_REQUEST_SOURCE_BUDGET_BYTES,
-        }),
-      ]),
+      provider.getChangedFiles(repository.externalId, number, {
+        maximumSourceBytes: PULL_REQUEST_SOURCE_BUDGET_BYTES,
+      }),
   );
   const confirmedRemote = await observeOperation(
     "provider.confirm-revision",
@@ -134,20 +215,16 @@ export async function syncPullRequest(
     return { file, currentBlob, previousBlob };
   });
   const changedFileCount = Math.max(confirmedRemote.changedFiles, files.length);
-  const preexistingSnapshot = observedPullRequest
-    ? await db.query.reviewSnapshots.findFirst({
-        where: eq(reviewSnapshots.pullRequestId, observedPullRequest.id),
-        orderBy: [desc(reviewSnapshots.version)],
-      })
-    : undefined;
-  const [preexistingUnits, preexistingSourcesAvailable] = preexistingSnapshot
-    ? await Promise.all([
-        db.query.reviewUnits.findMany({
-          where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
-        }),
-        reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id),
-      ])
-    : [[], false];
+  if (preexistingSnapshot && preexistingUnits === undefined) {
+    [preexistingUnits, preexistingSourcesAvailable] = await Promise.all([
+      db.query.reviewUnits.findMany({
+        where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
+      }),
+      reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id),
+    ]);
+  }
+  preexistingUnits ??= [];
+  preexistingSourcesAvailable ??= false;
 
   await options?.onProgress?.(SYNC_PROGRESS.savingSnapshot);
   const result = await db.transaction(async (tx) => {
@@ -219,9 +296,6 @@ export async function syncPullRequest(
       where: eq(reviewSnapshots.pullRequestId, pullRequest.id),
       orderBy: [desc(reviewSnapshots.version)],
     });
-    const retentionCutoff = new Date(
-      Date.now() - repository.sourceRetentionDays * 86_400_000,
-    );
     if (
       currentSnapshot?.headSha === confirmedRemote.headSha &&
       currentSnapshot.baseSha === confirmedRemote.baseSha &&

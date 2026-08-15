@@ -2559,23 +2559,39 @@ export function ReviewWorkspace({
     },
   );
   useEffect(() => {
+    if (!activeSyncId) return;
     const status = syncStatus.data?.status;
     if (status === "completed") {
       setActiveSyncId(undefined);
-      setUpdateAvailable(true);
+      const snapshot = initialData.snapshot;
+      if (snapshot) {
+        acknowledgeReviewRevision(
+          window.localStorage,
+          initialData.pullRequest.id,
+          {
+            headSha: snapshot.headSha,
+            snapshotId: snapshot.id,
+            version: snapshot.version,
+          },
+        );
+      }
+      setUpdateAvailable(false);
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
         utils.review.gamification.invalidate(),
+        utils.review.providerConversations.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
         utils.review.providerReviewState.invalidate({
           pullRequestId: initialData.pullRequest.id,
         }),
       ]);
       sendReviewSession({ type: "SYNC_FINISHED" });
-      toast.info("New pull request revision is ready", {
-        description:
-          "Load the updated review path when you are ready. Your current draft stays in place.",
+      toast.success("Pull request synchronized", {
+        description: "The latest review revision is loaded.",
       });
+      router.refresh();
     } else if (status === "failed" || status === "cancelled") {
       setActiveSyncId(undefined);
       void utils.review.activeSyncs.invalidate();
@@ -2588,13 +2604,17 @@ export function ReviewWorkspace({
       );
     }
   }, [
+    activeSyncId,
     sendReviewSession,
     syncStatus.data,
     utils.review.activeSyncs.invalidate,
     utils.review.dashboard.invalidate,
     utils.review.gamification.invalidate,
+    utils.review.providerConversations.invalidate,
     utils.review.providerReviewState.invalidate,
     initialData.pullRequest.id,
+    initialData.snapshot,
+    router,
   ]);
   const externalSyncPending =
     manualSyncPending ||
@@ -2619,7 +2639,7 @@ export function ReviewWorkspace({
     },
   });
 
-  /** Queues durable source synchronization and refreshes provider conversations. */
+  /** Queues durable source synchronization. */
   async function syncExternalData() {
     if (manualSyncPending) return;
     sendReviewSession({ type: "SYNC_STARTED" });
@@ -2627,17 +2647,6 @@ export function ReviewWorkspace({
       await pollLatestPullRequest.mutateAsync({
         pullRequestId: initialData.pullRequest.id,
       });
-      const conversationResult = await providerConversations.refetch();
-      const conversationError = conversationResult.error;
-      if (conversationError) {
-        toast.warning(
-          `${providerLabel(initialData.pullRequest.provider)} sync queued`,
-          {
-            description:
-              "Review conversations could not be loaded; retry them from the warning above the code.",
-          },
-        );
-      }
     } catch (cause) {
       sendReviewSession({ type: "SYNC_FINISHED" });
       toast.error(
@@ -6429,8 +6438,7 @@ export function ReviewWorkspace({
           {providerConversations.isError && (
             <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-400/[.06] px-5 py-2 sm:px-7">
               <p className="text-[10px] text-amber-800 dark:text-amber-200">
-                {providerLabel(initialData.pullRequest.provider)} conversations
-                could not be loaded.
+                {providerConversations.error.message}
               </p>
               <button
                 type="button"

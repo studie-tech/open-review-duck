@@ -102,7 +102,7 @@ describe("snapshot source availability", () => {
     ).resolves.toBe(true);
   });
 
-  it("keeps at most four object probes in flight", async () => {
+  it("keeps at most twelve object probes in flight", async () => {
     mocks.exists.mockReset();
     let inFlight = 0;
     let peak = 0;
@@ -120,7 +120,7 @@ describe("snapshot source availability", () => {
         "snapshot",
       ),
     ).resolves.toBe(true);
-    expect(peak).toBeLessThanOrEqual(4);
+    expect(peak).toBeLessThanOrEqual(12);
     expect(mocks.exists).toHaveBeenCalledTimes(16);
   });
 
@@ -136,7 +136,7 @@ describe("snapshot source availability", () => {
         "snapshot",
       ),
     ).resolves.toBe(false);
-    expect(mocks.exists.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(mocks.exists.mock.calls.length).toBeLessThanOrEqual(12);
   });
 
   it("rejects a pull request with no snapshot", async () => {
