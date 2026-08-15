@@ -217,7 +217,8 @@ function providerThreadError(provider: ProviderName, cause: unknown) {
  * provider gives that conversation: a discussion on GitLab, a thread on Azure
  * DevOps, and the root comment on GitHub, which is what GitHub keys a thread
  * by. So the ledger is keyed by conversation, and only the comment a
- * conversation hangs from is ever a row of it — a reply never is.
+ * conversation hangs from is ever a row of it — a reply is keyed by its own
+ * identifier instead.
  */
 function publishedCommentId(
   thread: { comments: { externalId: string }[]; externalId: string },
@@ -226,6 +227,71 @@ function publishedCommentId(
   return thread.comments[0]?.externalId === commentExternalId
     ? thread.externalId
     : undefined;
+}
+
+/**
+ * Names the reviewer ReviewDuck published one provider comment for.
+ *
+ * One workspace connection speaks for every member, so the provider cannot
+ * say which of them wrote a comment and will let any of them change it. What
+ * ReviewDuck published it knows the author of, and that is what it protects:
+ * a root comment through the conversation it opened, a reply through its own
+ * identifier. A comment ReviewDuck did not publish — a bot's, or one written
+ * in the provider's own interface — has no recorded author and stays open to
+ * whoever the provider itself would allow.
+ */
+export async function publishedCommentAuthor(
+  db: typeof database,
+  unitId: string,
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  const conversationId = publishedCommentId(thread, commentExternalId);
+  const [owned] = await db
+    .select({ userId: reviewComments.userId })
+    .from(reviewComments)
+    .where(
+      and(
+        eq(reviewComments.unitId, unitId),
+        eq(reviewComments.status, "published"),
+        conversationId
+          ? or(
+              eq(reviewComments.providerCommentExternalId, commentExternalId),
+              eq(reviewComments.providerExternalId, conversationId),
+            )
+          : eq(reviewComments.providerCommentExternalId, commentExternalId),
+      ),
+    )
+    .limit(1);
+  return owned?.userId;
+}
+
+/**
+ * Refuses one reviewer's change to a comment ReviewDuck published for another.
+ *
+ * Editing puts words in their mouth and deleting takes their feedback away,
+ * and the provider records neither as anyone but the shared connection.
+ */
+export async function assertCommentIsTheReviewersToChange(
+  db: typeof database,
+  userId: string,
+  unitId: string,
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  const author = await publishedCommentAuthor(
+    db,
+    unitId,
+    thread,
+    commentExternalId,
+  );
+  if (author && author !== userId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Another reviewer published this comment through ReviewDuck. Only they can change it.",
+    });
+  }
 }
 
 /**
@@ -238,19 +304,31 @@ function publishedCommentId(
 async function forgetPublishedComments(
   db: typeof database,
   unitId: string,
-  providerExternalIds: string[],
+  gone: {
+    commentIds?: readonly (string | undefined)[];
+    conversationIds?: readonly (string | undefined)[];
+  },
 ) {
-  if (providerExternalIds.length === 0) return;
+  const conversationIds = [...new Set(gone.conversationIds ?? [])].filter(
+    (id): id is string => Boolean(id),
+  );
+  const commentIds = [...new Set(gone.commentIds ?? [])].filter(
+    (id): id is string => Boolean(id),
+  );
+  // A root comment is recorded against the conversation it opened and a reply
+  // against itself, so both keys are given up together.
+  const named = [
+    ...(conversationIds.length
+      ? [inArray(reviewComments.providerExternalId, conversationIds)]
+      : []),
+    ...(commentIds.length
+      ? [inArray(reviewComments.providerCommentExternalId, commentIds)]
+      : []),
+  ];
+  if (named.length === 0) return;
   await db
     .delete(reviewComments)
-    .where(
-      and(
-        eq(reviewComments.unitId, unitId),
-        inArray(reviewComments.providerExternalId, [
-          ...new Set(providerExternalIds),
-        ]),
-      ),
-    );
+    .where(and(eq(reviewComments.unitId, unitId), or(...named)));
 }
 
 type SymbolDefinitionInput = z.infer<typeof symbolDefinitionSchema>;
@@ -2804,7 +2882,10 @@ export const reviewRouter = createTRPCRouter({
               ctx.db
                 .select({
                   unitId: reviewComments.unitId,
+                  userId: reviewComments.userId,
                   providerExternalId: reviewComments.providerExternalId,
+                  providerCommentExternalId:
+                    reviewComments.providerCommentExternalId,
                 })
                 .from(reviewComments)
                 .where(
@@ -2818,6 +2899,22 @@ export const reviewRouter = createTRPCRouter({
                 ),
             ])
           : [[], []];
+        // The provider attributes everything ReviewDuck posts to the one
+        // workspace connection, so the conversation carries who actually
+        // wrote each comment. A control the server would refuse should not
+        // be offered in the first place.
+        const publisherByProviderId = new Map(
+          localComments.flatMap(
+            ({ providerCommentExternalId, providerExternalId, userId }) => [
+              ...(providerCommentExternalId
+                ? [[providerCommentExternalId, userId] as const]
+                : []),
+              ...(providerExternalId
+                ? [[providerExternalId, userId] as const]
+                : []),
+            ],
+          ),
+        );
         const explicitUnitByThreadId = new Map(
           localComments.flatMap((comment) =>
             comment.providerExternalId
@@ -2885,10 +2982,23 @@ export const reviewRouter = createTRPCRouter({
             .filter((thread) => paths.has(thread.path))
             .map((thread) => ({
               ...thread,
-              comments: thread.comments.map((comment) => ({
-                ...comment,
-                body: visibleProviderCommentBody(comment.body),
-              })),
+              comments: thread.comments.map((comment, index) => {
+                // A root comment is recorded against the conversation it
+                // opened; a reply against itself.
+                const publisher =
+                  publisherByProviderId.get(comment.externalId) ??
+                  (index === 0
+                    ? publisherByProviderId.get(thread.externalId)
+                    : undefined);
+                return {
+                  ...comment,
+                  body: visibleProviderCommentBody(comment.body),
+                  // Absent means nobody here published it, which leaves it as
+                  // open to change as the provider itself would leave it.
+                  publishedByAnotherReviewer:
+                    publisher !== undefined && publisher !== ctx.auth.userId,
+                };
+              }),
             })),
           syncedAt: new Date(),
           reopenedUnitIds,
@@ -3624,13 +3734,27 @@ export const reviewRouter = createTRPCRouter({
               "This provider conversation is no longer attached to the current review unit",
           });
         }
-        return await provider.replyToInlineThread({
+        const reply = await provider.replyToInlineThread({
           repositoryExternalId: scope.repositoryExternalId,
           pullRequestNumber: scope.pullRequestNumber,
           threadExternalId: thread.externalId,
           parentCommentExternalId,
           body: input.body,
         });
+        // A reply opens no conversation, so this row exists to say who wrote
+        // it. Without it the reply would be the one thing ReviewDuck posts
+        // that any other member could rewrite or remove.
+        await ctx.db.insert(reviewComments).values({
+          unitId: input.unitId,
+          userId: ctx.auth.userId,
+          source: "user",
+          body: input.body,
+          line: thread.line,
+          status: "published",
+          providerCommentExternalId: reply.externalId,
+          publishedAt: new Date(),
+        });
+        return reply;
       } catch (cause) {
         throw providerThreadError(scope.provider, cause);
       }
@@ -3679,6 +3803,13 @@ export const reviewRouter = createTRPCRouter({
             message: "That comment is no longer part of this conversation",
           });
         }
+        await assertCommentIsTheReviewersToChange(
+          ctx.db,
+          ctx.auth.userId,
+          input.unitId,
+          thread,
+          input.commentExternalId,
+        );
         await provider.editInlineComment({
           repositoryExternalId: scope.repositoryExternalId,
           pullRequestNumber: scope.pullRequestNumber,
@@ -3725,18 +3856,25 @@ export const reviewRouter = createTRPCRouter({
             message: "That comment is no longer part of this conversation",
           });
         }
+        await assertCommentIsTheReviewersToChange(
+          ctx.db,
+          ctx.auth.userId,
+          input.unitId,
+          thread,
+          input.commentExternalId,
+        );
         await provider.deleteInlineComment({
           repositoryExternalId: scope.repositoryExternalId,
           pullRequestNumber: scope.pullRequestNumber,
           threadExternalId: thread.externalId,
           commentExternalId: input.commentExternalId,
         });
-        const published = publishedCommentId(thread, input.commentExternalId);
-        await forgetPublishedComments(
-          ctx.db,
-          input.unitId,
-          published ? [published] : [],
-        );
+        await forgetPublishedComments(ctx.db, input.unitId, {
+          conversationIds: [
+            publishedCommentId(thread, input.commentExternalId),
+          ],
+          commentIds: [input.commentExternalId],
+        });
         return { deleted: 1 };
       } catch (cause) {
         throw providerThreadError(scope.provider, cause);
@@ -3757,6 +3895,17 @@ export const reviewRouter = createTRPCRouter({
           throw providerThreadError(scope.provider, cause);
         },
       );
+      // Deleting a conversation takes every comment in it, so each one has to
+      // be the reviewer's to take.
+      for (const comment of thread.comments) {
+        await assertCommentIsTheReviewersToChange(
+          ctx.db,
+          ctx.auth.userId,
+          input.unitId,
+          thread,
+          comment.externalId,
+        );
+      }
       // Replies first: no provider lets the comment a conversation hangs
       // from leave while the conversation still holds answers to it.
       const ordered = [...thread.comments].reverse();
@@ -3776,19 +3925,21 @@ export const reviewRouter = createTRPCRouter({
         // way through leaves comments already gone at the provider. The ledger
         // is what tells the reviewer a comment is still posted, so it gives the
         // conversation up as soon as the comment it hangs from has left.
-        await forgetPublishedComments(
-          ctx.db,
-          input.unitId,
-          removed.some(
+        await forgetPublishedComments(ctx.db, input.unitId, {
+          conversationIds: removed.some(
             (externalId) =>
               publishedCommentId(thread, externalId) !== undefined,
           )
             ? [thread.externalId]
             : [],
-        );
+          commentIds: removed,
+        });
         throw providerThreadError(scope.provider, cause);
       }
-      await forgetPublishedComments(ctx.db, input.unitId, [thread.externalId]);
+      await forgetPublishedComments(ctx.db, input.unitId, {
+        conversationIds: [thread.externalId],
+        commentIds: removed,
+      });
       return { deleted: removed.length };
     }),
 

@@ -797,6 +797,7 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Could this retain the previous behavior?",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -841,6 +842,7 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "This still needs attention.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -874,6 +876,7 @@ describe("ProviderConversation", () => {
           author: "reviewer",
           body: "Please rename this.",
           createdAt: "2026-07-20T10:00:00Z",
+          publishedByAnotherReviewer: false,
         },
       ],
       unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -927,12 +930,14 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Never mind, this was wrong.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
             {
               externalId: "905",
               author: "author",
               body: "Agreed.",
               createdAt: "2026-07-20T11:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -977,6 +982,7 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Tpyo here.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -1000,6 +1006,98 @@ describe("ProviderConversation", () => {
     expect(edit).toHaveBeenCalledWith("906", "Typo here.");
   });
 
+  it("offers no edit or delete on another reviewer's comment", async () => {
+    // The provider would allow it: one workspace connection speaks for every
+    // member, so only ReviewDuck knows whose words these are.
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "920",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "920",
+              author: "reviewer",
+              body: "Mine.",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+            {
+              externalId: "921",
+              author: "colleague",
+              body: "Theirs.",
+              createdAt: "2026-07-20T11:00:00Z",
+              publishedByAnotherReviewer: true,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Edit the comment by reviewer" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit the comment by colleague" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete the comment by colleague" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("withholds the conversation delete while it holds another reviewer's comment", () => {
+    // Deleting a conversation takes every comment in it.
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "922",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "922",
+              author: "reviewer",
+              body: "Mine.",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+            {
+              externalId: "923",
+              author: "colleague",
+              body: "Theirs.",
+              createdAt: "2026-07-20T11:00:00Z",
+              publishedByAnotherReviewer: true,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Delete this conversation" }),
+    ).toBeDisabled();
+    // Resolving belongs to whoever is reading the conversation, not to the
+    // reviewer who happened to open it.
+    expect(
+      screen.getByRole("button", { name: "Resolve this conversation" }),
+    ).toBeEnabled();
+  });
+
   it("keeps the delete dialog open when the provider refuses", async () => {
     const deleteThread = vi.fn().mockRejectedValue(new Error("403"));
     const user = userEvent.setup();
@@ -1018,6 +1116,7 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Someone else's comment.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -1060,6 +1159,7 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Original.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -1107,6 +1207,7 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Still open.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
@@ -1150,12 +1251,14 @@ describe("ProviderConversation", () => {
               author: "reviewer",
               body: "Root comment.",
               createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
             },
             {
               externalId: "908",
               author: "author",
               body: "Stray reply.",
               createdAt: "2026-07-20T11:00:00Z",
+              publishedByAnotherReviewer: false,
             },
           ],
           unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",

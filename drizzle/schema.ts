@@ -1478,6 +1478,15 @@ export const reviewComments = createTable(
     line: integer().notNull(),
     status: reviewCommentStatusEnum().notNull().default("publishing"),
     providerExternalId: text(),
+    /**
+     * The provider's identifier for this comment on its own.
+     *
+     * `providerExternalId` names the conversation a publication opened, which
+     * is a discussion on GitLab and a thread on Azure DevOps rather than the
+     * comment inside it. A reply opens no conversation, so this is what says
+     * which reviewer wrote one, and what refuses another reviewer's edit.
+     */
+    providerCommentExternalId: text(),
     publicationLeaseToken: uuid(),
     error: text(),
     publishedAt: timestamp({ withTimezone: true }),
@@ -1489,6 +1498,12 @@ export const reviewComments = createTable(
   },
   (t) => [
     index("review_comment_unit_idx").on(t.unitId, t.createdAt),
+    // Every edit and delete asks who published one provider comment before
+    // it touches it.
+    index("review_comment_provider_comment_idx").on(
+      t.unitId,
+      t.providerCommentExternalId,
+    ),
     uniqueIndex("review_comment_ai_finding_idx").on(
       t.aiJobId,
       t.aiFindingIndex,
