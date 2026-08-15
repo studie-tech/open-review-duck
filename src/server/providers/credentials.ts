@@ -19,8 +19,20 @@ import type { PullRequestProvider } from "./types";
 
 type Database = typeof database;
 
-/** Mints a short-lived GitHub App installation token on demand. */
-async function githubInstallationToken(installationId: string) {
+interface GitHubInstallationToken {
+  expiresAt: number;
+  token: string;
+}
+
+const githubInstallationTokens = new Map<
+  string,
+  Promise<GitHubInstallationToken>
+>();
+
+/** Mints one short-lived GitHub App installation token. */
+async function mintGitHubInstallationToken(
+  installationId: string,
+): Promise<GitHubInstallationToken> {
   const jwt = await githubAppJwt({
     appId: env.GITHUB_APP_ID,
     privateKey: env.GITHUB_APP_PRIVATE_KEY,
@@ -45,11 +57,47 @@ async function githubInstallationToken(installationId: string) {
   if (!response.ok) {
     throw new Error(`GitHub installation token failed (${response.status})`);
   }
-  const body = (await response.json()) as { token?: unknown };
-  if (typeof body.token !== "string") {
+  const body = (await response.json()) as {
+    expires_at?: unknown;
+    token?: unknown;
+  };
+  const expiresAt =
+    typeof body.expires_at === "string" ? Date.parse(body.expires_at) : NaN;
+  if (typeof body.token !== "string" || !Number.isFinite(expiresAt)) {
     throw new Error("GitHub installation token response is invalid");
   }
-  return body.token;
+  return { token: body.token, expiresAt };
+}
+
+/** Reuses an installation token until shortly before GitHub expires it. */
+async function githubInstallationToken(installationId: string) {
+  const cached = githubInstallationTokens.get(installationId);
+  if (cached) {
+    try {
+      const token = await cached;
+      if (token.expiresAt > Date.now() + 60_000) return token.token;
+    } catch {
+      // A failed mint is removed below so the next request can recover.
+    }
+    githubInstallationTokens.delete(installationId);
+  }
+
+  const pending = mintGitHubInstallationToken(installationId);
+  githubInstallationTokens.set(installationId, pending);
+  if (githubInstallationTokens.size > 128) {
+    const oldest = githubInstallationTokens.keys().next().value;
+    if (oldest && oldest !== installationId) {
+      githubInstallationTokens.delete(oldest);
+    }
+  }
+  try {
+    return (await pending).token;
+  } catch (cause) {
+    if (githubInstallationTokens.get(installationId) === pending) {
+      githubInstallationTokens.delete(installationId);
+    }
+    throw cause;
+  }
 }
 
 /** Uninstalls the service-owned GitHub App before local disconnect completes. */

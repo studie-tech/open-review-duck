@@ -1851,6 +1851,12 @@ async function beginReviewWaits(
       message: "Local comments do not have provider response threads",
     });
   }
+  if (!scope.provider) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Provider connection not found",
+    });
+  }
   const provider = await providerForScope(db, scope.connectionId);
   let threads: Awaited<ReturnType<typeof provider.listInlineCommentThreads>>;
   try {
@@ -1861,7 +1867,7 @@ async function beginReviewWaits(
   } catch (cause) {
     throw new TRPCError({
       code: "BAD_GATEWAY",
-      message: `${scope.provider === "azure_devops" ? "Azure DevOps" : scope.provider === "gitlab" ? "GitLab" : "GitHub"} conversations could not be loaded`,
+      message: providerSyncErrorMessage(scope.provider, cause),
       cause,
     });
   }
@@ -3007,7 +3013,7 @@ export const reviewRouter = createTRPCRouter({
       } catch (cause) {
         throw new TRPCError({
           code: "BAD_GATEWAY",
-          message: `${scope.provider === "azure_devops" ? "Azure DevOps" : scope.provider === "gitlab" ? "GitLab" : "GitHub"} conversations could not be loaded`,
+          message: providerSyncErrorMessage(scope.provider, cause),
           cause,
         });
       }

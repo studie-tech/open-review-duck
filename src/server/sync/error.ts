@@ -101,6 +101,15 @@ export function providerSyncErrorMessage(
     return `${label} did not respond in time. Check the provider URL and try again.`;
   }
 
+  if (
+    cause instanceof Error &&
+    /(?:^|\D)(?:401|403|404|429)(?:\D|$)|rate limit|too many requests|forbidden|not allowed|unauthori[sz]ed|invalid token/i.test(
+      cause.message,
+    )
+  ) {
+    return persistedSyncErrorMessage(provider, cause.message);
+  }
+
   return `ReviewDuck could not reach ${label}. Check your network and provider connection, then try again.`;
 }
 

@@ -12,8 +12,14 @@ vi.mock("~/server/deployment", () => ({
 vi.mock("~/server/security/remote-url", () => ({
   safeRemoteFetch: safeRemoteFetchMock,
 }));
+vi.mock("./github-app-authorization", () => ({
+  githubAppJwt: vi.fn().mockResolvedValue("signed-app-jwt"),
+}));
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("hosted provider credential resolution", () => {
   const connection = {
@@ -106,6 +112,43 @@ describe("hosted provider credential resolution", () => {
         updatedAt: new Date(),
       }),
     ).rejects.toThrow("Provider authorization is suspended");
+  });
+
+  it("reuses a live GitHub App installation token", async () => {
+    const installationFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          token: "installation-token",
+          expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", installationFetch);
+    safeRemoteFetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 42,
+            account: { id: 7, login: "acme", name: "Acme" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const { providerForConnection } = await import("./credentials");
+    const appConnection = {
+      ...connection,
+      credentialKind: "github_app",
+      installationId: "installation-token-cache-test",
+    };
+
+    const first = await providerForConnection({} as never, appConnection);
+    const second = await providerForConnection({} as never, appConnection);
+    await first.getConnectionIdentity();
+    await second.getConnectionIdentity();
+
+    expect(installationFetch).toHaveBeenCalledOnce();
+    expect(safeRemoteFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("rejects legacy Azure DevOps OAuth credentials", async () => {

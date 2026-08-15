@@ -117,6 +117,17 @@ describe("provider sync errors", () => {
       "ReviewDuck could not reach Azure DevOps. Check your network and provider connection, then try again.",
     );
   });
+
+  it("classifies a failed GitHub App token mint without exposing internals", () => {
+    expect(
+      providerSyncErrorMessage(
+        "github",
+        new Error("GitHub installation token failed (403)"),
+      ),
+    ).toBe(
+      "GitHub denied access while loading this pull request. Check that the connection includes this repository and can read its code and pull requests.",
+    );
+  });
 });
 
 describe("persisted sync errors", () => {

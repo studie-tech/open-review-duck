@@ -8,7 +8,10 @@ import { sourceObjectStore } from "./index";
 
 type Database = typeof database;
 
-const SOURCE_OBJECT_PROBE_CONCURRENCY = 4;
+// A prepared pull request can reference hundreds of blobs. Presence checks are
+// one-byte reads, so a wider bound keeps unchanged-revision polls responsive
+// without transferring source bodies or opening an unbounded request wave.
+const SOURCE_OBJECT_PROBE_CONCURRENCY = 12;
 
 /** Checks that every source object needed to render a snapshot is still present. */
 export async function reviewSnapshotSourcesAvailable(

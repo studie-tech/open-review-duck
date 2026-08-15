@@ -3,6 +3,7 @@ import {
   assertCompleteChangedFileSet,
   pullRequestRevisionChanged,
   reviewAnalysisNeedsRefresh,
+  reviewSnapshotCanBeReused,
 } from "./revision";
 
 describe("pullRequestRevisionChanged", () => {
@@ -37,6 +38,54 @@ describe("reviewAnalysisNeedsRefresh", () => {
     expect(reviewAnalysisNeedsRefresh(null, 25)).toBe(true);
     expect(reviewAnalysisNeedsRefresh(24, 25)).toBe(true);
     expect(reviewAnalysisNeedsRefresh(25, 25)).toBe(false);
+  });
+});
+
+describe("reviewSnapshotCanBeReused", () => {
+  const snapshot = {
+    analysisVersion: 25,
+    baseSha: "base",
+    createdAt: new Date("2026-08-10T00:00:00Z"),
+    headSha: "head",
+  };
+  const cutoff = new Date("2026-08-01T00:00:00Z");
+
+  it("keeps an unchanged, current snapshot on the metadata-only path", () => {
+    expect(
+      reviewSnapshotCanBeReused(
+        snapshot,
+        { headSha: "head", baseSha: "base" },
+        25,
+        cutoff,
+      ),
+    ).toBe(true);
+  });
+
+  it("rebuilds changed, stale-analysis, and retention-expired snapshots", () => {
+    expect(
+      reviewSnapshotCanBeReused(
+        snapshot,
+        { headSha: "new-head", baseSha: "base" },
+        25,
+        cutoff,
+      ),
+    ).toBe(false);
+    expect(
+      reviewSnapshotCanBeReused(
+        snapshot,
+        { headSha: "head", baseSha: "base" },
+        26,
+        cutoff,
+      ),
+    ).toBe(false);
+    expect(
+      reviewSnapshotCanBeReused(
+        snapshot,
+        { headSha: "head", baseSha: "base" },
+        25,
+        new Date("2026-08-11T00:00:00Z"),
+      ),
+    ).toBe(false);
   });
 });
 
