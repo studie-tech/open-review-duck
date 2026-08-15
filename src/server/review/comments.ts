@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, lte, or } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, or } from "drizzle-orm";
 import { reviewComments } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import type { ProviderReviewThread } from "~/server/providers/types";
@@ -71,6 +71,12 @@ export async function findEquivalentUserComment(
       eq(reviewComments.source, "user"),
       eq(reviewComments.body, input.body),
       eq(reviewComments.line, input.line),
+      // A reply carries its own provider identifier and opened no
+      // conversation. It is a record of authorship, never a publication this
+      // one could stand in for: matching it would let a new inline comment
+      // report itself as already posted on the strength of a reply that
+      // happened to say the same thing on the same line.
+      isNull(reviewComments.providerCommentExternalId),
     ),
     orderBy: [desc(reviewComments.createdAt)],
   });

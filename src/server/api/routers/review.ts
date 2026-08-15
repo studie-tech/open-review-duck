@@ -673,6 +673,7 @@ async function providerScopeForUnit(
   db: typeof database,
   userId: string,
   unitId: string,
+  staleRevisionMessage = "Synchronize the pull request before changing its conversations",
 ) {
   const [scope] = await db
     .select({
@@ -714,7 +715,7 @@ async function providerScopeForUnit(
   ) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: "Synchronize the pull request before changing its conversations",
+      message: staleRevisionMessage,
     });
   }
   return scope;
@@ -3500,6 +3501,7 @@ export const reviewRouter = createTRPCRouter({
         ctx.db,
         ctx.auth.userId,
         input.unitId,
+        "Synchronize the pull request before publishing a comment",
       );
       if (!reviewUnitContainsLine(scope, input.line)) {
         throw new TRPCError({
@@ -3817,18 +3819,33 @@ export const reviewRouter = createTRPCRouter({
           commentExternalId: input.commentExternalId,
           body: rewrittenProviderCommentBody(edited.body, input.body),
         });
-        const published = publishedCommentId(thread, input.commentExternalId);
-        if (published) {
-          await ctx.db
-            .update(reviewComments)
-            .set({ body: input.body })
-            .where(
-              and(
-                eq(reviewComments.unitId, input.unitId),
-                eq(reviewComments.providerExternalId, published),
-              ),
-            );
-        }
+        // A root comment is recorded against the conversation it opened and
+        // a reply against itself, so the rewrite has to follow whichever key
+        // the ledger holds it under.
+        const conversationId = publishedCommentId(
+          thread,
+          input.commentExternalId,
+        );
+        await ctx.db
+          .update(reviewComments)
+          .set({ body: input.body })
+          .where(
+            and(
+              eq(reviewComments.unitId, input.unitId),
+              conversationId
+                ? or(
+                    eq(reviewComments.providerExternalId, conversationId),
+                    eq(
+                      reviewComments.providerCommentExternalId,
+                      input.commentExternalId,
+                    ),
+                  )
+                : eq(
+                    reviewComments.providerCommentExternalId,
+                    input.commentExternalId,
+                  ),
+            ),
+          );
         return { edited: true };
       } catch (cause) {
         throw providerThreadError(scope.provider, cause);
