@@ -2,9 +2,14 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "./dashboard-content";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 const queryState = vi.hoisted(() => ({
   activeSyncs: [
@@ -109,6 +114,37 @@ afterEach(() => {
 });
 
 describe("DashboardContent", () => {
+  /** Builds one dashboard item with focused test overrides. */
+  const pullRequest = (
+    overrides: Partial<
+      ComponentProps<typeof DashboardContent>["initialPullRequests"][number]
+    > & { id: string },
+  ): ComponentProps<typeof DashboardContent>["initialPullRequests"][number] => {
+    const { id, ...rest } = overrides;
+    return {
+      id,
+      number: 42,
+      title: "Improve the dashboard",
+      authorLogin: "reviewer",
+      authorAvatarUrl: null,
+      state: "open",
+      webUrl: "https://example.com/pull/42",
+      updatedAt: new Date("2026-08-15T12:00:00Z"),
+      additions: 12,
+      deletions: 2,
+      repositoryOwner: "acme",
+      repositoryName: "web",
+      provider: "github",
+      queueState: "active",
+      queueSource: "manual",
+      removedAt: null,
+      totalUnits: 4,
+      signedUnits: 0,
+      carriedSignOffs: 0,
+      ...rest,
+    };
+  };
+
   it("shows durable sync progress and refreshes reviews when it finishes", async () => {
     const properties = {
       initialPullRequests: [],
@@ -309,5 +345,108 @@ describe("DashboardContent", () => {
     expect(
       screen.getByRole("progressbar", { name: "Monthly AI token usage" }),
     ).toHaveAttribute("aria-valuenow", "25000");
+  });
+
+  it("prioritizes continued work and filters across providers", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    const items = [
+      pullRequest({
+        id: "ready",
+        number: 102,
+        title: "Retry settlement webhooks",
+        authorLogin: "sonia",
+        provider: "gitlab",
+        repositoryOwner: "payments",
+        repositoryName: "api",
+      }),
+      pullRequest({
+        id: "continue",
+        number: 101,
+        title: "Inventory improvements",
+        signedUnits: 2,
+      }),
+      pullRequest({
+        id: "unsupported",
+        number: 103,
+        title: "Update generated assets",
+        provider: "azure_devops",
+        totalUnits: 0,
+      }),
+    ];
+    const properties = {
+      initialPullRequests: items,
+      initialAiConfiguration: {
+        mode: "off" as const,
+        managedModel: "big-pickle",
+        managedModels: ["big-pickle"],
+        reviewPullRequests: false,
+        deepReviewAvailable: false,
+        configuration: null,
+        disclosure: { accepted: false, version: "test" },
+      },
+      initialAiPlanUsage: null,
+      localMode: true,
+    };
+    const view = render(<DashboardContent {...properties} />);
+
+    const continued = screen.getByText("Inventory improvements");
+    const ready = screen.getByText("Retry settlement webhooks");
+    expect(
+      continued.compareDocumentPosition(ready) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText("Continue reviewing")).toBeVisible();
+    expect(screen.getAllByText("Ready to start").length).toBeGreaterThan(0);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by provider" }),
+      "gitlab",
+    );
+    expect(screen.getByText("Retry settlement webhooks")).toBeVisible();
+    expect(
+      screen.queryByText("Inventory improvements"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "In progress, 0" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Ready to start, 1" }),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Clear inbox filters" }),
+    );
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search pull requests" }),
+      "payments/api #102 sonia",
+    );
+    expect(screen.getByText("Retry settlement webhooks")).toBeVisible();
+    expect(
+      screen.queryByText("Inventory improvements"),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Clear inbox filters" }),
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by provider" }),
+      "gitlab",
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by repository" }),
+      "gitlab:payments/api",
+    );
+    view.rerender(
+      <DashboardContent
+        {...properties}
+        initialPullRequests={items.filter(({ id }) => id !== "ready")}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: "Filter by repository" }),
+      ).toHaveValue("all"),
+    );
   });
 });
