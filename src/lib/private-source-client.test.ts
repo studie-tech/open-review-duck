@@ -1,10 +1,38 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hydratePrivateReviewSources } from "./private-source-client";
+import {
+  hydratePrivateReviewSources,
+  prioritizePrivateReviewSources,
+} from "./private-source-client";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("hydratePrivateReviewSources", () => {
+  it("prefetches the visible concept before the remaining review path", () => {
+    const sources = [
+      { id: "later", path: "src/later.ts" },
+      { id: "related", path: "src/related.ts" },
+      { id: "active", path: "src/active.ts" },
+      { id: "same-file", path: "src/active.ts" },
+      { id: "other-related-file", path: "src/related.ts" },
+    ];
+
+    expect(
+      prioritizePrivateReviewSources(sources, {
+        activeId: "active",
+        activePath: "src/active.ts",
+        relatedIds: new Set(["active", "related"]),
+        relatedPaths: new Set(["src/active.ts", "src/related.ts"]),
+      }).map(({ id }) => id),
+    ).toEqual([
+      "active",
+      "related",
+      "same-file",
+      "other-related-file",
+      "later",
+    ]);
+  });
+
   it("keeps successfully hydrated files when another private object fails", async () => {
     const source = "export const ready = true;\n";
     const digest = createHash("sha256").update(source).digest("hex");

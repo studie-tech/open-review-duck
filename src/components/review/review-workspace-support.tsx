@@ -586,6 +586,7 @@ export function ReviewConceptMemberPreview({
   index,
   count,
   sourceAvailable,
+  sourcePending = false,
   onSelect,
   onCommentLine,
 }: {
@@ -593,6 +594,7 @@ export function ReviewConceptMemberPreview({
   index: number;
   count: number;
   sourceAvailable: boolean;
+  sourcePending?: boolean;
   onSelect: () => void;
   onCommentLine?: (line: number) => void;
 }) {
@@ -621,7 +623,16 @@ export function ReviewConceptMemberPreview({
         expanded={expanded}
         onToggleExpanded={() => setExpanded((open) => !open)}
       />
-      {!expanded ? null : !sourceAvailable ? (
+      {!expanded ? null : !sourceAvailable && sourcePending ? (
+        <div
+          role="status"
+          aria-label={`Loading source for ${unit.name}`}
+          className="space-y-2 px-3 py-4"
+        >
+          <span className="bg-surface-hover block h-2 w-3/4 animate-pulse rounded-full" />
+          <span className="bg-surface-hover block h-2 w-1/2 animate-pulse rounded-full" />
+        </div>
+      ) : !sourceAvailable ? (
         <p className="px-3 py-4 font-sans text-[10px] text-amber-700 dark:text-amber-200">
           Source unavailable. Concept sign-off is blocked.
         </p>

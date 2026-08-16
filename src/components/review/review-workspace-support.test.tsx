@@ -120,6 +120,68 @@ describe("ReviewConceptMemberPreview", () => {
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
+  it("uses a quiet loading state while private source is still pending", () => {
+    render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: "unit-pending-source",
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "",
+            startLine: 10,
+            language: "typescript",
+            kind: "function",
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable={false}
+        sourcePending
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "Loading source for example" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Source unavailable. Concept sign-off is blocked."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports unavailable source only after loading settles", () => {
+    render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: "unit-unavailable-source",
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "",
+            startLine: 10,
+            language: "typescript",
+            kind: "function",
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable={false}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Source unavailable. Concept sign-off is blocked."),
+    ).toBeInTheDocument();
+  });
+
   /** Renders one member card at the given review status. */
   function renderMember(status: string) {
     return render(
