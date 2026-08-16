@@ -23,6 +23,7 @@ const config = {
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     cpus: 4,
+    useTypeScriptCli: true,
   },
   output: "standalone",
   outputFileTracingExcludes: {
