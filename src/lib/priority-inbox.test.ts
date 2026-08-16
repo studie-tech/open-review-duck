@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   comparePriorityInboxText,
   filterPriorityInbox,
+  type PriorityInboxItem,
   prioritizeInbox,
   priorityInboxGroup,
   priorityInboxRepositoryKey,
-  type PriorityInboxItem,
 } from "./priority-inbox";
 
 /** Builds one prioritizable item with focused test overrides. */
