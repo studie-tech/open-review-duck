@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  importReferenceForLocal,
   isImportOnlySource,
   parseImportReferences,
   parseImportStatements,
@@ -53,6 +54,25 @@ describe("parseImportReferences", () => {
     for (const reference of parseImportReferences(source, "typescript")) {
       expect(source.slice(reference.from, reference.to)).not.toHaveLength(0);
     }
+  });
+
+  it("finds the import behind a value used outside its import statement", () => {
+    const source = [
+      'import { defaultEffects as effects } from "./effects";',
+      "export const activation = { effects };",
+    ].join("\n");
+
+    expect(
+      importReferenceForLocal(
+        parseImportReferences(source, "typescript"),
+        "effects",
+      ),
+    ).toMatchObject({
+      imported: "defaultEffects",
+      kind: "named",
+      local: "effects",
+      specifier: "./effects",
+    });
   });
 
   it("finds Python imports, including aliases and parent modules", () => {

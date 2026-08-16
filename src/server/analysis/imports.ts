@@ -32,6 +32,14 @@ export function parseImportReferences(
     );
 }
 
+/** Finds the module binding behind one identifier used in a source file. */
+export function importReferenceForLocal(
+  references: readonly ImportReference[],
+  local: string,
+) {
+  return references.find((reference) => reference.local === local);
+}
+
 /** Returns whether source contains only imports, comments, and directives. */
 export function isImportOnlySource(
   source: string,

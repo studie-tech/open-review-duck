@@ -1396,6 +1396,18 @@ describe("SideBySideUnitDiff", () => {
       name: "Comment on current line 18",
     });
     expect(addedLine).toHaveTextContent("const added = true;");
+    expect(addedLine).toHaveClass("select-text");
+    expect(
+      screen.getByText("const added = true;").closest(".syntax-code"),
+    ).toHaveClass("cursor-text", "select-text");
+
+    const selection = vi
+      .spyOn(window, "getSelection")
+      .mockReturnValue({ isCollapsed: false } as Selection);
+    fireEvent.click(addedLine, { detail: 1 });
+    expect(selectLine).not.toHaveBeenCalled();
+    selection.mockRestore();
+
     await user.click(addedLine);
     expect(selectLine).toHaveBeenCalledWith(18);
   });
