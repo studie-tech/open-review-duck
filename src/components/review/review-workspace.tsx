@@ -68,7 +68,10 @@ import {
   type ImportReference,
 } from "~/lib/import-navigation";
 import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
-import { hydratePrivateReviewSources } from "~/lib/private-source-client";
+import {
+  hydratePrivateReviewSources,
+  prioritizePrivateReviewSources,
+} from "~/lib/private-source-client";
 import {
   buildReviewHierarchy,
   deepReviewFindingTarget,
@@ -896,6 +899,22 @@ export function ReviewWorkspace({
   useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
   const [fileContexts, setFileContexts] = useState(initialData.fileContexts);
+  // The workspace opens on work the reviewer can act on, which rules out a
+  // member left pending inside a concept that is waiting as a whole: opening
+  // there would land them on a concept the review path already shows as
+  // paused, with nothing on it to sign off.
+  const [activeIndex, setActiveIndex] = useState(() => {
+    const paused = pausedConceptUnitIds(initialData.concepts, units);
+    return Math.max(
+      0,
+      units.findIndex(
+        (unit) =>
+          unit.status !== "signed_off" &&
+          unit.status !== "waiting" &&
+          !paused.has(unit.id),
+      ),
+    );
+  });
   const [hydratedUnitIds, setHydratedUnitIds] = useState(
     () =>
       new Set(
@@ -915,10 +934,50 @@ export function ReviewWorkspace({
           : initialData.units.map(({ id }) => id),
       ),
   );
+  const sourceSnapshotId = initialData.snapshot?.id;
+  // A snapshot is immutable. Keep its first source manifest stable so a
+  // same-snapshot router refresh can update server state without aborting and
+  // restarting every verified private-object download.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot identity owns its immutable source manifest
+  const sourceHydrationInput = useMemo(
+    () => ({
+      activeIndex,
+      concepts: initialData.concepts,
+      fileContexts: initialData.fileContexts,
+      units: initialData.units,
+    }),
+    [sourceSnapshotId],
+  );
   useEffect(() => {
-    if (initialData.sourceDelivery !== "direct" || !initialData.snapshot)
-      return;
-    const snapshotId = initialData.snapshot.id;
+    if (initialData.sourceDelivery !== "direct" || !sourceSnapshotId) return;
+    const sourceUnits = sourceHydrationInput.units;
+    const sourceFileContexts = sourceHydrationInput.fileContexts;
+    const visibleUnit =
+      sourceUnits[sourceHydrationInput.activeIndex] ?? sourceUnits[0];
+    const visibleConcept = visibleUnit
+      ? sourceHydrationInput.concepts.find(({ memberIds }) =>
+          memberIds.includes(visibleUnit.id),
+        )
+      : undefined;
+    const relatedIds = new Set(visibleConcept?.memberIds ?? []);
+    const relatedPaths = new Set(
+      sourceUnits
+        .filter(({ id }) => relatedIds.has(id))
+        .map(({ path }) => path),
+    );
+    const prioritizedUnits = prioritizePrivateReviewSources(sourceUnits, {
+      activeId: visibleUnit?.id,
+      activePath: visibleUnit?.path,
+      relatedIds,
+      relatedPaths,
+    });
+    const prioritizedContexts = prioritizePrivateReviewSources(
+      sourceFileContexts,
+      {
+        activePath: visibleUnit?.path,
+        relatedPaths,
+      },
+    );
     let active = true;
     const controller = new AbortController();
     setSourceHydrationPending(true);
@@ -927,14 +986,14 @@ export function ReviewWorkspace({
     const cache = new Map<string, Promise<Uint8Array>>();
     void Promise.all([
       hydratePrivateReviewSources(
-        initialData.units,
-        snapshotId,
+        prioritizedUnits,
+        sourceSnapshotId,
         cache,
-        4,
+        6,
         controller.signal,
         (index, hydrated) => {
           if (!active) return;
-          const original = initialData.units[index];
+          const original = prioritizedUnits[index];
           if (!original) return;
           setUnits((current) =>
             current.map((unit) =>
@@ -959,21 +1018,21 @@ export function ReviewWorkspace({
         },
         (index) => {
           if (!active) return;
-          const original = initialData.units[index];
+          const original = prioritizedUnits[index];
           if (original) {
             setSettledUnitIds((current) => new Set(current).add(original.id));
           }
         },
       ),
       hydratePrivateReviewSources(
-        initialData.fileContexts,
-        snapshotId,
+        prioritizedContexts,
+        sourceSnapshotId,
         cache,
-        4,
+        2,
         controller.signal,
         (index, hydrated) => {
           if (!active) return;
-          const original = initialData.fileContexts[index];
+          const original = prioritizedContexts[index];
           if (!original) return;
           setFileContexts((current) =>
             current.map((context) =>
@@ -988,7 +1047,7 @@ export function ReviewWorkspace({
       setHydratedUnitIds(
         new Set(
           hydratedUnits.successfulIndexes.flatMap((index) => {
-            const unit = initialData.units[index];
+            const unit = prioritizedUnits[index];
             return unit &&
               (unit.kind === "binary" ||
                 unit.currentBlobId ||
@@ -1015,28 +1074,7 @@ export function ReviewWorkspace({
       controller.abort();
       cache.clear();
     };
-  }, [
-    initialData.fileContexts,
-    initialData.snapshot,
-    initialData.sourceDelivery,
-    initialData.units,
-  ]);
-  // The workspace opens on work the reviewer can act on, which rules out a
-  // member left pending inside a concept that is waiting as a whole: opening
-  // there would land them on a concept the review path already shows as
-  // paused, with nothing on it to sign off.
-  const [activeIndex, setActiveIndex] = useState(() => {
-    const paused = pausedConceptUnitIds(initialData.concepts, units);
-    return Math.max(
-      0,
-      units.findIndex(
-        (unit) =>
-          unit.status !== "signed_off" &&
-          unit.status !== "waiting" &&
-          !paused.has(unit.id),
-      ),
-    );
-  });
+  }, [initialData.sourceDelivery, sourceHydrationInput, sourceSnapshotId]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [showDiff, setShowDiff] = useState(true);
   const [pathSearch, setPathSearch] = useState("");
@@ -1757,6 +1795,12 @@ export function ReviewWorkspace({
             member.kind === "binary" ||
             hydratedUnitIds.has(member.id)
           }
+          sourcePending={
+            initialData.sourceDelivery === "direct" &&
+            member.kind !== "binary" &&
+            sourceHydrationPending &&
+            !settledUnitIds.has(member.id)
+          }
           onSelect={() => selectUnit(unitIndexById.get(member.id) ?? -1)}
           onCommentLine={(line) => commentOnMemberLine(member.id, line)}
         />
@@ -1767,6 +1811,8 @@ export function ReviewWorkspace({
       hydratedUnitIds,
       initialData.sourceDelivery,
       selectUnit,
+      settledUnitIds,
+      sourceHydrationPending,
       unitIndexById,
     ],
   );
@@ -6314,6 +6360,17 @@ export function ReviewWorkspace({
               </p>
             </div>
             <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              {sourceHydrationPending && (
+                <span
+                  role="status"
+                  aria-label="Loading private review source"
+                  className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
+                  title="Loading and verifying review source in the background"
+                >
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                  <span className="hidden lg:inline">Loading source…</span>
+                </span>
+              )}
               {initialData.conceptLayout &&
                 !initialData.conceptLayout.locked && (
                   <button

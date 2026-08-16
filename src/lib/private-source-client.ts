@@ -8,6 +8,31 @@ interface SourceRange {
   path: string;
 }
 
+interface SourcePriority {
+  activeId?: string;
+  activePath?: string;
+  relatedIds?: ReadonlySet<string>;
+  relatedPaths?: ReadonlySet<string>;
+}
+
+/** Orders private source work around the review concept already on screen. */
+export function prioritizePrivateReviewSources<
+  Source extends { id?: string; path: string },
+>(sources: readonly Source[], priority: SourcePriority) {
+  /** Gives visible work a lower rank while preserving canonical order. */
+  const rank = (source: Source) => {
+    if (source.id && source.id === priority.activeId) return 0;
+    if (source.id && priority.relatedIds?.has(source.id)) return 1;
+    if (source.path === priority.activePath) return 2;
+    if (priority.relatedPaths?.has(source.path)) return 3;
+    return 4;
+  };
+  return sources
+    .map((source, index) => ({ index, rank: rank(source), source }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(({ source }) => source);
+}
+
 /** Encodes digest bytes using lowercase hexadecimal. */
 function hex(bytes: ArrayBuffer) {
   return [...new Uint8Array(bytes)]

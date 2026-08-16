@@ -91,6 +91,15 @@ describe("upgradeLegacyDatabase", () => {
         sql.includes("insert into drizzle.__drizzle_migrations"),
       ),
     ).toBe(true);
+    const legacyColumns = statements.find((sql) =>
+      sql.includes('alter table "open_review_duck_ai_job"'),
+    );
+    expect(legacyColumns).toContain('"parentJobId" uuid');
+    expect(legacyColumns).toContain('"ruleConfigDigest" varchar(64)');
+    expect(legacyColumns).toContain(
+      '"deepReviewTerminalState" "deep_review_terminal_state"',
+    );
+    expect(legacyColumns).toContain('"runFailureClass" "review_failure_class"');
     const queueBackfill = statements.find((sql) =>
       sql.includes('insert into "open_review_duck_review_queue_item"'),
     );
