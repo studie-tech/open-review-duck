@@ -269,8 +269,7 @@ describe("personal concept layout validation", () => {
   });
 
   it("rejects a layout whose concepts together exceed it", () => {
-    // Each concept is within its own cap; only the total is over, which is
-    // what the two caps multiplying used to allow.
+    // Each concept is within its own cap, but the layout-wide total is not.
     expect(
       replacePersonalConceptLayoutSchema.safeParse(
         layout(3, MAX_CONCEPT_LAYOUT_MEMBERS / 2),

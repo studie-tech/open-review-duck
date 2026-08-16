@@ -152,10 +152,7 @@ export async function openRouterWorkspaceKey(
 }
 
 /** Deletes a managed workspace key at the provider before removing its record. */
-export async function revokeOpenRouterWorkspaceKey(
-  db: Database,
-  workspaceId: string,
-) {
+async function revokeOpenRouterWorkspaceKey(db: Database, workspaceId: string) {
   const credential = await db.query.managedAiCredentials.findFirst({
     where: (table, { and, eq }) =>
       and(eq(table.workspaceId, workspaceId), eq(table.provider, "openrouter")),

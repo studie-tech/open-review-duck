@@ -90,7 +90,7 @@ function endOfNumber(source: string, offset: number) {
  * The scan recognizes comments, quoted runs, numbers and identifiers, which is
  * everything the shared classifier can decide without a parse tree.
  */
-export function lexicalTokenSpans(source: string, syntax: LexicalSyntax) {
+function lexicalTokenSpans(source: string, syntax: LexicalSyntax) {
   const spans: TokenSpan[] = [];
   let index = 0;
   while (index < source.length) {

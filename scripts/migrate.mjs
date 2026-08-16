@@ -1,8 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { readMigrationFiles } from "drizzle-orm/migrator";
 import pg from "pg";
-import { upgradeLegacyDatabase } from "./upgrade-legacy-database.mjs";
 
 const connectionString =
   process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -22,16 +20,6 @@ const client = new pg.Client({
 await client.connect();
 try {
   await client.query("select pg_advisory_lock($1)", [1_683_524_535]);
-  const migrations = readMigrationFiles({ migrationsFolder: "./drizzle" });
-  let upgradedLegacyDatabase = false;
-  try {
-    upgradedLegacyDatabase = await upgradeLegacyDatabase(client, migrations);
-  } catch (cause) {
-    throw new Error("Legacy database schema upgrade failed", { cause });
-  }
-  if (upgradedLegacyDatabase) {
-    process.stdout.write("Legacy database schema upgraded.\n");
-  }
   await migrate(drizzle(client), { migrationsFolder: "./drizzle" });
   process.stdout.write("Database migrations are current.\n");
 } finally {

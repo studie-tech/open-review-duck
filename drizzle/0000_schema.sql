@@ -450,6 +450,7 @@ CREATE TABLE "open_review_duck_review_comment" (
 	"line" integer NOT NULL,
 	"status" "review_comment_status" DEFAULT 'publishing' NOT NULL,
 	"providerExternalId" text,
+	"providerCommentExternalId" text,
 	"publicationLeaseToken" uuid,
 	"error" text,
 	"publishedAt" timestamp with time zone,
@@ -811,6 +812,8 @@ CREATE UNIQUE INDEX "repository_external_idx" ON "open_review_duck_repository" U
 CREATE INDEX "review_comment_unit_idx" ON "open_review_duck_review_comment" USING btree ("unitId","createdAt");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "review_comment_ai_finding_idx" ON "open_review_duck_review_comment" USING btree ("aiJobId","aiFindingIndex");
+--> statement-breakpoint
+CREATE INDEX "review_comment_provider_comment_idx" ON "open_review_duck_review_comment" USING btree ("unitId","providerCommentExternalId");
 --> statement-breakpoint
 CREATE INDEX "review_concept_dependency_dependency_idx" ON "open_review_duck_review_concept_dependency" USING btree ("dependencyId");
 --> statement-breakpoint

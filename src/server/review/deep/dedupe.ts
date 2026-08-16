@@ -30,7 +30,7 @@ type Database = typeof database;
  * so below this size the remaining findings are almost always distinct and the
  * call buys nothing but a suppression channel.
  */
-export const DEEP_REVIEW_DEDUPE_MIN = env.DEEP_REVIEW_DEDUPE_MIN;
+const DEEP_REVIEW_DEDUPE_MIN = env.DEEP_REVIEW_DEDUPE_MIN;
 
 /**
  * The largest set one clustering call may reason over.
@@ -434,7 +434,7 @@ async function accumulateUsage(
 }
 
 /** Asks the model for one grouping, treating every failure as no proposal. */
-export async function clusterDeepReviewFindings(
+async function clusterDeepReviewFindings(
   db: Database,
   input: {
     job: typeof aiJobs.$inferSelect;

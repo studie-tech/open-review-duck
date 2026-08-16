@@ -372,7 +372,7 @@ export async function executeAiTurn(
     // Explanations and question threads are the only jobs this loop serves.
     // Deep-review children drive their own turn loop and semantic clustering
     // is a single structured call, so any other kind reaching here is a
-    // dispatch bug and must not be answered with an explanation prompt.
+    // dispatch mismatch and must not be answered with an explanation prompt.
     if (job.kind !== "explain") {
       throw new Error(`Job kind ${job.kind} does not run on this agent loop`);
     }

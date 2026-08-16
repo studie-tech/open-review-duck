@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { localAiConfigurations } from "@/drizzle/schema";
 import { openVaultSecret } from "~/server/security/vault";
 
-export const localAiSecretSchema = z.object({
+const localAiSecretSchema = z.object({
   apiKey: z.string().optional(),
   baseUrl: z.string().url(),
   headers: z.record(z.string(), z.string()).default({}),

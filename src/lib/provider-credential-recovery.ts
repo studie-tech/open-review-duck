@@ -13,10 +13,8 @@ export function supportsTokenReplacement(
  * Providers with no hosted authorization flow to send a reviewer through.
  *
  * Azure DevOps is reached with a personal access token and nothing else, so a
- * connection of its can only be repaired by replacing that token. A legacy row
- * can still carry a managed credential kind — the column has no per-provider
- * constraint, and this repository's own tests build one — so the kind alone
- * cannot say whether a reconnect is possible.
+ * connection of its can only be repaired by replacing that token. Provider and
+ * credential kind jointly determine whether a reconnect action is valid.
  */
 const providersWithoutHostedAuthorization = new Set(["azure_devops"]);
 

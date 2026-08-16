@@ -29,8 +29,6 @@ describe("provider credential recovery", () => {
   });
 
   it("offers no hosted reconnect for a provider that has no such flow", () => {
-    // A legacy Azure DevOps row can still carry a managed credential kind, and
-    // the reconnect it used to offer named the wrong provider and did nothing.
     expect(supportsManagedReauthorization(false, "oauth", "azure_devops")).toBe(
       false,
     );

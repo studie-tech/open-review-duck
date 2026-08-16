@@ -170,7 +170,7 @@ function addIndexedEvidence(
 }
 
 /** Builds a bounded provider-independent affinity graph. */
-export function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
+function buildConceptAffinityGraph(units: AnalyzedUnit[]) {
   const reviewable = units.filter(({ kind }) => kind !== "file");
   const byKey = new Map(reviewable.map((unit) => [unit.stableKey, unit]));
   const edges = new Map<string, AffinityEdge>();
@@ -643,7 +643,7 @@ type PartitionUnit = Pick<
  *
  * Membership alone proves every unit is reachable, not every changed line: the
  * analyzer may credit a line to the nearest unit while showing a range that
- * excludes it, which is how an added import used to disappear from the review.
+ * excludes it.
  * Blank lines are exempt because there is nothing on them to judge, and only
  * modified files are checked — an added or deleted file is reviewed whole, so
  * its preamble is context for the declarations shipping with it.

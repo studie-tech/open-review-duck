@@ -48,7 +48,7 @@ export type UnitKind =
   | "test_hook"
   | "binary"
   | "file";
-export type SourceChangeType = "added" | "modified" | "deleted" | "renamed";
+type SourceChangeType = "added" | "modified" | "deleted" | "renamed";
 
 export interface ReviewUnitRange {
   startLine?: number;

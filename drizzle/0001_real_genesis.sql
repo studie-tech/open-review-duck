@@ -1,2 +1,0 @@
-ALTER TABLE "open_review_duck_review_comment" ADD COLUMN "providerCommentExternalId" text;--> statement-breakpoint
-CREATE INDEX "review_comment_provider_comment_idx" ON "open_review_duck_review_comment" USING btree ("unitId","providerCommentExternalId");

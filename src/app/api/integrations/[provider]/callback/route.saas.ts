@@ -22,7 +22,6 @@ import {
 import {
   hostedProvider,
   oauthCallbackUrl,
-  stateOAuthCallbackUrl,
 } from "~/server/providers/oauth-callback-url";
 import {
   GITHUB_USER_AUTHORIZATION_STAGE,
@@ -84,7 +83,6 @@ async function githubUserAuthorization(input: {
       JSON.stringify({
         verifier,
         installationId: input.installationId,
-        callback,
       }),
     ),
     redirectPath: input.redirectPath,
@@ -201,13 +199,8 @@ async function completeProviderAuthorization(
   ) as {
     verifier?: unknown;
     installationId?: unknown;
-    callback?: unknown;
   };
-  const callback = stateOAuthCallbackUrl(
-    env.APP_URL,
-    provider,
-    stateSecret.callback,
-  );
+  const callback = oauthCallbackUrl(env.APP_URL, provider);
   if (provider === "github") {
     const pendingInstallationId = githubAuthorizationInstallationId(
       stateClaims,

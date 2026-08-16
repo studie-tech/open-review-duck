@@ -171,8 +171,8 @@ describe("a declaration this revision introduces", () => {
   });
 
   it("adds no whole-container card when a member is appended to one", () => {
-    // A container emitted at its full extent rather than as a header used to
-    // arrive alongside its own members, overlapping them.
+    // A whole-container card would overlap the member cards reviewers sign
+    // off independently.
     const units = reviewUnits({
       path: "sound.kt",
       previousContent: "enum class Sound {\n    A,\n    B,\n}\n",
@@ -233,8 +233,8 @@ describe("a declaration this revision introduces", () => {
   });
 
   it("leaves no changed line of an introduced declaration unrendered", () => {
-    // The closing brace of a new container used to belong to nothing: the
-    // shell stopped at the header and the members each held one line.
+    // The container shell and its members must cover structural lines such as
+    // the closing brace as well as declaration bodies.
     const { path, preamble, build } = containers[0] as (typeof containers)[0];
     const file: SourceFile = {
       path,

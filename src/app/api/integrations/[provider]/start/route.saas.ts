@@ -90,7 +90,7 @@ export async function POST(
     stateHash: createHash("sha256").update(state).digest("hex"),
     encryptedVerifier: await sealVaultSecret(
       { workspaceId: workspace.id, recordId: id, provider: "oauth-state" },
-      JSON.stringify({ verifier, callback }),
+      JSON.stringify({ verifier }),
     ),
     redirectPath: safeOAuthRedirectPath(body.redirectPath, env.APP_URL),
     expiresAt: new Date(Date.now() + 10 * 60_000),

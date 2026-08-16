@@ -10,9 +10,8 @@ afterEach(() => {
 /**
  * One declaration per language, each holding a line the revision removes.
  *
- * Diff scoping decides which declarations a revision touched by reading the
- * head side, and a revision that only removes lines changes nothing there, so
- * every one of these used to surface as an anonymous "Changed line 3".
+ * A deletion-only revision has no changed head-side line to scope against, so
+ * each fixture proves previous-side declaration ownership remains available.
  */
 const declarations = [
   {

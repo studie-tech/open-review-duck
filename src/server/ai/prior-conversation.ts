@@ -6,9 +6,9 @@ import { escapePromptXml } from "~/config/prompts";
 import type { db as database } from "~/server/db";
 
 type Database = typeof database;
-export const AI_PRIOR_CONVERSATION_MAX_BYTES = 64 * 1_024;
+const AI_PRIOR_CONVERSATION_MAX_BYTES = 64 * 1_024;
 
-export interface PriorConversationTurn {
+interface PriorConversationTurn {
   answer: string;
   question: string;
 }

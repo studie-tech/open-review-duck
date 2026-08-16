@@ -44,8 +44,8 @@ describe("lexicalLines", () => {
     ["0755", "java"],
     ["42", "typescript"],
   ])("classifies the literal %s as a number", (literal, language) => {
-    // A radix prefix used to be followed by decimal digits only, so a hex
-    // literal matched nothing and fell through to the operator class.
+    // Radix-prefixed literals accept the digit alphabet of their radix and
+    // remain one numeric token rather than falling through to operators.
     const tokens = tokensOf(lexicalLines(`x = ${literal};`, language));
 
     expect(tokens).toEqual(

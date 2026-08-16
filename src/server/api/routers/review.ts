@@ -108,7 +108,6 @@ import {
 } from "~/server/workflows/service";
 import {
   awaitResponseConceptSchema,
-  awaitResponseSchema,
   editReviewThreadCommentSchema,
   importTargetSchema,
   improveConceptGroupingSchema,
@@ -1109,11 +1108,8 @@ export async function deepReviewFindingForPublication(
       message: "This AI finding no longer matches the selected code",
     });
   }
-  // `review_comment` has no column for a finding id, and its uniqueness key is
-  // (aiJobId, aiFindingIndex). The run-wide `orderIndex` frozen at finalize is
-  // the one integer that identifies this finding under its parent job, so it
-  // carries the same idempotency the legacy result-array index did — and a run
-  // that has not reached finalize has nothing to carry it with yet.
+  // `review_comment` has no finding-id column. Its (aiJobId, aiFindingIndex)
+  // key therefore uses the run-wide order frozen at finalize.
   const orderIndex = finding.orderIndex;
   if (orderIndex === null) {
     throw new TRPCError({
@@ -1457,10 +1453,8 @@ async function lockConceptLayoutForReviewer(
 }
 
 /**
- * Persists a whole set of authorized sign-offs in a fixed number of round
- * trips. Every step is the set-at-a-time form of what a single sign-off used to
- * do on its own, taken in the same order, so a batch or a concept no longer
- * multiplies the work this transaction holds its advisory locks for.
+ * Persists authorized sign-offs in set-at-a-time steps so a batch or concept
+ * holds its advisory locks for a fixed number of round trips.
  */
 async function persistSignOffs(
   tx: ReviewTransaction,
@@ -3032,7 +3026,7 @@ export const reviewRouter = createTRPCRouter({
     }),
 
   awaitResponse: protectedProcedure
-    .input(awaitResponseSchema)
+    .input(reviewUnitSchema)
     .mutation(async ({ ctx, input }) => {
       await enforceRateLimit(
         ctx.db,

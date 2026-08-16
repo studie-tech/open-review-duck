@@ -318,7 +318,7 @@ export function nextAnchorableLine(
  * only anchors a comment inside a range, so the lines in those gaps offer no
  * composer rather than one that fails on publish.
  */
-export function memberCommentableLine(unit: ReviewUnit, line: number) {
+function memberCommentableLine(unit: ReviewUnit, line: number) {
   if (unit.kind === "binary") return false;
   return lineWithinReviewRanges(
     line,
@@ -699,7 +699,7 @@ export const AI_QUICK_QUESTIONS = [
 
 const AI_CONVERSATION_VISIBILITY_KEY = "reviewduck:ai-conversation-visibility";
 
-export interface AiConversationVisibility {
+interface AiConversationVisibility {
   line: number;
   threadId?: string;
 }

@@ -11,12 +11,11 @@ import {
   linesFromSpans,
   numericLiteralPattern,
   plainLines,
-  type SyntaxToken,
   type TokenSpan,
 } from "./highlight-tokens";
 import { lexicalLines } from "./lexical-highlighting";
 
-export type { HighlightedLine, SyntaxToken };
+export type { HighlightedLine };
 
 const parserLanguages = supportedLanguages.filter(
   (language): language is Exclude<SupportedLanguage, "text"> =>

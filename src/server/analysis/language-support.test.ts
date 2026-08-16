@@ -124,9 +124,8 @@ describe("declarations a grammar names in its own vocabulary", () => {
       "duck_counts",
     ],
   ])("reviews %s as a unit named after it", (_what, statement, name) => {
-    // A policy, a sequence and a materialized view are objects a reviewer
-    // signs off, and each one used to arrive as the whole statement for a
-    // name — or, before that, inside one undifferentiated file card.
+    // Each database object is an independently named unit a reviewer can sign
+    // off without accepting an undifferentiated file card.
     const units = analyzeFiles([
       { path: "schema.sql", content: `${statement}\n`, changeType: "added" },
     ]).units.filter(({ kind }) => kind !== "file");

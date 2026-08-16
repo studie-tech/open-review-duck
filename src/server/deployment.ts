@@ -7,7 +7,7 @@ import { validateDeploymentConfiguration } from "./deployment-validation.js";
 let deploymentConfigurationValidated = false;
 
 /** Returns the explicitly configured application deployment mode. */
-export function deploymentMode(): DeploymentMode {
+function deploymentMode(): DeploymentMode {
   return env.DEPLOYMENT_MODE;
 }
 

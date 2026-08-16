@@ -151,14 +151,14 @@ describe("hosted provider credential resolution", () => {
     expect(safeRemoteFetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects legacy Azure DevOps OAuth credentials", async () => {
+  it("rejects Azure DevOps OAuth credentials", async () => {
     const { providerForConnection } = await import("./credentials");
     await expect(
       providerForConnection({} as never, {
         ...connection,
         provider: "azure_devops",
         credentialKind: "oauth",
-        displayName: "Legacy Azure OAuth",
+        displayName: "Azure OAuth",
         baseUrl: "https://dev.azure.com/acme",
       }),
     ).rejects.toThrow(

@@ -1,6 +1,6 @@
 import "server-only";
 
-export interface ScipOccurrence {
+interface ScipOccurrence {
   endCharacter: number;
   endLine: number;
   path: string;

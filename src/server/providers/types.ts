@@ -44,7 +44,7 @@ export interface ChangedFilesOptions {
   maximumSourceBytes?: number;
 }
 
-export interface ProviderReviewComment {
+interface ProviderReviewComment {
   externalId: string;
   body: string;
   author: string;
@@ -63,7 +63,7 @@ export interface ProviderReviewThread {
   comments: ProviderReviewComment[];
 }
 
-export type ProviderReviewDecision =
+type ProviderReviewDecision =
   | "approved"
   | "changes_requested"
   | "waiting"

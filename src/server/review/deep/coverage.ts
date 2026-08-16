@@ -19,7 +19,7 @@ export type DeepReviewTerminalState =
   | "failed"
   | "skipped";
 
-export interface CoverageItem {
+interface CoverageItem {
   state: DeepReviewItemState;
   path?: string;
 }

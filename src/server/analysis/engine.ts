@@ -903,7 +903,7 @@ function uncoveredChangeFragments(
   return fragments;
 }
 
-/** Fails closed if a future parser regression leaves a PR line unreviewable. */
+/** Fails closed when parser output leaves a changed PR line unreviewable. */
 function assertChangedLinesCovered(
   path: string,
   side: "base" | "head",

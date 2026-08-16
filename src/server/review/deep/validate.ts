@@ -45,7 +45,7 @@ type Database = typeof database;
  * treatment — so `validateFileFindings` relocates without limit unless a
  * budget is passed in. The constant exists for callers that want the guard.
  */
-export const DEEP_REVIEW_RELOCATION_LIMIT = env.DEEP_REVIEW_RELOCATION_LIMIT;
+const DEEP_REVIEW_RELOCATION_LIMIT = env.DEEP_REVIEW_RELOCATION_LIMIT;
 
 const MAX_RELOCATE_OUTPUT_TOKENS = 1_024;
 const MAX_REFUTE_OUTPUT_TOKENS = 4_096;
@@ -53,7 +53,7 @@ const VALIDATION_TIMEOUT_MS = 120_000;
 const MAX_VERDICT_REASON_LENGTH = 1_000;
 
 /** The states validation can settle a reported finding into. */
-export type DeepReviewFindingState =
+type DeepReviewFindingState =
   | "anchored"
   | "unanchored"
   | "out_of_scope"
@@ -115,7 +115,7 @@ export interface ValidateFileFindingsInput {
   relocationBudget?: DeepReviewRelocationBudget;
 }
 
-export interface DeepReviewValidatedFinding {
+interface DeepReviewValidatedFinding {
   id: string;
   state: DeepReviewFindingState;
   verdict: RefuteVerdict;

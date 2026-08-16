@@ -6,14 +6,7 @@
       "idx": 0,
       "version": "7",
       "when": 1786620760220,
-      "tag": "0000_deep_review_baseline",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1786773599919,
-      "tag": "0001_real_genesis",
+      "tag": "0000_schema",
       "breakpoints": true
     }
   ]
