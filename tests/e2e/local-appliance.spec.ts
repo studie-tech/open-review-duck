@@ -85,7 +85,7 @@ test("bootstraps local provider setup and preserves the session across restart",
 
   await page.goto("/dashboard");
   await expect(
-    page.getByRole("heading", { name: "Good code deserves attention." }),
+    page.getByRole("heading", { name: "What needs your attention." }),
   ).toBeVisible();
   await page.goto("/settings/providers");
   await expect(
