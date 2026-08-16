@@ -22,11 +22,11 @@ import { Button } from "~/components/ui/button";
 import {
   comparePriorityInboxText,
   filterPriorityInbox,
+  type PriorityInboxItem,
+  type PriorityInboxView,
   prioritizeInbox,
   priorityInboxGroup,
   priorityInboxRepositoryKey,
-  type PriorityInboxItem,
-  type PriorityInboxView,
 } from "~/lib/priority-inbox";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { syncProgressLabel } from "~/lib/sync-progress";
