@@ -160,6 +160,25 @@ export function nextPendingReviewIndex<T extends ReviewNavigationUnit>(
   );
 }
 
+export type ReviewAvailability = "active" | "caught_up" | "complete";
+
+/** Distinguishes finished work from a review paused entirely on responses. */
+export function reviewAvailability<
+  T extends ReviewNavigationUnit & { id: string },
+>(units: T[], pausedUnitIds: ReadonlySet<string>) {
+  if (units.every(({ status }) => status === "signed_off")) {
+    return "complete" satisfies ReviewAvailability;
+  }
+  const actionable = nextPendingReviewIndex(
+    units,
+    (unit) => !pausedUnitIds.has(unit.id),
+  );
+  if (actionable < 0 && units.some(({ status }) => status === "waiting")) {
+    return "caught_up" satisfies ReviewAvailability;
+  }
+  return "active" satisfies ReviewAvailability;
+}
+
 /**
  * Prefers one actionable subset, then falls back to canonical review order.
  *

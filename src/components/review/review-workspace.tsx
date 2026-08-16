@@ -80,6 +80,7 @@ import {
   nextPendingReviewIndexPreferring,
   optimisticallySignOffReviewUnits,
   restoreReviewUnitAfterFailedSignOff,
+  reviewAvailability,
   reviewPathSearchMatches,
   reviewPathSections,
   unpublishableFindingReason,
@@ -127,6 +128,10 @@ import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
 import { ProviderCommentBody } from "./provider-comment-body";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
+import {
+  ReviewWaitingCompletion,
+  type WaitingReviewConcept,
+} from "./review-waiting-completion";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
@@ -1084,6 +1089,8 @@ export function ReviewWorkspace({
   const [reviewedExpanded, setReviewedExpanded] = useState(false);
   const [waitingLimit, setWaitingLimit] = useState(INITIAL_PATH_ITEMS);
   const [waitingExpanded, setWaitingExpanded] = useState(true);
+  const [releasingWaitingConceptId, setReleasingWaitingConceptId] =
+    useState<string>();
   const [pathPanelOpen, setPathPanelOpen] = useState(false);
   const [pathPanelCollapsed, setPathPanelCollapsed] = useState(false);
   const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
@@ -1173,6 +1180,9 @@ export function ReviewWorkspace({
     undefined,
     createSignOffQueue,
   );
+  const [pendingConceptSignOffIds, setPendingConceptSignOffIds] = useState(
+    () => new Set<string>(),
+  );
   const queuedSignOffs = useRef<QueuedSignOff[]>([]);
   const signOffDrainRunning = useRef(false);
   const utils = api.useUtils();
@@ -1202,6 +1212,10 @@ export function ReviewWorkspace({
     () =>
       activeConcept ? liveConceptStatus(activeConcept, unitsById) : undefined,
     [activeConcept, unitsById],
+  );
+  const conceptLayoutLocked = Boolean(
+    initialData.conceptLayout?.locked ||
+      units.some(({ status }) => status === "signed_off"),
   );
   const activeConceptMembers = useMemo(
     () => conceptMembersInReadingOrder(activeConceptProgress?.members ?? []),
@@ -1414,15 +1428,28 @@ export function ReviewWorkspace({
     0,
   );
   const waitingCount = units.filter((unit) => unit.status === "waiting").length;
-  const reviewComplete = signedCount === units.length;
+  const waitingConceptCount = conceptProgress.filter(
+    ({ status }) => status === "waiting",
+  ).length;
+  const pausedUnitIds = useMemo(
+    () => pausedConceptUnitIds(initialData.concepts, units),
+    [initialData.concepts, units],
+  );
+  const availability = reviewAvailability(units, pausedUnitIds);
+  const hasNextActionableUnit = availability === "active";
+  const reviewComplete = availability === "complete";
+  const reviewCaughtUp = availability === "caught_up";
   const [completionOpen, setCompletionOpen] = useState(reviewComplete);
+  const [waitingCompletionOpen, setWaitingCompletionOpen] =
+    useState(reviewCaughtUp);
   const previousReviewComplete = useRef(reviewComplete);
+  const previousReviewCaughtUp = useRef(reviewCaughtUp);
   const completedFileCount = useMemo(
     () => new Set(units.map(({ path }) => path)).size,
     [units],
   );
   const reviewQueue = api.review.dashboard.useQuery(undefined, {
-    enabled: reviewComplete,
+    enabled: reviewComplete || reviewCaughtUp,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
     staleTime: 0,
@@ -1485,18 +1512,20 @@ export function ReviewWorkspace({
     }
     previousReviewComplete.current = reviewComplete;
   }, [reviewComplete]);
+  useEffect(() => {
+    if (reviewCaughtUp && !previousReviewCaughtUp.current) {
+      setWaitingCompletionOpen(true);
+    } else if (!reviewCaughtUp) {
+      setWaitingCompletionOpen(false);
+    }
+    previousReviewCaughtUp.current = reviewCaughtUp;
+  }, [reviewCaughtUp]);
   const revisionReReviewCount = initialData.units.filter(
     ({ changedSinceSignOff }) => changedSinceSignOff,
   ).length;
   const revisionPreservedCount = initialData.units.filter(
     ({ status }) => status === "signed_off",
   ).length;
-  const pausedUnitIds = useMemo(
-    () => pausedConceptUnitIds(initialData.concepts, units),
-    [initialData.concepts, units],
-  );
-  const hasNextActionableUnit =
-    nextPendingReviewIndex(units, (unit) => !pausedUnitIds.has(unit.id)) >= 0;
   const previewHasFileContext = importPreview
     ? fileContexts.some((context) => context.path === importPreview.path)
     : false;
@@ -2267,54 +2296,7 @@ export function ReviewWorkspace({
     },
     onError: (error) => toast.error(error.message),
   });
-  const signOffConcept = api.review.signOffConcept.useMutation({
-    onMutate: ({ conceptId }) => {
-      const concept = initialData.concepts.find(({ id }) => id === conceptId);
-      const previousUnits = units;
-      if (concept) {
-        const memberIds = new Set(concept.memberIds);
-        setUnits((current) =>
-          current.map((unit) =>
-            memberIds.has(unit.id) && unit.status !== "waiting"
-              ? {
-                  ...unit,
-                  status: "signed_off" as const,
-                  changedSinceSignOff: false,
-                }
-              : unit,
-          ),
-        );
-      }
-      return { previousUnits };
-    },
-    onSuccess: ({ signedUnitIds }) => {
-      void Promise.all([
-        utils.workspace.guidance.invalidate(),
-        utils.review.dashboard.invalidate(),
-        utils.review.gamification.invalidate(),
-      ]);
-      setStartedAt(Date.now());
-      router.refresh();
-      toast.success("Review concept signed off", {
-        description: `${signedUnitIds.length} atomic ${signedUnitIds.length === 1 ? "unit" : "units"} recorded together.`,
-      });
-      window.requestAnimationFrame(() => {
-        const paused = pausedConceptUnitIds(initialData.concepts, units);
-        const next = units.findIndex(
-          (unit) =>
-            !signedUnitIds.includes(unit.id) &&
-            unit.status !== "signed_off" &&
-            unit.status !== "waiting" &&
-            !paused.has(unit.id),
-        );
-        if (next >= 0) selectUnit(next);
-      });
-    },
-    onError: (error, _variables, context) => {
-      if (context?.previousUnits) setUnits(context.previousUnits);
-      toast.error(error.message);
-    },
-  });
+  const signOffConcept = api.review.signOffConcept.useMutation();
   const undoConcept = api.review.unreviewConcept.useMutation({
     onSuccess: ({ unreviewed, unitIds }) => {
       if (!unreviewed) return;
@@ -2729,6 +2711,55 @@ export function ReviewWorkspace({
     setRevisionNotice(undefined);
   }
 
+  const waitingReviewConcepts = useMemo(() => {
+    const threads = providerConversations.data?.threads ?? [];
+    return conceptProgress.flatMap(
+      ({ concept, members, status }): WaitingReviewConcept[] => {
+        if (status !== "waiting") return [];
+        const memberIds = new Set(members.map(({ id }) => id));
+        const conceptThreads = threads.filter((thread) =>
+          memberIds.has(thread.unitId),
+        );
+        const latestComment = [
+          ...conceptThreads.flatMap(({ comments }) => comments),
+        ].sort(
+          (left, right) =>
+            new Date(right.createdAt).getTime() -
+            new Date(left.createdAt).getTime(),
+        )[0];
+        const waitingSince = [
+          ...members.flatMap((member) =>
+            member.status === "waiting" && member.waitingSince
+              ? [member.waitingSince]
+              : [],
+          ),
+        ].sort((left, right) => left.getTime() - right.getTime())[0];
+        return [
+          {
+            commentCount: conceptThreads.reduce(
+              (total, { comments }) => total + comments.length,
+              0,
+            ),
+            id: concept.id,
+            latestComment: latestComment
+              ? {
+                  author: latestComment.author,
+                  body: latestComment.body.replace(/\s+/g, " ").trim(),
+                }
+              : undefined,
+            paths: [...new Set(members.map(({ path }) => path))],
+            threadCount: conceptThreads.length,
+            title: concept.title,
+            unitIds: members
+              .filter(({ status: memberStatus }) => memberStatus === "waiting")
+              .map(({ id }) => id),
+            waitingSince: waitingSince ?? null,
+          },
+        ];
+      },
+    );
+  }, [conceptProgress, providerConversations.data?.threads]);
+
   const activeProviderThreads =
     providerConversations.data?.threads.filter(
       (thread) => thread.unitId === activeUnit?.id,
@@ -2860,6 +2891,7 @@ export function ReviewWorkspace({
       });
     },
     onError: (error) => toast.error(error.message),
+    onSettled: () => setReleasingWaitingConceptId(undefined),
   });
   const publishComment = api.review.publishComment.useMutation({
     onSuccess: () => {
@@ -3680,8 +3712,11 @@ export function ReviewWorkspace({
     [],
   );
   const nextQueueEntry = pathSections.upcoming[0];
+  const activeConceptSignOffPending = Boolean(
+    activeConcept && pendingConceptSignOffIds.has(activeConcept.id),
+  );
   const activeSignOffPending = activeUnit
-    ? signOffQueue.ids.has(activeUnit.id) || signOffConcept.isPending
+    ? signOffQueue.ids.has(activeUnit.id) || activeConceptSignOffPending
     : false;
   const activeConceptSourcesAvailable = activeConceptMembers.every((unit) =>
     initialData.sourceDelivery === "direct"
@@ -3701,8 +3736,13 @@ export function ReviewWorkspace({
         : true,
     ) &&
     !resetReview.isPending;
-  const pendingSignOffCount = signOffQueue.ids.size;
+  const pendingSignOffCount =
+    signOffQueue.ids.size + pendingConceptSignOffIds.size;
   const signOffQueueProgress = `${signOffQueue.completed}/${signOffQueue.total}`;
+  const backgroundSaveProgress =
+    pendingConceptSignOffIds.size > 0
+      ? `${pendingSignOffCount} pending`
+      : signOffQueueProgress;
   const footerSaveState = reviewFooterSaveState({
     activeSavePending: activeSignOffPending,
     pendingSaveCount: pendingSignOffCount,
@@ -3710,23 +3750,26 @@ export function ReviewWorkspace({
   });
   const completionVisible =
     reviewComplete && completionOpen && footerSaveState === "idle";
+  const waitingCompletionVisible =
+    reviewCaughtUp && waitingCompletionOpen && footerSaveState === "idle";
   const openDashboard = useCallback(() => router.push("/dashboard"), [router]);
   const openNextReview = useCallback(() => {
     if (nextReview) router.push(`/review/${nextReview.id}`);
   }, [nextReview, router]);
   useEffect(() => {
-    if (!completionVisible) return;
+    if (!completionVisible && !waitingCompletionVisible) return;
 
-    /** Dismisses the completion state while preserving the completed review. */
-    function dismissCompletion(event: KeyboardEvent) {
+    /** Dismisses either end state while preserving the review beneath it. */
+    function dismissEndState(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setCompletionOpen(false);
+      if (completionVisible) setCompletionOpen(false);
+      if (waitingCompletionVisible) setWaitingCompletionOpen(false);
     }
 
-    document.addEventListener("keydown", dismissCompletion);
-    return () => document.removeEventListener("keydown", dismissCompletion);
-  }, [completionVisible]);
+    document.addEventListener("keydown", dismissEndState);
+    return () => document.removeEventListener("keydown", dismissEndState);
+  }, [completionVisible, waitingCompletionVisible]);
   const canUseAi =
     aiConfiguration.data?.mode !== "off" &&
     !explanationRunning &&
@@ -3791,10 +3834,9 @@ export function ReviewWorkspace({
         !undoConcept.isPending &&
         !awaitPending &&
         !resetReview.isPending &&
-        // Read off the concept, not the open card: a member left pending
-        // inside a waiting concept cannot be signed off either, so offering
-        // the action on it only produces a keypress that goes nowhere.
-        (activeWaitStatus !== "waiting" || hasNextActionableUnit)
+        // Continue only exists when it has somewhere actionable to go. Waiting
+        // concepts belong to the caught-up state instead of a no-op button.
+        hasNextActionableUnit
       : onLastConceptMember
         ? canSignOffConcept
         : canSignOffUnit;
@@ -3811,7 +3853,7 @@ export function ReviewWorkspace({
       : conceptActionAvailable
         ? "Sign off unit"
         : "Sign off";
-  const primaryActionLabel = signOffConcept.isPending
+  const primaryActionLabel = activeConceptSignOffPending
     ? "Saving concept…"
     : activeSignOffPending
       ? `Saving ${signOffQueueProgress}…`
@@ -3858,7 +3900,7 @@ export function ReviewWorkspace({
     // waits for the save it would otherwise race: the queue drains unit
     // sign-offs, and a concept sign-off is one request of its own.
     signOffQueue.ids.size === 0 &&
-    !signOffConcept.isPending &&
+    pendingConceptSignOffIds.size === 0 &&
     !undoSignOff.isPending &&
     !undoConcept.isPending &&
     !resetReview.isPending;
@@ -4265,7 +4307,7 @@ export function ReviewWorkspace({
       activeConcept.memberIds.length < 2 ||
       !initialData.snapshot ||
       !initialData.conceptLayout ||
-      initialData.conceptLayout.locked
+      conceptLayoutLocked
     ) {
       return;
     }
@@ -4303,7 +4345,7 @@ export function ReviewWorkspace({
       initialData.concepts.length < 2 ||
       !initialData.snapshot ||
       !initialData.conceptLayout ||
-      initialData.conceptLayout.locked
+      conceptLayoutLocked
     ) {
       return;
     }
@@ -4392,24 +4434,82 @@ export function ReviewWorkspace({
     if (!canSignOffConcept || !activeConcept || !initialData.conceptLayout) {
       return;
     }
+    const concept = activeConcept;
+    const layout = initialData.conceptLayout;
+    const previousMembers = units.filter((unit) =>
+      concept.memberIds.includes(unit.id),
+    );
+    const view = reviewViewSnapshot({ unitIndex: activeIndex });
+    const updated = optimisticallySignOffReviewUnits(units, concept.memberIds);
+    const nextIndex = nextReviewIndexAfterAction(updated);
     setSignOffUndoHistory((history) =>
       rememberSignOff(history, {
         kind: "concept",
-        conceptId: activeConcept.id,
-        label: activeConcept.title,
-        layoutId: initialData.conceptLayout?.id ?? "",
-        layoutVersion: initialData.conceptLayout?.version ?? 0,
-        unitIds: activeConcept.memberIds,
-        view: reviewViewSnapshot({ unitIndex: activeIndex }),
+        conceptId: concept.id,
+        label: concept.title,
+        layoutId: layout.id,
+        layoutVersion: layout.version,
+        unitIds: concept.memberIds,
+        view,
       }),
     );
-    signOffConcept.mutate({
-      conceptId: activeConcept.id,
-      layoutId: initialData.conceptLayout.id,
-      layoutVersion: initialData.conceptLayout.version,
-      sessionId,
-      durationSeconds: Math.round((Date.now() - startedAt) / 1000),
-    });
+    setPendingConceptSignOffIds((current) => new Set(current).add(concept.id));
+    setUnits(updated);
+    if (nextIndex >= 0) setActiveIndex(nextIndex);
+    setQueueLimit(INITIAL_PATH_ITEMS);
+    setShowDiff(true);
+    setContextBefore(0);
+    setContextAfter(0);
+    codeScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    setStartedAt(Date.now());
+
+    void signOffConcept
+      .mutateAsync({
+        conceptId: concept.id,
+        layoutId: layout.id,
+        layoutVersion: layout.version,
+        sessionId,
+        durationSeconds: Math.round((Date.now() - startedAt) / 1000),
+      })
+      .then(({ signedUnitIds }) => {
+        void Promise.all([
+          utils.workspace.guidance.invalidate(),
+          utils.review.dashboard.invalidate(),
+          utils.review.gamification.invalidate(),
+        ]);
+        toast.success("Review concept signed off", {
+          description: `${signedUnitIds.length} atomic ${signedUnitIds.length === 1 ? "unit" : "units"} recorded together.`,
+        });
+      })
+      .catch((error: Error) => {
+        setUnits((current) =>
+          previousMembers.reduce(
+            (restored, original) =>
+              restoreReviewUnitAfterFailedSignOff(restored, original),
+            current,
+          ),
+        );
+        setSignOffUndoHistory((history) => {
+          const index = history.findIndex(
+            (entry) =>
+              entry.kind === "concept" && entry.conceptId === concept.id,
+          );
+          return index < 0
+            ? history
+            : history.filter((_entry, entryIndex) => entryIndex !== index);
+        });
+        restoreReviewView(view, concept.memberIds);
+        toast.error("Concept sign-off was not saved", {
+          description: `Returned to ${concept.title}. ${error.message}`,
+        });
+      })
+      .finally(() => {
+        setPendingConceptSignOffIds((current) => {
+          const pending = new Set(current);
+          pending.delete(concept.id);
+          return pending;
+        });
+      });
   }
 
   /** Captures where the reviewer is, so undoing a sign-off can return there. */
@@ -4567,6 +4667,26 @@ export function ReviewWorkspace({
   function stopWaitingOnActive() {
     if (!canStopWaiting) return;
     releaseReviewWaits.mutate({ unitIds: heldWaitUnitIds });
+  }
+
+  /** Opens the first held member of a concept selected from the waiting room. */
+  function openWaitingConcept(conceptId: string) {
+    const concept = waitingReviewConcepts.find(({ id }) => id === conceptId);
+    const unitId = concept?.unitIds[0];
+    const index = unitId ? (unitIndexById.get(unitId) ?? -1) : -1;
+    if (index < 0) return;
+    setWaitingCompletionOpen(false);
+    setWaitingExpanded(true);
+    selectUnit(index);
+  }
+
+  /** Returns one waiting-room concept to the actionable review path. */
+  function stopWaitingOnConcept(conceptId: string) {
+    if (releaseReviewWaits.isPending) return;
+    const concept = waitingReviewConcepts.find(({ id }) => id === conceptId);
+    if (!concept || concept.unitIds.length === 0) return;
+    setReleasingWaitingConceptId(conceptId);
+    releaseReviewWaits.mutate({ unitIds: concept.unitIds });
   }
 
   /** Returns the active signed-off unit to the pending review queue. */
@@ -5372,23 +5492,33 @@ export function ReviewWorkspace({
       id: "primary-review-action",
       // The same scope the footer advertises, because this entry carries the
       // same key: on the last member owed that key commits the concept.
-      label: primaryIsContinue
-        ? filteredReviewActive
-          ? "Continue to next match"
-          : "Continue review"
-        : primaryScopeLabel,
-      description: primaryIsContinue
-        ? filteredReviewActive
-          ? "Continue through the matching review units in planned order"
-          : "Open the next unit that still needs review"
-        : onLastConceptMember
-          ? "Record the last unit this concept is owed, finishing it"
-          : "Remember this unit at the current revision and open the next one",
+      label: reviewCaughtUp
+        ? `View ${waitingConceptCount} waiting ${waitingConceptCount === 1 ? "concept" : "concepts"}`
+        : primaryIsContinue
+          ? filteredReviewActive
+            ? "Continue to next match"
+            : "Continue review"
+          : primaryScopeLabel,
+      description: reviewCaughtUp
+        ? "See what must receive a reply or code change before this review can finish"
+        : primaryIsContinue
+          ? filteredReviewActive
+            ? "Continue through the matching review units in planned order"
+            : "Open the next unit that still needs review"
+          : onLastConceptMember
+            ? "Record the last unit this concept is owed, finishing it"
+            : "Remember this unit at the current revision and open the next one",
       group: "Review actions",
-      icon: <Check className="size-4" />,
-      shortcut: reviewShortcuts.signOff,
-      disabled: !canUsePrimaryAction,
-      onSelect: runPrimaryAction,
+      icon: reviewCaughtUp ? (
+        <Clock3 className="size-4" />
+      ) : (
+        <Check className="size-4" />
+      ),
+      shortcut: reviewCaughtUp ? undefined : reviewShortcuts.signOff,
+      disabled: reviewCaughtUp ? false : !canUsePrimaryAction,
+      onSelect: reviewCaughtUp
+        ? () => setWaitingCompletionOpen(true)
+        : runPrimaryAction,
     },
     {
       id: "sign-off-concept",
@@ -5483,6 +5613,7 @@ export function ReviewWorkspace({
       shortcut: reviewShortcuts.reset,
       disabled:
         signOffQueue.ids.size > 0 ||
+        pendingConceptSignOffIds.size > 0 ||
         externalSyncPending ||
         resetReview.isPending,
       onSelect: () => setResetDialogOpen(true),
@@ -6256,6 +6387,22 @@ export function ReviewWorkspace({
         </aside>
 
         <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
+          {waitingCompletionVisible && (
+            <ReviewWaitingCompletion
+              concepts={waitingReviewConcepts}
+              nextReview={nextReview}
+              providerName={providerLabel(initialData.pullRequest.provider)}
+              queueLoading={reviewQueue.isLoading}
+              releasingConceptId={releasingWaitingConceptId}
+              reviewedConcepts={signedConceptCount}
+              totalConcepts={conceptProgress.length}
+              onDashboard={openDashboard}
+              onDismiss={() => setWaitingCompletionOpen(false)}
+              onNextReview={openNextReview}
+              onOpenConcept={openWaitingConcept}
+              onStopWaiting={stopWaitingOnConcept}
+            />
+          )}
           {completionVisible && (
             <ReviewCompletion
               completedFiles={completedFileCount}
@@ -6371,41 +6518,40 @@ export function ReviewWorkspace({
                   <span className="hidden lg:inline">Loading source…</span>
                 </span>
               )}
+              {initialData.conceptLayout && !conceptLayoutLocked && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    improveConceptGrouping.mutate({
+                      pullRequestId: initialData.pullRequest.id,
+                      layoutId: initialData.conceptLayout?.id ?? "",
+                      layoutVersion: initialData.conceptLayout?.version ?? 1,
+                    })
+                  }
+                  disabled={
+                    improveConceptGrouping.isPending ||
+                    replaceConceptLayout.isPending
+                  }
+                  className="text-violet hover:bg-violet/[.06] flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-violet/20 px-2.5 text-[10px] transition disabled:cursor-wait disabled:opacity-60"
+                  title="Use the configured AI provider to create a personal intent-based grouping"
+                >
+                  {improveConceptGrouping.isPending ||
+                  replaceConceptLayout.isPending ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
+                  )}
+                  <span className="hidden lg:inline">
+                    {improveConceptGrouping.isPending
+                      ? "Improving grouping…"
+                      : replaceConceptLayout.isPending
+                        ? "Applying grouping…"
+                        : "Improve grouping with AI"}
+                  </span>
+                </button>
+              )}
               {initialData.conceptLayout &&
-                !initialData.conceptLayout.locked && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      improveConceptGrouping.mutate({
-                        pullRequestId: initialData.pullRequest.id,
-                        layoutId: initialData.conceptLayout?.id ?? "",
-                        layoutVersion: initialData.conceptLayout?.version ?? 1,
-                      })
-                    }
-                    disabled={
-                      improveConceptGrouping.isPending ||
-                      replaceConceptLayout.isPending
-                    }
-                    className="text-violet hover:bg-violet/[.06] flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-violet/20 px-2.5 text-[10px] transition disabled:cursor-wait disabled:opacity-60"
-                    title="Use the configured AI provider to create a personal intent-based grouping"
-                  >
-                    {improveConceptGrouping.isPending ||
-                    replaceConceptLayout.isPending ? (
-                      <LoaderCircle className="size-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="size-3.5" />
-                    )}
-                    <span className="hidden lg:inline">
-                      {improveConceptGrouping.isPending
-                        ? "Improving grouping…"
-                        : replaceConceptLayout.isPending
-                          ? "Applying grouping…"
-                          : "Improve grouping with AI"}
-                    </span>
-                  </button>
-                )}
-              {initialData.conceptLayout &&
-                !initialData.conceptLayout.locked &&
+                !conceptLayoutLocked &&
                 activeConceptMembers.length > 1 && (
                   <button
                     type="button"
@@ -6418,7 +6564,7 @@ export function ReviewWorkspace({
                   </button>
                 )}
               {initialData.conceptLayout &&
-                !initialData.conceptLayout.locked &&
+                !conceptLayoutLocked &&
                 initialData.concepts.length > 1 && (
                   <button
                     type="button"
@@ -6630,10 +6776,19 @@ export function ReviewWorkspace({
             )}
             {activeSourceHydrationPending && !activeSourceAvailable && (
               <div
-                className="text-mist grid min-h-72 place-items-center font-sans text-sm"
+                className="mx-4 min-h-72 animate-pulse rounded-b-xl border-x border-b border-line bg-surface/10 px-5 py-6 font-sans"
                 aria-live="polite"
               >
-                Loading and verifying private source…
+                <span className="sr-only">
+                  Loading and verifying private source…
+                </span>
+                <div aria-hidden="true" className="space-y-3">
+                  <div className="bg-line-strong h-2 w-2/5 rounded-full" />
+                  <div className="bg-line h-2 w-4/5 rounded-full" />
+                  <div className="bg-line h-2 w-3/5 rounded-full" />
+                  <div className="bg-line h-2 w-11/12 rounded-full" />
+                  <div className="bg-line h-2 w-2/3 rounded-full" />
+                </div>
               </div>
             )}
             {!activeSourceHydrationPending && !activeSourceAvailable && (
@@ -6966,6 +7121,14 @@ export function ReviewWorkspace({
                   <CheckCheck className="size-3.5" />
                   All {signedCount} units reviewed
                 </span>
+              ) : reviewCaughtUp ? (
+                <span
+                  role="status"
+                  className="text-cyan flex items-center gap-2 whitespace-nowrap"
+                >
+                  <Clock3 className="size-3.5" />
+                  All available work reviewed · {waitingConceptCount} waiting
+                </span>
               ) : (
                 <span className="hidden items-center gap-3 xl:flex">
                   <span className="flex items-center gap-1.5 whitespace-nowrap">
@@ -6995,13 +7158,13 @@ export function ReviewWorkspace({
             {footerSaveState === "background" && (
               <span
                 role="status"
-                aria-label={`Saving reviews, ${signOffQueue.completed} of ${signOffQueue.total} complete`}
+                aria-label={`Saving reviews, ${backgroundSaveProgress}`}
                 className="border-line-strong bg-surface text-mist flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 text-[10px] shadow-[0_8px_24px_var(--app-shadow)] sm:h-10 sm:px-3"
               >
                 <LoaderCircle className="size-3 animate-spin" />
                 <span className="hidden sm:inline">Saving</span>
                 <span className="font-mono text-cloud">
-                  {signOffQueueProgress}
+                  {backgroundSaveProgress}
                 </span>
               </span>
             )}
@@ -7009,10 +7172,10 @@ export function ReviewWorkspace({
               <Button
                 className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
                 disabled
-                aria-label={`Finishing review, ${signOffQueue.completed} of ${signOffQueue.total} saves complete`}
+                aria-label={`Finishing review, ${backgroundSaveProgress}`}
               >
                 <LoaderCircle className="size-4 animate-spin" />
-                Finishing {signOffQueueProgress}…
+                Finishing {backgroundSaveProgress}…
               </Button>
             ) : reviewComplete ? (
               <div className="flex min-w-0 items-center justify-end gap-2">
@@ -7087,6 +7250,56 @@ export function ReviewWorkspace({
                       shortcut={reviewShortcuts.dashboard}
                       className="hidden sm:inline-flex"
                     />
+                  </Button>
+                )}
+              </div>
+            ) : reviewCaughtUp ? (
+              <div className="flex min-w-0 items-center justify-end gap-2">
+                {activeWaitStatus === "waiting" && (
+                  <Button
+                    variant="secondary"
+                    className="h-10 px-3 sm:h-11 sm:px-4"
+                    onClick={stopWaitingOnActive}
+                    disabled={!canStopWaiting}
+                  >
+                    {releaseReviewWaits.isPending ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <Clock3 className="size-4" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {releaseReviewWaits.isPending
+                        ? "Resuming…"
+                        : "Stop waiting"}
+                    </span>
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  className="h-10 px-3 sm:h-11 sm:px-4"
+                  onClick={() => setWaitingCompletionOpen(true)}
+                >
+                  <Clock3 className="size-4 text-cyan" />
+                  <span className="hidden sm:inline">
+                    View {waitingConceptCount} waiting
+                  </span>
+                  <span className="sm:hidden">Waiting</span>
+                </Button>
+                {nextReview ? (
+                  <Button
+                    className="h-10 px-3 sm:h-11 sm:px-5"
+                    onClick={openNextReview}
+                  >
+                    Next review
+                    <ChevronRight className="size-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    className="h-10 px-3 sm:h-11 sm:px-5"
+                    onClick={openDashboard}
+                  >
+                    <ArrowLeft className="size-4" />
+                    Dashboard
                   </Button>
                 )}
               </div>
@@ -7251,7 +7464,7 @@ export function ReviewWorkspace({
                     </Button>
                   ))
                 )}
-                {(activeWaitStatus !== "waiting" || hasNextActionableUnit) &&
+                {(!primaryIsContinue || hasNextActionableUnit) &&
                   (conceptActionAvailable && !primaryIsContinue ? (
                     <SplitActionButton
                       icon={<Check className="size-4" />}
@@ -7260,7 +7473,7 @@ export function ReviewWorkspace({
                         activeSignOffPending ? signOffQueueProgress : "Sign off"
                       }
                       menuLabel="Choose what to sign off"
-                      pending={signOffConcept.isPending || activeSignOffPending}
+                      pending={activeSignOffPending}
                       primary={{
                         disabled: !canUsePrimaryAction,
                         label: primaryActionLabel,
