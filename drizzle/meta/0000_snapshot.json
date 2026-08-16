@@ -1,5 +1,5 @@
 {
-  "id": "e9cceb36-b7b6-4742-8ee5-42b158e9d689",
+  "id": "f8815fa0-bdc2-4e27-9720-4a3893406139",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -3836,6 +3836,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "providerCommentExternalId": {
+          "name": "providerCommentExternalId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "publicationLeaseToken": {
           "name": "publicationLeaseToken",
           "type": "uuid",
@@ -3881,6 +3887,27 @@
             },
             {
               "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "review_comment_provider_comment_idx": {
+          "name": "review_comment_provider_comment_idx",
+          "columns": [
+            {
+              "expression": "unitId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "providerCommentExternalId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

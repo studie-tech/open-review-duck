@@ -79,8 +79,7 @@ export const DEEP_REVIEW_FILE_MAX_TURNS = env.DEEP_REVIEW_FILE_MAX_TURNS;
  * plan over a three-line change has nothing to rank, and its output is noise
  * the scout then has to discount.
  */
-export const DEEP_REVIEW_PLAN_LINE_THRESHOLD =
-  env.DEEP_REVIEW_PLAN_LINE_THRESHOLD;
+const DEEP_REVIEW_PLAN_LINE_THRESHOLD = env.DEEP_REVIEW_PLAN_LINE_THRESHOLD;
 
 /**
  * Concurrent tool bodies per file scout.
@@ -89,7 +88,7 @@ export const DEEP_REVIEW_PLAN_LINE_THRESHOLD =
  * connection pool. A fan-out multiplies this by the number of files in flight,
  * so the child path runs narrower until `DATABASE_POOL_MAX` is measured.
  */
-export const DEEP_REVIEW_TOOL_SLOTS = env.DEEP_REVIEW_TOOL_SLOTS;
+const DEEP_REVIEW_TOOL_SLOTS = env.DEEP_REVIEW_TOOL_SLOTS;
 
 /** How many times one turn may retry a purely transport-level failure. */
 const DEEP_REVIEW_PROVIDER_ATTEMPTS = 3;
@@ -117,14 +116,14 @@ const planResponseSchema = z.object({
     .max(64),
 });
 
-export interface DeepReviewRunLimits {
+interface DeepReviewRunLimits {
   maxToolCalls: number;
   maxSourceBytes: number;
   maxDurationMs: number;
 }
 
 /** What the whole review tree has spent, not what one child has spent. */
-export interface DeepReviewRunUsage {
+interface DeepReviewRunUsage {
   toolCalls: number;
   sourceBytes: number;
   consumedTokens: number;
@@ -448,7 +447,7 @@ async function accumulateUsage(db: Database, jobId: string, usage: TokenUsage) {
  * one by the width of the run. The aggregate is over the children because the
  * parent makes no model calls and reads no source of its own.
  */
-export async function readDeepReviewRunUsage(
+async function readDeepReviewRunUsage(
   db: Database,
   parentJobId: string,
 ): Promise<DeepReviewRunUsage> {

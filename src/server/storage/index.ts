@@ -30,4 +30,4 @@ export async function sourceObjectStore(): Promise<SourceObjectStore> {
   return sourceStore;
 }
 
-export type { SourceObjectStore, StoredObject } from "./types";
+export type { SourceObjectStore } from "./types";

@@ -1,12 +1,3 @@
-export interface TokenUsage {
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-}
-
 /** Formats a token count as a compact, human-readable value. */
 export function formatTokenCount(tokens: number) {
   if (tokens < 1_000) return tokens.toLocaleString("en-US");

@@ -1,4 +1,4 @@
-export interface SessionTokenOptions {
+interface SessionTokenOptions {
   skipCache?: boolean;
 }
 

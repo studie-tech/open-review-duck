@@ -1,4 +1,4 @@
-export const MAX_ACTIVE_AUTOMATIC_SYNCS_PER_REPOSITORY = 1;
+const MAX_ACTIVE_AUTOMATIC_SYNCS_PER_REPOSITORY = 1;
 
 /** Returns the remaining automatic synchronization capacity for one repository. */
 export function automaticSyncSlots(activeSyncs: number) {

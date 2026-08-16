@@ -59,7 +59,6 @@ COPY --from=build --chown=reviewduck:reviewduck /app/.next/static ./.next/static
 COPY --from=build --chown=reviewduck:reviewduck /app/public ./public
 COPY --from=build --chown=reviewduck:reviewduck /app/drizzle ./drizzle
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/migrate.mjs ./scripts/migrate.mjs
-COPY --from=build --chown=reviewduck:reviewduck /app/scripts/upgrade-legacy-database.mjs ./scripts/upgrade-legacy-database.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/latest-migration-hash.mjs ./scripts/latest-migration-hash.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/setup-workflow.mjs ./scripts/setup-workflow.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-bootstrap.mjs ./scripts/local-bootstrap.mjs

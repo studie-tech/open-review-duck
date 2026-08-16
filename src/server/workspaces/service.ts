@@ -74,7 +74,4 @@ export async function ensurePersonalWorkspace(db: Database, userId: string) {
   });
 }
 
-export {
-  requireWorkspaceAdministrator,
-  requireWorkspaceMembership,
-} from "./access";
+export { requireWorkspaceAdministrator } from "./access";

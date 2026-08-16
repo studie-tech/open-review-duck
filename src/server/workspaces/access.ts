@@ -6,7 +6,7 @@ import type { db as database } from "~/server/db";
 type Database = typeof database;
 
 /** Loads a workspace only when the user is an active member. */
-export async function requireWorkspaceMembership(
+async function requireWorkspaceMembership(
   db: Database,
   workspaceId: string,
   userId: string,

@@ -37,7 +37,7 @@ type ReviewParentJob = typeof aiJobs.$inferSelect;
 const DEFAULT_MAX_SOURCE_BYTES = 2 << 20;
 
 /** The parent columns a child job copies instead of re-resolving. */
-export type ReviewChildJobParent = Pick<
+type ReviewChildJobParent = Pick<
   ReviewParentJob,
   | "id"
   | "workspaceId"
@@ -49,7 +49,7 @@ export type ReviewChildJobParent = Pick<
   | "agentVersion"
 >;
 
-export interface CreateReviewChildJobInput {
+interface CreateReviewChildJobInput {
   parent: ReviewChildJobParent;
   kind: "review_file" | "review_survey";
   ruleConfigDigest: string;
@@ -66,7 +66,7 @@ export interface ReviewItemFingerprintInput {
   ruleConfigDigest: string;
 }
 
-export interface SealedReviewItem {
+interface SealedReviewItem {
   itemId: string;
   path: string;
   changeType: string;
@@ -116,7 +116,7 @@ interface WaivedPlanFile {
  * the newest snapshot by version and a re-sync mid-run would otherwise split
  * one review across two revisions.
  */
-export async function createReviewChildJob(
+async function createReviewChildJob(
   tx: Transaction,
   input: CreateReviewChildJobInput,
 ) {

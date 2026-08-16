@@ -165,9 +165,8 @@ describe("data documents", () => {
   it.each(dataDocuments)(
     "keeps a $language file whole when a revision only removes lines",
     ({ path, content }) => {
-      // A deletion leaves no changed line on the current side, which is the
-      // side diff scoping reads, so the file used to fall apart into anonymous
-      // "Changed line 3" fragments precisely when nothing replaced the text.
+      // Deletion-only documents need previous-side scope because the current
+      // side has no changed line to associate with the document unit.
       const lines = content.split("\n");
       const shortened = lines.filter((_, index) => index !== 2).join("\n");
       const units = reviewUnits([

@@ -207,7 +207,7 @@ const findingSeverityStyle: Record<string, string> = {
 // The index gives one finding three pixels of colour and nothing else, so in
 // that column colour may only ever mean severity. Reusing the pill palette
 // would tint the rail with the pill's border and background too.
-export const findingSeverityRail: Record<string, string> = {
+const findingSeverityRail: Record<string, string> = {
   critical: "bg-red-500 dark:bg-red-400",
   high: "bg-amber-500 dark:bg-amber-400",
   medium: "bg-cyan/70",
@@ -476,7 +476,7 @@ export function DeepReviewFindingRow({
 }
 
 /** Renders a collapsed pill for a finding that accuses this source line. */
-export function DeepReviewFindingChip({
+function DeepReviewFindingChip({
   finding,
   onOpen,
   published,

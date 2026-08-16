@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { verify } from "@node-rs/argon2";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { repositories, semanticUploadCredentials } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { enforceRateLimit } from "~/server/security/rate-limit";
@@ -10,7 +10,6 @@ import { enforceRateLimit } from "~/server/security/rate-limit";
 type Database = typeof database;
 const CREDENTIAL_TOKEN =
   /^(?<id>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.[A-Za-z0-9_-]{32,}$/i;
-const LEGACY_CREDENTIAL_TOKEN = /^[A-Za-z0-9_-]{64}$/;
 
 /** Creates a lookup-addressable bearer token while keeping its secret random. */
 export function newSemanticUploadCredential() {
@@ -18,7 +17,7 @@ export function newSemanticUploadCredential() {
   return { id, token: `${id}.${randomBytes(48).toString("base64url")}` };
 }
 
-/** Resolves and verifies one repository credential, with a legacy-token fallback. */
+/** Resolves and verifies one repository credential. */
 export async function authorizeSemanticUploadCredential(
   db: Database,
   repositoryId: string,
@@ -30,19 +29,9 @@ export async function authorizeSemanticUploadCredential(
   });
   if (!repository) return undefined;
   const credentialId = CREDENTIAL_TOKEN.exec(token)?.groups?.id;
-  if (!credentialId && !LEGACY_CREDENTIAL_TOKEN.test(token)) {
-    return undefined;
-  }
-  if (!credentialId) {
-    await enforceRateLimit(
-      db,
-      `scip-upload-legacy:${repositoryId}`,
-      10,
-      60_000,
-    );
-  }
+  if (!credentialId) return undefined;
   await enforceRateLimit(db, `scip-upload:${repositoryId}`, 30, 60_000);
-  const credentials = await db
+  const [credential] = await db
     .select({
       id: semanticUploadCredentials.id,
       tokenHash: semanticUploadCredentials.tokenHash,
@@ -58,15 +47,10 @@ export async function authorizeSemanticUploadCredential(
       and(
         eq(semanticUploadCredentials.repositoryId, repositoryId),
         isNull(semanticUploadCredentials.revokedAt),
-        credentialId
-          ? eq(semanticUploadCredentials.id, credentialId)
-          : undefined,
+        eq(semanticUploadCredentials.id, credentialId),
       ),
     )
-    .orderBy(desc(semanticUploadCredentials.createdAt))
-    .limit(credentialId ? 1 : 20);
-  for (const credential of credentials) {
-    if (await verify(credential.tokenHash, token)) return credential;
-  }
-  return undefined;
+    .limit(1);
+  if (!credential || !(await verify(credential.tokenHash, token))) return;
+  return credential;
 }

@@ -106,8 +106,6 @@ export const improveConceptGroupingSchema = z.object({
   layoutVersion: z.number().int().positive(),
 });
 
-export const awaitResponseSchema = reviewUnitSchema;
-
 export const awaitResponseConceptSchema = signOffConceptSchema.pick({
   conceptId: true,
   layoutId: true,

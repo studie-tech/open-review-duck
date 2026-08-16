@@ -46,7 +46,7 @@ export interface DeepReviewRunFailure {
 }
 
 /** A budget stop that halted dispatch while the run itself stayed healthy. */
-export interface DeepReviewBudgetStop {
+interface DeepReviewBudgetStop {
   cause?: unknown;
 }
 
@@ -257,7 +257,7 @@ export function deepReviewCompletionReason(
 }
 
 /** States what the run covered, in wording that never varies on a replay. */
-export function deepReviewSummary(input: {
+function deepReviewSummary(input: {
   terminalState: DeepReviewTerminalState;
   coverage: DeepReviewCoverage;
   findingCount: number;

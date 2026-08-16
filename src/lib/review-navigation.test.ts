@@ -117,9 +117,8 @@ describe("nextPendingReviewIndexPreferring", () => {
   });
 
   it("keeps a ruled-out unit ruled out when the preferred subset is empty", () => {
-    // The fallback used to drop the caller's filter, which handed back the
-    // very unit the caller had excluded — for a paused concept, the one the
-    // reviewer was standing on.
+    // The fallback must retain the caller's filter so a paused concept cannot
+    // hand back the unit the reviewer is already standing on.
     const units = [
       { id: "paused", changeType: "modified", status: "pending" as const },
       { id: "open", changeType: "deleted", status: "pending" as const },

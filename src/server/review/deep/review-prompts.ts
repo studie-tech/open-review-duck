@@ -59,7 +59,7 @@ export interface RelocatePromptInput {
   changedSource: string;
 }
 
-export interface RefutePromptFinding {
+interface RefutePromptFinding {
   id: string;
   content: string;
   existingCode: string;
@@ -72,13 +72,13 @@ export interface RefutePromptInput {
   previousSource: string | null;
 }
 
-export interface SurveyPromptFile {
+interface SurveyPromptFile {
   path: string;
   changeType: string;
   changedLineCount: number;
 }
 
-export interface SurveyPromptUnit {
+interface SurveyPromptUnit {
   path: string;
   name: string;
   kind: string;

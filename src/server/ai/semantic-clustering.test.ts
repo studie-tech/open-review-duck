@@ -115,9 +115,8 @@ describe("the job a clustering run reserves", () => {
       job.threadId !== undefined);
 
   it("names its layout without borrowing the question column", () => {
-    // Layout identity used to travel in `question`, which a clustering run
-    // has no focus line or thread for, so the check refused every row and
-    // the feature could never start a job at all.
+    // A clustering job has no question focus or thread, so its layout identity
+    // belongs in dedicated input fields.
     const job = semanticClusterJobInput({
       pullRequestId: "11111111-1111-4111-8111-111111111111",
       layoutId: "22222222-2222-4222-8222-222222222222",

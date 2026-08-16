@@ -63,9 +63,8 @@ describe("deep review entitlement", () => {
 
   it("admits the local appliance, which can never report a subscription", () => {
     mocks.isLocalDeployment.mockReturnValue(true);
-    // The regression this guards: `subscribed` is forced false on local, so
-    // dropping the disjunction as redundant would disable deep review for
-    // every self-hosted operator without any test noticing.
+    // Local deployments always report `subscribed` as false and therefore
+    // require an explicit deployment-mode entitlement.
     expect(deepReviewAvailable(false)).toBe(true);
   });
 });

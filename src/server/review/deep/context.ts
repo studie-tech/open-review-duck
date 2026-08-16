@@ -50,19 +50,19 @@ const MAX_CACHED_SOURCE_BYTES = 4 * 1024 * 1024;
 const CONTEXT_IDLE_MS = 15 * 60 * 1000;
 const MAX_CACHED_RUNS = 8;
 
-export type DeepReviewUnit = typeof reviewUnits.$inferSelect & {
+type DeepReviewUnit = typeof reviewUnits.$inferSelect & {
   blobDigest: string | null;
   source: string;
   previousSource: string | null;
 };
 
-export interface DeepReviewSourceFile {
+interface DeepReviewSourceFile {
   blob: typeof sourceBlobs.$inferSelect;
   snapshotFileId?: string;
   source: string;
 }
 
-export interface DeepReviewChangedFile {
+interface DeepReviewChangedFile {
   snapshotFileId: string;
   path: string;
   previousPath: string | null;
@@ -75,13 +75,13 @@ export interface DeepReviewChangedFile {
   previousBlob: typeof sourceBlobs.$inferSelect | null;
 }
 
-export interface DeepReviewSearchInput {
+interface DeepReviewSearchInput {
   query: string;
   pathPrefix?: string;
   limit?: number;
 }
 
-export interface DeepReviewSearchHit {
+interface DeepReviewSearchHit {
   path: string;
   unitId: string;
   symbol: string;
@@ -91,7 +91,7 @@ export interface DeepReviewSearchHit {
   source: string;
 }
 
-export type DeepReviewSourceDecision =
+type DeepReviewSourceDecision =
   | { allowed: true }
   | {
       allowed: false;

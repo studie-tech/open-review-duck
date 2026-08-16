@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  hostedProvider,
-  oauthCallbackUrl,
-  stateOAuthCallbackUrl,
-} from "./oauth-callback-url";
+import { hostedProvider, oauthCallbackUrl } from "./oauth-callback-url";
 
 describe("provider OAuth callback URLs", () => {
   it.each([
@@ -20,32 +16,5 @@ describe("provider OAuth callback URLs", () => {
     expect(hostedProvider("gitlab")).toBe(true);
     expect(hostedProvider("azure_devops")).toBe(false);
     expect(hostedProvider("bitbucket")).toBe(false);
-  });
-
-  it("uses a validated state-bound callback across a deployment", () => {
-    expect(
-      stateOAuthCallbackUrl(
-        "https://reviewduck.example",
-        "gitlab",
-        "https://reviewduck.example/gitlab/complete",
-      ),
-    ).toBe("https://reviewduck.example/gitlab/complete");
-    expect(
-      stateOAuthCallbackUrl(
-        "https://reviewduck.example",
-        "gitlab",
-        "https://reviewduck.example/api/integrations/gitlab/callback",
-      ),
-    ).toBe("https://reviewduck.example/api/integrations/gitlab/callback");
-  });
-
-  it("falls back safely for legacy states without a bound callback", () => {
-    expect(
-      stateOAuthCallbackUrl(
-        "https://reviewduck.example",
-        "gitlab",
-        "https://attacker.example/callback",
-      ),
-    ).toBe("https://reviewduck.example/api/integrations/gitlab/callback");
   });
 });

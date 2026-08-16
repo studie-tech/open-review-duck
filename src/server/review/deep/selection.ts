@@ -32,7 +32,7 @@ export interface ReviewSelectionOptions {
   maxSourceBytes: number;
 }
 
-export interface WaivedReviewFile {
+interface WaivedReviewFile {
   file: ReviewCandidateFile;
   reason: ReviewExcludeReason;
 }

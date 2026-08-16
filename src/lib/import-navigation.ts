@@ -1,4 +1,4 @@
-export type ImportReferenceKind = "default" | "module" | "named" | "namespace";
+type ImportReferenceKind = "default" | "module" | "named" | "namespace";
 
 export interface ImportReference {
   specifier: string;

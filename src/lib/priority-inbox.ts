@@ -1,4 +1,4 @@
-export type PriorityInboxGroupId = "continue" | "ready" | "unreviewable";
+type PriorityInboxGroupId = "continue" | "ready" | "unreviewable";
 export type PriorityInboxView = "all" | PriorityInboxGroupId;
 
 export interface PriorityInboxItem {
