@@ -61,6 +61,10 @@ import {
 } from "~/server/analysis/concepts";
 import { analyzeFiles } from "~/server/analysis/engine";
 import { sha256 } from "~/server/analysis/hash";
+import {
+  importReferenceForLocal,
+  parseImportReferences,
+} from "~/server/analysis/imports";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
@@ -429,7 +433,10 @@ const MAXIMUM_IMPORT_READS = 8;
 
 const DIRECTORY_IMPORT = /\/(?:index\.[^./]+|__init__\.py)$/;
 
-type FileDeclarations = Map<string, ReturnType<typeof symbolDefinitionOf>>;
+interface ParsedSymbolFile {
+  declarations: Map<string, ReturnType<typeof symbolDefinitionOf>>;
+  imports: ReturnType<typeof parseImportReferences>;
+}
 
 /**
  * Narrows a whole file to the lines a definition card can actually show.
@@ -456,7 +463,7 @@ function windowedModuleSource<
   };
 }
 
-const symbolFileCache = new Map<string, FileDeclarations>();
+const symbolFileCache = new Map<string, ParsedSymbolFile>();
 const symbolFileCacheWeights = new Map<string, number>();
 let symbolFileCacheCharacters = 0;
 
@@ -468,10 +475,11 @@ let symbolFileCacheCharacters = 0;
  * The file's stored source is already at hand, so this needs no provider call.
  *
  * Peek fires on hover, and one parse answers every name in the file, so the
- * declarations are kept against the snapshot revision they came from instead
- * of running the analysis again for the next name on the same line.
+ * declarations and imports are kept against the snapshot revision they came
+ * from instead of running the analysis again for the next name on the same
+ * line.
  */
-async function declaredSymbolInFile(
+async function parsedSymbolFile(
   db: typeof database,
   snapshotId: string,
   input: SymbolDefinitionInput,
@@ -483,7 +491,7 @@ async function declaredSymbolInFile(
     // the ring, so the one evicted next is the one longest unused.
     symbolFileCache.delete(key);
     symbolFileCache.set(key, cached);
-    return cached.get(input.symbol);
+    return cached;
   }
 
   const [file] = await hydrateReviewUnits(
@@ -498,7 +506,7 @@ async function declaredSymbolInFile(
     }),
   );
   if (!file?.source) return undefined;
-  const declarations: FileDeclarations = new Map();
+  const declarations: ParsedSymbolFile["declarations"] = new Map();
   for (const unit of analyzeFiles([
     { path: input.sourcePath, content: file.source, changeType: "modified" },
   ]).units) {
@@ -513,7 +521,11 @@ async function declaredSymbolInFile(
   // the total, or it keeps a surplus that eventually empties the ring on
   // every insert and quietly costs a parse per hover.
   symbolFileCacheCharacters -= symbolFileCacheWeights.get(key) ?? 0;
-  symbolFileCache.set(key, declarations);
+  const parsed = {
+    declarations,
+    imports: parseImportReferences(file.source, input.sourceLanguage),
+  } satisfies ParsedSymbolFile;
+  symbolFileCache.set(key, parsed);
   symbolFileCacheCharacters += file.source.length;
   symbolFileCacheWeights.set(key, file.source.length);
   while (
@@ -526,7 +538,7 @@ async function declaredSymbolInFile(
     symbolFileCacheCharacters -= symbolFileCacheWeights.get(oldest) ?? 0;
     symbolFileCacheWeights.delete(oldest);
   }
-  return declarations.get(input.symbol);
+  return parsed;
 }
 
 /**
@@ -3303,11 +3315,10 @@ export const reviewRouter = createTRPCRouter({
    * Finds where a name used in the reviewed code is declared.
    *
    * A reviewer reading a call has to know what it does, and leaving the review
-   * to find out is the expensive part. Resolution goes from the cheapest
-   * answer to the dearest: the declarations the snapshot already holds, then a
-   * parse of the file the name appears in, which is what finds a helper the
-   * diff never touched, and only then the file's own import of the name, which
-   * is the one step that can reach the provider.
+   * to find out is the expensive part. The whole file first answers local
+   * declarations and identifies imports the browser has not parsed yet. A
+   * known import is followed precisely; names without one can then use the
+   * snapshot's unique repository-wide declaration as a safe fallback.
    */
   symbolDefinition: protectedProcedure
     .input(symbolDefinitionSchema)
@@ -3345,16 +3356,37 @@ export const reviewRouter = createTRPCRouter({
       });
       if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
+      const parsedFile = await parsedSymbolFile(ctx.db, snapshot.id, input);
+      // Browser-side import parsing is progressive: a reviewer can hover a
+      // value before its grammar has loaded. The stored full file is the
+      // authoritative fallback, so imported variables do not depend on that
+      // client timing while functions already indexed in the review work.
+      const fileImport = parsedFile
+        ? importReferenceForLocal(parsedFile.imports, input.symbol)
+        : undefined;
+      const resolvedInput =
+        input.specifier || !fileImport
+          ? input
+          : {
+              ...input,
+              specifier: fileImport.specifier,
+              imported: fileImport.imported,
+              kind: fileImport.kind,
+            };
+      const local = parsedFile?.declarations.get(input.symbol);
+      const imported = resolvedInput.specifier
+        ? await importedSymbolDefinition(
+            ctx.db,
+            ctx.auth.userId,
+            { headSha: snapshot.headSha, id: snapshot.id },
+            scope,
+            resolvedInput,
+          )
+        : undefined;
       const found =
-        (await declaredSymbolInSnapshot(ctx.db, snapshot.id, input)) ??
-        (await declaredSymbolInFile(ctx.db, snapshot.id, input)) ??
-        (await importedSymbolDefinition(
-          ctx.db,
-          ctx.auth.userId,
-          { headSha: snapshot.headSha, id: snapshot.id },
-          scope,
-          input,
-        ));
+        local ??
+        imported ??
+        (await declaredSymbolInSnapshot(ctx.db, snapshot.id, input));
       if (!found) {
         return { kind: "unresolved" as const, reason: "not_found" as const };
       }
