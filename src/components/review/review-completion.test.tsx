@@ -119,6 +119,9 @@ describe("ReviewCompletion", () => {
       screen.getByRole("button", { name: /Review next PR/i }),
     ).toHaveFocus();
 
+    await user.tab();
+    expect(dismiss).toHaveFocus();
+
     outside.focus();
     expect(dismiss).toHaveFocus();
     unmount();

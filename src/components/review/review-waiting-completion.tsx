@@ -124,6 +124,12 @@ export function ReviewWaitingCompletion({
         aria-labelledby="review-waiting-title"
         aria-describedby="review-waiting-description"
         tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          onDismiss();
+        }}
         className="bg-panel relative my-auto flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
       >
         <div
