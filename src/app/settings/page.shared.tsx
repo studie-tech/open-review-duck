@@ -30,7 +30,7 @@ export default function SettingsPage() {
       <p className="text-mist mt-2 text-sm">
         Configure the integrations behind your review workflow.
       </p>
-      <div className="mt-9 grid gap-4">
+      <div className="mt-9 grid gap-4 sm:grid-cols-2">
         {sections.map(({ href, title, body, icon: Icon }) => (
           <Link
             key={href}
