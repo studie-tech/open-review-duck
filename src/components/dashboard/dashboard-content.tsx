@@ -5,9 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  DashboardAiCard,
   DashboardFailurePanel,
-  DashboardHistoryPanel,
   DashboardSyncPanel,
 } from "~/components/dashboard/dashboard-panels";
 import { PullRequestList } from "~/components/dashboard/pull-request-list";
@@ -23,13 +21,11 @@ import {
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
 import { partitionReviewQueue } from "~/lib/review-queue";
-import { formatTokenCount } from "~/lib/token-usage";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type DashboardPullRequests = RouterOutputs["review"]["dashboard"];
-type AiConfiguration = RouterOutputs["ai"]["configuration"];
-type AiPlanUsage = RouterOutputs["ai"]["planUsage"];
+type WorkView = PriorityInboxView | "reviewed" | "closed" | "removed";
 
 const providerLabel = {
   github: "GitHub",
@@ -37,21 +33,44 @@ const providerLabel = {
   azure_devops: "Azure DevOps",
 } satisfies Record<PriorityInboxItem["provider"], string>;
 
+const workCopy = {
+  all: [
+    "Your priority inbox",
+    "Grouped by the next useful action, then repository.",
+  ],
+  continue: ["In progress", "Pick up where you left off."],
+  ready: ["Ready to start", "Prepared changes waiting for a first pass."],
+  unreviewable: [
+    "Not reviewable here",
+    "No supported review units were found.",
+  ],
+  reviewed: [
+    "Reviewed, awaiting merge",
+    "Fully reviewed at the current provider revision.",
+  ],
+  closed: ["Closed history", "Merged and closed pull requests."],
+  removed: [
+    "Removed from my queue",
+    "Hidden until restored or a new revision arrives.",
+  ],
+} satisfies Record<WorkView, readonly [string, string]>;
+
+/** Returns whether the selected My work tab shows history instead of the inbox. */
+function isHistoryView(
+  view: WorkView,
+): view is "reviewed" | "closed" | "removed" {
+  return view === "reviewed" || view === "closed" || view === "removed";
+}
+
 /** Renders live dashboard data and follows durable synchronization progress. */
 export function DashboardContent({
   initialPullRequests,
-  initialAiConfiguration,
-  initialAiPlanUsage,
-  localMode,
 }: {
   initialPullRequests: DashboardPullRequests;
-  initialAiConfiguration: AiConfiguration;
-  initialAiPlanUsage: AiPlanUsage;
-  localMode: boolean;
 }) {
   const utils = api.useUtils();
   const [pendingPullRequestId, setPendingPullRequestId] = useState<string>();
-  const [inboxView, setInboxView] = useState<PriorityInboxView>("all");
+  const [workView, setWorkView] = useState<WorkView>("all");
   const [providerFilter, setProviderFilter] = useState<
     "all" | PriorityInboxItem["provider"]
   >("all");
@@ -73,23 +92,10 @@ export function DashboardContent({
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
-  const aiConfiguration = api.ai.configuration.useQuery(undefined, {
-    initialData: initialAiConfiguration,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
-  });
-  const aiPlanUsage = api.ai.planUsage.useQuery(undefined, {
-    enabled: !localMode,
-    initialData: initialAiPlanUsage ?? undefined,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
-  });
   const hadActiveSync = useRef(false);
   const reviews = pullRequests.data ?? initialPullRequests;
   const synchronizing = activeSyncs.data ?? [];
   const failedSyncs = recentSyncFailures.data ?? [];
-  const configuration = aiConfiguration.data ?? initialAiConfiguration;
-  const planUsage = aiPlanUsage.data ?? initialAiPlanUsage;
 
   /** Updates one queue item immediately while the server mutation settles. */
   function setQueueState(
@@ -162,24 +168,31 @@ export function DashboardContent({
     () => prioritizeInbox(needsReview),
     [needsReview],
   );
-  const scopedNeedsReview = useMemo(
+  const sourceItems = isHistoryView(workView)
+    ? workView === "reviewed"
+      ? reviewed
+      : workView === "closed"
+        ? closed
+        : removed
+    : prioritizedNeedsReview;
+  const scopedItems = useMemo(
     () =>
-      filterPriorityInbox(prioritizedNeedsReview, {
+      filterPriorityInbox(sourceItems, {
         view: "all",
         provider: providerFilter,
         repository: repositoryFilter,
         search: searchQuery,
       }),
-    [prioritizedNeedsReview, providerFilter, repositoryFilter, searchQuery],
+    [providerFilter, repositoryFilter, searchQuery, sourceItems],
   );
-  const filteredNeedsReview = useMemo(
+  const visibleItems = useMemo(
     () =>
-      inboxView === "all"
-        ? scopedNeedsReview
-        : scopedNeedsReview.filter(
-            (pullRequest) => priorityInboxGroup(pullRequest).id === inboxView,
+      isHistoryView(workView) || workView === "all"
+        ? scopedItems
+        : scopedItems.filter(
+            (pullRequest) => priorityInboxGroup(pullRequest).id === workView,
           ),
-    [inboxView, scopedNeedsReview],
+    [scopedItems, workView],
   );
   const inProgressCount = useMemo(
     () =>
@@ -188,26 +201,35 @@ export function DashboardContent({
       ).length,
     [needsReview],
   );
-  const inboxCounts = useMemo(
-    () => ({
-      all: scopedNeedsReview.length,
-      continue: scopedNeedsReview.filter(
-        (pullRequest) => priorityInboxGroup(pullRequest).id === "continue",
-      ).length,
-      ready: scopedNeedsReview.filter(
-        (pullRequest) => priorityInboxGroup(pullRequest).id === "ready",
-      ).length,
-      unreviewable: scopedNeedsReview.filter(
-        (pullRequest) => priorityInboxGroup(pullRequest).id === "unreviewable",
-      ).length,
-    }),
-    [scopedNeedsReview],
-  );
+  /** Applies the current provider, repository, and search filters to one list. */
+  const applySharedFilters = (
+    items: DashboardPullRequests,
+    view: PriorityInboxView,
+  ) =>
+    filterPriorityInbox(items, {
+      view,
+      provider: providerFilter,
+      repository: repositoryFilter,
+      search: searchQuery,
+    });
+  const workCounts = {
+    all: applySharedFilters(prioritizedNeedsReview, "all").length,
+    continue: applySharedFilters(prioritizedNeedsReview, "continue").length,
+    ready: applySharedFilters(prioritizedNeedsReview, "ready").length,
+    unreviewable: applySharedFilters(prioritizedNeedsReview, "unreviewable")
+      .length,
+    reviewed: applySharedFilters(reviewed, "all").length,
+    closed: applySharedFilters(closed, "all").length,
+    removed: applySharedFilters(removed, "all").length,
+  };
+  const repositorySource = isHistoryView(workView)
+    ? sourceItems
+    : prioritizedNeedsReview;
   const repositories = useMemo(
     () =>
       [
         ...new Map(
-          prioritizedNeedsReview
+          repositorySource
             .filter(
               (pullRequest) =>
                 providerFilter === "all" ||
@@ -225,7 +247,7 @@ export function DashboardContent({
       ].sort((left, right) =>
         comparePriorityInboxText(left.label, right.label),
       ),
-    [prioritizedNeedsReview, providerFilter],
+    [providerFilter, repositorySource],
   );
   useEffect(() => {
     if (
@@ -236,36 +258,25 @@ export function DashboardContent({
     }
   }, [repositories, repositoryFilter]);
   const filtersActive =
-    inboxView !== "all" ||
+    workView !== "all" ||
     providerFilter !== "all" ||
     repositoryFilter !== "all" ||
     searchQuery.trim().length > 0;
-  const localAiStatus =
-    configuration.mode === "off"
-      ? ["Off", "Enable when you want assistance"]
-      : !configuration.configuration
-        ? ["Setup", "Connect your preferred model provider"]
-        : configuration.configuration.useManagedModels
-          ? configuration.configuration.provider === "opencode"
-            ? ["Free", "Managed Big Pickle with privacy controls"]
-            : ["Subscriber", "Managed ZDR model with quota guardrails"]
-          : ["Connected", "Using your local AI configuration"];
-  const resetLabel = planUsage?.resetsAt.toLocaleDateString("en-US", {
-    timeZone: "UTC",
-    month: "short",
-    day: "numeric",
-  });
-  const aiStatus =
-    !localMode && planUsage
-      ? [
-          `${formatTokenCount(planUsage.usedTokens)} / ${formatTokenCount(planUsage.limitTokens)}`,
-          `${formatTokenCount(planUsage.remainingTokens)} left · resets ${resetLabel}`,
-        ]
-      : localAiStatus;
-  const aiUsagePercent = planUsage
-    ? Math.min(100, (planUsage.usedTokens / planUsage.limitTokens) * 100)
-    : 0;
-  const hasInbox = needsReview.length > 0;
+  const hasWorkNav =
+    needsReview.length + reviewed.length + closed.length + removed.length > 0;
+  const showListFilters = isHistoryView(workView)
+    ? sourceItems.length > 0 || filtersActive
+    : needsReview.length > 0;
+  const listKind = isHistoryView(workView) ? workView : "active";
+  const [sectionTitle, sectionDetail] = workCopy[workView];
+
+  /** Resets My work to the full inbox and clears search filters. */
+  function clearFilters() {
+    setWorkView("all");
+    setProviderFilter("all");
+    setRepositoryFilter("all");
+    setSearchQuery("");
+  }
 
   return (
     <PageContainer>
@@ -290,127 +301,121 @@ export function DashboardContent({
       </div>
 
       <section className="bg-surface/55 mt-8 grid grid-cols-3 gap-4 rounded-2xl border border-line px-5 py-4 sm:max-w-lg">
-        <div>
-          <p className="text-fog text-[10px] tracking-[.08em] uppercase">
-            Needs review
-          </p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums">
-            {needsReview.length}
-          </p>
-        </div>
-        <div>
-          <p className="text-fog text-[10px] tracking-[.08em] uppercase">
-            In progress
-          </p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums">
-            {inProgressCount}
-          </p>
-        </div>
-        <div>
-          <p className="text-fog text-[10px] tracking-[.08em] uppercase">
-            Reviewed
-          </p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums">
-            {reviewed.length}
-          </p>
-        </div>
+        {(
+          [
+            ["all", "Needs review", needsReview.length],
+            ["continue", "In progress", inProgressCount],
+            ["reviewed", "Reviewed", reviewed.length],
+          ] as const
+        ).map(([view, label, count]) => (
+          <button
+            key={view}
+            type="button"
+            onClick={() => setWorkView(view)}
+            aria-pressed={workView === view}
+            className="rounded-xl text-left transition hover:opacity-80"
+          >
+            <p className="text-fog text-[10px] tracking-[.08em] uppercase">
+              {label}
+            </p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums">{count}</p>
+          </button>
+        ))}
       </section>
 
+      <div className="mt-6 space-y-4">
+        <DashboardSyncPanel synchronizing={synchronizing} />
+        <DashboardFailurePanel failedSyncs={failedSyncs} />
+      </div>
+
       <section className="mt-10">
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-base font-medium">Your priority inbox</h2>
-            <p className="text-mist mt-1 text-xs">
-              Grouped by the next useful action, then repository.
-            </p>
-          </div>
-          <span aria-live="polite" className="text-fog text-xs tabular-nums">
-            {filteredNeedsReview.length === needsReview.length
-              ? `${needsReview.length} pull requests`
-              : `${filteredNeedsReview.length} of ${needsReview.length} pull requests`}
-          </span>
-        </div>
         <div
           className={cn(
             "grid items-start gap-4",
-            hasInbox
-              ? "xl:grid-cols-[13rem_minmax(0,1fr)_20rem]"
-              : "xl:grid-cols-[minmax(0,1fr)_20rem]",
+            hasWorkNav && "xl:grid-cols-[15rem_minmax(0,1fr)]",
           )}
         >
-          <div
-            className={cn(
-              "order-1 space-y-4",
-              hasInbox
-                ? "xl:col-start-3 xl:row-start-1"
-                : "xl:col-start-2 xl:row-start-1",
-            )}
-          >
-            <DashboardSyncPanel synchronizing={synchronizing} />
-            <DashboardFailurePanel failedSyncs={failedSyncs} />
-            <DashboardAiCard
-              localMode={localMode}
-              status={aiStatus}
-              usagePercent={aiUsagePercent}
-              usedTokens={planUsage?.usedTokens}
-              limitTokens={planUsage?.limitTokens}
-              subscribed={planUsage?.subscribed}
-            />
-          </div>
-
-          {hasInbox && (
-            <aside className="bg-surface/55 order-2 rounded-2xl border border-line p-2 xl:col-start-1 xl:row-start-1">
+          {hasWorkNav && (
+            <aside className="bg-surface/55 rounded-2xl border border-line p-2">
               <p className="text-fog px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[.1em] uppercase">
                 My work
               </p>
-              <nav
-                className="grid grid-cols-2 gap-1 sm:grid-cols-4 xl:grid-cols-1"
-                aria-label="Priority inbox views"
-              >
-                {[
-                  ["all", "Needs review", inboxCounts.all, "bg-lime"],
-                  ["continue", "In progress", inboxCounts.continue, "bg-lime"],
-                  ["ready", "Ready to start", inboxCounts.ready, "bg-cyan"],
+              <nav className="grid grid-cols-1 gap-0.5" aria-label="My work">
+                {(
                   [
-                    "unreviewable",
-                    "Not reviewable here",
-                    inboxCounts.unreviewable,
-                    "bg-fog",
-                  ],
-                ].map(([view, label, count, dot]) => (
-                  <button
+                    ["all", "Needs review", workCounts.all, "bg-lime"],
+                    ["continue", "In progress", workCounts.continue, "bg-lime"],
+                    ["ready", "Ready to start", workCounts.ready, "bg-cyan"],
+                    [
+                      "unreviewable",
+                      "Not reviewable here",
+                      workCounts.unreviewable,
+                      "bg-fog",
+                    ],
+                  ] as const
+                ).map(([view, label, count, dot]) => (
+                  <WorkTab
                     key={view}
-                    type="button"
-                    aria-label={`${label}, ${count}`}
-                    aria-pressed={inboxView === view}
-                    onClick={() => setInboxView(view as PriorityInboxView)}
-                    className={
-                      inboxView === view
-                        ? "bg-surface-subtle text-cloud flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs font-medium"
-                        : "text-mist hover:bg-surface-subtle/70 hover:text-cloud flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs transition"
-                    }
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`size-1.5 shrink-0 rounded-full ${dot}`}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{label}</span>
-                    <span className="text-fog tabular-nums">{count}</span>
-                  </button>
+                    label={label}
+                    count={count}
+                    dot={dot}
+                    selected={workView === view}
+                    onSelect={() => setWorkView(view)}
+                  />
                 ))}
+              </nav>
+              <p className="text-fog mt-2 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[.1em] uppercase">
+                History
+              </p>
+              <nav
+                className="grid grid-cols-1 gap-0.5"
+                aria-label="Review history"
+              >
+                {(reviewed.length > 0 || workView === "reviewed") && (
+                  <WorkTab
+                    label="Reviewed"
+                    count={workCounts.reviewed}
+                    dot="bg-lime"
+                    selected={workView === "reviewed"}
+                    onSelect={() => setWorkView("reviewed")}
+                  />
+                )}
+                <WorkTab
+                  label="Closed history"
+                  count={workCounts.closed}
+                  dot="bg-cyan"
+                  selected={workView === "closed"}
+                  onSelect={() => setWorkView("closed")}
+                />
+                {(removed.length > 0 || workView === "removed") && (
+                  <WorkTab
+                    label="Removed"
+                    count={workCounts.removed}
+                    dot="bg-fog"
+                    selected={workView === "removed"}
+                    onSelect={() => setWorkView("removed")}
+                  />
+                )}
               </nav>
             </aside>
           )}
 
-          <div
-            className={cn(
-              "order-3 min-w-0",
-              hasInbox
-                ? "xl:col-start-2 xl:row-start-1 xl:row-span-2"
-                : "xl:col-start-1 xl:row-start-1 xl:row-span-2",
-            )}
-          >
-            {needsReview.length === 0 ? (
+          <div className="min-w-0">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-base font-medium">{sectionTitle}</h2>
+                <p className="text-mist mt-1 text-xs">{sectionDetail}</p>
+              </div>
+              <span
+                aria-live="polite"
+                className="text-fog text-xs tabular-nums"
+              >
+                {visibleItems.length === sourceItems.length
+                  ? `${sourceItems.length} pull requests`
+                  : `${visibleItems.length} of ${sourceItems.length} pull requests`}
+              </span>
+            </div>
+            {!isHistoryView(workView) && needsReview.length === 0 ? (
               <div className="bg-surface/55 grid min-h-80 place-items-center rounded-3xl border border-dashed border-line-strong p-8 text-center">
                 <div>
                   <span className="text-lime mx-auto grid size-12 place-items-center rounded-2xl bg-lime/10">
@@ -431,7 +436,7 @@ export function DashboardContent({
                     {synchronizing.length > 0
                       ? "You can stay on this page. The pull request will appear as soon as its dependency path is ready."
                       : reviews.length > 0
-                        ? "There is nothing waiting for review. Completed, closed, and removed work remains in the workspace rail."
+                        ? "There is nothing waiting for review. Closed and finished work stays in My work."
                         : "Add GitHub, GitLab, or Azure DevOps and choose the pull requests you want to review with full context."}
                   </p>
                   {synchronizing.length === 0 && reviews.length === 0 && (
@@ -443,144 +448,169 @@ export function DashboardContent({
               </div>
             ) : (
               <>
-                <div className="bg-surface/55 mb-3 flex flex-col gap-2 rounded-2xl border border-line p-3 sm:flex-row sm:items-center">
-                  <label className="relative min-w-0 flex-1">
-                    <span className="sr-only">Search pull requests</span>
-                    <Search className="text-fog pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
-                    <input
-                      type="search"
-                      value={searchQuery}
-                      onChange={(event) =>
-                        setSearchQuery(event.currentTarget.value)
-                      }
-                      placeholder="Search PRs, repos, authors…"
-                      className="bg-ink/35 placeholder:text-fog h-9 w-full rounded-xl border border-line py-2 pr-3 pl-9 text-xs outline-none transition focus:border-line-strong"
-                    />
-                  </label>
-                  <select
-                    aria-label="Filter by provider"
-                    value={providerFilter}
-                    onChange={(event) => {
-                      setProviderFilter(
-                        event.currentTarget.value as
-                          | "all"
-                          | PriorityInboxItem["provider"],
-                      );
-                      setRepositoryFilter("all");
-                    }}
-                    className="bg-ink/35 h-9 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-36"
-                  >
-                    <option value="all">All providers</option>
-                    {Object.entries(providerLabel).map(([provider, label]) => (
-                      <option key={provider} value={provider}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Filter by repository"
-                    value={repositoryFilter}
-                    onChange={(event) =>
-                      setRepositoryFilter(event.currentTarget.value)
-                    }
-                    className="bg-ink/35 h-9 min-w-0 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-52"
-                  >
-                    <option value="all">All repositories</option>
-                    {repositories.map((repository) => (
-                      <option key={repository.key} value={repository.key}>
-                        {repository.label}
-                        {providerFilter === "all"
-                          ? ` · ${providerLabel[repository.provider]}`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {filtersActive && (
-                    <button
-                      type="button"
-                      aria-label="Clear inbox filters"
-                      title="Clear filters"
-                      onClick={() => {
-                        setInboxView("all");
-                        setProviderFilter("all");
+                {showListFilters && (
+                  <div className="bg-surface/55 mb-3 flex flex-col gap-2 rounded-2xl border border-line p-3 sm:flex-row sm:items-center">
+                    <label className="relative min-w-0 flex-1">
+                      <span className="sr-only">Search pull requests</span>
+                      <Search className="text-fog pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
+                      <input
+                        type="search"
+                        value={searchQuery}
+                        onChange={(event) =>
+                          setSearchQuery(event.currentTarget.value)
+                        }
+                        placeholder="Search PRs, repos, authors…"
+                        className="bg-ink/35 placeholder:text-fog h-9 w-full rounded-xl border border-line py-2 pr-3 pl-9 text-xs outline-none transition focus:border-line-strong"
+                      />
+                    </label>
+                    <select
+                      aria-label="Filter by provider"
+                      value={providerFilter}
+                      onChange={(event) => {
+                        setProviderFilter(
+                          event.currentTarget.value as
+                            | "all"
+                            | PriorityInboxItem["provider"],
+                        );
                         setRepositoryFilter("all");
-                        setSearchQuery("");
                       }}
-                      className="text-mist hover:bg-surface-subtle hover:text-cloud grid size-9 shrink-0 place-items-center self-end rounded-xl transition sm:self-auto"
+                      className="bg-ink/35 h-9 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-36"
                     >
-                      <X className="size-4" />
-                    </button>
-                  )}
-                </div>
+                      <option value="all">All providers</option>
+                      {Object.entries(providerLabel).map(
+                        ([provider, label]) => (
+                          <option key={provider} value={provider}>
+                            {label}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                    <select
+                      aria-label="Filter by repository"
+                      value={repositoryFilter}
+                      onChange={(event) =>
+                        setRepositoryFilter(event.currentTarget.value)
+                      }
+                      className="bg-ink/35 h-9 min-w-0 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-52"
+                    >
+                      <option value="all">All repositories</option>
+                      {repositories.map((repository) => (
+                        <option key={repository.key} value={repository.key}>
+                          {repository.label}
+                          {providerFilter === "all"
+                            ? ` · ${providerLabel[repository.provider]}`
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {filtersActive && (
+                      <button
+                        type="button"
+                        aria-label="Clear inbox filters"
+                        title="Clear filters"
+                        onClick={clearFilters}
+                        className="text-mist hover:bg-surface-subtle hover:text-cloud grid size-9 shrink-0 place-items-center self-end rounded-xl transition sm:self-auto"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
 
-                {filteredNeedsReview.length === 0 ? (
+                {visibleItems.length === 0 ? (
                   <div className="bg-surface/45 grid min-h-56 place-items-center rounded-2xl border border-dashed border-line-strong p-6 text-center">
                     <div>
                       <Search className="text-fog mx-auto size-5" />
                       <h3 className="mt-3 text-sm font-medium">
-                        No pull requests match
+                        {sourceItems.length === 0
+                          ? workView === "closed"
+                            ? "No closed pull requests"
+                            : workView === "reviewed"
+                              ? "Nothing awaiting merge"
+                              : "Nothing removed from your queue"
+                          : "No pull requests match"}
                       </h3>
                       <p className="text-mist mt-1 text-xs">
-                        Try another repository, provider, or search.
+                        {sourceItems.length === 0
+                          ? "This history stays here so you can return to it later."
+                          : "Try another repository, provider, or search."}
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setInboxView("all");
-                          setProviderFilter("all");
-                          setRepositoryFilter("all");
-                          setSearchQuery("");
-                        }}
-                        className="text-lime mt-4 text-xs font-medium hover:underline"
-                      >
-                        Clear filters
-                      </button>
+                      {filtersActive && (
+                        <button
+                          type="button"
+                          onClick={clearFilters}
+                          className="text-lime mt-4 text-xs font-medium hover:underline"
+                        >
+                          Clear filters
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : (
                   <PullRequestList
-                    pullRequests={filteredNeedsReview}
-                    kind="active"
-                    showPriorityGroups
+                    pullRequests={visibleItems}
+                    kind={listKind}
+                    showPriorityGroups={!isHistoryView(workView)}
                     pendingPullRequestId={pendingPullRequestId}
-                    onRemove={(pullRequest) =>
-                      removeFromQueue.mutate({ pullRequestId: pullRequest.id })
+                    onRemove={
+                      listKind === "active" || listKind === "reviewed"
+                        ? (pullRequest) =>
+                            removeFromQueue.mutate({
+                              pullRequestId: pullRequest.id,
+                            })
+                        : undefined
+                    }
+                    onRestore={
+                      listKind === "removed"
+                        ? (pullRequest) =>
+                            restoreToQueue.mutate({
+                              pullRequestId: pullRequest.id,
+                            })
+                        : undefined
                     }
                   />
                 )}
               </>
             )}
           </div>
-
-          {(reviewed.length > 0 ||
-            closed.length > 0 ||
-            removed.length > 0 ||
-            !hasInbox) && (
-            <div
-              className={cn(
-                "order-4",
-                hasInbox
-                  ? "xl:col-start-3 xl:row-start-2"
-                  : "xl:col-start-2 xl:row-start-2",
-              )}
-            >
-              <DashboardHistoryPanel
-                reviewed={reviewed}
-                closed={closed}
-                removed={removed}
-                compact
-                pendingPullRequestId={pendingPullRequestId}
-                onRemove={(pullRequest) =>
-                  removeFromQueue.mutate({ pullRequestId: pullRequest.id })
-                }
-                onRestore={(pullRequest) =>
-                  restoreToQueue.mutate({ pullRequestId: pullRequest.id })
-                }
-              />
-            </div>
-          )}
         </div>
       </section>
     </PageContainer>
+  );
+}
+
+/** Renders one selectable My work or history view. */
+function WorkTab({
+  label,
+  count,
+  dot,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  count: number;
+  dot: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`${label}, ${count}`}
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={
+        selected
+          ? "bg-surface-subtle text-cloud flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs font-medium"
+          : "text-mist hover:bg-surface-subtle/70 hover:text-cloud flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs transition"
+      }
+    >
+      <span
+        aria-hidden="true"
+        className={`size-1.5 shrink-0 rounded-full ${dot}`}
+      />
+      <span className="min-w-0 flex-1">{label}</span>
+      <span className="text-fog tabular-nums">{count}</span>
+    </button>
   );
 }

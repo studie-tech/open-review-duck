@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 
+import { AiUsageChip } from "~/components/ai-usage-chip";
 import { BrandMark } from "~/components/brand-mark";
 import {
   CommandCenter,
@@ -92,6 +93,8 @@ function isNavigationActive(pathname: string, href: string) {
 }
 
 type Guidance = RouterOutputs["workspace"]["guidance"];
+type AiConfiguration = RouterOutputs["ai"]["configuration"];
+type AiPlanUsage = RouterOutputs["ai"]["planUsage"];
 const INBOX_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 
 /** Renders the app shell interface. */
@@ -99,10 +102,14 @@ export function AppShell({
   children,
   deploymentMode,
   initialGuidance,
+  initialAiConfiguration,
+  initialAiPlanUsage,
 }: {
   children: ReactNode;
   deploymentMode: DeploymentMode;
   initialGuidance: Guidance;
+  initialAiConfiguration?: AiConfiguration;
+  initialAiPlanUsage?: AiPlanUsage;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -281,7 +288,7 @@ export function AppShell({
             className="flex items-center gap-2 font-semibold lg:hidden"
           >
             <BrandMark className="size-9" />
-            ReviewDuck.ai
+            <span className="sr-only">ReviewDuck.ai</span>
           </Link>
           <div className="text-fog hidden text-xs lg:block">
             {deploymentMode === "local"
@@ -293,15 +300,21 @@ export function AppShell({
               type="button"
               onClick={openCommands}
               aria-label="Open quick actions"
-              className="text-mist hover:text-cloud flex h-9 items-center gap-2 rounded-lg border border-line bg-surface/65 px-2.5 text-xs transition hover:bg-surface-hover sm:px-3"
+              title="Quick actions"
+              className="text-mist hover:text-cloud hover:bg-surface-hover grid size-10 place-items-center rounded-xl border border-line bg-surface/75 transition lg:flex lg:h-9 lg:w-auto lg:items-center lg:gap-2 lg:px-3 lg:text-xs"
             >
-              <Search className="size-3.5" />
-              <span className="hidden sm:inline">Quick actions</span>
+              <Search className="size-3.5" aria-hidden="true" />
+              <span className="hidden lg:inline">Quick actions</span>
               <ShortcutHint
                 shortcut={commandMenuShortcut}
-                className="hidden sm:inline-flex"
+                className="hidden lg:inline-flex"
               />
             </button>
+            <AiUsageChip
+              deploymentMode={deploymentMode}
+              initialConfiguration={initialAiConfiguration}
+              initialPlanUsage={initialAiPlanUsage}
+            />
             <ThemeToggle />
             {deploymentMode === "saas" && <UserButton />}
           </div>
