@@ -166,13 +166,13 @@ export function PullRequestList({
               <Link
                 href={`/review/${pullRequest.id}`}
                 className={cn(
-                  "flex min-w-0 flex-1 flex-col gap-4 p-5",
-                  compact ? "gap-3 p-3" : "sm:flex-row sm:items-center",
+                  "grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2.5 p-4",
+                  compact ? "p-3" : "sm:flex sm:items-center sm:gap-4 sm:p-5",
                 )}
               >
                 <span
                   className={cn(
-                    "text-mist bg-surface-subtle grid size-10 shrink-0 place-items-center rounded-xl border border-transparent transition",
+                    "text-mist bg-surface-subtle grid size-9 shrink-0 place-items-center rounded-xl border border-transparent transition sm:size-10",
                     isChoosingPullRequest &&
                       matchesTypedPosition &&
                       "border-coral/40 bg-coral/10 text-coral",
@@ -192,15 +192,15 @@ export function PullRequestList({
                     <GitPullRequest className="size-4" />
                   )}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0">
+                  <span className="flex min-w-0 items-center gap-2">
                     <Badge>{providerLabel[pullRequest.provider]}</Badge>
-                    <span className="text-fog text-xs">
+                    <span className="text-fog truncate text-xs">
                       {pullRequest.repositoryOwner}/{pullRequest.repositoryName}{" "}
                       #{pullRequest.number}
                     </span>
                   </span>
-                  <span className="mt-2 block truncate text-sm font-medium">
+                  <span className="mt-1.5 block text-sm leading-5 font-medium sm:truncate">
                     {pullRequest.title}
                   </span>
                   <span className="text-fog mt-1 block text-xs">
@@ -211,10 +211,17 @@ export function PullRequestList({
                     </span>
                   </span>
                 </span>
-                <span className={cn("w-full", !compact && "sm:w-40")}>
-                  <span className="text-mist flex items-center justify-between text-[10px]">
-                    <span>{progressLabel(pullRequest, kind)}</span>
-                    <ArrowUpRight className="size-3.5 transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span
+                  className={cn(
+                    "col-start-2 min-w-0",
+                    !compact && "sm:col-auto sm:w-40 sm:shrink-0",
+                  )}
+                >
+                  <span className="text-mist flex items-center gap-2 text-[10px]">
+                    <span className="min-w-0 truncate">
+                      {progressLabel(pullRequest, kind)}
+                    </span>
+                    <ArrowUpRight className="hidden size-3.5 shrink-0 transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5 sm:block" />
                   </span>
                   {kind === "active" && (
                     <span className="text-fog mt-1 block text-[10px]">
@@ -242,7 +249,7 @@ export function PullRequestList({
                 </span>
               </Link>
 
-              <div className="flex shrink-0 items-center border-l border-line px-2 sm:px-3">
+              <div className="flex shrink-0 items-start border-l border-line px-1.5 pt-4 sm:items-center sm:px-3 sm:pt-0">
                 {kind === "removed" ? (
                   <button
                     type="button"

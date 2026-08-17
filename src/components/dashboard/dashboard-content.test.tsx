@@ -46,18 +46,6 @@ vi.mock("~/trpc/react", () => ({
         },
       },
     })),
-    ai: {
-      configuration: {
-        useQuery: vi.fn((_input, options) => ({
-          data: options.initialData,
-        })),
-      },
-      planUsage: {
-        useQuery: vi.fn((_input, options) => ({
-          data: options.initialData,
-        })),
-      },
-    },
     review: {
       removeFromQueue: {
         useMutation: vi.fn(() => ({ mutate: queryState.removeMutate })),
@@ -146,24 +134,7 @@ describe("DashboardContent", () => {
   };
 
   it("shows durable sync progress and refreshes reviews when it finishes", async () => {
-    const properties = {
-      initialPullRequests: [],
-      initialAiConfiguration: {
-        mode: "off" as const,
-        managedModel: "big-pickle",
-        managedModels: ["big-pickle"],
-        reviewPullRequests: false,
-        deepReviewAvailable: false,
-        configuration: null,
-        disclosure: {
-          accepted: false,
-          version: "test",
-        },
-      },
-      initialAiPlanUsage: null,
-      localMode: true,
-    };
-    const view = render(<DashboardContent {...properties} />);
+    const view = render(<DashboardContent initialPullRequests={[]} />);
 
     expect(screen.getByText("Preparing a review")).toBeVisible();
     expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
@@ -185,7 +156,7 @@ describe("DashboardContent", () => {
     ).toBeVisible();
 
     queryState.activeSyncs = [];
-    view.rerender(<DashboardContent {...properties} />);
+    view.rerender(<DashboardContent initialPullRequests={[]} />);
 
     await waitFor(() =>
       expect(queryState.dashboardRefetch).toHaveBeenCalledTimes(1),
@@ -210,22 +181,7 @@ describe("DashboardContent", () => {
       },
     ];
 
-    render(
-      <DashboardContent
-        initialPullRequests={[]}
-        initialAiConfiguration={{
-          mode: "off",
-          managedModel: "big-pickle",
-          managedModels: ["big-pickle"],
-          reviewPullRequests: false,
-          deepReviewAvailable: false,
-          configuration: null,
-          disclosure: { accepted: false, version: "test" },
-        }}
-        initialAiPlanUsage={null}
-        localMode={true}
-      />,
-    );
+    render(<DashboardContent initialPullRequests={[]} />);
 
     expect(screen.getByText("A review could not be prepared")).toBeVisible();
     expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
@@ -239,112 +195,6 @@ describe("DashboardContent", () => {
     expect(
       screen.getByRole("link", { name: "Review connection" }),
     ).toHaveAttribute("href", "/settings/providers");
-  });
-
-  const statusCases = [
-    {
-      name: "disabled configuration",
-      status: "Off",
-      localMode: true,
-      mode: "off" as const,
-      configuration: null,
-    },
-    {
-      name: "unconfigured local provider",
-      status: "Setup",
-      localMode: true,
-      mode: "on_demand" as const,
-      configuration: null,
-    },
-    {
-      name: "configured local provider",
-      status: "Connected",
-      localMode: true,
-      mode: "on_demand" as const,
-      configuration: {
-        provider: "ollama",
-        model: "local-model",
-        baseUrl: "http://host.docker.internal:11434/v1",
-        useManagedModels: false,
-        hasApiKey: false,
-        hasHeaders: false,
-      },
-    },
-  ] satisfies Array<{
-    name: string;
-    status: string;
-    localMode: boolean;
-    mode: ComponentProps<
-      typeof DashboardContent
-    >["initialAiConfiguration"]["mode"];
-    configuration: ComponentProps<
-      typeof DashboardContent
-    >["initialAiConfiguration"]["configuration"];
-  }>;
-
-  it.each(statusCases)("shows $status for $name", (testCase) => {
-    queryState.activeSyncs = [];
-    render(
-      <DashboardContent
-        initialPullRequests={[]}
-        initialAiConfiguration={{
-          mode: testCase.mode,
-          managedModel: "big-pickle",
-          managedModels: ["big-pickle"],
-          reviewPullRequests: false,
-          deepReviewAvailable: false,
-          configuration: testCase.configuration,
-          disclosure: { accepted: false, version: "test" },
-        }}
-        initialAiPlanUsage={null}
-        localMode={testCase.localMode}
-      />,
-    );
-
-    expect(screen.getByText(testCase.status)).toBeVisible();
-  });
-
-  it("shows SaaS monthly token usage and an upgrade link", () => {
-    queryState.activeSyncs = [];
-    render(
-      <DashboardContent
-        initialPullRequests={[]}
-        initialAiConfiguration={{
-          mode: "on_demand",
-          managedModel: "provider/model",
-          managedModels: ["provider/model"],
-          reviewPullRequests: false,
-          deepReviewAvailable: false,
-          configuration: {
-            provider: "openrouter",
-            model: "provider/model",
-            baseUrl: null,
-            useManagedModels: true,
-            hasApiKey: false,
-            hasHeaders: false,
-          },
-          disclosure: { accepted: false, version: "test" },
-        }}
-        initialAiPlanUsage={{
-          tier: "free",
-          subscribed: false,
-          usedTokens: 25_000,
-          limitTokens: 100_000,
-          remainingTokens: 75_000,
-          resetsAt: new Date("2026-09-01T00:00:00Z"),
-        }}
-        localMode={false}
-      />,
-    );
-
-    expect(screen.getByText("25k / 100k")).toBeVisible();
-    expect(screen.getByRole("link", { name: "View plans" })).toHaveAttribute(
-      "href",
-      "/settings/ai",
-    );
-    expect(
-      screen.getByRole("progressbar", { name: "Monthly AI token usage" }),
-    ).toHaveAttribute("aria-valuenow", "25000");
   });
 
   it("prioritizes continued work and filters across providers", async () => {
@@ -374,21 +224,7 @@ describe("DashboardContent", () => {
         totalUnits: 0,
       }),
     ];
-    const properties = {
-      initialPullRequests: items,
-      initialAiConfiguration: {
-        mode: "off" as const,
-        managedModel: "big-pickle",
-        managedModels: ["big-pickle"],
-        reviewPullRequests: false,
-        deepReviewAvailable: false,
-        configuration: null,
-        disclosure: { accepted: false, version: "test" },
-      },
-      initialAiPlanUsage: null,
-      localMode: true,
-    };
-    const view = render(<DashboardContent {...properties} />);
+    const view = render(<DashboardContent initialPullRequests={items} />);
 
     const continued = screen.getByText("Inventory improvements");
     const ready = screen.getByText("Retry settlement webhooks");
@@ -439,7 +275,6 @@ describe("DashboardContent", () => {
     );
     view.rerender(
       <DashboardContent
-        {...properties}
         initialPullRequests={items.filter(({ id }) => id !== "ready")}
       />,
     );
@@ -448,5 +283,40 @@ describe("DashboardContent", () => {
         screen.getByRole("combobox", { name: "Filter by repository" }),
       ).toHaveValue("all"),
     );
+  });
+
+  it("toggles closed history from My work without a side rail", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    render(
+      <DashboardContent
+        initialPullRequests={[
+          pullRequest({ id: "open", title: "Inventory improvements" }),
+          pullRequest({
+            id: "closed",
+            number: 88,
+            title: "Merged settlement",
+            state: "merged",
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Inventory improvements")).toBeVisible();
+    expect(screen.queryByText("Merged settlement")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI assistant")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Closed history, 1" }));
+    expect(
+      screen.getByRole("heading", { name: "Closed history" }),
+    ).toBeVisible();
+    expect(screen.getByText("Merged settlement")).toBeVisible();
+    expect(
+      screen.queryByText("Inventory improvements"),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Needs review, 1" }));
+    expect(screen.getByText("Inventory improvements")).toBeVisible();
+    expect(screen.queryByText("Merged settlement")).not.toBeInTheDocument();
   });
 });
