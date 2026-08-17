@@ -561,7 +561,7 @@ export function ProviderSettings({
       {showForm && (
         <section
           id="provider-connection-form"
-          className="bg-surface mt-8 scroll-mt-6 rounded-3xl border border-line p-5 sm:p-7"
+          className="bg-surface mt-8 max-w-3xl scroll-mt-6 rounded-3xl border border-line p-5 sm:p-7"
         >
           {editingConnection ? (
             <div className="border-line bg-surface-subtle rounded-2xl border p-4">

@@ -82,7 +82,7 @@ export function AchievementsContent({
         })}
       </section>
 
-      <section className="mt-10 grid gap-4 sm:grid-cols-2">
+      <section className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {achievements.map(
           ({ title, description, progress: value, target, icon: Icon }) => {
             const completed = value >= target;

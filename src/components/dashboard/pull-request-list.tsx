@@ -65,6 +65,7 @@ export function PullRequestList({
   onRemove,
   onRestore,
   showPriorityGroups = false,
+  compact = false,
 }: {
   pullRequests: PullRequests;
   kind: PullRequestListKind;
@@ -72,6 +73,7 @@ export function PullRequestList({
   onRemove?: (pullRequest: PullRequests[number]) => void;
   onRestore?: (pullRequest: PullRequests[number]) => void;
   showPriorityGroups?: boolean;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const commands = useMemo<CommandCenterItem[]>(
@@ -163,7 +165,10 @@ export function PullRequestList({
             >
               <Link
                 href={`/review/${pullRequest.id}`}
-                className="flex min-w-0 flex-1 flex-col gap-4 p-5 sm:flex-row sm:items-center"
+                className={cn(
+                  "flex min-w-0 flex-1 flex-col gap-4 p-5",
+                  compact ? "gap-3 p-3" : "sm:flex-row sm:items-center",
+                )}
               >
                 <span
                   className={cn(
@@ -206,7 +211,7 @@ export function PullRequestList({
                     </span>
                   </span>
                 </span>
-                <span className="w-full sm:w-40">
+                <span className={cn("w-full", !compact && "sm:w-40")}>
                   <span className="text-mist flex items-center justify-between text-[10px]">
                     <span>{progressLabel(pullRequest, kind)}</span>
                     <ArrowUpRight className="size-3.5 transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />

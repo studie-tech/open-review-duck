@@ -140,7 +140,7 @@ export function SaasAiSettings({
         </article>
       </section>
 
-      <section className="bg-surface/70 mt-6 grid gap-5 rounded-3xl border border-line p-6">
+      <section className="bg-surface/70 mt-6 grid max-w-3xl gap-5 rounded-3xl border border-line p-6">
         <div>
           <h2 className="text-lg font-medium">Assistant preferences</h2>
           <p className="text-mist mt-1 text-xs leading-5">

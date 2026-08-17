@@ -182,7 +182,7 @@ export function LocalAiSettings({
         used for model requests.
       </p>
 
-      <section className="bg-surface/70 mt-9 grid gap-5 rounded-3xl border border-line p-6">
+      <section className="bg-surface/70 mt-9 grid max-w-3xl gap-5 rounded-3xl border border-line p-6">
         <label
           htmlFor="ai-assistance-timing"
           className="text-mist grid gap-2 text-xs"
