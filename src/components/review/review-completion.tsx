@@ -9,7 +9,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
@@ -38,6 +38,83 @@ interface ReviewCompletionProps {
   onDashboard: () => void;
   onDismiss: () => void;
   onNextReview: () => void;
+}
+
+const reviewDialogFocusableSelector = [
+  "button:not([disabled])",
+  "[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(", ");
+
+/** Returns controls that can participate in a completion dialog's tab order. */
+function reviewDialogControls(dialog: HTMLElement) {
+  return [
+    ...dialog.querySelectorAll<HTMLElement>(reviewDialogFocusableSelector),
+  ];
+}
+
+/** Keeps focus inside a review completion overlay and restores it on close. */
+export function useReviewDialogFocus() {
+  const dialogRef = useRef<HTMLElement>(null);
+  const initialFocusRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const mountedDialog = dialogRef.current;
+    if (!mountedDialog) return;
+    const dialog: HTMLElement = mountedDialog;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+
+    /** Focuses the preferred dismiss action, falling back inside the dialog. */
+    function focusInitialControl() {
+      const target =
+        initialFocusRef.current ?? reviewDialogControls(dialog)[0] ?? dialog;
+      target.focus();
+    }
+
+    /** Wraps Tab and Shift+Tab at the dialog boundaries. */
+    function trapTab(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const controls = reviewDialogControls(dialog);
+      const first = controls[0] ?? dialog;
+      const last = controls.at(-1) ?? dialog;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (active === last || !dialog.contains(active))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    /** Redirects programmatic or pointer focus that lands behind the overlay. */
+    function containFocus(event: FocusEvent) {
+      if (event.target instanceof Node && !dialog.contains(event.target)) {
+        focusInitialControl();
+      }
+    }
+
+    document.addEventListener("keydown", trapTab, true);
+    document.addEventListener("focusin", containFocus, true);
+    focusInitialControl();
+
+    return () => {
+      document.removeEventListener("keydown", trapTab, true);
+      document.removeEventListener("focusin", containFocus, true);
+      previousFocus?.focus();
+    };
+  }, []);
+
+  return { dialogRef, initialFocusRef };
 }
 
 /** Selects the first ready, unfinished pull request after a review completes. */
@@ -69,6 +146,7 @@ export function ReviewCompletion({
   onDismiss,
   onNextReview,
 }: ReviewCompletionProps) {
+  const { dialogRef, initialFocusRef } = useReviewDialogFocus();
   const nextReviewProgress = nextReview
     ? Math.round((nextReview.signedUnits / nextReview.totalUnits) * 100)
     : 0;
@@ -76,8 +154,12 @@ export function ReviewCompletion({
   return (
     <div className="bg-ink/90 absolute inset-0 z-30 grid place-items-center overflow-y-auto p-4 font-sans backdrop-blur-[3px] sm:p-8">
       <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="review-completion-title"
         aria-describedby="review-completion-description"
+        tabIndex={-1}
         className="bg-panel relative my-auto w-full max-w-3xl overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
       >
         <div
@@ -85,6 +167,7 @@ export function ReviewCompletion({
           className="from-lime/12 via-cyan/[.035] absolute inset-x-0 top-0 h-48 bg-gradient-to-b to-transparent"
         />
         <button
+          ref={initialFocusRef}
           type="button"
           aria-label="Keep completed review open"
           title="Keep completed review open (Escape)"

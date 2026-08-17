@@ -121,6 +121,10 @@ describe("reviewAvailability", () => {
       ),
     ).toBe("active");
   });
+
+  it("treats a review with no units as complete", () => {
+    expect(reviewAvailability([], new Set())).toBe("complete");
+  });
 });
 
 describe("nextPendingReviewIndexPreferring", () => {
