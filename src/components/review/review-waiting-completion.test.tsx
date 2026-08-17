@@ -73,6 +73,7 @@ describe("ReviewWaitingCompletion", () => {
     document.body.append(outside);
     outside.focus();
     const user = userEvent.setup();
+    const onDismiss = vi.fn();
     const { unmount } = render(
       <ReviewWaitingCompletion
         concepts={[waitingConcept(1)]}
@@ -81,7 +82,7 @@ describe("ReviewWaitingCompletion", () => {
         reviewedConcepts={9}
         totalConcepts={10}
         onDashboard={vi.fn()}
-        onDismiss={vi.fn()}
+        onDismiss={onDismiss}
         onNextReview={vi.fn()}
         onOpenConcept={vi.fn()}
         onStopWaiting={vi.fn()}
@@ -97,6 +98,10 @@ describe("ReviewWaitingCompletion", () => {
 
     await user.tab({ shift: true });
     expect(screen.getByRole("button", { name: "Dashboard" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(onDismiss).toHaveBeenCalledOnce();
+
     outside.focus();
     expect(dismiss).toHaveFocus();
     unmount();
