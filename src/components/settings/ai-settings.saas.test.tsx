@@ -108,7 +108,14 @@ describe("SaasAiSettings", () => {
     expect(
       screen.getByText(/Pull-request review is a Pro capability/),
     ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Save preferences" }),
+    ).toBeDisabled();
 
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /Assistance timing/ }),
+      "automatic",
+    );
     await user.click(screen.getByRole("button", { name: "Save preferences" }));
     expect(mocks.save).toHaveBeenCalledWith({
       provider: "openrouter",
@@ -117,7 +124,7 @@ describe("SaasAiSettings", () => {
       clearHeaders: false,
       headers: {},
       useManagedModels: true,
-      mode: "on_demand",
+      mode: "automatic",
       reviewPullRequests: false,
     });
     expect(mocks.configurationInvalidate).toHaveBeenCalledOnce();
