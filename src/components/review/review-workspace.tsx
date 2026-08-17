@@ -7300,6 +7300,10 @@ export function ReviewWorkspace({
                   >
                     <ArrowLeft className="size-4" />
                     Dashboard
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.dashboard}
+                      className="hidden sm:inline-flex"
+                    />
                   </Button>
                 )}
               </div>

@@ -36,13 +36,15 @@ describe("waiting review concept selection", () => {
   it("orders the oldest wait first without mutating its input", () => {
     const newer = waitingConcept(4);
     const older = waitingConcept(1);
-    const input = [newer, older];
+    const unknown = waitingConcept(8, { waitingSince: null });
+    const input = [unknown, newer, older];
 
     expect(orderWaitingReviewConcepts(input).map(({ id }) => id)).toEqual([
       older.id,
       newer.id,
+      unknown.id,
     ]);
-    expect(input).toEqual([newer, older]);
+    expect(input).toEqual([unknown, newer, older]);
   });
 
   it("searches concept titles, files, authors, and comment bodies", () => {
@@ -66,6 +68,63 @@ describe("waiting review concept selection", () => {
 });
 
 describe("ReviewWaitingCompletion", () => {
+  it("contains focus within an accessible modal and restores it on close", async () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <ReviewWaitingCompletion
+        concepts={[waitingConcept(1)]}
+        providerName="GitHub"
+        queueLoading={false}
+        reviewedConcepts={9}
+        totalConcepts={10}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onStopWaiting={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "You’re caught up." });
+    const dismiss = screen.getByRole("button", {
+      name: "Close waiting dialog and keep review open",
+    });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dismiss).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Dashboard" })).toHaveFocus();
+    outside.focus();
+    expect(dismiss).toHaveFocus();
+    unmount();
+    expect(outside).toHaveFocus();
+    outside.remove();
+  });
+
+  it("explains when provider activity has no known wait timestamp", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewWaitingCompletion
+        concepts={[waitingConcept(1, { waitingSince: null })]}
+        providerName="GitHub"
+        queueLoading={false}
+        reviewedConcepts={9}
+        totalConcepts={10}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onStopWaiting={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /View 1 concept/i }));
+    expect(screen.getByText("Waiting for provider activity")).toBeVisible();
+  });
+
   it("summarizes a large waiting set before rendering its rows", async () => {
     const concepts = Array.from({ length: 42 }, (_, index) =>
       waitingConcept(index),
@@ -139,5 +198,35 @@ describe("ReviewWaitingCompletion", () => {
     expect(onOpenConcept).toHaveBeenCalledWith("concept-2");
     await user.click(screen.getByRole("button", { name: "Stop waiting" }));
     expect(onStopWaiting).toHaveBeenCalledWith("concept-2");
+  });
+
+  it("allows only one waiting concept release at a time", async () => {
+    const onStopWaiting = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReviewWaitingCompletion
+        concepts={[waitingConcept(1), waitingConcept(2)]}
+        providerName="GitHub"
+        queueLoading={false}
+        releasingConceptId="concept-1"
+        reviewedConcepts={10}
+        totalConcepts={12}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onStopWaiting={onStopWaiting}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /View 2 concepts/i }));
+    const resuming = screen.getByRole("button", { name: "Resuming…" });
+    const otherRelease = screen.getByRole("button", { name: "Stop waiting" });
+    expect(resuming).toBeDisabled();
+    expect(resuming.querySelector(".animate-spin")).toBeInTheDocument();
+    expect(otherRelease).toBeDisabled();
+
+    await user.click(otherRelease);
+    expect(onStopWaiting).not.toHaveBeenCalled();
   });
 });

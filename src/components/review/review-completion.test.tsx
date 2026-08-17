@@ -86,6 +86,46 @@ describe("findNextReview", () => {
 });
 
 describe("ReviewCompletion", () => {
+  it("contains focus within an accessible modal and restores it on close", async () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <ReviewCompletion
+        completedFiles={7}
+        completedUnits={24}
+        dashboardShortcut={[{ key: "g" }, { key: "r" }]}
+        dismissShortcut={[{ key: "Escape" }]}
+        nextReview={reviews[3]}
+        nextReviewShortcut={[{ key: "n", shift: true }]}
+        providerReview={<div>Provider approval</div>}
+        queueLoading={false}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Review complete." });
+    const dismiss = screen.getByRole("button", {
+      name: "Keep completed review open",
+    });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dismiss).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(
+      screen.getByRole("button", { name: /Review next PR/i }),
+    ).toHaveFocus();
+
+    outside.focus();
+    expect(dismiss).toHaveFocus();
+    unmount();
+    expect(outside).toHaveFocus();
+    outside.remove();
+  });
+
   it("summarizes the accomplishment and continues to the next review", async () => {
     const onNextReview = vi.fn();
     const user = userEvent.setup();

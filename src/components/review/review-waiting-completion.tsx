@@ -11,7 +11,10 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
-import type { ReviewCompletionCandidate } from "./review-completion";
+import {
+  type ReviewCompletionCandidate,
+  useReviewDialogFocus,
+} from "./review-completion";
 
 export interface WaitingReviewConcept {
   commentCount: number;
@@ -71,13 +74,16 @@ export function orderWaitingReviewConcepts(concepts: WaitingReviewConcept[]) {
   });
 }
 
+let waitFormatter: Intl.DateTimeFormat | undefined;
+
 /** Formats a wait start while allowing the browser to use the reviewer's locale. */
 function waitingTimestamp(value: Date | null) {
   if (!value) return "Waiting for provider activity";
-  return `Waiting since ${new Intl.DateTimeFormat(undefined, {
+  waitFormatter ??= new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(value)}`;
+  });
+  return `Waiting since ${waitFormatter.format(value)}`;
 }
 
 /** Shows the distinct end state where all available work is done but waits remain. */
@@ -95,6 +101,7 @@ export function ReviewWaitingCompletion({
   onOpenConcept,
   onStopWaiting,
 }: ReviewWaitingCompletionProps) {
+  const { dialogRef, initialFocusRef } = useReviewDialogFocus();
   const [waitingRoomOpen, setWaitingRoomOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ordered = useMemo(
@@ -111,8 +118,12 @@ export function ReviewWaitingCompletion({
   return (
     <div className="bg-ink/90 absolute inset-0 z-30 grid place-items-center overflow-y-auto p-4 font-sans backdrop-blur-[3px] sm:p-8">
       <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="review-waiting-title"
         aria-describedby="review-waiting-description"
+        tabIndex={-1}
         className="bg-panel relative my-auto flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
       >
         <div
@@ -120,8 +131,9 @@ export function ReviewWaitingCompletion({
           className="from-cyan/10 via-cyan/[.025] absolute inset-x-0 top-0 h-48 bg-gradient-to-b to-transparent"
         />
         <button
+          ref={initialFocusRef}
           type="button"
-          aria-label="Keep review open"
+          aria-label="Close waiting dialog and keep review open"
           title="Keep review open (Escape)"
           onClick={onDismiss}
           className="text-mist hover:text-cloud hover:bg-surface-subtle absolute top-4 right-4 z-20 grid size-9 place-items-center rounded-full border border-transparent transition hover:border-line"
