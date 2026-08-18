@@ -191,12 +191,26 @@ export function RepositoryDetail({
               ) : (
                 <>
                   <Clock3 className="text-cyan size-3.5" />
-                  {repository.intakeLastReconciledAt
-                    ? `Last checked ${new Intl.DateTimeFormat(undefined, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      }).format(new Date(repository.intakeLastReconciledAt))}`
-                    : "Waiting for the first automatic check."}
+                  {repository.intakeLastReconciledAt ? (
+                    <>
+                      Last checked{" "}
+                      <time
+                        dateTime={new Date(
+                          repository.intakeLastReconciledAt,
+                        ).toISOString()}
+                        // Formatted in the reviewer's locale, which the server
+                        // render cannot know.
+                        suppressHydrationWarning
+                      >
+                        {new Intl.DateTimeFormat(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(repository.intakeLastReconciledAt))}
+                      </time>
+                    </>
+                  ) : (
+                    "Waiting for the first automatic check."
+                  )}
                 </>
               )}
             </p>
@@ -307,9 +321,11 @@ export function RepositoryDetail({
                     })
                   }
                 >
-                  {syncPullRequest.isPending && (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  )}
+                  {syncPullRequest.isPending &&
+                    syncPullRequest.variables?.number ===
+                      pullRequest.number && (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    )}
                   Prepare review
                 </Button>
               </div>

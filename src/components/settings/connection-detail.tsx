@@ -258,17 +258,6 @@ export function ConnectionDetail({
             {availableRepositories.isLoading && (
               <Loader2 className="text-lime m-4 size-4 animate-spin" />
             )}
-            {availableRepositories.isError && !connectionError && (
-              <div
-                role="alert"
-                className="border-coral/25 bg-coral/[.055] flex items-start gap-3 rounded-xl border px-4 py-3"
-              >
-                <CircleAlert className="text-coral mt-0.5 size-4 shrink-0" />
-                <p className="text-mist text-[11px] leading-5">
-                  {availableRepositories.error.message}
-                </p>
-              </div>
-            )}
             {filteredRepositories?.map((repository) => {
               const imported = importedRepositories.find(
                 (item) => item.externalId === repository.externalId,
@@ -302,6 +291,11 @@ export function ConnectionDetail({
                         })
                       }
                     >
+                      {importRepository.isPending &&
+                        importRepository.variables?.externalId ===
+                          repository.externalId && (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        )}
                       Add
                     </Button>
                   )}
