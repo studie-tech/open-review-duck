@@ -13,6 +13,12 @@ import {
 
 afterEach(cleanup);
 
+const shortcutProps = {
+  dashboardShortcut: [{ key: "g" }, { key: "r" }],
+  dismissShortcut: [{ key: "Escape" }],
+  nextReviewShortcut: [{ key: "n", shift: true }],
+};
+
 /** Builds a waiting-concept fixture with focused per-test overrides. */
 const waitingConcept = (
   index: number,
@@ -76,6 +82,7 @@ describe("ReviewWaitingCompletion", () => {
     const onDismiss = vi.fn();
     const { unmount } = render(
       <ReviewWaitingCompletion
+        {...shortcutProps}
         concepts={[waitingConcept(1)]}
         providerName="GitHub"
         queueLoading={false}
@@ -97,7 +104,7 @@ describe("ReviewWaitingCompletion", () => {
     expect(dismiss).toHaveFocus();
 
     await user.tab({ shift: true });
-    expect(screen.getByRole("button", { name: "Dashboard" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Dashboard/ })).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(onDismiss).toHaveBeenCalledOnce();
@@ -109,10 +116,44 @@ describe("ReviewWaitingCompletion", () => {
     outside.remove();
   });
 
+  it("shows keyboard shortcuts on the end-state actions", () => {
+    render(
+      <ReviewWaitingCompletion
+        {...shortcutProps}
+        concepts={[waitingConcept(1)]}
+        nextReview={{
+          id: "next-pr",
+          number: 7,
+          repositoryName: "open-review-duck",
+          repositoryOwner: "studie-tech",
+          signedUnits: 2,
+          title: "Improve settings UX",
+          totalUnits: 9,
+        }}
+        providerName="GitHub"
+        queueLoading={false}
+        reviewedConcepts={9}
+        totalConcepts={10}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onStopWaiting={vi.fn()}
+      />,
+    );
+
+    for (const name of [/Keep review open/, /Dashboard/, /Review next PR/]) {
+      expect(
+        screen.getByRole("button", { name }).querySelector("kbd"),
+      ).toBeInTheDocument();
+    }
+  });
+
   it("explains when provider activity has no known wait timestamp", async () => {
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
+        {...shortcutProps}
         concepts={[waitingConcept(1, { waitingSince: null })]}
         providerName="GitHub"
         queueLoading={false}
@@ -137,6 +178,7 @@ describe("ReviewWaitingCompletion", () => {
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
+        {...shortcutProps}
         concepts={concepts}
         providerName="GitHub"
         queueLoading={false}
@@ -171,6 +213,7 @@ describe("ReviewWaitingCompletion", () => {
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
+        {...shortcutProps}
         concepts={[
           waitingConcept(1, { title: "Bloodline behavior" }),
           waitingConcept(2, {
@@ -210,6 +253,7 @@ describe("ReviewWaitingCompletion", () => {
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
+        {...shortcutProps}
         concepts={[waitingConcept(1), waitingConcept(2)]}
         providerName="GitHub"
         queueLoading={false}
