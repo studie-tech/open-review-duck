@@ -239,8 +239,10 @@ export function ReviewCompletion({
                 </p>
                 <button
                   type="button"
+                  disabled={navigationPending}
+                  aria-busy={navigationPending || undefined}
                   onClick={onNextReview}
-                  className="hover:border-cyan/25 hover:bg-cyan/[.035] mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/70 p-4 text-left transition"
+                  className="hover:border-cyan/25 hover:bg-cyan/[.035] mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/70 p-4 text-left transition disabled:pointer-events-none"
                 >
                   <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
                     <GitPullRequest className="size-4" />
