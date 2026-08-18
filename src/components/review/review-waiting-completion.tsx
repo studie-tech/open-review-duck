@@ -6,6 +6,7 @@ import {
   Clock3,
   LayoutDashboard,
   LoaderCircle,
+  MessageSquareText,
   Search,
   X,
 } from "lucide-react";
@@ -19,6 +20,7 @@ import {
 } from "./review-completion";
 
 export interface WaitingReviewConcept {
+  answered: boolean;
   commentCount: number;
   id: string;
   latestComment?: {
@@ -70,12 +72,16 @@ export function filterWaitingReviewConcepts(
   );
 }
 
-/** Orders long waiting sets by the concept that has been paused the longest. */
+/** Orders answered concepts first, then the concept paused the longest. */
 export function orderWaitingReviewConcepts(concepts: WaitingReviewConcept[]) {
   return [...concepts].sort((left, right) => {
     const leftTime = left.waitingSince?.getTime() ?? Number.MAX_SAFE_INTEGER;
     const rightTime = right.waitingSince?.getTime() ?? Number.MAX_SAFE_INTEGER;
-    return leftTime - rightTime || left.title.localeCompare(right.title);
+    return (
+      Number(right.answered) - Number(left.answered) ||
+      leftTime - rightTime ||
+      left.title.localeCompare(right.title)
+    );
   });
 }
 
@@ -122,6 +128,7 @@ export function ReviewWaitingCompletion({
   );
   const oldest = ordered[0];
   const waitingLabel = `${concepts.length} ${concepts.length === 1 ? "concept" : "concepts"}`;
+  const answeredCount = concepts.filter(({ answered }) => answered).length;
 
   return (
     <div className="bg-ink/90 absolute inset-0 z-30 grid place-items-center overflow-y-auto p-4 font-sans backdrop-blur-[3px] sm:p-8">
@@ -217,10 +224,19 @@ export function ReviewWaitingCompletion({
                           className="min-w-0 flex-1 text-left"
                         >
                           <span className="flex items-center gap-2">
-                            <Clock3 className="text-cyan size-3.5 shrink-0" />
+                            {concept.answered ? (
+                              <MessageSquareText className="text-lime size-3.5 shrink-0" />
+                            ) : (
+                              <Clock3 className="text-cyan size-3.5 shrink-0" />
+                            )}
                             <span className="truncate text-sm font-medium text-cloud">
                               {concept.title}
                             </span>
+                            {concept.answered && (
+                              <span className="border-lime/25 bg-lime/10 text-lime shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-wider uppercase">
+                                Response received
+                              </span>
+                            )}
                           </span>
                           <span className="text-fog mt-1.5 block truncate pl-5.5 font-mono text-[9px]">
                             {concept.paths.join(" · ")}
@@ -274,18 +290,22 @@ export function ReviewWaitingCompletion({
                           <Button
                             type="button"
                             size="sm"
-                            variant="secondary"
+                            variant={concept.answered ? "primary" : "secondary"}
                             disabled={Boolean(releasingConceptId)}
                             onClick={() => onStopWaiting(concept.id)}
                           >
                             {releasingConceptId === concept.id ? (
                               <LoaderCircle className="size-3.5 animate-spin" />
+                            ) : concept.answered ? (
+                              <MessageSquareText className="size-3.5" />
                             ) : (
                               <Clock3 className="size-3.5" />
                             )}
                             {releasingConceptId === concept.id
                               ? "Resuming…"
-                              : "Stop waiting"}
+                              : concept.answered
+                                ? "Resume review"
+                                : "Stop waiting"}
                           </Button>
                         </div>
                       </div>
@@ -348,9 +368,12 @@ export function ReviewWaitingCompletion({
                 id="review-waiting-description"
                 className="text-mist mt-3 max-w-2xl text-sm leading-6"
               >
-                You reviewed {reviewedConcepts} of {totalConcepts} concepts. The
-                remaining {waitingLabel} will return automatically when their{" "}
-                {providerName} conversations or code change.
+                You reviewed {reviewedConcepts} of {totalConcepts} concepts.{" "}
+                {answeredCount > 0
+                  ? `${answeredCount} of the ${waitingLabel} you were waiting on ${
+                      answeredCount === 1 ? "has" : "have"
+                    } a response ready to review; the rest return automatically when their ${providerName} conversations or code change.`
+                  : `The remaining ${waitingLabel} will return automatically when their ${providerName} conversations or code change.`}
               </p>
 
               <dl className="mt-7 grid grid-cols-3 overflow-hidden rounded-2xl border border-line bg-surface/55">
@@ -374,7 +397,13 @@ export function ReviewWaitingCompletion({
                   <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
                     Ready now
                   </dt>
-                  <dd className="mt-1 font-mono text-lg text-cloud">0</dd>
+                  <dd
+                    className={`mt-1 font-mono text-lg ${
+                      answeredCount > 0 ? "text-lime" : "text-cloud"
+                    }`}
+                  >
+                    {answeredCount}
+                  </dd>
                 </div>
               </dl>
 
@@ -391,9 +420,11 @@ export function ReviewWaitingCompletion({
                     View {waitingLabel}
                   </span>
                   <span className="text-mist mt-1 block truncate text-[10px]">
-                    {oldest
-                      ? `${oldest.title} has been waiting longest`
-                      : "See what this review is waiting on"}
+                    {answeredCount > 0
+                      ? `${answeredCount} ${answeredCount === 1 ? "response is" : "responses are"} ready to review`
+                      : oldest
+                        ? `${oldest.title} has been waiting longest`
+                        : "See what this review is waiting on"}
                   </span>
                 </span>
                 <ArrowRight className="text-cyan size-4 shrink-0" />

@@ -2711,6 +2711,10 @@ export function ReviewWorkspace({
     setRevisionNotice(undefined);
   }
 
+  const answeredWaitUnitIds = useMemo(
+    () => new Set(providerConversations.data?.answeredUnitIds ?? []),
+    [providerConversations.data?.answeredUnitIds],
+  );
   const waitingReviewConcepts = useMemo(() => {
     const threads = providerConversations.data?.threads ?? [];
     return conceptProgress.flatMap(
@@ -2736,6 +2740,7 @@ export function ReviewWorkspace({
         ].sort((left, right) => left.getTime() - right.getTime())[0];
         return [
           {
+            answered: members.some(({ id }) => answeredWaitUnitIds.has(id)),
             commentCount: conceptThreads.reduce(
               (total, { comments }) => total + comments.length,
               0,
@@ -2758,7 +2763,14 @@ export function ReviewWorkspace({
         ];
       },
     );
-  }, [conceptProgress, providerConversations.data?.threads]);
+  }, [
+    conceptProgress,
+    providerConversations.data?.threads,
+    answeredWaitUnitIds,
+  ]);
+  const answeredConceptCount = waitingReviewConcepts.filter(
+    ({ answered }) => answered,
+  ).length;
 
   const activeProviderThreads =
     providerConversations.data?.threads.filter(
@@ -2778,38 +2790,26 @@ export function ReviewWorkspace({
       activeConceptMembers.some((member) => member.id === thread.unitId),
     ) ??
       false);
-  const handledReopenedUnits = useRef(new Set<string>());
+  const notifiedAnsweredUnits = useRef(new Set<string>());
   useEffect(() => {
-    const reopenedUnitIds =
-      providerConversations.data?.reopenedUnitIds.filter(
-        (unitId) => !handledReopenedUnits.current.has(unitId),
+    const answeredUnitIds =
+      providerConversations.data?.answeredUnitIds.filter(
+        (unitId) => !notifiedAnsweredUnits.current.has(unitId),
       ) ?? [];
-    if (reopenedUnitIds.length === 0) return;
-    for (const unitId of reopenedUnitIds) {
-      handledReopenedUnits.current.add(unitId);
+    if (answeredUnitIds.length === 0) return;
+    for (const unitId of answeredUnitIds) {
+      notifiedAnsweredUnits.current.add(unitId);
     }
-    const reopened = new Set(reopenedUnitIds);
-    setUnits((current) =>
-      current.map((unit) =>
-        reopened.has(unit.id)
-          ? {
-              ...unit,
-              status: "pending" as const,
-              waitingSince: null,
-            }
-          : unit,
-      ),
-    );
     toast.info(
-      reopenedUnitIds.length === 1
-        ? "A waiting unit has new activity"
-        : `${reopenedUnitIds.length} waiting units have new activity`,
+      answeredUnitIds.length === 1
+        ? "A waiting conversation has a response"
+        : `${answeredUnitIds.length} waiting conversations have responses`,
       {
         description:
-          "The affected code is back in your review path with the new conversation.",
+          "The work stays in Waiting until you resume it — open it to see what changed.",
       },
     );
-  }, [providerConversations.data?.reopenedUnitIds]);
+  }, [providerConversations.data?.answeredUnitIds]);
   /**
    * Moves the named units into the waiting section of the review path.
    *
@@ -3413,6 +3413,9 @@ export function ReviewWorkspace({
             key={thread.externalId}
             provider={initialData.pullRequest.provider}
             thread={thread}
+            newSince={
+              activeUnit.status === "waiting" ? activeUnit.waitingSince : null
+            }
             managing={managingThread(thread.externalId)}
             replying={
               replyToThread.isPending &&
@@ -3788,6 +3791,12 @@ export function ReviewWorkspace({
   // waiting?" asks the concept first and falls back to the unit only when no
   // layout groups it.
   const activeWaitStatus = activeConceptProgress?.status ?? activeUnit?.status;
+  // The concept holds the wait, so a response on any member marks the whole
+  // concept as answered even when another member's card is open.
+  const activeConceptAnswered =
+    activeWaitStatus === "waiting" &&
+    (activeConceptMembers.some(({ id }) => answeredWaitUnitIds.has(id)) ||
+      (activeUnit ? answeredWaitUnitIds.has(activeUnit.id) : false));
   // A concept action needs a layout to name, and a concept of one member is
   // its unit — there the two levels collapse into a single action.
   const conceptActionAvailable = Boolean(
@@ -4659,10 +4668,10 @@ export function ReviewWorkspace({
   /**
    * Gives back the waits the open concept is holding.
    *
-   * A wait ends on its own only when the provider answers or the code moves,
-   * so without this a concept paused by mistake — or answered somewhere the
-   * poll cannot see, such as a thread resolved rather than replied to — stays
-   * out of the review path for good.
+   * Only the reviewer releases a wait: when the provider answers, the
+   * workspace marks the concept as answered and this same action resumes it
+   * with the response still on screen. It equally frees a concept paused by
+   * mistake or answered somewhere the poll cannot see.
    */
   function stopWaitingOnActive() {
     if (!canStopWaiting) return;
@@ -6468,12 +6477,18 @@ export function ReviewWorkspace({
                 >
                   {activeConcept?.title ?? activeUnit.name}
                 </h1>
-                {activeConceptProgress?.status === "waiting" && (
-                  <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
-                    <Clock3 className="size-3" />
-                    Waiting for response
-                  </Badge>
-                )}
+                {activeConceptProgress?.status === "waiting" &&
+                  (activeConceptAnswered ? (
+                    <Badge className="border-lime/25 bg-lime/10 text-lime">
+                      <MessageSquareText className="size-3" />
+                      Response received
+                    </Badge>
+                  ) : (
+                    <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                      <Clock3 className="size-3" />
+                      Waiting for response
+                    </Badge>
+                  ))}
                 {activeUnit.changedSinceSignOff && (
                   <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
                     Changed
@@ -7129,10 +7144,19 @@ export function ReviewWorkspace({
               ) : reviewCaughtUp ? (
                 <span
                   role="status"
-                  className="text-cyan flex items-center gap-2 whitespace-nowrap"
+                  className={cn(
+                    "flex items-center gap-2 whitespace-nowrap",
+                    answeredConceptCount > 0 ? "text-lime" : "text-cyan",
+                  )}
                 >
-                  <Clock3 className="size-3.5" />
-                  All available work reviewed · {waitingConceptCount} waiting
+                  {answeredConceptCount > 0 ? (
+                    <MessageSquareText className="size-3.5" />
+                  ) : (
+                    <Clock3 className="size-3.5" />
+                  )}
+                  {answeredConceptCount > 0
+                    ? `All available work reviewed · ${answeredConceptCount} ${answeredConceptCount === 1 ? "response" : "responses"} ready`
+                    : `All available work reviewed · ${waitingConceptCount} waiting`}
                 </span>
               ) : (
                 <span className="hidden items-center gap-3 xl:flex">
@@ -7262,20 +7286,24 @@ export function ReviewWorkspace({
               <div className="flex min-w-0 items-center justify-end gap-2">
                 {activeWaitStatus === "waiting" && (
                   <Button
-                    variant="secondary"
+                    variant={activeConceptAnswered ? "primary" : "secondary"}
                     className="h-10 px-3 sm:h-11 sm:px-4"
                     onClick={stopWaitingOnActive}
                     disabled={!canStopWaiting}
                   >
                     {releaseReviewWaits.isPending ? (
                       <LoaderCircle className="size-4 animate-spin" />
+                    ) : activeConceptAnswered ? (
+                      <MessageSquareText className="size-4" />
                     ) : (
                       <Clock3 className="size-4" />
                     )}
                     <span className="hidden sm:inline">
                       {releaseReviewWaits.isPending
                         ? "Resuming…"
-                        : "Stop waiting"}
+                        : activeConceptAnswered
+                          ? "Resume review"
+                          : "Stop waiting"}
                     </span>
                   </Button>
                 )}
@@ -7284,11 +7312,19 @@ export function ReviewWorkspace({
                   className="h-10 px-3 sm:h-11 sm:px-4"
                   onClick={() => setWaitingCompletionOpen(true)}
                 >
-                  <Clock3 className="size-4 text-cyan" />
+                  {answeredConceptCount > 0 ? (
+                    <MessageSquareText className="text-lime size-4" />
+                  ) : (
+                    <Clock3 className="text-cyan size-4" />
+                  )}
                   <span className="hidden sm:inline">
-                    View {waitingConceptCount} waiting
+                    {answeredConceptCount > 0
+                      ? `View ${answeredConceptCount} ${answeredConceptCount === 1 ? "response" : "responses"}`
+                      : `View ${waitingConceptCount} waiting`}
                   </span>
-                  <span className="sm:hidden">Waiting</span>
+                  <span className="sm:hidden">
+                    {answeredConceptCount > 0 ? "Responses" : "Waiting"}
+                  </span>
                 </Button>
                 {nextReview ? (
                   <Button
@@ -7367,21 +7403,29 @@ export function ReviewWorkspace({
                   // footer spends the slot on the way out of it instead of
                   // repeating the state as a button nobody can press.
                   <Button
-                    variant="secondary"
+                    variant={activeConceptAnswered ? "primary" : "secondary"}
                     className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                    title="Take back the wait and return this work to your review path"
+                    title={
+                      activeConceptAnswered
+                        ? "The conversation has a response — return this work to your review path"
+                        : "Take back the wait and return this work to your review path"
+                    }
                     onClick={stopWaitingOnActive}
                     disabled={!canStopWaiting}
                   >
                     {releaseReviewWaits.isPending ? (
                       <LoaderCircle className="size-4 animate-spin" />
+                    ) : activeConceptAnswered ? (
+                      <MessageSquareText className="size-4" />
                     ) : (
                       <Clock3 className="size-4" />
                     )}
                     <span className="hidden sm:inline">
                       {releaseReviewWaits.isPending
                         ? "Resuming…"
-                        : "Stop waiting"}
+                        : activeConceptAnswered
+                          ? "Resume review"
+                          : "Stop waiting"}
                     </span>
                     <span className="sm:hidden">
                       {releaseReviewWaits.isPending ? "Resuming…" : "Resume"}
