@@ -1,6 +1,8 @@
 import { ArrowRight, Bot, PlugZap } from "lucide-react";
 import Link from "next/link";
 import { PageContainer } from "~/components/page-container";
+import { LinkNavigationStatus } from "~/components/ui/link-status";
+import { Spinner } from "~/components/ui/spinner";
 
 const sections = [
   {
@@ -44,7 +46,14 @@ export default function SettingsPage() {
               <span className="block text-sm font-medium">{title}</span>
               <span className="text-mist mt-1 block text-xs">{body}</span>
             </span>
-            <ArrowRight className="text-fog group-hover:text-cloud size-4 transition group-hover:translate-x-1" />
+            <LinkNavigationStatus
+              idle={
+                <ArrowRight className="text-fog group-hover:text-cloud size-4 transition group-hover:translate-x-1" />
+              }
+              pending={
+                <Spinner className="navigation-pending-reveal text-fog size-4" />
+              }
+            />
           </Link>
         ))}
       </div>

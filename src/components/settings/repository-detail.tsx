@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
+import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
 import {
@@ -265,8 +266,9 @@ export function RepositoryDetail({
             <button
               type="button"
               aria-label="Refresh pull requests"
+              disabled={openPullRequests.isFetching}
               onClick={() => void openPullRequests.refetch()}
-              className="text-mist hover:text-cloud grid size-9 shrink-0 place-items-center rounded-lg border border-line transition"
+              className="text-mist hover:text-cloud grid size-9 shrink-0 place-items-center rounded-lg border border-line transition disabled:pointer-events-none"
             >
               <RefreshCw
                 className={cn(
@@ -349,7 +351,10 @@ export function RepositoryDetail({
             </p>
           </div>
           <Button asChild size="sm" variant="secondary">
-            <Link href="/dashboard">Open review queue</Link>
+            <Link href="/dashboard">
+              <LinkPendingSpinner />
+              Open review queue
+            </Link>
           </Button>
         </div>
       )}

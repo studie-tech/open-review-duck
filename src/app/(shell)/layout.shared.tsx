@@ -3,8 +3,8 @@ import { protectApplicationRoute } from "~/server/auth";
 import { isLocalDeployment } from "~/server/deployment";
 import { api } from "~/trpc/server";
 
-/** Renders the settings layout interface. */
-export default async function SettingsLayout({
+/** Renders the shared app shell around the dashboard and settings sections. */
+export default async function ShellLayout({
   children,
 }: {
   children: React.ReactNode;

@@ -11,12 +11,14 @@ import {
   RotateCcw,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Fragment, useMemo } from "react";
 
 import type { CommandCenterItem } from "~/components/command-center";
+import { usePendingNavigation } from "~/components/navigation-progress";
 import { usePageCommandCenter } from "~/components/page-command-center";
 import { Badge } from "~/components/ui/badge";
+import { LinkNavigationStatus } from "~/components/ui/link-status";
+import { Spinner } from "~/components/ui/spinner";
 import { priorityInboxGroup } from "~/lib/priority-inbox";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
@@ -75,7 +77,7 @@ export function PullRequestList({
   showPriorityGroups?: boolean;
   compact?: boolean;
 }) {
-  const router = useRouter();
+  const { navigate } = usePendingNavigation();
   const commands = useMemo<CommandCenterItem[]>(
     () =>
       kind === "active"
@@ -91,10 +93,10 @@ export function PullRequestList({
             ],
             shortcut: positionShortcut(index + 1),
             searchOnly: true,
-            onSelect: () => router.push(`/review/${pullRequest.id}`),
+            onSelect: () => navigate(`/review/${pullRequest.id}`),
           }))
         : [],
-    [kind, pullRequests, router],
+    [kind, pullRequests, navigate],
   );
   const pendingShortcut = usePageCommandCenter(commands);
   const isChoosingPullRequest =
@@ -180,17 +182,24 @@ export function PullRequestList({
                     kind === "closed" && "bg-cyan/10 text-cyan",
                   )}
                 >
-                  {isChoosingPullRequest ? (
-                    <kbd className="font-mono text-xs font-semibold">
-                      {position}
-                    </kbd>
-                  ) : kind === "reviewed" ? (
-                    <CheckCheck className="size-4" />
-                  ) : kind === "closed" ? (
-                    <GitMerge className="size-4" />
-                  ) : (
-                    <GitPullRequest className="size-4" />
-                  )}
+                  <LinkNavigationStatus
+                    idle={
+                      isChoosingPullRequest ? (
+                        <kbd className="font-mono text-xs font-semibold">
+                          {position}
+                        </kbd>
+                      ) : kind === "reviewed" ? (
+                        <CheckCheck className="size-4" />
+                      ) : kind === "closed" ? (
+                        <GitMerge className="size-4" />
+                      ) : (
+                        <GitPullRequest className="size-4" />
+                      )
+                    }
+                    pending={
+                      <Spinner className="navigation-pending-reveal size-4" />
+                    }
+                  />
                 </span>
                 <span className="min-w-0">
                   <span className="flex min-w-0 items-center gap-2">

@@ -2,8 +2,12 @@
 
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useTransition } from "react";
 import { Button } from "~/components/ui/button";
+import {
+  LinkNavigationStatus,
+  LinkPendingSpinner,
+} from "~/components/ui/link-status";
 
 interface RecoveryErrorProps {
   backHref: string;
@@ -27,6 +31,7 @@ export function RecoveryError({
   reset,
   title,
 }: RecoveryErrorProps) {
+  const [retrying, startRetry] = useTransition();
   useEffect(() => {
     console.error(logLabel, error);
   }, [error, logLabel]);
@@ -40,13 +45,16 @@ export function RecoveryError({
         <h1 className="mt-3 font-serif text-3xl tracking-tight">{title}</h1>
         <p className="text-mist mt-3 text-sm leading-6">{description}</p>
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Button onClick={reset}>
-            <RefreshCw className="size-4" />
+          <Button loading={retrying} onClick={() => startRetry(reset)}>
+            {!retrying && <RefreshCw className="size-4" />}
             Try again
           </Button>
           <Button variant="secondary" asChild>
             <Link href={backHref}>
-              <ArrowLeft className="size-4" />
+              <LinkNavigationStatus
+                idle={<ArrowLeft className="size-4" />}
+                pending={<LinkPendingSpinner />}
+              />
               {backLabel}
             </Link>
           </Button>
