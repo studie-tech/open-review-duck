@@ -159,9 +159,12 @@ export function ProviderSettings({
       setRepositories((current) =>
         current.filter(({ id }) => id !== variables.repositoryId),
       );
-      if (removed) {
-        setSelection({ kind: "connection", id: removed.connectionId ?? "" });
-      }
+      const nextConnectionId = removed?.connectionId ?? connections[0]?.id;
+      setSelection(
+        nextConnectionId
+          ? { kind: "connection", id: nextConnectionId }
+          : undefined,
+      );
       void Promise.all([
         invalidateProviderState(),
         utils.provider.listOpenPullRequests.invalidate(),

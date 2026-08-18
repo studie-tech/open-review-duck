@@ -105,6 +105,9 @@ export function ConnectionFormDialog({
   /** Switches the create form to another provider and clears provider input. */
   function selectProvider(nextProvider: Provider) {
     setProvider(nextProvider);
+    // The token belongs to the provider it was created for; carrying it across
+    // a switch would send that secret to a different provider's host.
+    setToken("");
     setBaseUrl("");
     setConnectionMethod(
       localMode || nextProvider === "azure_devops" ? "pat" : "managed",
@@ -319,7 +322,7 @@ export function ConnectionFormDialog({
                 connect.mutate({
                   connectionId: editingConnection?.id,
                   provider,
-                  displayName: account || undefined,
+                  displayName: account.trim() || undefined,
                   accessToken: token,
                   baseUrl: baseUrl || undefined,
                 })

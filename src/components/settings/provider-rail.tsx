@@ -49,10 +49,17 @@ export function ProviderRail({
   selection?: SettingsSelection;
 }) {
   const normalizedSearch = search.trim().toLowerCase();
+  const repositoriesByConnection = new Map<string, ImportedRepository[]>();
+  for (const repository of repositories) {
+    if (!repository.connectionId) continue;
+    const bucket = repositoriesByConnection.get(repository.connectionId);
+    if (bucket) bucket.push(repository);
+    else repositoriesByConnection.set(repository.connectionId, [repository]);
+  }
   const visibleConnections = connections.filter((connection) =>
     connectionMatches(
       connection,
-      repositories.filter(({ connectionId }) => connectionId === connection.id),
+      repositoriesByConnection.get(connection.id) ?? [],
       normalizedSearch,
     ),
   );
@@ -74,9 +81,8 @@ export function ProviderRail({
       </label>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-1 lg:pr-1">
         {visibleConnections.map((connection) => {
-          const connectionRepositories = repositories.filter(
-            ({ connectionId }) => connectionId === connection.id,
-          );
+          const connectionRepositories =
+            repositoriesByConnection.get(connection.id) ?? [];
           const connectionSelected =
             selection?.kind === "connection" && selection.id === connection.id;
           const connectionSearchMatch =
@@ -155,6 +161,7 @@ export function ProviderRail({
                       </span>
                       {repository.intakeLastError && (
                         <CircleAlert
+                          role="img"
                           className="text-coral size-3 shrink-0"
                           aria-label="Intake needs attention"
                         />
