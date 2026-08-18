@@ -56,8 +56,9 @@ test("bootstraps local provider setup and preserves the session across restart",
     ),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Add connection" }),
+    page.getByRole("heading", { name: "Connect your first code provider" }),
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: "GitHub" })).toBeVisible();
 
   const bootstrapCountBeforeRestart = bootstrapUrls().length;
   execFileSync("docker", ["restart", container]);
