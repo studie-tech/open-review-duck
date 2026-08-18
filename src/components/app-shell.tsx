@@ -290,12 +290,7 @@ export function AppShell({
             <BrandMark className="size-9" />
             <span className="sr-only">ReviewDuck.ai</span>
           </Link>
-          <div className="text-fog hidden text-xs lg:block">
-            {deploymentMode === "local"
-              ? "Local review workspace"
-              : "Focused review workspace"}
-          </div>
-          <div className="flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-3">
             <button
               type="button"
               onClick={openCommands}

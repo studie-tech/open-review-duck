@@ -194,13 +194,6 @@ export function DashboardContent({
           ),
     [scopedItems, workView],
   );
-  const inProgressCount = useMemo(
-    () =>
-      needsReview.filter(
-        (pullRequest) => priorityInboxGroup(pullRequest).id === "continue",
-      ).length,
-    [needsReview],
-  );
   /** Applies the current provider, repository, and search filters to one list. */
   const applySharedFilters = (
     items: DashboardPullRequests,
@@ -300,30 +293,7 @@ export function DashboardContent({
         </Button>
       </div>
 
-      <section className="bg-surface/55 mt-8 grid grid-cols-3 gap-4 rounded-2xl border border-line px-5 py-4 sm:max-w-lg">
-        {(
-          [
-            ["all", "Needs review", needsReview.length],
-            ["continue", "In progress", inProgressCount],
-            ["reviewed", "Reviewed", reviewed.length],
-          ] as const
-        ).map(([view, label, count]) => (
-          <button
-            key={view}
-            type="button"
-            onClick={() => setWorkView(view)}
-            aria-pressed={workView === view}
-            className="rounded-xl text-left transition hover:opacity-80"
-          >
-            <p className="text-fog text-[10px] tracking-[.08em] uppercase">
-              {label}
-            </p>
-            <p className="mt-0.5 text-sm font-semibold tabular-nums">{count}</p>
-          </button>
-        ))}
-      </section>
-
-      <div className="mt-6 space-y-4">
+      <div className="mt-8 space-y-4">
         <DashboardSyncPanel synchronizing={synchronizing} />
         <DashboardFailurePanel failedSyncs={failedSyncs} />
       </div>
