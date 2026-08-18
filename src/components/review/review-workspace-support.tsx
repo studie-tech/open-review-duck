@@ -2638,6 +2638,7 @@ export interface ProviderConversationActions {
 export function ProviderConversation({
   className,
   managing = false,
+  newSince,
   onDeleteComment,
   onDeleteThread,
   onEditComment,
@@ -2650,12 +2651,24 @@ export function ProviderConversation({
 }: ProviderConversationActions & {
   className?: string;
   managing?: boolean;
+  /** Marks comments after this moment as the activity a wait was paused for. */
+  newSince?: Date | null;
   provider: WorkspaceData["pullRequest"]["provider"];
   replying: boolean;
   thread: ProviderConversationThread;
   publishedByReviewDuck: boolean;
 }) {
-  const [expanded, setExpanded] = useState(thread.status !== "resolved");
+  /** Reports whether one comment arrived after the reviewer began waiting. */
+  const isNewComment = (createdAt: string) =>
+    Boolean(newSince && new Date(createdAt) > newSince);
+  // A resolved conversation normally starts collapsed, but the one a wait was
+  // paused for holds the answer the reviewer came back to read.
+  const hasNewComments = thread.comments.some(({ createdAt }) =>
+    isNewComment(createdAt),
+  );
+  const [expanded, setExpanded] = useState(
+    thread.status !== "resolved" || hasNewComments,
+  );
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [editing, setEditing] = useState<string>();
@@ -2684,9 +2697,9 @@ export function ProviderConversation({
   }, [editing]);
 
   useEffect(() => {
-    setExpanded(thread.status !== "resolved");
+    setExpanded(thread.status !== "resolved" || hasNewComments);
     setReplyOpen(false);
-  }, [thread.status]);
+  }, [thread.status, hasNewComments]);
 
   /** Publishes the draft while preserving it if the provider rejects the reply. */
   async function submitReply() {
@@ -2877,6 +2890,11 @@ export function ProviderConversation({
                   {index > 0 && (
                     <span className="text-cyan text-[8px] font-semibold tracking-wider uppercase">
                       Reply
+                    </span>
+                  )}
+                  {isNewComment(comment.createdAt) && (
+                    <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-1.5 py-px text-[8px] font-semibold tracking-wider uppercase">
+                      New
                     </span>
                   )}
                   {/* One workspace connection speaks for every member, so

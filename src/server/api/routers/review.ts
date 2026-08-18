@@ -2851,7 +2851,7 @@ export const reviewRouter = createTRPCRouter({
           provider: scope.provider,
           threads: [],
           syncedAt: new Date(),
-          reopenedUnitIds: [],
+          answeredUnitIds: [],
         };
       }
       const allUnits = await ctx.db
@@ -2963,7 +2963,7 @@ export const reviewRouter = createTRPCRouter({
             answeredUnitIds.push(wait.unitId);
           }
         }
-        const released = new Set([
+        const answered = new Set([
           ...answeredUnitIds,
           ...(await conceptSiblingUnitIds(
             ctx.db,
@@ -2972,23 +2972,14 @@ export const reviewRouter = createTRPCRouter({
             answeredUnitIds,
           )),
         ]);
-        // A sibling the reviewer never paused is already in the review path,
-        // so only the waits actually held are reported as reopened.
-        const releasedWaits = waits.filter(({ unitId }) =>
-          released.has(unitId),
+        // The waits stay held: releasing them here would clear the waiting
+        // state before the reviewer has seen what answered it. A sibling the
+        // reviewer never paused is already in the review path, so only the
+        // waits actually held are reported as answered — the reviewer resumes
+        // them from the workspace once the response is read.
+        const answeredWaits = waits.filter(({ unitId }) =>
+          answered.has(unitId),
         );
-        const reopenedUnitIds = releasedWaits.map(({ unitId }) => unitId);
-        if (releasedWaits.length) {
-          await ctx.db.delete(reviewWaits).where(
-            and(
-              eq(reviewWaits.userId, ctx.auth.userId),
-              inArray(
-                reviewWaits.id,
-                releasedWaits.map(({ id }) => id),
-              ),
-            ),
-          );
-        }
         return {
           provider: scope.provider,
           threads: assignedThreads
@@ -3014,7 +3005,7 @@ export const reviewRouter = createTRPCRouter({
               }),
             })),
           syncedAt: new Date(),
-          reopenedUnitIds,
+          answeredUnitIds: answeredWaits.map(({ unitId }) => unitId),
         };
       } catch (cause) {
         throw new TRPCError({

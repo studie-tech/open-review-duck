@@ -39,12 +39,18 @@ export function providerActivityForUnit(
     providerThreadIds: relevantThreads
       .map((thread) => thread.externalId)
       .sort(),
+    // A resolved thread carries a marker of its own: a conversation can be
+    // answered by resolving it without a reply, and only a marker that was
+    // absent when the wait began reads as new activity later.
     observedCommentIds: relevantThreads
-      .flatMap((thread) =>
-        thread.comments.map(
+      .flatMap((thread) => [
+        ...thread.comments.map(
           (comment) => `${thread.externalId}:${comment.externalId}`,
         ),
-      )
+        ...(thread.status === "resolved"
+          ? [`${thread.externalId}:resolved`]
+          : []),
+      ])
       .sort(),
   };
 }

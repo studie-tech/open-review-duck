@@ -24,6 +24,7 @@ const waitingConcept = (
   index: number,
   overrides: Partial<WaitingReviewConcept> = {},
 ): WaitingReviewConcept => ({
+  answered: false,
   commentCount: 1,
   id: `concept-${index}`,
   latestComment: {
@@ -51,6 +52,15 @@ describe("waiting review concept selection", () => {
       unknown.id,
     ]);
     expect(input).toEqual([unknown, newer, older]);
+  });
+
+  it("puts an answered concept ahead of one that waited longer", () => {
+    const answered = waitingConcept(6, { answered: true });
+    const older = waitingConcept(1);
+
+    expect(
+      orderWaitingReviewConcepts([older, answered]).map(({ id }) => id),
+    ).toEqual([answered.id, older.id]);
   });
 
   it("searches concept titles, files, authors, and comment bodies", () => {
@@ -114,6 +124,41 @@ describe("ReviewWaitingCompletion", () => {
     unmount();
     expect(outside).toHaveFocus();
     outside.remove();
+  });
+
+  it("surfaces answered concepts as ready to resume", async () => {
+    const onStopWaiting = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReviewWaitingCompletion
+        {...shortcutProps}
+        concepts={[
+          waitingConcept(1, { answered: true, title: "Answered concept" }),
+          waitingConcept(2, { title: "Still waiting" }),
+        ]}
+        providerName="GitHub"
+        queueLoading={false}
+        reviewedConcepts={8}
+        totalConcepts={10}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onStopWaiting={onStopWaiting}
+      />,
+    );
+
+    expect(screen.getByText("Ready now").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText(/1 response is ready to review/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /View 2 concepts/i }));
+    expect(screen.getByText("Response received")).toBeVisible();
+    const resume = screen.getByRole("button", { name: /Resume review/ });
+    await user.click(resume);
+    expect(onStopWaiting).toHaveBeenCalledWith("concept-1");
+    expect(
+      screen.getByRole("button", { name: /Stop waiting/ }),
+    ).toBeInTheDocument();
   });
 
   it("shows keyboard shortcuts on the end-state actions", () => {

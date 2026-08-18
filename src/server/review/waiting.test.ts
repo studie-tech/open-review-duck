@@ -73,6 +73,43 @@ describe("providerActivityForUnit", () => {
       ).providerThreadIds,
     ).toEqual(["thread-1"]);
   });
+
+  it("treats resolving a thread without a reply as new activity", () => {
+    const unit = { path: "src/review.ts", startLine: 10, endLine: 20 };
+    const observedWhileOpen = providerActivityForUnit(threads, unit);
+    const observedAfterResolution = providerActivityForUnit(
+      threads.map((thread) =>
+        thread.externalId === "thread-1"
+          ? { ...thread, status: "resolved" as const }
+          : thread,
+      ),
+      unit,
+    );
+
+    expect(
+      hasNewProviderActivity(
+        observedWhileOpen.observedCommentIds,
+        observedAfterResolution.observedCommentIds,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not wake a unit whose thread was already resolved when waiting began", () => {
+    const unit = { path: "src/review.ts", startLine: 10, endLine: 20 };
+    const resolvedThreads = threads.map((thread) =>
+      thread.externalId === "thread-1"
+        ? { ...thread, status: "resolved" as const }
+        : thread,
+    );
+    const observed = providerActivityForUnit(resolvedThreads, unit);
+
+    expect(
+      hasNewProviderActivity(
+        observed.observedCommentIds,
+        providerActivityForUnit(resolvedThreads, unit).observedCommentIds,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("assignProviderThreadsToUnits", () => {
