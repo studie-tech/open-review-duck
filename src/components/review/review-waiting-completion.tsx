@@ -10,7 +10,9 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
+import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
 import {
   type ReviewCompletionCandidate,
   useReviewDialogFocus,
@@ -32,7 +34,10 @@ export interface WaitingReviewConcept {
 
 interface ReviewWaitingCompletionProps {
   concepts: WaitingReviewConcept[];
+  dashboardShortcut: KeyboardShortcut;
+  dismissShortcut: KeyboardShortcut;
   nextReview?: ReviewCompletionCandidate;
+  nextReviewShortcut: KeyboardShortcut;
   providerName: string;
   queueLoading: boolean;
   releasingConceptId?: string;
@@ -89,7 +94,10 @@ function waitingTimestamp(value: Date | null) {
 /** Shows the distinct end state where all available work is done but waits remain. */
 export function ReviewWaitingCompletion({
   concepts,
+  dashboardShortcut,
+  dismissShortcut,
   nextReview,
+  nextReviewShortcut,
   providerName,
   queueLoading,
   releasingConceptId,
@@ -294,6 +302,7 @@ export function ReviewWaitingCompletion({
             <footer className="relative flex shrink-0 flex-col-reverse gap-2 border-t border-line bg-surface/35 px-5 py-4 sm:flex-row sm:items-center sm:px-8">
               <Button type="button" variant="ghost" onClick={onDismiss}>
                 Keep review open
+                <ShortcutHint shortcut={dismissShortcut} />
               </Button>
               <Button
                 type="button"
@@ -303,11 +312,19 @@ export function ReviewWaitingCompletion({
               >
                 <LayoutDashboard className="size-4" />
                 Dashboard
+                <ShortcutHint
+                  shortcut={dashboardShortcut}
+                  className="hidden sm:inline-flex"
+                />
               </Button>
               {nextReview && (
                 <Button type="button" onClick={onNextReview}>
                   Review next PR
                   <ArrowRight className="size-4" />
+                  <ShortcutHint
+                    shortcut={nextReviewShortcut}
+                    className="hidden sm:inline-flex"
+                  />
                 </Button>
               )}
             </footer>
@@ -391,15 +408,24 @@ export function ReviewWaitingCompletion({
                 onClick={onDismiss}
               >
                 Keep review open
+                <ShortcutHint shortcut={dismissShortcut} />
               </Button>
               <Button type="button" variant="secondary" onClick={onDashboard}>
                 <LayoutDashboard className="size-4" />
                 Dashboard
+                <ShortcutHint
+                  shortcut={dashboardShortcut}
+                  className="hidden sm:inline-flex"
+                />
               </Button>
               {nextReview ? (
                 <Button type="button" onClick={onNextReview}>
                   Review next PR
                   <ArrowRight className="size-4" />
+                  <ShortcutHint
+                    shortcut={nextReviewShortcut}
+                    className="hidden sm:inline-flex"
+                  />
                 </Button>
               ) : queueLoading ? (
                 <Button type="button" disabled>

@@ -5627,7 +5627,9 @@ export function ReviewWorkspace({
       group: "Navigate",
       icon: <ChevronRight className="size-4" />,
       shortcut: reviewShortcuts.nextReview,
-      disabled: !reviewComplete || !nextReview,
+      // The caught-up end state offers the same jump: everything reviewable is
+      // done even though waiting concepts keep the review itself unfinished.
+      disabled: (!reviewComplete && !reviewCaughtUp) || !nextReview,
       onSelect: openNextReview,
     },
     {
@@ -6390,7 +6392,10 @@ export function ReviewWorkspace({
           {waitingCompletionVisible && (
             <ReviewWaitingCompletion
               concepts={waitingReviewConcepts}
+              dashboardShortcut={reviewShortcuts.dashboard}
+              dismissShortcut={[{ key: "Escape" }]}
               nextReview={nextReview}
+              nextReviewShortcut={reviewShortcuts.nextReview}
               providerName={providerLabel(initialData.pullRequest.provider)}
               queueLoading={reviewQueue.isLoading}
               releasingConceptId={releasingWaitingConceptId}
