@@ -20,6 +20,25 @@ describe("Button", () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
+  it("shows a spinner and blocks activation while loading", async () => {
+    const onClick = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <Button loading onClick={onClick}>
+        Publishing comment
+      </Button>,
+    );
+    const button = screen.getByRole("button", { name: "Publishing comment" });
+
+    await user.click(button).catch(() => undefined);
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button.querySelector(".animate-spin")).not.toBeNull();
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
   it("preserves link semantics when rendered as a child", () => {
     render(
       <Button asChild variant="secondary">

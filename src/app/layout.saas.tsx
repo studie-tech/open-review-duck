@@ -6,6 +6,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { cookies, headers } from "next/headers";
 
 import { AppToaster } from "~/components/app-toaster";
+import { NavigationProgressProvider } from "~/components/navigation-progress";
 import { ThemePreferenceScript } from "~/components/theme-preference-script";
 import { THEME_COOKIE_NAME, themePreference } from "~/lib/theme-preference";
 import { assertDeploymentConfigured } from "~/server/deployment";
@@ -54,7 +55,9 @@ export default async function RootLayout({
   assertDeploymentConfigured();
   const application = (
     <body className="bg-ink text-cloud antialiased">
-      <TRPCReactProvider localMode={false}>{children}</TRPCReactProvider>
+      <TRPCReactProvider localMode={false}>
+        <NavigationProgressProvider>{children}</NavigationProgressProvider>
+      </TRPCReactProvider>
       <AppToaster />
     </body>
   );

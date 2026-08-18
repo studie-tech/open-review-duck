@@ -14,6 +14,10 @@ import { redirect } from "next/navigation";
 
 import { BrandMark } from "~/components/brand-mark";
 import { ThemeToggle } from "~/components/theme-toggle";
+import {
+  LinkNavigationStatus,
+  LinkPendingSpinner,
+} from "~/components/ui/link-status";
 import { applicationAuth } from "~/server/auth";
 import { isLocalDeployment } from "~/server/deployment";
 
@@ -259,9 +263,10 @@ export default async function Home() {
           </Link>
           <ThemeToggle />
           <Link
-            className="bg-cloud text-ink hidden rounded-xl px-4 py-2.5 text-sm font-semibold transition hover:opacity-85 sm:block"
+            className="bg-cloud text-ink hidden items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition hover:opacity-85 sm:flex"
             href="/dashboard"
           >
+            <LinkPendingSpinner />
             Open workspace
           </Link>
         </div>
@@ -290,7 +295,12 @@ export default async function Home() {
               className="bg-lime text-accent-foreground group inline-flex items-center justify-center gap-2 rounded-xl border border-lime px-5 py-3.5 text-sm font-semibold shadow-[0_12px_35px_var(--app-shadow)] transition hover:-translate-y-px hover:bg-accent-hover"
             >
               Review a pull request
-              <ArrowRight className="size-4 transition group-hover:translate-x-0.5" />
+              <LinkNavigationStatus
+                idle={
+                  <ArrowRight className="size-4 transition group-hover:translate-x-0.5" />
+                }
+                pending={<LinkPendingSpinner />}
+              />
             </Link>
             <Link
               href="#workflow"
@@ -386,7 +396,11 @@ export default async function Home() {
             href="/dashboard"
             className="bg-lime text-accent-foreground mt-8 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold"
           >
-            Open the workspace <Send className="size-4" />
+            Open the workspace{" "}
+            <LinkNavigationStatus
+              idle={<Send className="size-4" />}
+              pending={<LinkPendingSpinner />}
+            />
           </Link>
         </div>
       </section>

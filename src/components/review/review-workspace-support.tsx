@@ -2681,6 +2681,7 @@ export function ProviderConversation({
   // `managing` only reaches this component on the render after a mutation
   // starts, so a second activation in the same frame would send twice.
   const inFlight = useRef(false);
+  const [resolving, setResolving] = useState(false);
   const resolved = thread.status === "resolved";
   // Deleting a conversation takes every comment in it, so one belonging to
   // someone else puts the whole conversation out of this reviewer's reach.
@@ -2737,6 +2738,7 @@ export function ProviderConversation({
   async function submitResolution(resolve: boolean) {
     if (managing || inFlight.current) return;
     inFlight.current = true;
+    setResolving(true);
     try {
       await onResolve(resolve);
     } catch {
@@ -2744,6 +2746,7 @@ export function ProviderConversation({
       // the resolution the provider still reports.
     } finally {
       inFlight.current = false;
+      setResolving(false);
     }
   }
 
@@ -2827,13 +2830,21 @@ export function ProviderConversation({
                 : "text-lime hover:bg-lime/10",
             )}
           >
-            {resolved ? (
+            {resolving ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : resolved ? (
               <CircleDot className="size-3.5" />
             ) : (
               <CircleCheck className="size-3.5" />
             )}
             <span className="hidden sm:inline">
-              {resolved ? "Reopen" : "Resolve"}
+              {resolving
+                ? resolved
+                  ? "Reopening…"
+                  : "Resolving…"
+                : resolved
+                  ? "Reopen"
+                  : "Resolve"}
             </span>
           </button>
           <button

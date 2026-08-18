@@ -40,6 +40,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import { toast } from "sonner";
 import {
@@ -51,10 +52,15 @@ import {
   ShortcutSequenceIndicator,
   useCommandCenterBindings,
 } from "~/components/command-center";
+import { usePendingNavigation } from "~/components/navigation-progress";
 import { ThemeToggle } from "~/components/theme-toggle";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import {
+  LinkNavigationStatus,
+  LinkPendingSpinner,
+} from "~/components/ui/link-status";
 import { aiErrorPresentation } from "~/lib/ai-errors";
 import {
   type AiQuestionStreamUpdate,
@@ -900,6 +906,8 @@ export function ReviewWorkspace({
   initialData: WorkspaceData;
 }) {
   const router = useRouter();
+  const { navigate, pending: navigationPending } = usePendingNavigation();
+  const [loadingChanges, startLoadingChanges] = useTransition();
   const [reviewSession, sendReviewSession] = useMachine(reviewSessionMachine);
   useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
@@ -1171,6 +1179,7 @@ export function ReviewWorkspace({
   // Units of a multi-unit undo whose own success is not worth a toast.
   const quietUndoUnitIds = useRef(new Set<string>());
   const undoInFlight = useRef(false);
+  const [undoPending, setUndoPending] = useState(false);
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
@@ -2322,6 +2331,11 @@ export function ReviewWorkspace({
     },
     onError: (error) => toast.error(error.message),
   });
+  // Improve, Split, and Move member all funnel into the same layout mutation,
+  // so the pressed control is remembered to keep its spinner on that control.
+  const [conceptLayoutAction, setConceptLayoutAction] = useState<
+    "improve" | "split" | "move"
+  >();
   const replaceConceptLayout =
     api.review.replacePersonalConceptLayout.useMutation({
       onSuccess: () => {
@@ -2332,10 +2346,14 @@ export function ReviewWorkspace({
         router.refresh();
       },
       onError: (error) => toast.error(error.message),
+      onSettled: () => setConceptLayoutAction(undefined),
     });
   const improveConceptGrouping = api.review.improveConceptGrouping.useMutation({
     onSuccess: ({ concepts }) => {
-      if (!initialData.snapshot || !initialData.conceptLayout) return;
+      if (!initialData.snapshot || !initialData.conceptLayout) {
+        setConceptLayoutAction(undefined);
+        return;
+      }
       replaceConceptLayout.mutate({
         pullRequestId: initialData.pullRequest.id,
         snapshotId: initialData.snapshot.id,
@@ -2344,7 +2362,10 @@ export function ReviewWorkspace({
         concepts,
       });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => {
+      setConceptLayoutAction(undefined);
+      toast.error(error.message);
+    },
   });
   /** Finds the next filtered match, then resumes the global review path. */
   function nextReviewIndexAfterAction(
@@ -2700,9 +2721,14 @@ export function ReviewWorkspace({
 
   /** Replaces the current review workspace with the newly synced revision. */
   function loadAvailableChanges() {
+    if (loadingChanges) return;
     rememberLoadedRevision();
-    setUpdateAvailable(false);
-    router.refresh();
+    // Inside the transition, the banner stays up (with its button spinning)
+    // until the refreshed workspace actually arrives.
+    startLoadingChanges(() => {
+      setUpdateAvailable(false);
+      router.refresh();
+    });
   }
 
   /** Acknowledges the explanation for the currently loaded PR revision. */
@@ -3343,6 +3369,10 @@ export function ReviewWorkspace({
                 comment.aiFindingIndex === finding.index &&
                 comment.status === "published",
             ) ?? false;
+          const publishingThisFinding =
+            publishComment.isPending &&
+            publishComment.variables?.aiJobId === finding.aiJobId &&
+            publishComment.variables?.aiFindingIndex === finding.index;
           return (
             <article
               key={`${finding.aiJobId}-${finding.index}`}
@@ -3376,12 +3406,12 @@ export function ReviewWorkspace({
                       })
                     }
                   >
-                    {publishComment.isPending ? (
+                    {publishingThisFinding ? (
                       <LoaderCircle className="size-3 animate-spin" />
                     ) : (
                       <Send className="size-3" />
                     )}
-                    {publishComment.isPending
+                    {publishingThisFinding
                       ? "Posting…"
                       : `Post to ${providerLabel(initialData.pullRequest.provider)}`}
                   </Button>
@@ -3514,12 +3544,14 @@ export function ReviewWorkspace({
                     })
                   }
                 >
-                  {publishComment.isPending ? (
+                  {publishComment.isPending &&
+                  publishComment.variables?.body != null ? (
                     <LoaderCircle className="size-3 animate-spin" />
                   ) : (
                     <Send className="size-3" />
                   )}
-                  {publishComment.isPending
+                  {publishComment.isPending &&
+                  publishComment.variables?.body != null
                     ? "Posting…"
                     : `Post to ${providerLabel(initialData.pullRequest.provider)}`}
                 </Button>
@@ -3755,10 +3787,10 @@ export function ReviewWorkspace({
     reviewComplete && completionOpen && footerSaveState === "idle";
   const waitingCompletionVisible =
     reviewCaughtUp && waitingCompletionOpen && footerSaveState === "idle";
-  const openDashboard = useCallback(() => router.push("/dashboard"), [router]);
+  const openDashboard = useCallback(() => navigate("/dashboard"), [navigate]);
   const openNextReview = useCallback(() => {
-    if (nextReview) router.push(`/review/${nextReview.id}`);
-  }, [nextReview, router]);
+    if (nextReview) navigate(`/review/${nextReview.id}`);
+  }, [nextReview, navigate]);
   useEffect(() => {
     if (!completionVisible && !waitingCompletionVisible) return;
 
@@ -4320,6 +4352,7 @@ export function ReviewWorkspace({
     ) {
       return;
     }
+    setConceptLayoutAction("split");
     replaceConceptLayout.mutate({
       pullRequestId: initialData.pullRequest.id,
       snapshotId: initialData.snapshot.id,
@@ -4364,6 +4397,7 @@ export function ReviewWorkspace({
     const target =
       initialData.concepts[(sourceIndex + 1) % initialData.concepts.length];
     if (!target || target.id === activeConcept.id) return;
+    setConceptLayoutAction("move");
     replaceConceptLayout.mutate({
       pullRequestId: initialData.pullRequest.id,
       snapshotId: initialData.snapshot.id,
@@ -4589,6 +4623,7 @@ export function ReviewWorkspace({
     // so a held shortcut would otherwise take the same step back twice.
     if (!undoableSignOff || !canUndoSignOff || undoInFlight.current) return;
     undoInFlight.current = true;
+    setUndoPending(true);
     const { entry, remaining } = undoableSignOff;
     setSignOffUndoHistory(remaining);
     restoreReviewView(entry.view, entry.unitIds);
@@ -4619,6 +4654,7 @@ export function ReviewWorkspace({
       // and the next undo of one of them would succeed without saying so.
       quietUndoUnitIds.current.clear();
       undoInFlight.current = false;
+      setUndoPending(false);
     }
   }
 
@@ -5656,7 +5692,7 @@ export function ReviewWorkspace({
       group: "Navigate",
       icon: <Sparkles className="size-4" />,
       shortcut: reviewShortcuts.aiSettings,
-      onSelect: () => router.push("/settings/ai"),
+      onSelect: () => navigate("/settings/ai"),
     },
     ...unitCommands,
   ];
@@ -5798,7 +5834,10 @@ export function ReviewWorkspace({
             Synchronize this pull request after its first file change.
           </p>
           <Button asChild className="mt-6">
-            <Link href="/dashboard">Back to dashboard</Link>
+            <Link href="/dashboard">
+              <LinkPendingSpinner />
+              Back to dashboard
+            </Link>
           </Button>
         </div>
       </main>
@@ -5813,7 +5852,12 @@ export function ReviewWorkspace({
           aria-label="Back to dashboard"
           className="text-mist hover:text-cloud grid size-9 place-items-center rounded-full transition hover:bg-surface-subtle"
         >
-          <ArrowLeft className="size-4" />
+          <LinkNavigationStatus
+            idle={<ArrowLeft className="size-4" />}
+            pending={
+              <LoaderCircle className="navigation-pending-reveal size-4 animate-spin" />
+            }
+          />
         </Link>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">
@@ -5850,7 +5894,9 @@ export function ReviewWorkspace({
               : () => void syncExternalData()
           }
           disabled={
-            resetReview.isPending || (!updateAvailable && externalSyncPending)
+            resetReview.isPending ||
+            loadingChanges ||
+            (!updateAvailable && externalSyncPending)
           }
           aria-label={
             updateAvailable
@@ -5867,11 +5913,14 @@ export function ReviewWorkspace({
           <RefreshCw
             className={cn(
               "size-4",
-              externalSyncPending && !updateAvailable && "animate-spin",
+              (loadingChanges || (externalSyncPending && !updateAvailable)) &&
+                "animate-spin",
             )}
           />
           <span className="hidden sm:inline">
-            {updateAvailable ? (
+            {loadingChanges ? (
+              "Loading…"
+            ) : updateAvailable ? (
               <>
                 Load
                 <span className="hidden xl:inline"> changes</span>
@@ -5895,6 +5944,7 @@ export function ReviewWorkspace({
           type="button"
           onClick={undoLastSignOff}
           disabled={!canUndoSignOff}
+          aria-busy={undoPending || undefined}
           aria-label="Undo the last sign-off"
           title={
             undoableSignOff
@@ -5903,8 +5953,14 @@ export function ReviewWorkspace({
           }
           className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
         >
-          <Undo2 className="size-4" />
-          <span className="hidden sm:inline">Undo</span>
+          {undoPending ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <Undo2 className="size-4" />
+          )}
+          <span className="hidden sm:inline">
+            {undoPending ? "Undoing…" : "Undo"}
+          </span>
           <ShortcutHint
             shortcut={reviewShortcuts.undoSignOff}
             className="hidden 2xl:inline-flex"
@@ -5970,11 +6026,14 @@ export function ReviewWorkspace({
           </p>
           <Button
             size="sm"
+            loading={loadingChanges}
             onClick={loadAvailableChanges}
             title="Load the synced code changes (R)"
           >
-            <span>Load changes</span>
-            <ShortcutHint shortcut={reviewShortcuts.loadChanges} />
+            <span>{loadingChanges ? "Loading changes…" : "Load changes"}</span>
+            {!loadingChanges && (
+              <ShortcutHint shortcut={reviewShortcuts.loadChanges} />
+            )}
           </Button>
         </div>
       )}
@@ -6541,13 +6600,14 @@ export function ReviewWorkspace({
               {initialData.conceptLayout && !conceptLayoutLocked && (
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setConceptLayoutAction("improve");
                     improveConceptGrouping.mutate({
                       pullRequestId: initialData.pullRequest.id,
                       layoutId: initialData.conceptLayout?.id ?? "",
                       layoutVersion: initialData.conceptLayout?.version ?? 1,
-                    })
-                  }
+                    });
+                  }}
                   disabled={
                     improveConceptGrouping.isPending ||
                     replaceConceptLayout.isPending
@@ -6556,7 +6616,8 @@ export function ReviewWorkspace({
                   title="Use the configured AI provider to create a personal intent-based grouping"
                 >
                   {improveConceptGrouping.isPending ||
-                  replaceConceptLayout.isPending ? (
+                  (replaceConceptLayout.isPending &&
+                    conceptLayoutAction === "improve") ? (
                     <LoaderCircle className="size-3.5 animate-spin" />
                   ) : (
                     <Sparkles className="size-3.5" />
@@ -6564,7 +6625,8 @@ export function ReviewWorkspace({
                   <span className="hidden lg:inline">
                     {improveConceptGrouping.isPending
                       ? "Improving grouping…"
-                      : replaceConceptLayout.isPending
+                      : replaceConceptLayout.isPending &&
+                          conceptLayoutAction === "improve"
                         ? "Applying grouping…"
                         : "Improve grouping with AI"}
                   </span>
@@ -6577,10 +6639,17 @@ export function ReviewWorkspace({
                     type="button"
                     onClick={splitActiveConcept}
                     disabled={replaceConceptLayout.isPending}
-                    className="text-mist hover:text-cyan h-8 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
+                    className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
                     title="Split this concept into atomic units"
                   >
-                    Split
+                    {replaceConceptLayout.isPending &&
+                      conceptLayoutAction === "split" && (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      )}
+                    {replaceConceptLayout.isPending &&
+                    conceptLayoutAction === "split"
+                      ? "Splitting…"
+                      : "Split"}
                   </button>
                 )}
               {initialData.conceptLayout &&
@@ -6590,10 +6659,17 @@ export function ReviewWorkspace({
                     type="button"
                     onClick={moveActiveMemberToNextConcept}
                     disabled={replaceConceptLayout.isPending}
-                    className="text-mist hover:text-cyan h-8 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
+                    className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
                     title="Move this member to the next review concept"
                   >
-                    Move member
+                    {replaceConceptLayout.isPending &&
+                      conceptLayoutAction === "move" && (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      )}
+                    {replaceConceptLayout.isPending &&
+                    conceptLayoutAction === "move"
+                      ? "Moving…"
+                      : "Move member"}
                   </button>
                 )}
               <button
@@ -7259,10 +7335,11 @@ export function ReviewWorkspace({
                 {nextReview ? (
                   <Button
                     className="h-10 px-3 sm:h-11 sm:px-5"
+                    loading={navigationPending}
                     onClick={openNextReview}
                   >
                     Next review
-                    <ChevronRight className="size-4" />
+                    {!navigationPending && <ChevronRight className="size-4" />}
                     <ShortcutHint
                       shortcut={reviewShortcuts.nextReview}
                       className="hidden sm:inline-flex"
@@ -7271,9 +7348,10 @@ export function ReviewWorkspace({
                 ) : (
                   <Button
                     className="h-10 px-3 sm:h-11 sm:px-5"
+                    loading={navigationPending}
                     onClick={openDashboard}
                   >
-                    <ArrowLeft className="size-4" />
+                    {!navigationPending && <ArrowLeft className="size-4" />}
                     Dashboard
                     <ShortcutHint
                       shortcut={reviewShortcuts.dashboard}

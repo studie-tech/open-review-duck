@@ -13,7 +13,7 @@ import {
   Trophy,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   type ReactNode,
   useCallback,
@@ -33,8 +33,11 @@ import {
   ShortcutSequenceIndicator,
   useCommandCenterBindings,
 } from "~/components/command-center";
+import { usePendingNavigation } from "~/components/navigation-progress";
 import { PageCommandCenterProvider } from "~/components/page-command-center";
 import { ThemeToggle } from "~/components/theme-toggle";
+import { LinkNavigationStatus } from "~/components/ui/link-status";
+import { Spinner } from "~/components/ui/spinner";
 import type { DeploymentMode } from "~/lib/deployment";
 import {
   commandMenuShortcut,
@@ -51,6 +54,9 @@ const navigation = [
     mobileLabel: "Reviews",
     icon: LayoutDashboard,
     shortcut: [{ key: "g" }, { key: "r" }],
+    // The dashboard refetches its queries on mount, so a full prefetch can
+    // never pin stale data to the screen.
+    eagerPrefetch: true,
   },
   {
     href: "/dashboard/achievements",
@@ -58,6 +64,7 @@ const navigation = [
     mobileLabel: "Progress",
     icon: Trophy,
     shortcut: [{ key: "g" }, { key: "p" }],
+    eagerPrefetch: true,
   },
   {
     href: "/settings/ai",
@@ -65,6 +72,7 @@ const navigation = [
     mobileLabel: "AI",
     icon: Sparkles,
     shortcut: [{ key: "g" }, { key: "a" }],
+    eagerPrefetch: false,
   },
   {
     href: "/settings",
@@ -72,6 +80,7 @@ const navigation = [
     mobileLabel: "Settings",
     icon: Settings,
     shortcut: [{ key: "g" }, { key: "s" }],
+    eagerPrefetch: false,
   },
 ] satisfies Array<{
   href: string;
@@ -79,6 +88,7 @@ const navigation = [
   mobileLabel: string;
   icon: typeof LayoutDashboard;
   shortcut: KeyboardShortcut;
+  eagerPrefetch: boolean;
 }>;
 
 /** Checks whether a navigation item matches the current route. */
@@ -112,7 +122,7 @@ export function AppShell({
   initialAiPlanUsage?: AiPlanUsage;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
+  const { navigate } = usePendingNavigation();
   const utils = api.useUtils();
   const reconcileIntake = api.provider.reconcileWorkspaceIntake.useMutation({
     onSuccess: (result) => {
@@ -178,7 +188,7 @@ export function AppShell({
         icon: <Icon className="size-4" />,
         shortcut,
         disabled: href === pathname,
-        onSelect: () => router.push(href),
+        onSelect: () => navigate(href),
       })),
       {
         id: "navigate-providers",
@@ -187,7 +197,7 @@ export function AppShell({
         group: "Workspace",
         icon: <PlugZap className="size-4" />,
         shortcut: [{ key: "g" }, { key: "c" }],
-        onSelect: () => router.push("/settings/providers"),
+        onSelect: () => navigate("/settings/providers"),
       },
       {
         id: "navigate-ai",
@@ -195,11 +205,11 @@ export function AppShell({
         description: "Manage assistance, providers, and model options",
         group: "Workspace",
         icon: <Bot className="size-4" />,
-        onSelect: () => router.push("/settings/ai"),
+        onSelect: () => navigate("/settings/ai"),
       },
       ...pageCommands,
     ],
-    [pageCommands, pathname, router],
+    [pageCommands, pathname, navigate],
   );
   const pendingShortcut = useCommandCenterBindings({
     commands,
@@ -218,13 +228,14 @@ export function AppShell({
           <span className="font-semibold tracking-tight">ReviewDuck.ai</span>
         </Link>
         <nav className="mt-10 space-y-1">
-          {navigation.map(({ href, label, icon: Icon, shortcut }) => {
+          {navigation.map(({ href, label, icon: Icon, shortcut, ...item }) => {
             const active = isNavigationActive(pathname, href);
 
             return (
               <Link
                 key={href}
                 href={href}
+                prefetch={item.eagerPrefetch || undefined}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition",
@@ -233,9 +244,16 @@ export function AppShell({
                     : "text-mist hover:bg-surface-subtle hover:text-cloud",
                 )}
               >
-                <Icon
-                  className={cn("size-4", active && "text-lime")}
-                  aria-hidden="true"
+                <LinkNavigationStatus
+                  idle={
+                    <Icon
+                      className={cn("size-4", active && "text-lime")}
+                      aria-hidden="true"
+                    />
+                  }
+                  pending={
+                    <Spinner className="navigation-pending-reveal size-4" />
+                  }
                 />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
                 <ShortcutHint
@@ -273,9 +291,16 @@ export function AppShell({
             </p>
             <span className="text-lime mt-3 flex items-center gap-1.5 text-xs font-semibold">
               {guidance.action}
-              <ArrowRight
-                className="size-3.5 transition-transform group-hover:translate-x-0.5"
-                aria-hidden="true"
+              <LinkNavigationStatus
+                idle={
+                  <ArrowRight
+                    className="size-3.5 transition-transform group-hover:translate-x-0.5"
+                    aria-hidden="true"
+                  />
+                }
+                pending={
+                  <Spinner className="navigation-pending-reveal size-3.5" />
+                }
               />
             </span>
           </Link>
@@ -330,7 +355,14 @@ export function AppShell({
                     : "text-mist hover:text-cloud",
                 )}
               >
-                <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+                <LinkNavigationStatus
+                  idle={
+                    <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+                  }
+                  pending={
+                    <Spinner className="navigation-pending-reveal size-3.5" />
+                  }
+                />
                 <span className="truncate sm:hidden">{mobileLabel}</span>
                 <span className="hidden sm:inline">{label}</span>
               </Link>

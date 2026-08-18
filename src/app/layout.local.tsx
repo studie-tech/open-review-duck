@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { cookies, headers } from "next/headers";
 import { AppToaster } from "~/components/app-toaster";
+import { NavigationProgressProvider } from "~/components/navigation-progress";
 import { ThemePreferenceScript } from "~/components/theme-preference-script";
 import { THEME_COOKIE_NAME, themePreference } from "~/lib/theme-preference";
 import { assertDeploymentConfigured } from "~/server/deployment";
@@ -53,7 +54,9 @@ export default async function LocalRootLayout({
         <ThemePreferenceScript nonce={nonce} />
       </head>
       <body className="bg-ink text-cloud antialiased">
-        <TRPCReactProvider localMode>{children}</TRPCReactProvider>
+        <TRPCReactProvider localMode>
+          <NavigationProgressProvider>{children}</NavigationProgressProvider>
+        </TRPCReactProvider>
         <AppToaster />
       </body>
     </html>

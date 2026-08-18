@@ -12,6 +12,10 @@ import { PullRequestList } from "~/components/dashboard/pull-request-list";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import {
+  LinkNavigationStatus,
+  LinkPendingSpinner,
+} from "~/components/ui/link-status";
+import {
   comparePriorityInboxText,
   filterPriorityInbox,
   type PriorityInboxItem,
@@ -288,7 +292,11 @@ export function DashboardContent({
         </div>
         <Button asChild>
           <Link href="/settings/providers">
-            <Plus className="size-4" /> Add repository
+            <LinkNavigationStatus
+              idle={<Plus className="size-4" />}
+              pending={<LinkPendingSpinner />}
+            />{" "}
+            Add repository
           </Link>
         </Button>
       </div>
@@ -411,7 +419,10 @@ export function DashboardContent({
                   </p>
                   {synchronizing.length === 0 && reviews.length === 0 && (
                     <Button asChild className="mt-6">
-                      <Link href="/settings/providers">Connect a provider</Link>
+                      <Link href="/settings/providers">
+                        <LinkPendingSpinner />
+                        Connect a provider
+                      </Link>
                     </Button>
                   )}
                 </div>

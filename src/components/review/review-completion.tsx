@@ -11,7 +11,9 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { ShortcutHint } from "~/components/command-center";
+import { usePendingNavigation } from "~/components/navigation-progress";
 import { Button } from "~/components/ui/button";
+import { Spinner } from "~/components/ui/spinner";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
 
 export interface ReviewCompletionCandidate {
@@ -147,6 +149,7 @@ export function ReviewCompletion({
   onNextReview,
 }: ReviewCompletionProps) {
   const { dialogRef, initialFocusRef } = useReviewDialogFocus();
+  const { pending: navigationPending } = usePendingNavigation();
   const nextReviewProgress = nextReview
     ? Math.round((nextReview.signedUnits / nextReview.totalUnits) * 100)
     : 0;
@@ -258,7 +261,11 @@ export function ReviewCompletion({
                       />
                     </span>
                   </span>
-                  <ArrowRight className="text-mist size-4 shrink-0" />
+                  {navigationPending ? (
+                    <Spinner className="text-mist size-4 shrink-0" />
+                  ) : (
+                    <ArrowRight className="text-mist size-4 shrink-0" />
+                  )}
                 </button>
               </div>
             ) : queueLoading ? (
@@ -296,8 +303,13 @@ export function ReviewCompletion({
               Keep review open
               <ShortcutHint shortcut={dismissShortcut} />
             </Button>
-            <Button type="button" variant="secondary" onClick={onDashboard}>
-              <LayoutDashboard className="size-4" />
+            <Button
+              type="button"
+              variant="secondary"
+              loading={navigationPending}
+              onClick={onDashboard}
+            >
+              {!navigationPending && <LayoutDashboard className="size-4" />}
               Dashboard
               <ShortcutHint
                 shortcut={dashboardShortcut}
@@ -305,9 +317,13 @@ export function ReviewCompletion({
               />
             </Button>
             {nextReview && (
-              <Button type="button" onClick={onNextReview}>
+              <Button
+                type="button"
+                loading={navigationPending}
+                onClick={onNextReview}
+              >
                 Review next PR
-                <ArrowRight className="size-4" />
+                {!navigationPending && <ArrowRight className="size-4" />}
                 <ShortcutHint
                   shortcut={nextReviewShortcut}
                   className="hidden sm:inline-flex"

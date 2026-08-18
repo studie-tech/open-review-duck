@@ -196,6 +196,28 @@ button:not(:disabled),
       transparent 34%
     );
 }
+@keyframes navigation-progress-slide {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(410%);
+  }
+}
+@keyframes navigation-pending-reveal {
+  to {
+    opacity: 1;
+  }
+}
+/* Delay pending indicators so prefetched, near-instant navigations never flash them. */
+.navigation-progress,
+.navigation-pending-reveal {
+  opacity: 0;
+  animation: navigation-pending-reveal 0s linear 150ms forwards;
+}
+.navigation-progress-bar {
+  animation: navigation-progress-slide 1.1s ease-in-out infinite;
+}
 :focus-visible {
   outline-color: var(--app-accent);
 }

@@ -1,5 +1,6 @@
 import { CircleAlert, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { syncProgressLabel } from "~/lib/sync-progress";
 import type { RouterOutputs } from "~/trpc/react";
 
@@ -138,9 +139,10 @@ export function DashboardFailurePanel({
                     {sync.message}{" "}
                     <Link
                       href="/settings/providers"
-                      className="text-coral font-medium hover:underline"
+                      className="text-coral inline-flex items-center gap-1 font-medium hover:underline"
                     >
                       Review connection
+                      <LinkPendingSpinner className="size-3" />
                     </Link>
                   </p>
                 </li>

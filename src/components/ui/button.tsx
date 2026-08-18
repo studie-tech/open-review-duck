@@ -2,6 +2,7 @@ import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import type { ButtonHTMLAttributes, Ref } from "react";
 import { cn } from "~/lib/utils";
+import { Spinner } from "~/components/ui/spinner";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime/55 focus-visible:ring-offset-2 focus-visible:ring-offset-ink disabled:pointer-events-none disabled:opacity-45",
@@ -30,16 +31,40 @@ const buttonVariants = cva(
 type Props = ButtonHTMLAttributes<HTMLButtonElement> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    loading?: boolean;
     ref?: Ref<HTMLButtonElement>;
   };
 
-/** Renders the button interface. */
-export function Button({ className, variant, size, asChild, ...props }: Props) {
-  const Component = asChild ? Slot : "button";
+/** Renders the button interface, showing a spinner while `loading` is set. */
+export function Button({
+  className,
+  variant,
+  size,
+  asChild,
+  loading,
+  disabled,
+  children,
+  ...props
+}: Props) {
+  if (asChild) {
+    return (
+      <Slot
+        className={cn(buttonVariants({ variant, size }), className)}
+        {...props}
+      >
+        {children}
+      </Slot>
+    );
+  }
   return (
-    <Component
+    <button
       className={cn(buttonVariants({ variant, size }), className)}
+      aria-busy={loading || undefined}
+      disabled={disabled || loading}
       {...props}
-    />
+    >
+      {loading && <Spinner />}
+      {children}
+    </button>
   );
 }

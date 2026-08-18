@@ -2,6 +2,8 @@
 
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
+import { LinkNavigationStatus } from "~/components/ui/link-status";
+import { Spinner } from "~/components/ui/spinner";
 import type { DeploymentMode } from "~/lib/deployment";
 import { formatTokenCount } from "~/lib/token-usage";
 import { cn } from "~/lib/utils";
@@ -79,7 +81,17 @@ export function AiUsageChip({
       aria-label={ariaLabel}
       className="text-mist hover:text-cloud hover:bg-surface-hover grid size-10 place-items-center rounded-xl border border-line bg-surface/75 px-0 transition sm:flex sm:h-9 sm:w-auto sm:gap-2 sm:px-2.5 sm:text-xs"
     >
-      <Sparkles className="text-violet size-3.5 shrink-0" aria-hidden="true" />
+      <LinkNavigationStatus
+        idle={
+          <Sparkles
+            className="text-violet size-3.5 shrink-0"
+            aria-hidden="true"
+          />
+        }
+        pending={
+          <Spinner className="navigation-pending-reveal text-violet size-3.5" />
+        }
+      />
       <span className="hidden tabular-nums sm:inline">{label}</span>
       {!localMode && usage && (
         <span

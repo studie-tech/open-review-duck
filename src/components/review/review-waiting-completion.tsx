@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ShortcutHint } from "~/components/command-center";
+import { usePendingNavigation } from "~/components/navigation-progress";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
 import {
@@ -116,6 +117,7 @@ export function ReviewWaitingCompletion({
   onStopWaiting,
 }: ReviewWaitingCompletionProps) {
   const { dialogRef, initialFocusRef } = useReviewDialogFocus();
+  const { pending: navigationPending } = usePendingNavigation();
   const [waitingRoomOpen, setWaitingRoomOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ordered = useMemo(
@@ -328,9 +330,10 @@ export function ReviewWaitingCompletion({
                 type="button"
                 variant="secondary"
                 className="sm:ml-auto"
+                loading={navigationPending}
                 onClick={onDashboard}
               >
-                <LayoutDashboard className="size-4" />
+                {!navigationPending && <LayoutDashboard className="size-4" />}
                 Dashboard
                 <ShortcutHint
                   shortcut={dashboardShortcut}
@@ -338,9 +341,13 @@ export function ReviewWaitingCompletion({
                 />
               </Button>
               {nextReview && (
-                <Button type="button" onClick={onNextReview}>
+                <Button
+                  type="button"
+                  loading={navigationPending}
+                  onClick={onNextReview}
+                >
                   Review next PR
-                  <ArrowRight className="size-4" />
+                  {!navigationPending && <ArrowRight className="size-4" />}
                   <ShortcutHint
                     shortcut={nextReviewShortcut}
                     className="hidden sm:inline-flex"
@@ -441,8 +448,13 @@ export function ReviewWaitingCompletion({
                 Keep review open
                 <ShortcutHint shortcut={dismissShortcut} />
               </Button>
-              <Button type="button" variant="secondary" onClick={onDashboard}>
-                <LayoutDashboard className="size-4" />
+              <Button
+                type="button"
+                variant="secondary"
+                loading={navigationPending}
+                onClick={onDashboard}
+              >
+                {!navigationPending && <LayoutDashboard className="size-4" />}
                 Dashboard
                 <ShortcutHint
                   shortcut={dashboardShortcut}
@@ -450,9 +462,13 @@ export function ReviewWaitingCompletion({
                 />
               </Button>
               {nextReview ? (
-                <Button type="button" onClick={onNextReview}>
+                <Button
+                  type="button"
+                  loading={navigationPending}
+                  onClick={onNextReview}
+                >
                   Review next PR
-                  <ArrowRight className="size-4" />
+                  {!navigationPending && <ArrowRight className="size-4" />}
                   <ShortcutHint
                     shortcut={nextReviewShortcut}
                     className="hidden sm:inline-flex"
