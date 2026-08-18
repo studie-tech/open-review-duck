@@ -21,6 +21,7 @@
   --color-accent-hover: var(--app-accent-hover);
   --color-accent-foreground: var(--app-accent-foreground);
   --color-cyan: var(--app-cyan);
+  --color-coral: var(--app-coral);
   --color-violet: var(--app-ai);
   --color-addition: var(--app-addition);
 }
@@ -42,6 +43,7 @@
   --app-accent-hover: #c85339;
   --app-accent-foreground: #fffaf5;
   --app-cyan: #14758a;
+  --app-coral: #b42318;
   --app-ai: #53648f;
   --app-addition: #26733f;
   --app-shadow: rgba(76, 54, 39, 0.16);
@@ -81,6 +83,7 @@
   --app-accent-hover: #ff876b;
   --app-accent-foreground: #17100d;
   --app-cyan: #58b8ce;
+  --app-coral: #ff8a80;
   --app-ai: #8fa9d8;
   --app-addition: #56d17a;
   --app-shadow: rgba(0, 0, 0, 0.55);
