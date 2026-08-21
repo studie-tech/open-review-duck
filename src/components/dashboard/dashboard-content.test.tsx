@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { dashboardFilters } from "~/lib/dashboard-filters";
 import { DashboardContent } from "./dashboard-content";
 
 vi.mock("next/navigation", () => ({
@@ -77,6 +78,7 @@ vi.mock("~/trpc/react", () => ({
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   queryState.activeSyncs = [
     {
       id: "sync-1",
@@ -318,5 +320,64 @@ describe("DashboardContent", () => {
     await user.click(screen.getByRole("button", { name: "Needs review, 1" }));
     expect(screen.getByText("Inventory improvements")).toBeVisible();
     expect(screen.queryByText("Merged settlement")).not.toBeInTheDocument();
+  });
+
+  it("remembers inbox filters in localStorage and restores them on return", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    const items = [
+      pullRequest({
+        id: "ready",
+        number: 102,
+        title: "Retry settlement webhooks",
+        authorLogin: "sonia",
+        provider: "gitlab",
+        repositoryOwner: "payments",
+        repositoryName: "api",
+      }),
+      pullRequest({
+        id: "continue",
+        number: 101,
+        title: "Inventory improvements",
+        signedUnits: 2,
+      }),
+    ];
+    const view = render(<DashboardContent initialPullRequests={items} />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by provider" }),
+      "gitlab",
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by repository" }),
+      "gitlab:payments/api",
+    );
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search pull requests" }),
+      "sonia",
+    );
+    expect(dashboardFilters(localStorage)).toEqual({
+      provider: "gitlab",
+      repository: "gitlab:payments/api",
+      search: "sonia",
+    });
+
+    view.unmount();
+    render(<DashboardContent initialPullRequests={items} />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: "Filter by provider" }),
+      ).toHaveValue("gitlab");
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Filter by repository" }),
+    ).toHaveValue("gitlab:payments/api");
+    expect(
+      screen.getByRole("searchbox", { name: "Search pull requests" }),
+    ).toHaveValue("sonia");
+    expect(screen.getByText("Retry settlement webhooks")).toBeVisible();
+    expect(
+      screen.queryByText("Inventory improvements"),
+    ).not.toBeInTheDocument();
   });
 });
