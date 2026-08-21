@@ -6800,7 +6800,7 @@ export function ReviewWorkspace({
             {keyboardLine !== undefined && (
               <div
                 role="status"
-                className="border-cyan/20 bg-panel/95 text-mist sticky top-0 z-20 mx-4 mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 font-sans text-[10px] shadow-xl backdrop-blur"
+                className="border-cyan/20 bg-panel/95 text-mist sticky top-0 z-30 mx-4 mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 font-sans text-[10px] shadow-xl backdrop-blur"
               >
                 <span className="text-cloud flex items-center gap-2 font-medium">
                   <MessageSquareText className="text-cyan size-3.5" />
