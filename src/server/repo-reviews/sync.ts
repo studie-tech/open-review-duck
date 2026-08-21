@@ -40,20 +40,21 @@ import {
 } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
+import {
+  persistSourceBlob,
+  readSourceText,
+} from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "~/server/sync/retention";
 import {
   persistedUnitSourceRange,
   previousSourceRange,
 } from "~/server/sync/source-range";
-import {
-  persistSourceBlob,
-  readSourceText,
-} from "~/server/storage/source-blobs";
 
 type Database = typeof database;
 
 const REPOSITORY_SOURCE_BUDGET_BYTES = 20_000_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const SNAPSHOT_FILE_INSERT_BATCH_SIZE = 500;
 const UNIT_INSERT_BATCH_SIZE = 100;
 const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const CONCEPT_INSERT_BATCH_SIZE = 500;
@@ -338,6 +339,7 @@ export async function syncRepositoryBranch(
   db: Database,
   monitorId: string,
   options?: {
+    force?: boolean;
     onProgress?: (progress: number) => Promise<void>;
   },
 ) {
@@ -370,6 +372,7 @@ export async function syncRepositoryBranch(
     scope.monitor.branch,
   );
   if (
+    !options?.force &&
     previousSnapshot?.headSha === branch.sha &&
     previousSnapshot.analysisVersion === CURRENT_ANALYSIS_VERSION
   ) {
@@ -563,7 +566,10 @@ export async function syncRepositoryBranch(
         changedFiles: files.filter(
           (file) =>
             file.changeType !== "modified" ||
-            file.previousContent !== file.content,
+            (!file.skipReason &&
+              !file.isBinary &&
+              file.previousContent !== undefined &&
+              file.previousContent !== file.content),
         ).length,
         lastSyncedAt: new Date(),
       })
@@ -583,45 +589,60 @@ export async function syncRepositoryBranch(
       .returning();
     if (!snapshot) throw new Error("Could not create repository snapshot");
 
-    const snapshotFileRows = await tx
-      .insert(snapshotFiles)
-      .values(
-        storedFiles.map(({ file, currentBlob, previousBlob }) => {
-          const representative = analysis.units.find(
-            (unit) => unit.path === file.path,
-          );
-          return {
-            snapshotId: snapshot.id,
-            path: file.path,
-            previousPath: file.previousPath,
-            language: representative?.language ?? "text",
-            changeType: file.changeType ?? "modified",
-            currentBlobId: currentBlob?.id,
-            previousBlobId: previousBlob?.id,
-            additions:
-              file.changeType === "deleted"
-                ? 0
-                : Math.max(
-                    0,
-                    file.content.split("\n").length -
-                      (file.previousContent?.split("\n").length ?? 0),
-                  ),
-            deletions:
-              file.changeType === "deleted"
-                ? file.content.split("\n").length
-                : Math.max(
-                    0,
-                    (file.previousContent?.split("\n").length ?? 0) -
-                      file.content.split("\n").length,
-                  ),
-            // The deep-review planner understands binary as explicit waived
-            // coverage. Size-budget exclusions use the same durable signal so
-            // an empty placeholder can never be counted as a reviewed file.
-            isBinary: Boolean(file.isBinary || file.skipReason),
-          };
-        }),
-      )
-      .returning();
+    const snapshotFileValues = storedFiles.map(
+      ({ file, currentBlob, previousBlob }) => {
+        const representative = analysis.units.find(
+          (unit) => unit.path === file.path,
+        );
+        return {
+          snapshotId: snapshot.id,
+          path: file.path,
+          previousPath: file.previousPath,
+          language: representative?.language ?? "text",
+          changeType: file.changeType ?? "modified",
+          currentBlobId: currentBlob?.id,
+          previousBlobId: previousBlob?.id,
+          additions:
+            file.changeType === "deleted"
+              ? 0
+              : Math.max(
+                  0,
+                  file.content.split("\n").length -
+                    (file.previousContent?.split("\n").length ?? 0),
+                ),
+          deletions:
+            file.changeType === "deleted"
+              ? file.content.split("\n").length
+              : Math.max(
+                  0,
+                  (file.previousContent?.split("\n").length ?? 0) -
+                    file.content.split("\n").length,
+                ),
+          // The deep-review planner understands binary as explicit waived
+          // coverage. Size-budget exclusions use the same durable signal so
+          // an empty placeholder can never be counted as a reviewed file.
+          isBinary: Boolean(file.isBinary || file.skipReason),
+        };
+      },
+    );
+    const snapshotFileRows: (typeof snapshotFiles.$inferSelect)[] = [];
+    for (
+      let offset = 0;
+      offset < snapshotFileValues.length;
+      offset += SNAPSHOT_FILE_INSERT_BATCH_SIZE
+    ) {
+      snapshotFileRows.push(
+        ...(await tx
+          .insert(snapshotFiles)
+          .values(
+            snapshotFileValues.slice(
+              offset,
+              offset + SNAPSHOT_FILE_INSERT_BATCH_SIZE,
+            ),
+          )
+          .returning()),
+      );
+    }
     const snapshotFileByPath = new Map(
       snapshotFileRows.map((file) => [file.path, file]),
     );

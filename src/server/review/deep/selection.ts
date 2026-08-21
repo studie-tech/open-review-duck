@@ -14,6 +14,7 @@ export type ReviewExcludeReason =
   | "vendored"
   | "unsupported_extension"
   | "oversized"
+  | "no_applicable_rule"
   | "protected_path"
   | "secret_detected";
 

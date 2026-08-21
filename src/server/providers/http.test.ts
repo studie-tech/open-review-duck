@@ -49,6 +49,19 @@ describe("provider HTTP safeguards", () => {
     ).rejects.toThrow("403");
   });
 
+  it("stops a GET retry loop when the caller aborts", async () => {
+    fetchMock.mockResolvedValue(new Response("retry", { status: 503 }));
+    const controller = new AbortController();
+
+    const pending = providerFetch("github", "https://example.com/projects", {
+      signal: controller.signal,
+    });
+    controller.abort(new Error("maintenance deadline reached"));
+
+    await expect(pending).rejects.toThrow("maintenance deadline reached");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not expose provider error bodies", async () => {
     fetchMock.mockResolvedValue(
       new Response("secret provider response", { status: 403 }),

@@ -9,7 +9,6 @@ import {
   Download,
   FileCheck2,
   GitBranch,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
@@ -18,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
 import { Badge } from "~/components/ui/badge";
@@ -396,6 +395,8 @@ function RepositoryCockpit({
             <Button
               size="icon"
               variant="ghost"
+              loading={remove.isPending}
+              disabled={remove.isPending}
               aria-label="Remove repository monitor"
               onClick={() => {
                 if (
@@ -407,11 +408,7 @@ function RepositoryCockpit({
                 }
               }}
             >
-              {remove.isPending ? (
-                <MoreHorizontal className="size-4" />
-              ) : (
-                <Trash2 className="size-4" />
-              )}
+              <Trash2 className="size-4" />
             </Button>
           </div>
         </div>
@@ -429,6 +426,7 @@ function RepositoryCockpit({
               <button
                 key={item}
                 type="button"
+                aria-current={section === item ? "page" : undefined}
                 onClick={() => onSection(item)}
                 className={cn(
                   "border-b-2 pb-3 text-sm font-medium capitalize transition",
@@ -773,6 +771,8 @@ function Findings({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const payload = findings.data;
   const visibleFindings = payload?.findings ?? [];
+  const waivedItems =
+    payload?.items.filter(({ state }) => state === "waived") ?? [];
   useEffect(() => {
     const visibleIds = new Set(visibleFindings.map(({ id }) => id));
     setSelected((current) => {
@@ -836,6 +836,7 @@ function Findings({
     <div className="space-y-5">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <select
+          aria-label="Review run"
           value={selectedJobId ?? ""}
           onChange={(event) => {
             setJobId(event.target.value);
@@ -905,7 +906,7 @@ function Findings({
           <Metric
             label="Waived"
             value={String(payload.coverage.waived)}
-            detail="Unsupported or protected"
+            detail="Explicit coverage exclusions"
           />
           <Metric
             label="Failed"
@@ -914,6 +915,23 @@ function Findings({
             accent={payload.coverage.failed > 0}
           />
         </div>
+      )}
+      {waivedItems.length > 0 && (
+        <details className="rounded-2xl border border-line bg-surface p-4 text-xs text-mist">
+          <summary className="cursor-pointer font-medium text-cloud">
+            Coverage waivers ({waivedItems.length})
+          </summary>
+          <ul className="mt-3 space-y-2">
+            {waivedItems.map((item) => (
+              <li key={item.id} className="flex min-w-0 justify-between gap-3">
+                <span className="truncate font-mono">{item.path}</span>
+                <span className="shrink-0">
+                  {(item.reason ?? "waived").replaceAll("_", " ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       {visibleFindings.length > 0 && (
         <div className="flex items-center gap-3 border-b border-line pb-3 text-xs text-mist">
@@ -1056,8 +1074,9 @@ function Rules({ monitor }: { monitor: Monitors[number] }) {
       toast.error("Could not update rule", { description: error.message }),
   });
   const archive = api.repoReviews.archiveRule.useMutation({
-    onSuccess: () => {
+    onSuccess: (_result, { ruleId }) => {
       toast.success("Compliance rule archived");
+      if (editingId === ruleId) reset();
       void rules.refetch();
     },
     onError: (error) =>
@@ -1283,7 +1302,15 @@ function History({
   monitor: Monitors[number];
   onOpenFindings: (jobId: string) => void;
 }) {
-  const history = api.repoReviews.history.useQuery({ monitorId: monitor.id });
+  const history = api.repoReviews.history.useQuery(
+    { monitorId: monitor.id },
+    {
+      refetchInterval: (query) =>
+        query.state.data?.some(({ status }) => activeStatuses.has(status))
+          ? 1_500
+          : false,
+    },
+  );
   return (
     <div className="space-y-2">
       {(history.data ?? []).map((run) => (
@@ -1338,6 +1365,9 @@ function AddRepositoryDialog({
   onClose: () => void;
   onAdded: (monitorId: string) => void;
 }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const generatedId = useId();
+  const titleId = `${generatedId}-title`;
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? "");
   const branches = api.repoReviews.listBranches.useQuery(
     { repositoryId: repositoryId || EMPTY_UUID },
@@ -1369,142 +1399,153 @@ function AddRepositoryDialog({
     });
   }, [branches.data, monitoredBranches]);
   useEffect(() => {
-    /** Closes the repository picker from the standard escape key. */
-    const close = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [onClose]);
+    const element = dialog.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    if (element && !element.open) {
+      if (typeof element.showModal === "function") element.showModal();
+      else element.setAttribute("open", "");
+      element.querySelector<HTMLElement>("button, select")?.focus();
+    }
+    return () => {
+      if (element?.open && typeof element.close === "function") element.close();
+      previousFocus?.focus();
+    };
+  }, []);
   const add = api.repoReviews.add.useMutation({
-    onSuccess: ({ monitor }) => {
-      toast.success("Repository added", {
-        description: "The first complete snapshot is being prepared.",
-      });
+    onSuccess: ({ monitor, sync }) => {
+      if (sync.status === "failed" && "error" in sync) {
+        toast.warning("Repository added, but its first check could not start", {
+          description: sync.error,
+        });
+      } else {
+        toast.success("Repository added", {
+          description: "The first complete snapshot is being prepared.",
+        });
+      }
       onAdded(monitor.id);
     },
     onError: (error) =>
       toast.error("Could not add repository", { description: error.message }),
   });
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 p-4 backdrop-blur-sm">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-repository-title"
-        className="w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2
-              id="add-repository-title"
-              className="text-xl font-semibold text-cloud"
-            >
-              Monitor a repository
-            </h2>
-            <p className="mt-1 text-sm text-mist">
-              Pick an imported repository and the exact branch to follow.
-            </p>
-          </div>
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            <X className="size-4" />
+    <dialog
+      ref={dialog}
+      aria-labelledby={titleId}
+      className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl backdrop:bg-ink/80 backdrop:backdrop-blur-sm"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!add.isPending) onClose();
+      }}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 id={titleId} className="text-xl font-semibold text-cloud">
+            Monitor a repository
+          </h2>
+          <p className="mt-1 text-sm text-mist">
+            Pick an imported repository and the exact branch to follow.
+          </p>
+        </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Close"
+          disabled={add.isPending}
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
+      </div>
+      {repositories.length === 0 ? (
+        <div className="mt-8 rounded-2xl border border-dashed border-line p-8 text-center">
+          <p className="text-sm text-mist">
+            Import a repository from a code provider first.
+          </p>
+          <Button asChild className="mt-5">
+            <Link href="/settings/providers">Open provider settings</Link>
           </Button>
         </div>
-        {repositories.length === 0 ? (
-          <div className="mt-8 rounded-2xl border border-dashed border-line p-8 text-center">
-            <p className="text-sm text-mist">
-              Import a repository from a code provider first.
-            </p>
-            <Button asChild className="mt-5">
-              <Link href="/settings/providers">Open provider settings</Link>
-            </Button>
-          </div>
-        ) : (
-          <div className="mt-7 space-y-5">
-            <Field label="Repository">
-              <select
-                aria-label="Repository"
-                value={repositoryId}
-                onChange={(event) => {
-                  setRepositoryId(event.target.value);
-                  setBranch("");
-                }}
-                className="form-input"
-              >
-                {repositories.map((repository) => (
-                  <option key={repository.id} value={repository.id}>
-                    {repository.owner}/{repository.name} ·{" "}
-                    {providerLabel[repository.provider]}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Branch">
-              <select
-                aria-label="Branch"
-                value={branch}
-                onChange={(event) => setBranch(event.target.value)}
-                disabled={branches.isLoading || branches.isError}
-                className="form-input"
-              >
-                <option value="">
-                  {branches.isLoading
-                    ? "Loading branches…"
-                    : branches.isError
-                      ? "Branches unavailable"
-                      : "Choose a branch"}
+      ) : (
+        <div className="mt-7 space-y-5">
+          <Field label="Repository">
+            <select
+              aria-label="Repository"
+              value={repositoryId}
+              onChange={(event) => {
+                setRepositoryId(event.target.value);
+                setBranch("");
+              }}
+              className="form-input"
+            >
+              {repositories.map((repository) => (
+                <option key={repository.id} value={repository.id}>
+                  {repository.owner}/{repository.name} ·{" "}
+                  {providerLabel[repository.provider]}
                 </option>
-                {branches.data?.map((item) => (
-                  <option
-                    key={item.name}
-                    value={item.name}
-                    disabled={monitoredBranches.has(item.name)}
-                  >
-                    {item.name}
-                    {item.isDefault ? " (default)" : ""}
-                    {monitoredBranches.has(item.name)
-                      ? " (already monitored)"
-                      : ""}
-                  </option>
-                ))}
-              </select>
-              {branches.error && (
-                <span className="mt-2 block text-xs text-red-300">
-                  {branches.error.message}
+              ))}
+            </select>
+          </Field>
+          <Field label="Branch">
+            <select
+              aria-label="Branch"
+              value={branch}
+              onChange={(event) => setBranch(event.target.value)}
+              disabled={branches.isLoading || branches.isError}
+              className="form-input"
+            >
+              <option value="">
+                {branches.isLoading
+                  ? "Loading branches…"
+                  : branches.isError
+                    ? "Branches unavailable"
+                    : "Choose a branch"}
+              </option>
+              {branches.data?.map((item) => (
+                <option
+                  key={item.name}
+                  value={item.name}
+                  disabled={monitoredBranches.has(item.name)}
+                >
+                  {item.name}
+                  {item.isDefault ? " (default)" : ""}
+                  {monitoredBranches.has(item.name)
+                    ? " (already monitored)"
+                    : ""}
+                </option>
+              ))}
+            </select>
+            {branches.error && (
+              <span className="mt-2 block text-xs text-red-300">
+                {branches.error.message}
+              </span>
+            )}
+            {!branches.isLoading &&
+              !branches.isError &&
+              branches.data?.length !== 0 &&
+              !branch && (
+                <span className="mt-2 block text-xs text-mist">
+                  Every branch in this repository is already monitored.
                 </span>
               )}
-              {!branches.isLoading &&
-                !branches.isError &&
-                branches.data?.length !== 0 &&
-                !branch && (
-                  <span className="mt-2 block text-xs text-mist">
-                    Every branch in this repository is already monitored.
-                  </span>
-                )}
-            </Field>
-            <div className="rounded-xl border border-line bg-surface-subtle/45 p-3 text-xs leading-5 text-mist">
-              The initial snapshot reads the full branch. Later checks compare
-              the branch head and carry your reading progress across unchanged
-              code.
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button
-                loading={add.isPending}
-                disabled={!repositoryId || !branch}
-                onClick={() => add.mutate({ repositoryId, branch })}
-              >
-                <Plus className="size-4" /> Add and sync
-              </Button>
-            </div>
+          </Field>
+          <div className="rounded-xl border border-line bg-surface-subtle/45 p-3 text-xs leading-5 text-mist">
+            The initial snapshot reads the full branch. Later checks compare the
+            branch head and carry your reading progress across unchanged code.
           </div>
-        )}
-      </div>
-    </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              loading={add.isPending}
+              disabled={!repositoryId || !branch}
+              onClick={() => add.mutate({ repositoryId, branch })}
+            >
+              <Plus className="size-4" /> Add and sync
+            </Button>
+          </div>
+        </div>
+      )}
+    </dialog>
   );
 }

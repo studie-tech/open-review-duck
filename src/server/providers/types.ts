@@ -108,6 +108,7 @@ export interface PullRequestProvider {
   getBranch(
     repositoryExternalId: string,
     branch: string,
+    signal?: AbortSignal,
   ): Promise<RepositoryBranch>;
   /** Ensures provider events for this repository reach the signed SaaS endpoint. */
   ensureRepositoryWebhook(input: {

@@ -74,6 +74,28 @@ export function RepositoryReader({
     let live = true;
     const controller = new AbortController();
     const cache = new Map<string, Promise<Uint8Array>>();
+    const hydratedById = new Map<string, Workspace["units"][number]>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Applies all source files hydrated in the same event-loop turn at once. */
+    const flushHydrated = () => {
+      flushTimer = undefined;
+      if (!live || hydratedById.size === 0) return;
+      const hydrated = new Map(hydratedById);
+      hydratedById.clear();
+      setUnits((current) =>
+        current.map((unit) => {
+          const replacement = hydrated.get(unit.id);
+          return replacement
+            ? {
+                ...replacement,
+                status: unit.status,
+                changedSinceSignOff: unit.changedSinceSignOff,
+                waitingSince: unit.waitingSince,
+              }
+            : unit;
+        }),
+      );
+    };
     setSourceLoading(true);
     void hydratePrivateReviewSources(
       initialData.units,
@@ -83,31 +105,34 @@ export function RepositoryReader({
       controller.signal,
       (_index, hydrated) => {
         if (!live) return;
-        setUnits((current) =>
-          current.map((unit) =>
-            unit.id === hydrated.id
-              ? {
-                  ...hydrated,
-                  status: unit.status,
-                  changedSinceSignOff: unit.changedSinceSignOff,
-                  waitingSince: unit.waitingSince,
-                }
-              : unit,
-          ),
-        );
+        hydratedById.set(hydrated.id, hydrated);
+        flushTimer ??= setTimeout(flushHydrated, 0);
       },
-    ).then(({ failures }) => {
-      if (!live) return;
-      setSourceLoading(false);
-      if (failures.length > 0) {
-        toast.error(
-          `${failures.length} source file${failures.length === 1 ? "" : "s"} could not be loaded`,
-        );
-      }
-    });
+    )
+      .then(({ failures }) => {
+        if (!live) return;
+        if (flushTimer !== undefined) clearTimeout(flushTimer);
+        flushHydrated();
+        if (failures.length > 0) {
+          toast.error(
+            `${failures.length} source file${failures.length === 1 ? "" : "s"} could not be loaded`,
+          );
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!live || controller.signal.aborted) return;
+        toast.error("Repository source files could not be loaded", {
+          description:
+            cause instanceof Error ? cause.message : "Please try again.",
+        });
+      })
+      .finally(() => {
+        if (live) setSourceLoading(false);
+      });
     return () => {
       live = false;
       controller.abort();
+      if (flushTimer !== undefined) clearTimeout(flushTimer);
       cache.clear();
     };
   }, [initialData]);
@@ -298,6 +323,7 @@ export function RepositoryReader({
                     <button
                       key={unit.id}
                       type="button"
+                      aria-current={active?.id === unit.id ? "true" : undefined}
                       onClick={() => {
                         setActiveId(unit.id);
                         if (window.innerWidth < 768) setSidebarOpen(false);

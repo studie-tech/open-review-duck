@@ -65,10 +65,23 @@ export async function reconcileRepositoryBranchMonitors(
     if (options.deadline !== undefined && Date.now() >= options.deadline) {
       return "deferred" as const;
     }
+    const controller = new AbortController();
+    const remaining =
+      options.deadline === undefined
+        ? undefined
+        : Math.max(0, options.deadline - Date.now());
+    const timeout =
+      remaining === undefined
+        ? undefined
+        : setTimeout(() => controller.abort(), remaining);
     try {
       const branch = await (
         await providerForConnection(db, scope.connection)
-      ).getBranch(scope.repository.externalId, scope.monitor.branch);
+      ).getBranch(
+        scope.repository.externalId,
+        scope.monitor.branch,
+        remaining === undefined ? undefined : controller.signal,
+      );
       await db
         .update(repositoryBranchMonitors)
         .set({ lastCheckedAt: new Date(), lastError: null })
@@ -81,6 +94,13 @@ export async function reconcileRepositoryBranchMonitors(
       });
       return "queued" as const;
     } catch (cause) {
+      if (
+        controller.signal.aborted &&
+        options.deadline !== undefined &&
+        Date.now() >= options.deadline
+      ) {
+        return "deferred" as const;
+      }
       const error = providerConnectionErrorMessage(
         scope.connection.provider,
         cause,
@@ -90,6 +110,8 @@ export async function reconcileRepositoryBranchMonitors(
         .set({ lastCheckedAt: new Date(), lastError: error })
         .where(eq(repositoryBranchMonitors.id, scope.monitor.id));
       return "failed" as const;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   });
 

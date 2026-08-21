@@ -184,17 +184,18 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   async getBranch(
     repositoryExternalId: string,
     branch: string,
+    signal?: AbortSignal,
   ): Promise<RepositoryBranch> {
     const [repository, refs] = await Promise.all([
       providerFetch<AzureRepository>(
         this.name,
         `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}?api-version=7.1`,
-        { headers: this.headers },
+        { headers: this.headers, signal },
       ),
       providerFetch<{ value: AzureRef[] }>(
         this.name,
         `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/refs?filter=${encodeURIComponent(`heads/${branch}`)}&api-version=7.1`,
-        { headers: this.headers },
+        { headers: this.headers, signal },
       ),
     ]);
     const exactName = `refs/heads/${branch}`;
