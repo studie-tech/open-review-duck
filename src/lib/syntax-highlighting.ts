@@ -192,27 +192,58 @@ function ancestors(node: SyntaxNode) {
   return types;
 }
 
+/**
+ * Reports a Tree-sitter node that embeds evaluated code in a string.
+ *
+ * Grammars name these interpolation, substitution, or expansion nodes. The
+ * walk stops inheriting the outer string class here so `${name}`, `#{name}`,
+ * and f-string `{name}` highlight as code in every language that exposes them.
+ */
+export function isInterpolationContext(type: string) {
+  return (
+    type.includes("interpolation") ||
+    type.includes("interpolated") ||
+    type.includes("substitution") ||
+    type === "expansion" ||
+    type.endsWith("_expansion")
+  );
+}
+
+/**
+ * Reports a Tree-sitter node that is itself string or template text.
+ *
+ * A bare "template" match would also paint C++ template parameters as
+ * strings, so only template nodes that carry string or literal text count.
+ */
+export function isStringContext(type: string) {
+  if (type === "char_literal" || type === "character") return true;
+  if (type.includes("heredoc")) return true;
+  if (type.includes("string")) return true;
+  return (
+    type.includes("template") &&
+    (type.includes("literal") ||
+      type.includes("chars") ||
+      type.includes("fragment"))
+  );
+}
+
 /** Maps a Tree-sitter leaf token to the application's syntax class. */
 function tokenClass(node: SyntaxNode, source: string) {
   const value = source.slice(node.startIndex, node.endIndex);
   const types = ancestors(node);
-  if (types.some((type) => type.includes("comment"))) return "tok-comment";
-  if (types.some((type) => type.startsWith("preproc"))) return "tok-meta";
-  if (types.some((type) => type.includes("keyword"))) return "tok-keyword";
-  if (
-    types.some(
-      (type) =>
-        type.includes("string") ||
-        type.includes("heredoc") ||
-        type.includes("template") ||
-        type === "char_literal" ||
-        type === "character",
-    )
-  ) {
-    return types.some((type) => type.includes("formatted_string")) ||
-      /^f["']/i.test(value)
-      ? "tok-string2"
-      : "tok-string";
+  for (const type of types) {
+    if (type.includes("comment")) return "tok-comment";
+    // Embedded expressions keep the outer string from swallowing their
+    // identifiers, calls, and nested quotes.
+    if (isInterpolationContext(type)) break;
+    if (type.startsWith("preproc")) return "tok-meta";
+    if (type.includes("keyword")) return "tok-keyword";
+    if (isStringContext(type)) {
+      return types.some((ancestor) => ancestor.includes("formatted_string")) ||
+        /^f["']/i.test(value)
+        ? "tok-string2"
+        : "tok-string";
+    }
   }
   if (
     numericLiteralPattern.test(value) &&

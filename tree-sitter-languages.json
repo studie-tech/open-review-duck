@@ -20,6 +20,12 @@
     "js-family": {
       "lineComments": ["//"],
       "blockComments": [["/*", "*/"]],
+      "quotes": ["\"", "'", "`"],
+      "interpolations": [{ "quotes": ["`"], "open": "${", "close": "}" }]
+    },
+    "backtick-quotes": {
+      "lineComments": ["//"],
+      "blockComments": [["/*", "*/"]],
       "quotes": ["\"", "'", "`"]
     },
     "block-comment": {
@@ -42,7 +48,8 @@
     "hash-slash": {
       "lineComments": ["#", "//"],
       "blockComments": [["/*", "*/"]],
-      "quotes": ["\""]
+      "quotes": ["\""],
+      "interpolations": [{ "quotes": ["\""], "open": "${", "close": "}" }]
     },
     "hash-slash-quotes": {
       "lineComments": ["//", "#"],
@@ -213,7 +220,7 @@
       "asset": "tree-sitter-go.wasm",
       "source": "tree-sitter-wasms/out/tree-sitter-go.wasm",
       "extensions": [".go"],
-      "lexical": "js-family"
+      "lexical": "backtick-quotes"
     },
     "makefile": {
       "asset": "tree-sitter-makefile.wasm",
