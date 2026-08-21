@@ -222,7 +222,7 @@ export function ReviewConceptMemberHeader({
       className={cn(
         "flex items-stretch border-b",
         selected
-          ? "bg-cyan/[.035] border-cyan/20"
+          ? "bg-cyan/[.05] border-cyan/20"
           : reviewedMember(unit)
             ? "border-addition/25"
             : "border-line",
