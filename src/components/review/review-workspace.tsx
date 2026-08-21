@@ -1645,17 +1645,21 @@ export function ReviewWorkspace({
   const diffCurrentSource =
     activeModule?.source ??
     (activeUnit?.changeType === "deleted" ? "" : (activeUnit?.source ?? ""));
+  const overviewLineCount = Math.max(
+    diffCurrentSource ? diffCurrentSource.split("\n").length : 0,
+    diffPreviousSource ? diffPreviousSource.split("\n").length : 0,
+  );
+  const overviewEnabled =
+    Boolean(activeUnit) &&
+    activeSourceAvailable &&
+    activeUnit?.kind !== "binary" &&
+    overviewLineCount >= 24;
   const overviewRows = useMemo(
     () =>
-      activeSourceAvailable && activeUnit?.kind !== "binary"
+      overviewEnabled
         ? sideBySideDiff(diffPreviousSource, diffCurrentSource)
         : [],
-    [
-      activeSourceAvailable,
-      activeUnit?.kind,
-      diffCurrentSource,
-      diffPreviousSource,
-    ],
+    [diffCurrentSource, diffPreviousSource, overviewEnabled],
   );
   const overviewMarks = useMemo(
     () => overviewMarksFromDiffRows(overviewRows),
@@ -1672,20 +1676,18 @@ export function ReviewWorkspace({
         ? previousUnitEndLine
         : activeUnit.endLine,
       {
-        currentStartLine: 1,
-        previousStartLine: 1,
+        currentStartLine: activeModule ? 1 : activeUnit.startLine,
+        previousStartLine: activeModule ? 1 : previousUnitStartLine,
       },
     );
-  }, [activeUnit, overviewRows, previousUnitEndLine, previousUnitStartLine]);
-  const overviewLineCount = Math.max(
-    diffCurrentSource ? diffCurrentSource.split("\n").length : 0,
-    diffPreviousSource ? diffPreviousSource.split("\n").length : 0,
-  );
-  const showScrollOverview =
-    Boolean(activeUnit) &&
-    activeSourceAvailable &&
-    activeUnit?.kind !== "binary" &&
-    overviewLineCount >= 24;
+  }, [
+    activeModule,
+    activeUnit,
+    overviewRows,
+    previousUnitEndLine,
+    previousUnitStartLine,
+  ]);
+  const showScrollOverview = overviewEnabled;
   const {
     scrolled: codePaneScrolled,
     seek: seekCodeOverview,
