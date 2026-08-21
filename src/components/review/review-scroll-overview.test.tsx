@@ -148,7 +148,7 @@ describe("ReviewScrollOverview", () => {
       name: "Visible region of this file",
     });
     fireEvent.keyDown(slider, { key: "ArrowRight" });
-    expect(onSeek.mock.calls[0]?.[0]).toBeCloseTo(0.24);
+    expect(onSeek.mock.calls[0]?.[0]).toBeCloseTo(0.29);
     fireEvent.keyDown(slider, { key: "Home" });
     expect(onSeek).toHaveBeenCalledWith(0);
   });

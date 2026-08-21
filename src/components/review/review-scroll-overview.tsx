@@ -217,14 +217,15 @@ export function ReviewScrollOverview({
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? 0.12 : 0.04;
+      const center = (viewport.start + viewport.end) / 2;
       if (event.key === "ArrowRight" || event.key === "ArrowDown") {
         event.preventDefault();
-        onSeek(clampOverviewRatio(viewport.start + step));
+        onSeek(clampOverviewRatio(center + step));
         return;
       }
       if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
         event.preventDefault();
-        onSeek(clampOverviewRatio(viewport.start - step));
+        onSeek(clampOverviewRatio(center - step));
         return;
       }
       if (event.key === "Home") {
@@ -237,7 +238,7 @@ export function ReviewScrollOverview({
         onSeek(1);
       }
     },
-    [onSeek, viewport.start],
+    [onSeek, viewport.end, viewport.start],
   );
 
   return (
@@ -342,8 +343,9 @@ export function useReviewCodeOverview(
     start: 0,
   });
   const [scrolled, setScrolled] = useState(false);
+  const frame = useRef(0);
 
-  const update = useCallback(() => {
+  const measure = useCallback(() => {
     const pane = paneRef.current;
     const code = codeRef.current;
     if (!pane) return;
@@ -354,6 +356,14 @@ export function useReviewCodeOverview(
     }
     setViewport(overviewViewportFromElements(pane, code));
   }, [codeRef, paneRef]);
+
+  const update = useCallback(() => {
+    if (frame.current) return;
+    frame.current = window.requestAnimationFrame(() => {
+      frame.current = 0;
+      measure();
+    });
+  }, [measure]);
 
   useEffect(() => {
     const pane = paneRef.current;
@@ -366,7 +376,10 @@ export function useReviewCodeOverview(
     const observer = new ResizeObserver(update);
     observer.observe(pane);
     if (code) observer.observe(code);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame.current) window.cancelAnimationFrame(frame.current);
+    };
   }, [codeRef, paneRef, resetKey, update]);
 
   const seek = useCallback(
