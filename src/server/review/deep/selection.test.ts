@@ -47,6 +47,15 @@ describe("deep review file selection", () => {
     expect(reviewExclusionReason(file, options)).toBe("binary");
   });
 
+  it("records an explicit source-size exclusion as oversized", () => {
+    expect(
+      reviewExclusionReason(
+        candidate({ path: "src/generated.ts", skipReason: "too_large" }),
+        options,
+      ),
+    ).toBe("oversized");
+  });
+
   it("reports no_source ahead of an unsupported extension", () => {
     const file = candidate({
       path: "docs/notes.md",

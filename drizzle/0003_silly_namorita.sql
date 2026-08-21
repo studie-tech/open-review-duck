@@ -1,0 +1,1 @@
+ALTER TABLE "open_review_duck_snapshot_file" ADD COLUMN "skipReason" varchar(32);

@@ -702,6 +702,7 @@ export const snapshotFiles = createTable(
     additions: integer().notNull().default(0),
     deletions: integer().notNull().default(0),
     isBinary: boolean().notNull().default(false),
+    skipReason: varchar({ length: 32 }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

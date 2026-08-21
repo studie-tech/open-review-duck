@@ -1,9 +1,87 @@
 import { describe, expect, it, vi } from "vitest";
 import type { db as database } from "~/server/db";
 import type { PullRequestProvider } from "~/server/providers/types";
-import { downloadRepositoryFiles } from "./sync";
+import { downloadRepositoryFiles, repositoryChangedFileCount } from "./sync";
 
 describe("repository branch source download", () => {
+  it("counts a newly readable prior source without recounting unknown files", () => {
+    expect(
+      repositoryChangedFileCount([
+        {
+          path: "src/readable.ts",
+          content: "export const ready = true;",
+          changeType: "modified",
+          previousSourceUnavailable: true,
+        },
+        {
+          path: "src/still-skipped.ts",
+          content: "",
+          changeType: "modified",
+          previousSourceUnavailable: true,
+          skipReason: "too_large",
+        },
+        {
+          path: "assets/logo.png",
+          content: "",
+          changeType: "modified",
+          previousSourceUnavailable: true,
+          isBinary: true,
+        },
+        {
+          path: "src/unknown.ts",
+          content: "export const unknown = true;",
+          changeType: "modified",
+        },
+      ]),
+    ).toBe(1);
+  });
+
+  it("keeps a previously skipped text file distinct from binary content", async () => {
+    const db = {
+      query: {
+        snapshotFiles: {
+          findMany: vi.fn(async () => [
+            {
+              path: "src/large.ts",
+              changeType: "modified",
+              currentBlobId: "blob-1",
+              isBinary: false,
+              skipReason: "too_large",
+            },
+          ]),
+        },
+        sourceBlobs: {
+          findMany: vi.fn(async () => [{ id: "blob-1", state: "ready" }]),
+        },
+      },
+    } as unknown as typeof database;
+    const provider = {
+      listRepositoryFiles: vi.fn(async () => ["src/large.ts"]),
+      getFileContent: vi.fn(async () => "export const readable = true;"),
+    } as unknown as PullRequestProvider;
+
+    const files = await downloadRepositoryFiles(
+      db,
+      {
+        monitorId: "monitor",
+        repositoryExternalId: "repository",
+        ref: "revision",
+        previousSnapshotId: "snapshot-1",
+      },
+      provider,
+    );
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "src/large.ts",
+        previousSourceUnavailable: true,
+      }),
+    ]);
+    expect(files[0]?.isBinary).toBeUndefined();
+    expect(files[0]?.skipReason).toBeUndefined();
+    expect(files[0]?.previousContent).toBeUndefined();
+  });
+
   it("stops provider reads in bounded batches once the source budget is full", async () => {
     const paths = Array.from(
       { length: 20 },
