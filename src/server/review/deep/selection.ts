@@ -22,6 +22,7 @@ export interface ReviewCandidateFile {
   path: string;
   changeType: string;
   isBinary: boolean;
+  skipReason?: "too_large";
   /** From `source_blob.byteLength`; 0 when there is no current blob. */
   sourceBytes: number;
   hasCurrentSource: boolean;
@@ -289,6 +290,7 @@ export function reviewExclusionReason(
   options: ReviewSelectionOptions,
 ): ReviewExcludeReason | null {
   if (file.isBinary) return "binary";
+  if (file.skipReason) return "oversized";
   if (!file.hasCurrentSource && !file.hasPreviousSource) return "no_source";
   const path = normalizePath(file.path);
   const extension = pathExtension(path);

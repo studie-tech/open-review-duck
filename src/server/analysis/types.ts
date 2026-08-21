@@ -168,6 +168,8 @@ export interface SourceFile {
   content: string;
   previousContent?: string;
   skipReason?: "too_large";
+  /** The prior path existed, but its source could not be compared. */
+  previousSourceUnavailable?: boolean;
   isBinary?: boolean;
   binaryHash?: string;
   changeType?: SourceChangeType;

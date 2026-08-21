@@ -72,9 +72,22 @@ export const REPOSITORY_SYNC_PROGRESS = {
   completed: 100,
 } as const;
 
+/** Counts known file changes without inventing diffs for unavailable sources. */
+export function repositoryChangedFileCount(files: readonly SourceFile[]) {
+  return files.filter(
+    (file) =>
+      file.changeType !== "modified" ||
+      (!file.skipReason &&
+        !file.isBinary &&
+        (file.previousSourceUnavailable ||
+          (file.previousContent !== undefined &&
+            file.previousContent !== file.content))),
+  ).length;
+}
+
 interface PreviousRepositoryFile {
   path: string;
-  content: string;
+  content?: string;
   isBinary: boolean;
 }
 
@@ -103,15 +116,22 @@ async function previousRepositoryFiles(
     const blob = file.currentBlobId
       ? blobById.get(file.currentBlobId)
       : undefined;
-    if (blob?.state !== "ready") return undefined;
+    const unavailable = {
+      path: file.path,
+      content: undefined,
+      isBinary: file.isBinary,
+    };
+    if (file.isBinary || file.skipReason || blob?.state !== "ready") {
+      return unavailable;
+    }
     try {
       return {
         path: file.path,
-        content: file.isBinary ? "" : await readSourceText(blob),
-        isBinary: file.isBinary,
+        content: await readSourceText(blob),
+        isBinary: false,
       };
     } catch {
-      return undefined;
+      return unavailable;
     }
   });
   return new Map(
@@ -212,7 +232,10 @@ export async function downloadRepositoryFiles(
         return {
           path,
           content,
-          previousContent: prior?.isBinary ? undefined : prior?.content,
+          previousContent: prior?.content,
+          previousSourceUnavailable: Boolean(
+            prior && prior.content === undefined,
+          ),
           changeType: prior ? "modified" : "added",
           reviewWholeFile: true,
         };
@@ -257,8 +280,14 @@ export async function downloadRepositoryFiles(
   }
   const deleted = [...previous.values()].flatMap((file): SourceFile[] => {
     if (currentPathSet.has(file.path)) return [];
-    const bytes = Buffer.byteLength(file.content);
-    if (!exhausted && !file.isBinary && usedBytes + bytes <= comparisonBudget) {
+    const bytes =
+      file.content === undefined ? 0 : Buffer.byteLength(file.content);
+    if (
+      file.content !== undefined &&
+      !exhausted &&
+      !file.isBinary &&
+      usedBytes + bytes <= comparisonBudget
+    ) {
       usedBytes += bytes;
       return [
         {
@@ -513,7 +542,7 @@ export async function syncRepositoryBranch(
       where: eq(reviewSnapshots.pullRequestId, latestMonitor.pullRequestId),
       orderBy: [desc(reviewSnapshots.version)],
     });
-    if (currentSnapshot?.headSha === confirmed.sha) {
+    if (currentSnapshot?.headSha === confirmed.sha && !options?.force) {
       return {
         pullRequestId: latestMonitor.pullRequestId,
         snapshotId: currentSnapshot.id,
@@ -563,14 +592,7 @@ export async function syncRepositoryBranch(
                 )),
           0,
         ),
-        changedFiles: files.filter(
-          (file) =>
-            file.changeType !== "modified" ||
-            (!file.skipReason &&
-              !file.isBinary &&
-              file.previousContent !== undefined &&
-              file.previousContent !== file.content),
-        ).length,
+        changedFiles: repositoryChangedFileCount(files),
         lastSyncedAt: new Date(),
       })
       .where(eq(pullRequests.id, latestMonitor.pullRequestId))
@@ -589,16 +611,19 @@ export async function syncRepositoryBranch(
       .returning();
     if (!snapshot) throw new Error("Could not create repository snapshot");
 
+    const languageByPath = new Map<string, string>();
+    for (const unit of analysis.units) {
+      if (!languageByPath.has(unit.path)) {
+        languageByPath.set(unit.path, unit.language);
+      }
+    }
     const snapshotFileValues = storedFiles.map(
       ({ file, currentBlob, previousBlob }) => {
-        const representative = analysis.units.find(
-          (unit) => unit.path === file.path,
-        );
         return {
           snapshotId: snapshot.id,
           path: file.path,
           previousPath: file.previousPath,
-          language: representative?.language ?? "text",
+          language: languageByPath.get(file.path) ?? "text",
           changeType: file.changeType ?? "modified",
           currentBlobId: currentBlob?.id,
           previousBlobId: previousBlob?.id,
@@ -618,10 +643,8 @@ export async function syncRepositoryBranch(
                   (file.previousContent?.split("\n").length ?? 0) -
                     file.content.split("\n").length,
                 ),
-          // The deep-review planner understands binary as explicit waived
-          // coverage. Size-budget exclusions use the same durable signal so
-          // an empty placeholder can never be counted as a reviewed file.
-          isBinary: Boolean(file.isBinary || file.skipReason),
+          isBinary: Boolean(file.isBinary),
+          skipReason: file.skipReason,
         };
       },
     );

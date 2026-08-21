@@ -314,8 +314,10 @@ async function loadPlanFiles(reader: Reader, snapshotId: string) {
         path: file.path,
         changeType: file.changeType,
         isBinary: file.isBinary,
-        // `snapshot_file` carries no byte count of its own, and a deleted file
-        // has no current blob, so it is never oversized.
+        skipReason:
+          file.skipReason === "too_large" ? file.skipReason : undefined,
+        // `snapshot_file` carries no byte count of its own. Explicit source
+        // exclusions are preserved separately above.
         sourceBytes: currentBlob?.byteLength ?? 0,
         hasCurrentSource: currentBlob !== null,
         hasPreviousSource: previousBlob !== null,

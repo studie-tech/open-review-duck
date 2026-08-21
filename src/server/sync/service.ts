@@ -449,6 +449,7 @@ export async function syncPullRequest(
                       file.content.split("\n").length,
                   ),
             isBinary: file.isBinary ?? false,
+            skipReason: file.skipReason,
           };
         }),
       )
