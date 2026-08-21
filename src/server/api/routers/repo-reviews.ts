@@ -17,23 +17,23 @@ import {
 } from "@/drizzle/schema";
 import { PAID_AI_FEATURE } from "~/server/ai/plan";
 import { createAiJob, scheduleAiJob } from "~/server/ai/service";
+import type { db as database } from "~/server/db";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
 import { providerForConnection } from "~/server/providers/credentials";
-import type { ProviderName } from "~/server/providers/types";
-import type { RepositoryBranch } from "~/server/providers/types";
+import type { ProviderName, RepositoryBranch } from "~/server/providers/types";
 import {
   REPOSITORY_RECONCILE_INTERVAL_MS,
   reconcileRepositoryBranchMonitors,
 } from "~/server/repo-reviews/reconcile";
 import {
-  repositoryRuleDigest,
   type RepositoryReviewRuleSnapshot,
+  repositoryRuleDigest,
 } from "~/server/repo-reviews/rules";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { startRepositoryBranchSync } from "~/server/workflows/service";
 import { ensurePersonalWorkspace } from "~/server/workspaces/service";
-import { deepReviewRunPayload } from "./review";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { deepReviewRunPayload } from "./review";
 
 const monitorIdSchema = z.object({ monitorId: z.uuid() });
 const ruleScopeSchema = z.enum(["file", "repository"]);
@@ -45,15 +45,10 @@ const ruleFields = {
   scope: ruleScopeSchema,
   severity: ruleSeveritySchema,
 } as const;
+type Database = typeof database;
 
 /** Authorizes a repository monitor and loads its provider scope. */
-async function monitorScope(
-  db: Parameters<
-    Parameters<typeof protectedProcedure.query>[0]
-  >[0]["ctx"]["db"],
-  userId: string,
-  monitorId: string,
-) {
+async function monitorScope(db: Database, userId: string, monitorId: string) {
   const workspace = await ensurePersonalWorkspace(db, userId);
   const [scope] = await db
     .select({
@@ -121,121 +116,186 @@ export const repoReviewsRouter = createTRPCRouter({
       )
       .where(eq(repositoryBranchMonitors.workspaceId, workspace.id))
       .orderBy(desc(repositoryBranchMonitors.updatedAt));
+    if (rows.length === 0) return [];
 
-    return Promise.all(
-      rows.map(async (row) => {
-        const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-          where: eq(reviewSnapshots.pullRequestId, row.pullRequestId),
-          orderBy: [desc(reviewSnapshots.version)],
-        });
-        const [units, files] = snapshot
-          ? await Promise.all([
-              ctx.db.query.reviewUnits.findMany({
-                columns: {
-                  id: true,
-                  snapshotFileId: true,
-                  requiresReReview: true,
-                },
-                where: and(
-                  eq(reviewUnits.snapshotId, snapshot.id),
-                  ne(reviewUnits.kind, "file"),
-                ),
-              }),
-              ctx.db.query.snapshotFiles.findMany({
-                columns: { id: true },
-                where: eq(snapshotFiles.snapshotId, snapshot.id),
-              }),
-            ])
-          : [[], []];
-        const signed = units.length
-          ? await ctx.db
-              .select({ unitId: signOffs.unitId })
-              .from(signOffs)
-              .where(
-                and(
-                  eq(signOffs.userId, ctx.auth.userId),
-                  inArray(
-                    signOffs.unitId,
-                    units.map(({ id }) => id),
-                  ),
-                  isNull(signOffs.invalidatedAt),
-                ),
-              )
-          : [];
-        const activeSync =
-          await ctx.db.query.repositoryBranchSyncRuns.findFirst({
-            where: and(
-              eq(repositoryBranchSyncRuns.monitorId, row.id),
-              inArray(repositoryBranchSyncRuns.status, ["queued", "running"]),
-            ),
-            orderBy: [desc(repositoryBranchSyncRuns.createdAt)],
-          });
-        const jobs = snapshot
-          ? await ctx.db.query.aiJobs.findMany({
-              columns: {
-                id: true,
-                status: true,
-                progress: true,
-                reviewPurpose: true,
-                createdAt: true,
-                completedAt: true,
-              },
-              where: and(
-                eq(aiJobs.pullRequestId, row.pullRequestId),
-                eq(aiJobs.snapshotId, snapshot.id),
+    const pullRequestIds = rows.map(({ pullRequestId }) => pullRequestId);
+    const monitorIds = rows.map(({ id }) => id);
+    const snapshots = await ctx.db
+      .selectDistinctOn([reviewSnapshots.pullRequestId], {
+        id: reviewSnapshots.id,
+        pullRequestId: reviewSnapshots.pullRequestId,
+        version: reviewSnapshots.version,
+        headSha: reviewSnapshots.headSha,
+        createdAt: reviewSnapshots.createdAt,
+      })
+      .from(reviewSnapshots)
+      .where(inArray(reviewSnapshots.pullRequestId, pullRequestIds))
+      .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
+    const snapshotIds = snapshots.map(({ id }) => id);
+    const [units, files, activeSyncs, jobs] = await Promise.all([
+      snapshotIds.length
+        ? ctx.db
+            .select({
+              id: reviewUnits.id,
+              snapshotId: reviewUnits.snapshotId,
+              snapshotFileId: reviewUnits.snapshotFileId,
+              requiresReReview: reviewUnits.requiresReReview,
+            })
+            .from(reviewUnits)
+            .where(
+              and(
+                inArray(reviewUnits.snapshotId, snapshotIds),
+                ne(reviewUnits.kind, "file"),
+              ),
+            )
+        : Promise.resolve([]),
+      snapshotIds.length
+        ? ctx.db
+            .select({
+              id: snapshotFiles.id,
+              snapshotId: snapshotFiles.snapshotId,
+            })
+            .from(snapshotFiles)
+            .where(inArray(snapshotFiles.snapshotId, snapshotIds))
+        : Promise.resolve([]),
+      ctx.db
+        .selectDistinctOn([repositoryBranchSyncRuns.monitorId], {
+          id: repositoryBranchSyncRuns.id,
+          monitorId: repositoryBranchSyncRuns.monitorId,
+          status: repositoryBranchSyncRuns.status,
+          progress: repositoryBranchSyncRuns.progress,
+          error: repositoryBranchSyncRuns.error,
+        })
+        .from(repositoryBranchSyncRuns)
+        .where(
+          and(
+            inArray(repositoryBranchSyncRuns.monitorId, monitorIds),
+            inArray(repositoryBranchSyncRuns.status, ["queued", "running"]),
+          ),
+        )
+        .orderBy(
+          repositoryBranchSyncRuns.monitorId,
+          desc(repositoryBranchSyncRuns.createdAt),
+        ),
+      snapshotIds.length
+        ? ctx.db
+            .selectDistinctOn([aiJobs.pullRequestId, aiJobs.reviewPurpose], {
+              id: aiJobs.id,
+              pullRequestId: aiJobs.pullRequestId,
+              status: aiJobs.status,
+              progress: aiJobs.progress,
+              reviewPurpose: aiJobs.reviewPurpose,
+              createdAt: aiJobs.createdAt,
+              completedAt: aiJobs.completedAt,
+            })
+            .from(aiJobs)
+            .where(
+              and(
+                inArray(aiJobs.pullRequestId, pullRequestIds),
+                inArray(aiJobs.snapshotId, snapshotIds),
                 eq(aiJobs.userId, ctx.auth.userId),
                 eq(aiJobs.kind, "review"),
                 eq(aiJobs.reviewScope, "repository_snapshot"),
                 isNull(aiJobs.parentJobId),
+                inArray(aiJobs.reviewPurpose, ["code", "compliance"]),
               ),
-              orderBy: [desc(aiJobs.createdAt)],
-              limit: 12,
-            })
-          : [];
-        const signedIds = new Set(signed.map(({ unitId }) => unitId));
-        const reviewableFileCount = new Set(
-          units.flatMap(({ snapshotFileId }) =>
-            snapshotFileId ? [snapshotFileId] : [],
-          ),
-        ).size;
-        return {
-          ...row,
-          snapshot: snapshot
-            ? {
-                id: snapshot.id,
-                version: snapshot.version,
-                headSha: snapshot.headSha,
-                createdAt: snapshot.createdAt,
-              }
-            : null,
-          progress: {
-            total: units.length,
-            signed: units.filter(({ id }) => signedIds.has(id)).length,
-            unseen: units.filter(({ id }) => !signedIds.has(id)).length,
-            changed: units.filter(({ requiresReReview }) => requiresReReview)
-              .length,
-          },
-          coverage: {
-            files: files.length,
-            reviewableFiles: reviewableFileCount,
-            nonReviewableFiles: files.length - reviewableFileCount,
-          },
-          activeSync: activeSync
-            ? {
-                id: activeSync.id,
-                status: activeSync.status,
-                progress: activeSync.progress,
-                error: activeSync.error,
-              }
-            : null,
-          latestCodeRun:
-            jobs.find(({ reviewPurpose }) => reviewPurpose === "code") ?? null,
-          latestComplianceRun:
-            jobs.find(({ reviewPurpose }) => reviewPurpose === "compliance") ??
-            null,
-        };
-      }),
+            )
+            .orderBy(
+              aiJobs.pullRequestId,
+              aiJobs.reviewPurpose,
+              desc(aiJobs.createdAt),
+            )
+        : Promise.resolve([]),
+    ]);
+    const signed = snapshotIds.length
+      ? await ctx.db
+          .select({ unitId: signOffs.unitId })
+          .from(signOffs)
+          .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
+          .where(
+            and(
+              eq(signOffs.userId, ctx.auth.userId),
+              inArray(reviewUnits.snapshotId, snapshotIds),
+              ne(reviewUnits.kind, "file"),
+              isNull(signOffs.invalidatedAt),
+            ),
+          )
+      : [];
+    const snapshotByPullRequest = new Map(
+      snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot]),
     );
+    const unitsBySnapshot = new Map<string, typeof units>();
+    for (const unit of units) {
+      const grouped = unitsBySnapshot.get(unit.snapshotId) ?? [];
+      grouped.push(unit);
+      unitsBySnapshot.set(unit.snapshotId, grouped);
+    }
+    const filesBySnapshot = new Map<string, typeof files>();
+    for (const file of files) {
+      const grouped = filesBySnapshot.get(file.snapshotId) ?? [];
+      grouped.push(file);
+      filesBySnapshot.set(file.snapshotId, grouped);
+    }
+    const signedIds = new Set(signed.map(({ unitId }) => unitId));
+    const activeSyncByMonitor = new Map(
+      activeSyncs.map((run) => [run.monitorId, run]),
+    );
+    const jobsByPullRequestAndPurpose = new Map(
+      jobs.map((job) => [`${job.pullRequestId}:${job.reviewPurpose}`, job]),
+    );
+
+    return rows.map((row) => {
+      const snapshot = snapshotByPullRequest.get(row.pullRequestId);
+      const snapshotUnits = snapshot
+        ? (unitsBySnapshot.get(snapshot.id) ?? [])
+        : [];
+      const snapshotFileRows = snapshot
+        ? (filesBySnapshot.get(snapshot.id) ?? [])
+        : [];
+      const activeSync = activeSyncByMonitor.get(row.id);
+      const reviewableFileCount = new Set(
+        snapshotUnits.flatMap(({ snapshotFileId }) =>
+          snapshotFileId ? [snapshotFileId] : [],
+        ),
+      ).size;
+      return {
+        ...row,
+        snapshot: snapshot
+          ? {
+              id: snapshot.id,
+              version: snapshot.version,
+              headSha: snapshot.headSha,
+              createdAt: snapshot.createdAt,
+            }
+          : null,
+        progress: {
+          total: snapshotUnits.length,
+          signed: snapshotUnits.filter(({ id }) => signedIds.has(id)).length,
+          unseen: snapshotUnits.filter(({ id }) => !signedIds.has(id)).length,
+          changed: snapshotUnits.filter(
+            ({ requiresReReview }) => requiresReReview,
+          ).length,
+        },
+        coverage: {
+          files: snapshotFileRows.length,
+          reviewableFiles: reviewableFileCount,
+          nonReviewableFiles: snapshotFileRows.length - reviewableFileCount,
+        },
+        activeSync: activeSync
+          ? {
+              id: activeSync.id,
+              status: activeSync.status,
+              progress: activeSync.progress,
+              error: activeSync.error,
+            }
+          : null,
+        latestCodeRun:
+          jobsByPullRequestAndPurpose.get(`${row.pullRequestId}:code`) ?? null,
+        latestComplianceRun:
+          jobsByPullRequestAndPurpose.get(`${row.pullRequestId}:compliance`) ??
+          null,
+      };
+    });
   }),
 
   listBranches: protectedProcedure
@@ -257,6 +317,12 @@ export const repoReviewsRouter = createTRPCRouter({
         )
         .limit(1);
       if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
+      await enforceRateLimit(
+        ctx.db,
+        `repository-branches-list:${workspace.id}:${ctx.auth.userId}`,
+        60,
+        10 * 60_000,
+      );
       try {
         const branches = await (
           await providerForConnection(ctx.db, scope.connection)
@@ -356,12 +422,33 @@ export const repoReviewsRouter = createTRPCRouter({
         if (!created) throw new Error("Could not create repository monitor");
         return created;
       });
-      const sync = await startRepositoryBranchSync(ctx.db, {
-        workspaceId: workspace.id,
-        monitorId: monitor.id,
-        force: true,
-      });
-      return { monitor, sync };
+      try {
+        const sync = await startRepositoryBranchSync(ctx.db, {
+          workspaceId: workspace.id,
+          monitorId: monitor.id,
+          force: true,
+        });
+        return { monitor, sync };
+      } catch (cause) {
+        const persistedSync =
+          await ctx.db.query.repositoryBranchSyncRuns.findFirst({
+            where: eq(repositoryBranchSyncRuns.monitorId, monitor.id),
+            orderBy: [desc(repositoryBranchSyncRuns.createdAt)],
+          });
+        return {
+          monitor,
+          sync: {
+            status: persistedSync?.status ?? ("failed" as const),
+            syncId: persistedSync?.id ?? null,
+            workflowRunId: persistedSync?.workflowRunId ?? null,
+            error:
+              persistedSync?.error ??
+              (cause instanceof Error
+                ? cause.message.slice(0, 300)
+                : "Initial repository synchronization could not start"),
+          },
+        };
+      }
     }),
 
   sync: protectedProcedure
@@ -408,6 +495,8 @@ export const repoReviewsRouter = createTRPCRouter({
         ctx.auth.userId,
         input.monitorId,
       );
+      // The review subject owns this monitor; deleting it intentionally
+      // cascades through snapshots/jobs and then monitor rules/sync runs.
       await ctx.db
         .delete(pullRequests)
         .where(eq(pullRequests.id, scope.monitor.pullRequestId));

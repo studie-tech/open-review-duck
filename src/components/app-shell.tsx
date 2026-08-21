@@ -209,7 +209,6 @@ export function AppShell({
     },
   });
   const reconcileIntakeRef = useRef(reconcileIntake);
-  reconcileIntakeRef.current = reconcileIntake;
   const reconcileRepositories = api.repoReviews.reconcile.useMutation({
     onSuccess: (result) => {
       if (result.queued === 0) return;
@@ -217,7 +216,10 @@ export function AppShell({
     },
   });
   const reconcileRepositoriesRef = useRef(reconcileRepositories);
-  reconcileRepositoriesRef.current = reconcileRepositories;
+  useEffect(() => {
+    reconcileIntakeRef.current = reconcileIntake;
+    reconcileRepositoriesRef.current = reconcileRepositories;
+  }, [reconcileIntake, reconcileRepositories]);
   useEffect(() => {
     /** Refreshes provider state without overlapping an existing reconciliation. */
     const reconcile = () => {

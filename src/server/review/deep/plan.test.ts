@@ -357,9 +357,19 @@ describe("sealReviewPlan", () => {
     const jobCount = fake.jobs().length;
     const second = await sealReviewPlan(fake.db, PARENT_ID);
 
-    expect(first.items).toEqual([]);
+    expect(first.items).toEqual([
+      expect.objectContaining({
+        path: "src/router.ts",
+        state: "waived",
+        reason: "no_applicable_rule",
+        childJobId: null,
+      }),
+    ]);
+    expect(first.selectedCount).toBe(0);
+    expect(first.waivedCount).toBe(1);
     expect(first.terminalState).toBeNull();
     expect(first.surveyJobId).not.toBeNull();
+    expect(second.items).toEqual(first.items);
     expect(second.surveyJobId).toBe(first.surveyJobId);
     expect(fake.jobs()).toHaveLength(jobCount);
   });

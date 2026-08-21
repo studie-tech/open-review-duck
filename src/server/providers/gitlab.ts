@@ -157,18 +157,19 @@ export class GitLabProvider implements PullRequestProvider {
   async getBranch(
     repositoryExternalId: string,
     branch: string,
+    signal?: AbortSignal,
   ): Promise<RepositoryBranch> {
     const projectId = encodeURIComponent(repositoryExternalId);
     const [project, resolved] = await Promise.all([
       providerFetch<GitLabProject>(
         this.name,
         `${this.apiUrl}/projects/${projectId}`,
-        { headers: this.headers },
+        { headers: this.headers, signal },
       ),
       providerFetch<GitLabBranch>(
         this.name,
         `${this.apiUrl}/projects/${projectId}/repository/branches/${encodeURIComponent(branch)}`,
-        { headers: this.headers },
+        { headers: this.headers, signal },
       ),
     ]);
     return {

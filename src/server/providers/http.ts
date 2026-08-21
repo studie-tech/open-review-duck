@@ -16,6 +16,7 @@ async function requestProvider(url: string, init: RequestInit) {
   const method = (init.method ?? "GET").toUpperCase();
   const retryableMethod = method === "GET" || method === "HEAD";
   for (let attempt = 0; attempt < 3; attempt++) {
+    init.signal?.throwIfAborted();
     const timeout = AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS);
     const signal = init.signal
       ? AbortSignal.any([init.signal, timeout])
@@ -39,19 +40,35 @@ async function requestProvider(url: string, init: RequestInit) {
         Number.isFinite(retryAfter)
           ? Math.min(5_000, retryAfter * 1_000)
           : 100 * 2 ** attempt,
+        init.signal,
       );
     } catch (cause) {
       if (!retryableMethod || attempt === 2 || init.signal?.aborted)
         throw cause;
-      await retryDelay(100 * 2 ** attempt);
+      await retryDelay(100 * 2 ** attempt, init.signal);
     }
   }
   throw new Error("Provider retry loop ended unexpectedly");
 }
 
 /** Waits for one bounded exponential provider retry interval. */
-function retryDelay(milliseconds: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+function retryDelay(milliseconds: number, signal?: AbortSignal | null) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    /** Cancels the pending delay without leaving an abort listener behind. */
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export interface ProviderResponse<T> {

@@ -222,13 +222,14 @@ export class GitHubProvider implements PullRequestProvider {
   async getBranch(
     repositoryExternalId: string,
     branch: string,
+    signal?: AbortSignal,
   ): Promise<RepositoryBranch> {
     const [repository, resolved] = await Promise.all([
-      this.repository(repositoryExternalId),
+      this.repository(repositoryExternalId, signal),
       providerFetch<GitHubBranch>(
         this.name,
         `${this.apiUrl}/repositories/${repositoryExternalId}/branches/${encodeURIComponent(branch)}`,
-        { headers: this.headers },
+        { headers: this.headers, signal },
       ),
     ]);
     return {
@@ -911,7 +912,14 @@ export class GitHubProvider implements PullRequestProvider {
    * repository's owner and name, so without this a five-comment thread would
    * spend five more requests re-reading facts that cannot change underneath it.
    */
-  private repository(repositoryExternalId: string) {
+  private repository(repositoryExternalId: string, signal?: AbortSignal) {
+    if (signal) {
+      return providerFetch<GitHubRepository>(
+        this.name,
+        `${this.apiUrl}/repositories/${repositoryExternalId}`,
+        { headers: this.headers, signal },
+      );
+    }
     const cached = this.repositories.get(repositoryExternalId);
     if (cached) return cached;
     const pending = providerFetch<GitHubRepository>(

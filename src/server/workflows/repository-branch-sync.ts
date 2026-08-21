@@ -41,10 +41,7 @@ async function recordTerminalFailure(
   error: string,
 ) {
   "use step";
-  const run = await db.query.repositoryBranchSyncRuns.findFirst({
-    where: eq(repositoryBranchSyncRuns.id, syncId),
-  });
-  await db
+  const updatedRuns = await db
     .update(repositoryBranchSyncRuns)
     .set({ status: "failed", error, completedAt: new Date() })
     .where(
@@ -52,12 +49,14 @@ async function recordTerminalFailure(
         eq(repositoryBranchSyncRuns.id, syncId),
         inArray(repositoryBranchSyncRuns.status, ["queued", "running"]),
       ),
-    );
-  if (run) {
+    )
+    .returning({ monitorId: repositoryBranchSyncRuns.monitorId });
+  const updatedRun = updatedRuns[0];
+  if (updatedRun) {
     await db
       .update(repositoryBranchMonitors)
       .set({ lastCheckedAt: new Date(), lastError: error })
-      .where(eq(repositoryBranchMonitors.id, run.monitorId));
+      .where(eq(repositoryBranchMonitors.id, updatedRun.monitorId));
   }
   await db
     .update(workflowRuns)
@@ -99,6 +98,7 @@ async function executeRepositoryBranchSync(
     .where(eq(workflowRuns.id, workflow.id));
   try {
     const result = await syncRepositoryBranch(db, run.monitorId, {
+      force: run.force,
       onProgress: async (progress) => {
         await db
           .update(repositoryBranchSyncRuns)

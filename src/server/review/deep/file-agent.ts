@@ -25,6 +25,10 @@ import {
 } from "~/server/ai/turn-guards";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
+import {
+  applicableRepositoryRules,
+  repositoryRulebookText,
+} from "~/server/repo-reviews/rules";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { createDeepReviewContext, type DeepReviewContext } from "./context";
 import {
@@ -54,10 +58,6 @@ import {
   surveyUserPrompt,
 } from "./review-prompts";
 import { resolveRulebooks } from "./rulebooks";
-import {
-  applicableRepositoryRules,
-  repositoryRulebookText,
-} from "~/server/repo-reviews/rules";
 import {
   deepReviewSurveyFinished,
   deepReviewSurveyPromptInput,
@@ -914,28 +914,38 @@ function surveyAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
         ? DEEP_REVIEW_REPOSITORY_SURVEY_SYSTEM_PROMPT
         : DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
     operation: "ai.deep-review-survey-turn",
-    buildPrompt: async () => ({
-      role: "user",
-      content: surveyUserPrompt({
-        ...(await deepReviewSurveyPromptInput(db, {
-          job,
-          parentJobId: input.parent.id,
-          repository,
-        })),
-        reviewScope:
-          input.parent.reviewScope === "repository_snapshot"
-            ? "repository_snapshot"
-            : "pull_request",
-        reviewChecklist:
-          input.parent.reviewPurpose === "compliance"
-            ? repositoryRulebookText(
-                (input.parent.reviewRules ?? []).filter(
-                  (rule) => rule.scope === "repository",
-                ),
-              )
-            : undefined,
-      }),
-    }),
+    buildPrompt: async () => {
+      const promptInput = await deepReviewSurveyPromptInput(db, {
+        job,
+        parentJobId: input.parent.id,
+        repository,
+      });
+      const repositoryRules = (input.parent.reviewRules ?? []).filter(
+        (rule) =>
+          rule.scope === "repository" &&
+          repository
+            .changedFiles()
+            .some(
+              ({ path }) =>
+                applicableRepositoryRules([rule], path, "repository").length >
+                0,
+            ),
+      );
+      return {
+        role: "user",
+        content: surveyUserPrompt({
+          ...promptInput,
+          reviewScope:
+            input.parent.reviewScope === "repository_snapshot"
+              ? "repository_snapshot"
+              : "pull_request",
+          reviewChecklist:
+            input.parent.reviewPurpose === "compliance"
+              ? repositoryRulebookText(repositoryRules)
+              : undefined,
+        }),
+      };
+    },
     buildTools: (tools) =>
       deepReviewSurveyTools({
         db,
@@ -993,6 +1003,15 @@ async function validateReviewedFile(db: Database, input: AgentTurnInput) {
       previousSource,
       input.parent.reviewScope,
     ),
+    previousChangedRanges:
+      item.changeType === "deleted"
+        ? fileChangedRanges(
+            "added",
+            previousSource,
+            null,
+            input.parent.reviewScope,
+          )
+        : undefined,
     units: (await repository.units())
       .filter((unit) => unit.path === item.path)
       .map((unit) => ({

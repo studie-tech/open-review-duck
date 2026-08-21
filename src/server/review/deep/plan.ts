@@ -11,8 +11,8 @@ import {
 } from "@/drizzle/schema";
 import { bigPickleSourceDecision } from "~/server/ai/source-policy";
 import type { db as database } from "~/server/db";
-import { readSourceText } from "~/server/storage/source-blobs";
 import { applicableRepositoryRules } from "~/server/repo-reviews/rules";
+import { readSourceText } from "~/server/storage/source-blobs";
 import type { DeepReviewItemState } from "./coverage";
 import { rulebookCorpusDigest } from "./rulebooks";
 import {
@@ -376,18 +376,31 @@ export async function sealReviewPlan(
   const files = await loadPlanFiles(db, parent.snapshotId);
   const byPath = new Map(files.map((file) => [file.candidate.path, file]));
   const complianceRules = parent.reviewRules ?? [];
-  const candidateFiles = files
-    .map((file) => file.candidate)
-    .filter(
-      (file) =>
-        parent.reviewPurpose !== "compliance" ||
-        applicableRepositoryRules(complianceRules, file.path, "file").length >
-          0,
-    );
+  const allCandidates = files.map((file) => file.candidate);
+  const withoutApplicableRule =
+    parent.reviewPurpose === "compliance"
+      ? allCandidates.filter(
+          (file) =>
+            applicableRepositoryRules(complianceRules, file.path, "file")
+              .length === 0,
+        )
+      : [];
+  const withoutApplicableRulePaths = new Set(
+    withoutApplicableRule.map(({ path }) => path),
+  );
+  const candidateFiles = allCandidates.filter(
+    ({ path }) => !withoutApplicableRulePaths.has(path),
+  );
   const selection = selectReviewFiles(candidateFiles, {
     maxSourceBytes: options.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES,
   });
-  const waived: WaivedPlanFile[] = [...selection.waived];
+  const waived: WaivedPlanFile[] = [
+    ...selection.waived,
+    ...withoutApplicableRule.map((file) => ({
+      file,
+      reason: "no_applicable_rule" as const,
+    })),
+  ];
   const selected: ReviewCandidateFile[] = [];
   // Read outside the transaction and one file at a time: the source is object
   // storage I/O, which has no business holding a database transaction open,
