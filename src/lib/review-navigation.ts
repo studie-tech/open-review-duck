@@ -165,15 +165,16 @@ export type ReviewAvailability = "active" | "caught_up" | "complete";
 /** Distinguishes finished work from a review paused entirely on responses. */
 export function reviewAvailability<
   T extends ReviewNavigationUnit & { id: string },
->(units: T[], pausedUnitIds: ReadonlySet<string>) {
+>(units: T[]) {
   if (units.every(({ status }) => status === "signed_off")) {
     return "complete" satisfies ReviewAvailability;
   }
-  const actionable = nextPendingReviewIndex(
-    units,
-    (unit) => !pausedUnitIds.has(unit.id),
-  );
-  if (actionable < 0 && units.some(({ status }) => status === "waiting")) {
+  // Waiting is per unit. A sibling that is still pending remains work, even
+  // when another member of the same concept is paused on a conversation.
+  if (
+    nextPendingReviewIndex(units) < 0 &&
+    units.some(({ status }) => status === "waiting")
+  ) {
     return "caught_up" satisfies ReviewAvailability;
   }
   return "active" satisfies ReviewAvailability;

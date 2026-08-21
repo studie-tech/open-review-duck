@@ -11,7 +11,6 @@ import {
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
   groupDeepReviewFindings,
-  pausedConceptUnitIds,
   useTerminalReviewRefetch,
 } from "./review-workspace";
 
@@ -541,47 +540,5 @@ describe("DeepReviewFindingRow", () => {
 
     await user.click(row);
     expect(onOpen).toHaveBeenCalledOnce();
-  });
-});
-
-describe("pausedConceptUnitIds", () => {
-  const units = [
-    { id: "a", status: "waiting" },
-    { id: "b", status: "pending" },
-    { id: "c", status: "pending" },
-    { id: "d", status: "signed_off" },
-  ] as never;
-
-  it("pauses every member of a concept one member waits on", () => {
-    // A synchronization carries only the waits whose code is unchanged, so a
-    // concept can wait on one member while the rest read as pending. Offering
-    // those siblings as work sends the reviewer back into a paused concept.
-    const paused = pausedConceptUnitIds(
-      [{ id: "concept-1", memberIds: ["a", "b", "d"] }] as never,
-      units,
-    );
-
-    expect([...paused].sort()).toEqual(["a", "b", "d"]);
-  });
-
-  it("leaves a concept nobody is waiting on available", () => {
-    const paused = pausedConceptUnitIds(
-      [{ id: "concept-1", memberIds: ["b", "c"] }] as never,
-      units,
-    );
-
-    expect(paused.size).toBe(0);
-  });
-
-  it("pauses only the concept that holds the wait", () => {
-    const paused = pausedConceptUnitIds(
-      [
-        { id: "concept-1", memberIds: ["a", "b"] },
-        { id: "concept-2", memberIds: ["c", "d"] },
-      ] as never,
-      units,
-    );
-
-    expect([...paused].sort()).toEqual(["a", "b"]);
   });
 });

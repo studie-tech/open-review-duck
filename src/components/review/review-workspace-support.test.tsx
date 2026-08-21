@@ -86,7 +86,6 @@ describe("review shortcuts", () => {
     // hands the chord to the page, so a concept chord built on it would shut
     // the review down instead of recording it.
     expect(reviewShortcuts.signOffConcept).toEqual([{ key: "s", shift: true }]);
-    expect(reviewShortcuts.awaitConcept).toEqual([{ key: "w", shift: true }]);
     expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[sw]","mod"/);
   });
 

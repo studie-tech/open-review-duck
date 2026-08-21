@@ -90,40 +90,30 @@ describe("nextPendingReviewIndex", () => {
 describe("reviewAvailability", () => {
   it("separates a caught-up review from a fully completed one", () => {
     expect(
-      reviewAvailability(
-        [
-          { id: "reviewed", status: "signed_off" },
-          { id: "waiting", status: "waiting" },
-          { id: "paused-sibling", status: "pending" },
-        ],
-        new Set(["waiting", "paused-sibling"]),
-      ),
+      reviewAvailability([
+        { id: "reviewed", status: "signed_off" },
+        { id: "waiting", status: "waiting" },
+      ]),
     ).toBe("caught_up");
     expect(
-      reviewAvailability(
-        [
-          { id: "one", status: "signed_off" },
-          { id: "two", status: "signed_off" },
-        ],
-        new Set(),
-      ),
+      reviewAvailability([
+        { id: "one", status: "signed_off" },
+        { id: "two", status: "signed_off" },
+      ]),
     ).toBe("complete");
   });
 
-  it("remains active while any unpaused work can be reviewed", () => {
+  it("remains active while a sibling of a waiting unit can still be reviewed", () => {
     expect(
-      reviewAvailability(
-        [
-          { id: "waiting", status: "waiting" },
-          { id: "next", status: "pending" },
-        ],
-        new Set(["waiting"]),
-      ),
+      reviewAvailability([
+        { id: "waiting", status: "waiting" },
+        { id: "next", status: "pending" },
+      ]),
     ).toBe("active");
   });
 
   it("treats a review with no units as complete", () => {
-    expect(reviewAvailability([], new Set())).toBe("complete");
+    expect(reviewAvailability([])).toBe("complete");
   });
 });
 

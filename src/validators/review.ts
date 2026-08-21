@@ -106,12 +106,6 @@ export const improveConceptGroupingSchema = z.object({
   layoutVersion: z.number().int().positive(),
 });
 
-export const awaitResponseConceptSchema = signOffConceptSchema.pick({
-  conceptId: true,
-  layoutId: true,
-  layoutVersion: true,
-});
-
 /**
  * Names the waits one reviewer is taking back.
  *

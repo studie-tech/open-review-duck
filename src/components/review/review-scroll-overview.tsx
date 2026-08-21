@@ -116,6 +116,28 @@ export function overviewViewportFromElements(
   };
 }
 
+/**
+ * Shows the file map only when mixed changes sit outside the visible pane.
+ *
+ * A solid add or delete bar cannot point at anything the reviewer does not
+ * already know, and a unit that already fits on screen has nowhere to jump.
+ */
+export function shouldShowReviewScrollOverview(
+  rows: readonly Pick<SideBySideDiffRow, "kind">[],
+  viewport: ReviewOverviewRange,
+) {
+  if (rows.length === 0) return false;
+  let hasUnchanged = false;
+  let hasChanged = false;
+  for (const { kind } of rows) {
+    if (kind === "unchanged") hasUnchanged = true;
+    else hasChanged = true;
+    if (hasUnchanged && hasChanged) break;
+  }
+  if (!hasUnchanged || !hasChanged) return false;
+  return viewport.start > 0 || viewport.end < 1;
+}
+
 /** Scrolls a pane so `ratio` of the code root sits near the middle. */
 export function seekOverviewRatio(
   pane: {

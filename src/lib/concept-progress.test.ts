@@ -29,9 +29,15 @@ describe("concept status", () => {
     expect(conceptStatusFromMembers([], 0)).toBe("pending");
   });
 
-  it("waits on a concept with any member awaiting a response", () => {
+  it("keeps a concept open when one member is waiting on a response", () => {
+    // A wait names one conversation, not the concept. The signed-off member
+    // is still progress, and the waiting one is unfinished work — not a
+    // reason to hide the rest of the concept from the review path.
     expect(conceptStatusFromMembers(members("signed_off", "waiting"))).toBe(
-      "waiting",
+      "partial",
+    );
+    expect(conceptStatusFromMembers(members("waiting", "waiting"))).toBe(
+      "pending",
     );
   });
 
@@ -52,9 +58,9 @@ describe("concept status", () => {
     ).toBe("changed");
   });
 
-  it("waits on a returning concept whose member is also awaiting a response", () => {
+  it("still reports a returning member ahead of a wait beside it", () => {
     expect(conceptStatusFromMembers(members("changed", "waiting"))).toBe(
-      "waiting",
+      "changed",
     );
   });
 
