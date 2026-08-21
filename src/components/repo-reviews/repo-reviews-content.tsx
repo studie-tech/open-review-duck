@@ -1,0 +1,1488 @@
+"use client";
+
+import {
+  BookOpenCheck,
+  CheckCircle2,
+  ChevronRight,
+  Clipboard,
+  Code2,
+  Download,
+  FileCheck2,
+  GitBranch,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Trash2,
+  X,
+} from "lucide-react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { PageContainer } from "~/components/page-container";
+import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
+import { LinkPendingSpinner } from "~/components/ui/link-status";
+import {
+  repositoryReportFilename,
+  repositoryReviewReport,
+} from "~/lib/repository-review-report";
+import { cn } from "~/lib/utils";
+import { api, type RouterOutputs } from "~/trpc/react";
+
+type Monitors = RouterOutputs["repoReviews"]["list"];
+type Repositories = RouterOutputs["provider"]["listImportedRepositories"];
+type Section = "overview" | "findings" | "rules" | "history";
+const EMPTY_UUID = "00000000-0000-4000-8000-000000000000";
+const activeStatuses = new Set([
+  "queued",
+  "waiting_for_provider",
+  "running",
+  "streaming",
+]);
+
+const providerLabel = {
+  github: "GitHub",
+  gitlab: "GitLab",
+  azure_devops: "Azure DevOps",
+} as const;
+
+/** Formats a provider revision for compact display. */
+function shortSha(value: string | null | undefined) {
+  return value?.slice(0, 7) ?? "Waiting";
+}
+
+/** Formats a timestamp relative to the current browser time. */
+function relativeTime(value: Date | null | undefined) {
+  if (!value) return "Not yet";
+  const seconds = Math.round((value.getTime() - Date.now()) / 1_000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (Math.abs(seconds) < 60) return formatter.format(seconds, "second");
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return formatter.format(minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
+  return formatter.format(Math.round(hours / 24), "day");
+}
+
+/** Renders a durable review run's compact live state. */
+function RunStatus({ status, progress }: { status: string; progress: number }) {
+  const active = activeStatuses.has(status);
+  return (
+    <span className="inline-flex items-center gap-2 text-xs text-mist">
+      <span
+        className={cn(
+          "size-2 rounded-full",
+          active
+            ? "animate-pulse bg-amber-400"
+            : status === "completed"
+              ? "bg-lime"
+              : status === "failed"
+                ? "bg-red-400"
+                : "bg-mist/50",
+        )}
+      />
+      {active ? `${progress}%` : status.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+/** Renders Option A: a repo cockpit with one deliberate workflow per action. */
+export function RepoReviewsContent({
+  initialMonitors,
+  initialRepositories,
+}: {
+  initialMonitors: Monitors;
+  initialRepositories: Repositories;
+}) {
+  const utils = api.useUtils();
+  const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
+    initialData: initialMonitors,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (monitor) =>
+          monitor.activeSync ||
+          activeStatuses.has(monitor.latestCodeRun?.status ?? "") ||
+          activeStatuses.has(monitor.latestComplianceRun?.status ?? ""),
+      )
+        ? 1_500
+        : false,
+  });
+  const repositoriesQuery = api.provider.listImportedRepositories.useQuery(
+    undefined,
+    { initialData: initialRepositories },
+  );
+  const monitors = monitorsQuery.data ?? initialMonitors;
+  const [selectedMonitorId, setSelectedMonitorId] = useState(
+    initialMonitors[0]?.id,
+  );
+  const [section, setSection] = useState<Section>("overview");
+  const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const selectedMonitor =
+    monitors.find(({ id }) => id === selectedMonitorId) ?? monitors[0];
+
+  useEffect(() => {
+    if (!selectedMonitorId && monitors[0]) setSelectedMonitorId(monitors[0].id);
+    if (
+      selectedMonitorId &&
+      !monitors.some(({ id }) => id === selectedMonitorId)
+    ) {
+      setSelectedMonitorId(monitors[0]?.id);
+    }
+  }, [monitors, selectedMonitorId]);
+
+  const visibleMonitors = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return monitors;
+    return monitors.filter((monitor) =>
+      `${monitor.repositoryOwner}/${monitor.repositoryName} ${monitor.branch}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [monitors, search]);
+
+  return (
+    <PageContainer className="mx-auto max-w-[1600px]">
+      <header className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+        <div>
+          <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-lime">
+            <BookOpenCheck className="size-4" />
+            Living repository knowledge
+          </div>
+          <h1 className="text-3xl font-semibold tracking-tight text-cloud sm:text-4xl">
+            Repo reviews
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-mist">
+            Read a codebase once, keep up with what changed, and run focused
+            audits without losing your place.
+          </p>
+        </div>
+        <Button onClick={() => setAddOpen(true)}>
+          <Plus className="size-4" /> Add repository
+        </Button>
+      </header>
+
+      {monitors.length === 0 ? (
+        <EmptyState
+          repositories={repositoriesQuery.data ?? []}
+          onAdd={() => setAddOpen(true)}
+        />
+      ) : (
+        <div className="grid min-h-[680px] overflow-hidden rounded-3xl border border-line bg-panel shadow-[0_24px_80px_var(--app-shadow)] lg:grid-cols-[310px_minmax(0,1fr)]">
+          <aside className="border-b border-line bg-surface-subtle/45 p-4 lg:border-r lg:border-b-0">
+            <label className="relative block">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Find a repository"
+                className="h-10 w-full rounded-xl border border-line bg-surface pl-9 pr-3 text-sm text-cloud outline-none placeholder:text-mist focus:border-lime/50"
+              />
+            </label>
+            <div className="mt-4 space-y-1.5">
+              {visibleMonitors.map((monitor) => {
+                const selected = monitor.id === selectedMonitor?.id;
+                const syncing = Boolean(monitor.activeSync);
+                return (
+                  <button
+                    key={monitor.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMonitorId(monitor.id);
+                      setSection("overview");
+                    }}
+                    className={cn(
+                      "group w-full rounded-2xl border px-3.5 py-3 text-left transition",
+                      selected
+                        ? "border-lime/35 bg-lime/8"
+                        : "border-transparent hover:border-line hover:bg-surface",
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span
+                        className={cn(
+                          "mt-1 size-2.5 shrink-0 rounded-full",
+                          syncing
+                            ? "animate-pulse bg-amber-400"
+                            : monitor.lastError
+                              ? "bg-red-400"
+                              : "bg-lime",
+                        )}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-cloud">
+                          {monitor.repositoryName}
+                        </span>
+                        <span className="mt-1 flex items-center gap-1.5 truncate text-xs text-mist">
+                          <GitBranch className="size-3" /> {monitor.branch}
+                        </span>
+                      </span>
+                      {(monitor.progress.unseen > 0 || syncing) && (
+                        <Badge className="border-lime/25 bg-lime/8 text-lime">
+                          {syncing
+                            ? `${monitor.activeSync?.progress ?? 0}%`
+                            : monitor.progress.unseen}
+                        </Badge>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          {selectedMonitor && (
+            <RepositoryCockpit
+              key={selectedMonitor.id}
+              monitor={selectedMonitor}
+              section={section}
+              onSection={setSection}
+              onRemoved={() => setSelectedMonitorId(undefined)}
+            />
+          )}
+        </div>
+      )}
+
+      {addOpen && (
+        <AddRepositoryDialog
+          repositories={repositoriesQuery.data ?? []}
+          monitors={monitors}
+          onClose={() => setAddOpen(false)}
+          onAdded={(monitorId) => {
+            setSelectedMonitorId(monitorId);
+            setAddOpen(false);
+            void utils.repoReviews.list.invalidate();
+          }}
+        />
+      )}
+    </PageContainer>
+  );
+}
+
+/** Guides an empty workspace toward its first repository monitor. */
+function EmptyState({
+  repositories,
+  onAdd,
+}: {
+  repositories: Repositories;
+  onAdd: () => void;
+}) {
+  return (
+    <section className="flex min-h-[520px] items-center justify-center rounded-3xl border border-dashed border-line bg-panel px-6 text-center">
+      <div className="max-w-md">
+        <span className="mx-auto flex size-16 items-center justify-center rounded-2xl border border-lime/20 bg-lime/8 text-lime">
+          <GitBranch className="size-7" />
+        </span>
+        <h2 className="mt-6 text-xl font-semibold text-cloud">
+          Build your repository shelf
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-mist">
+          Add a repository and branch. The first sync maps the complete
+          codebase; later revisions preserve what you read and surface only what
+          is new.
+        </p>
+        {repositories.length > 0 ? (
+          <Button className="mt-6" onClick={onAdd}>
+            <Plus className="size-4" /> Add your first repository
+          </Button>
+        ) : (
+          <Button className="mt-6" asChild>
+            <Link href="/settings/providers">Connect a code provider</Link>
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Renders the selected monitored branch and its cockpit sections. */
+function RepositoryCockpit({
+  monitor,
+  section,
+  onSection,
+  onRemoved,
+}: {
+  monitor: Monitors[number];
+  section: Section;
+  onSection: (section: Section) => void;
+  onRemoved: () => void;
+}) {
+  const utils = api.useUtils();
+  const [findingJobId, setFindingJobId] = useState<string>();
+  const sync = api.repoReviews.sync.useMutation({
+    onSuccess: () => {
+      toast.success("Repository check queued");
+      void utils.repoReviews.list.invalidate();
+    },
+    onError: (error) =>
+      toast.error("Could not check repository", { description: error.message }),
+  });
+  const remove = api.repoReviews.remove.useMutation({
+    onSuccess: () => {
+      toast.success("Repository monitor removed");
+      onRemoved();
+      void utils.repoReviews.list.invalidate();
+    },
+    onError: (error) =>
+      toast.error("Could not remove repository", {
+        description: error.message,
+      }),
+  });
+
+  return (
+    <section className="min-w-0">
+      <div className="border-b border-line px-5 pt-5 sm:px-7 sm:pt-7">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-xl font-semibold text-cloud">
+                {monitor.repositoryOwner}/{monitor.repositoryName}
+              </h2>
+              <Badge>{providerLabel[monitor.provider]}</Badge>
+              {monitor.activeSync && (
+                <Badge className="border-amber-400/25 bg-amber-400/8 text-amber-300">
+                  Syncing {monitor.activeSync.progress}%
+                </Badge>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-mist">
+              <span className="inline-flex items-center gap-1.5">
+                <GitBranch className="size-3.5" /> {monitor.branch}
+              </span>
+              <span className="font-mono">
+                {shortSha(monitor.snapshot?.headSha)}
+              </span>
+              <span suppressHydrationWarning>
+                Checked {relativeTime(monitor.lastCheckedAt)}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={sync.isPending}
+              disabled={Boolean(monitor.activeSync)}
+              onClick={() => sync.mutate({ monitorId: monitor.id })}
+            >
+              <RefreshCw className="size-3.5" /> Check now
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Remove repository monitor"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Stop monitoring ${monitor.repositoryName}/${monitor.branch}? Review history for this monitor will be removed.`,
+                  )
+                ) {
+                  remove.mutate({ monitorId: monitor.id });
+                }
+              }}
+            >
+              {remove.isPending ? (
+                <MoreHorizontal className="size-4" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+        {monitor.lastError && (
+          <div className="mt-4 rounded-xl border border-red-400/20 bg-red-400/8 px-4 py-3 text-xs text-red-200">
+            {monitor.lastError}
+          </div>
+        )}
+        <nav
+          className="mt-6 flex gap-6 overflow-x-auto"
+          aria-label="Repository review sections"
+        >
+          {(["overview", "findings", "rules", "history"] as const).map(
+            (item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => onSection(item)}
+                className={cn(
+                  "border-b-2 pb-3 text-sm font-medium capitalize transition",
+                  section === item
+                    ? "border-lime text-cloud"
+                    : "border-transparent text-mist hover:text-cloud",
+                )}
+              >
+                {item}
+              </button>
+            ),
+          )}
+        </nav>
+      </div>
+
+      <div className="p-5 sm:p-7">
+        {section === "overview" && (
+          <Overview
+            monitor={monitor}
+            onSection={onSection}
+            onOpenFindings={(jobId) => {
+              setFindingJobId(jobId);
+              onSection("findings");
+            }}
+          />
+        )}
+        {section === "findings" && (
+          <Findings monitor={monitor} requestedJobId={findingJobId} />
+        )}
+        {section === "rules" && <Rules monitor={monitor} />}
+        {section === "history" && (
+          <History
+            monitor={monitor}
+            onOpenFindings={(jobId) => {
+              setFindingJobId(jobId);
+              onSection("findings");
+            }}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Presents the three primary repository-review workflows. */
+function Overview({
+  monitor,
+  onSection,
+  onOpenFindings,
+}: {
+  monitor: Monitors[number];
+  onSection: (section: Section) => void;
+  onOpenFindings: (jobId: string) => void;
+}) {
+  const utils = api.useUtils();
+  const rules = api.repoReviews.rules.useQuery({ monitorId: monitor.id });
+  const enabledRuleCount =
+    rules.data?.filter(({ enabled }) => enabled).length ?? 0;
+  const run = api.repoReviews.startRun.useMutation({
+    onSuccess: (result, variables) => {
+      toast.success(
+        variables.purpose === "code"
+          ? "Code audit started"
+          : "Compliance check started",
+      );
+      void Promise.all([
+        utils.repoReviews.list.invalidate(),
+        utils.repoReviews.history.invalidate({ monitorId: monitor.id }),
+      ]);
+      onOpenFindings(result.job.id);
+    },
+    onError: (error) =>
+      toast.error("Could not start review", { description: error.message }),
+  });
+  const total = monitor.progress.total;
+  const percent = total
+    ? Math.round((monitor.progress.signed / total) * 100)
+    : 0;
+  const coverage = monitor.coverage ?? {
+    files: 0,
+    reviewableFiles: 0,
+    nonReviewableFiles: 0,
+  };
+  return (
+    <div className="space-y-7">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Metric
+          label="Read"
+          value={`${percent}%`}
+          detail={`${monitor.progress.signed} of ${total} units`}
+        />
+        <Metric
+          label="Unseen"
+          value={String(monitor.progress.unseen)}
+          detail={
+            monitor.progress.changed
+              ? `${monitor.progress.changed} changed since sign-off`
+              : "Current revision"
+          }
+          accent={monitor.progress.unseen > 0}
+        />
+        <Metric
+          label="Snapshot"
+          value={`v${monitor.snapshot?.version ?? 0}`}
+          detail={
+            monitor.snapshot
+              ? relativeTime(monitor.snapshot.createdAt)
+              : "Preparing first snapshot"
+          }
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <ActionCard
+          icon={BookOpenCheck}
+          eyebrow="Understand"
+          title="Complete repo review"
+          description="Walk the codebase in a structured reading path. Sign-offs survive unchanged revisions; changed units return to your queue."
+          action={
+            monitor.snapshot ? (
+              <Button asChild className="w-full">
+                <Link href={`/repo-reviews/${monitor.id}/read`}>
+                  {monitor.progress.signed
+                    ? "Continue reading"
+                    : "Start reading"}
+                  <LinkPendingSpinner />
+                  <ChevronRight className="size-4" />
+                </Link>
+              </Button>
+            ) : (
+              <Button className="w-full" disabled>
+                Preparing repository…
+              </Button>
+            )
+          }
+        />
+        <ActionCard
+          icon={Code2}
+          eyebrow="Inspect"
+          title="Code audit"
+          description="Launch the existing evidence-based reviewer across the full branch, then curate its findings into a fixing brief."
+          status={
+            monitor.latestCodeRun ? (
+              <RunStatus
+                status={monitor.latestCodeRun.status}
+                progress={monitor.latestCodeRun.progress}
+              />
+            ) : undefined
+          }
+          action={
+            <Button
+              variant="secondary"
+              className="w-full"
+              loading={run.isPending && run.variables?.purpose === "code"}
+              disabled={
+                !monitor.snapshot ||
+                activeStatuses.has(monitor.latestCodeRun?.status ?? "")
+              }
+              onClick={() =>
+                run.mutate({ monitorId: monitor.id, purpose: "code" })
+              }
+            >
+              <Code2 className="size-4" /> Run code audit
+            </Button>
+          }
+        />
+        <ActionCard
+          icon={ShieldCheck}
+          eyebrow="Enforce"
+          title="Compliance"
+          description="Check your versioned conventions with file agents and a repository-wide survey for architecture rules."
+          status={
+            monitor.latestComplianceRun ? (
+              <RunStatus
+                status={monitor.latestComplianceRun.status}
+                progress={monitor.latestComplianceRun.progress}
+              />
+            ) : undefined
+          }
+          action={
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <Button
+                variant="secondary"
+                loading={
+                  run.isPending && run.variables?.purpose === "compliance"
+                }
+                disabled={
+                  !monitor.snapshot ||
+                  rules.isLoading ||
+                  activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
+                }
+                onClick={() => {
+                  if (enabledRuleCount === 0) onSection("rules");
+                  else {
+                    run.mutate({
+                      monitorId: monitor.id,
+                      purpose: "compliance",
+                    });
+                  }
+                }}
+              >
+                <ShieldCheck className="size-4" />
+                {enabledRuleCount === 0 ? "Set up rules" : "Check rules"}
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Manage compliance rules"
+                onClick={() => onSection("rules")}
+              >
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          }
+        />
+      </div>
+
+      <div className="rounded-2xl border border-line bg-surface-subtle/35 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold text-cloud">
+              How updates work
+            </h3>
+            <p className="mt-1 text-xs leading-5 text-mist">
+              Every branch head is captured as a complete immutable snapshot.
+              Semantic sign-offs carry forward only when a unit and its
+              dependencies remain safe; changed knowledge becomes unseen again.
+            </p>
+          </div>
+          <CheckCircle2 className="size-6 shrink-0 text-lime" />
+        </div>
+      </div>
+      {coverage.nonReviewableFiles > 0 && (
+        <div className="rounded-2xl border border-amber-400/20 bg-amber-400/7 px-5 py-4 text-xs leading-5 text-amber-100">
+          {coverage.nonReviewableFiles} of {coverage.files} tracked files are
+          outside the reading path because they are binary, unsupported, or
+          beyond the source budget. Repository audits record those files as
+          waived coverage instead of silently reviewing partial content.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Renders one compact repository metric. */
+function Metric({
+  label,
+  value,
+  detail,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-line bg-surface px-5 py-4">
+      <div className="text-xs font-medium uppercase tracking-[0.14em] text-mist">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-2 text-2xl font-semibold",
+          accent ? "text-lime" : "text-cloud",
+        )}
+      >
+        {value}
+      </div>
+      <div className="mt-1 text-xs text-mist" suppressHydrationWarning>
+        {detail}
+      </div>
+    </div>
+  );
+}
+
+/** Renders one primary cockpit action with optional durable status. */
+function ActionCard({
+  icon: Icon,
+  eyebrow,
+  title,
+  description,
+  action,
+  status,
+}: {
+  icon: typeof Code2;
+  eyebrow: string;
+  title: string;
+  description: string;
+  action: React.ReactNode;
+  status?: React.ReactNode;
+}) {
+  return (
+    <article className="flex min-h-64 flex-col rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-start justify-between gap-3">
+        <span className="flex size-10 items-center justify-center rounded-xl border border-lime/15 bg-lime/8 text-lime">
+          <Icon className="size-5" />
+        </span>
+        {status}
+      </div>
+      <div className="mt-5 text-[10px] font-semibold uppercase tracking-[0.18em] text-lime">
+        {eyebrow}
+      </div>
+      <h3 className="mt-1 text-base font-semibold text-cloud">{title}</h3>
+      <p className="mt-2 flex-1 text-xs leading-5 text-mist">{description}</p>
+      <div className="mt-5">{action}</div>
+    </article>
+  );
+}
+
+/** Renders run findings and composes a selected fixing report. */
+function Findings({
+  monitor,
+  requestedJobId,
+}: {
+  monitor: Monitors[number];
+  requestedJobId?: string;
+}) {
+  const history = api.repoReviews.history.useQuery(
+    { monitorId: monitor.id },
+    {
+      refetchInterval: (query) =>
+        query.state.data?.some(({ status }) => activeStatuses.has(status))
+          ? 1_500
+          : false,
+    },
+  );
+  const [jobId, setJobId] = useState<string | undefined>(requestedJobId);
+  const runs = history.data ?? [];
+  const selectedJobId = runs.some(({ id }) => id === jobId)
+    ? jobId
+    : runs[0]?.id;
+  const selectedRun = runs.find(({ id }) => id === selectedJobId);
+  const findings = api.repoReviews.findings.useQuery(
+    { monitorId: monitor.id, jobId: selectedJobId ?? EMPTY_UUID },
+    {
+      enabled: Boolean(selectedJobId),
+      refetchInterval:
+        selectedRun && activeStatuses.has(selectedRun.status) ? 1_500 : false,
+    },
+  );
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const payload = findings.data;
+  const visibleFindings = payload?.findings ?? [];
+  useEffect(() => {
+    const visibleIds = new Set(visibleFindings.map(({ id }) => id));
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleFindings]);
+  const purpose =
+    selectedRun?.reviewPurpose === "compliance" ? "compliance" : "code";
+  /** Compiles the current finding selection into a fixing brief. */
+  const report = () =>
+    repositoryReviewReport({
+      repository: `${monitor.repositoryOwner}/${monitor.repositoryName}`,
+      branch: monitor.branch,
+      revision:
+        monitor.snapshot?.headSha ?? monitor.currentHeadSha ?? "unknown",
+      purpose,
+      findings: visibleFindings.filter(({ id }) => selected.has(id)),
+    });
+  /** Copies the current fixing brief to the clipboard. */
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(report());
+      toast.success(
+        `Copied ${selected.size} finding${selected.size === 1 ? "" : "s"}`,
+      );
+    } catch {
+      toast.error("Could not copy the report");
+    }
+  };
+  /** Downloads the current fixing brief as Markdown. */
+  const download = () => {
+    const url = URL.createObjectURL(
+      new Blob([report()], { type: "text/markdown;charset=utf-8" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = repositoryReportFilename(
+      `${monitor.repositoryOwner}-${monitor.repositoryName}`,
+      monitor.branch,
+      purpose,
+    );
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  if (runs.length === 0 && !history.isLoading) {
+    return (
+      <div className="rounded-2xl border border-dashed border-line py-20 text-center">
+        <FileCheck2 className="mx-auto size-8 text-mist" />
+        <h3 className="mt-4 font-semibold text-cloud">No review runs yet</h3>
+        <p className="mt-2 text-sm text-mist">
+          Start a code audit or compliance check from Overview.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <select
+          value={selectedJobId ?? ""}
+          onChange={(event) => {
+            setJobId(event.target.value);
+            setSelected(new Set());
+          }}
+          className="h-10 rounded-xl border border-line bg-surface px-3 text-sm text-cloud outline-none focus:border-lime/50"
+        >
+          {runs.map((run) => (
+            <option key={run.id} value={run.id} suppressHydrationWarning>
+              {run.reviewPurpose === "compliance" ? "Compliance" : "Code audit"}{" "}
+              · {run.status.replaceAll("_", " ")} ·{" "}
+              {run.createdAt.toLocaleString()}
+            </option>
+          ))}
+        </select>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={selected.size === 0}
+            onClick={copy}
+          >
+            <Clipboard className="size-3.5" /> Copy report
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={selected.size === 0}
+            onClick={download}
+          >
+            <Download className="size-3.5" /> Download .md
+          </Button>
+        </div>
+      </div>
+      {selectedRun && activeStatuses.has(selectedRun.status) && (
+        <div className="rounded-2xl border border-amber-400/20 bg-amber-400/7 p-4">
+          <div className="flex items-center justify-between text-xs text-amber-200">
+            <span>Reviewing repository snapshot…</span>
+            <span>{selectedRun.progress}%</span>
+          </div>
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink/30">
+            <div
+              className="h-full rounded-full bg-amber-400 transition-all"
+              style={{ width: `${selectedRun.progress}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {findings.error && (
+        <div className="rounded-2xl border border-red-400/20 bg-red-400/8 p-4 text-xs text-red-200">
+          Findings could not be loaded. {findings.error.message}
+        </div>
+      )}
+      {payload && (
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Metric
+            label="Findings"
+            value={String(payload.findings.length)}
+            detail={`${payload.coverage.completed} items covered`}
+          />
+          <Metric
+            label="Selected"
+            value={String(selected.size)}
+            detail="Included in report"
+            accent={selected.size > 0}
+          />
+          <Metric
+            label="Waived"
+            value={String(payload.coverage.waived)}
+            detail="Unsupported or protected"
+          />
+          <Metric
+            label="Failed"
+            value={String(payload.coverage.failed)}
+            detail="Coverage gaps"
+            accent={payload.coverage.failed > 0}
+          />
+        </div>
+      )}
+      {visibleFindings.length > 0 && (
+        <div className="flex items-center gap-3 border-b border-line pb-3 text-xs text-mist">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selected.size === visibleFindings.length}
+              onChange={(event) =>
+                setSelected(
+                  event.target.checked
+                    ? new Set(visibleFindings.map(({ id }) => id))
+                    : new Set(),
+                )
+              }
+              className="accent-lime"
+            />
+            Select all
+          </label>
+          <span>Choose only findings you want an agent to fix.</span>
+        </div>
+      )}
+      <div className="space-y-3">
+        {visibleFindings.map((finding) => (
+          <label
+            key={finding.id}
+            className={cn(
+              "block cursor-pointer rounded-2xl border p-4 transition",
+              selected.has(finding.id)
+                ? "border-lime/35 bg-lime/5"
+                : "border-line bg-surface hover:border-line-strong",
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={selected.has(finding.id)}
+                onChange={(event) =>
+                  setSelected((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(finding.id);
+                    else next.delete(finding.id);
+                    return next;
+                  })
+                }
+                className="mt-1 accent-lime"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    className={cn(
+                      finding.severity === "critical" ||
+                        finding.severity === "high"
+                        ? "border-red-400/25 text-red-300"
+                        : finding.severity === "medium"
+                          ? "border-amber-400/25 text-amber-300"
+                          : "",
+                    )}
+                  >
+                    {finding.severity}
+                  </Badge>
+                  <span className="text-xs text-mist">{finding.category}</span>
+                  {finding.path && (
+                    <span className="truncate font-mono text-[11px] text-mist">
+                      {finding.path}
+                      {finding.startLine ? `:${finding.startLine}` : ""}
+                    </span>
+                  )}
+                </div>
+                <h3 className="mt-3 text-sm font-semibold text-cloud">
+                  {finding.title}
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-mist">
+                  {finding.body}
+                </p>
+                {finding.existingCode && (
+                  <pre className="mt-3 max-h-48 overflow-auto rounded-xl border border-line bg-ink/50 p-3 text-[11px] leading-5 text-cloud">
+                    <code>{finding.existingCode}</code>
+                  </pre>
+                )}
+              </div>
+            </div>
+          </label>
+        ))}
+      </div>
+      {payload &&
+        visibleFindings.length === 0 &&
+        !activeStatuses.has(payload.status) && (
+          <div className="rounded-2xl border border-line bg-surface py-16 text-center">
+            <CheckCircle2 className="mx-auto size-8 text-lime" />
+            <h3 className="mt-4 font-semibold text-cloud">
+              No surfaced findings
+            </h3>
+            <p className="mt-2 text-sm text-mist">
+              Review coverage and any waived files are recorded above.
+            </p>
+          </div>
+        )}
+    </div>
+  );
+}
+
+/** Manages versioned file and repository compliance rules. */
+function Rules({ monitor }: { monitor: Monitors[number] }) {
+  const rules = api.repoReviews.rules.useQuery({ monitorId: monitor.id });
+  const [editingId, setEditingId] = useState<string>();
+  const [form, setForm] = useState({
+    title: "",
+    instruction: "",
+    pathGlob: "**/*",
+    scope: "file" as "file" | "repository",
+    severity: "medium" as "critical" | "high" | "medium" | "low",
+  });
+  /** Restores the rule editor to its creation defaults. */
+  const reset = () => {
+    setEditingId(undefined);
+    setForm({
+      title: "",
+      instruction: "",
+      pathGlob: "**/*",
+      scope: "file",
+      severity: "medium",
+    });
+  };
+  const add = api.repoReviews.addRule.useMutation({
+    onSuccess: () => {
+      toast.success("Compliance rule added");
+      reset();
+      void rules.refetch();
+    },
+    onError: (error) =>
+      toast.error("Could not save rule", { description: error.message }),
+  });
+  const update = api.repoReviews.updateRule.useMutation({
+    onSuccess: () => {
+      toast.success("Compliance rule updated");
+      reset();
+      void rules.refetch();
+    },
+    onError: (error) =>
+      toast.error("Could not update rule", { description: error.message }),
+  });
+  const archive = api.repoReviews.archiveRule.useMutation({
+    onSuccess: () => {
+      toast.success("Compliance rule archived");
+      void rules.refetch();
+    },
+    onError: (error) =>
+      toast.error("Could not archive rule", { description: error.message }),
+  });
+  /** Creates or updates the rule currently open in the editor. */
+  const save = () => {
+    if (editingId)
+      update.mutate({ monitorId: monitor.id, ruleId: editingId, ...form });
+    else add.mutate({ monitorId: monitor.id, ...form });
+  };
+  return (
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div>
+        <div className="mb-4">
+          <h3 className="font-semibold text-cloud">Active rules</h3>
+          <p className="mt-1 text-xs leading-5 text-mist">
+            File rules fan out only to matching paths. Repository rules run in
+            the cross-file survey. Every run stores an immutable copy.
+          </p>
+        </div>
+        <div className="space-y-3">
+          {(rules.data ?? []).map((rule) => (
+            <article
+              key={rule.id}
+              className="rounded-2xl border border-line bg-surface p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-sm font-semibold text-cloud">
+                      {rule.title}
+                    </h4>
+                    <Badge>{rule.scope}</Badge>
+                    <Badge>{rule.severity}</Badge>
+                    {!rule.enabled && <Badge>paused</Badge>}
+                  </div>
+                  <div className="mt-2 font-mono text-[11px] text-lime">
+                    {rule.pathGlob}
+                  </div>
+                  <p className="mt-3 whitespace-pre-wrap text-xs leading-5 text-mist">
+                    {rule.instruction}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditingId(rule.id);
+                      setForm({
+                        title: rule.title,
+                        instruction: rule.instruction,
+                        pathGlob: rule.pathGlob,
+                        scope:
+                          rule.scope === "repository" ? "repository" : "file",
+                        severity: rule.severity,
+                      });
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`Archive ${rule.title}`}
+                    onClick={() => {
+                      if (window.confirm(`Archive “${rule.title}”?`)) {
+                        archive.mutate({
+                          monitorId: monitor.id,
+                          ruleId: rule.id,
+                        });
+                      }
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="mt-3 text-xs text-mist hover:text-cloud"
+                onClick={() =>
+                  update.mutate({
+                    monitorId: monitor.id,
+                    ruleId: rule.id,
+                    enabled: !rule.enabled,
+                  })
+                }
+              >
+                {rule.enabled ? "Pause rule" : "Enable rule"}
+              </button>
+            </article>
+          ))}
+          {!rules.isLoading && rules.data?.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-line p-10 text-center text-sm text-mist">
+              No compliance rules yet.
+            </div>
+          )}
+        </div>
+      </div>
+      <aside className="h-fit rounded-2xl border border-line bg-surface p-5 xl:sticky xl:top-6">
+        <h3 className="font-semibold text-cloud">
+          {editingId ? "Edit rule" : "Write a rule"}
+        </h3>
+        <div className="mt-4 space-y-4">
+          <Field label="Name">
+            <input
+              aria-label="Rule name"
+              value={form.title}
+              onChange={(event) =>
+                setForm({ ...form, title: event.target.value })
+              }
+              placeholder="Utilities below routers"
+              className="form-input"
+            />
+          </Field>
+          <Field label="Instruction">
+            <textarea
+              aria-label="Rule instruction"
+              value={form.instruction}
+              onChange={(event) =>
+                setForm({ ...form, instruction: event.target.value })
+              }
+              placeholder="In tRPC route files, declare router exports before local utility functions…"
+              rows={5}
+              className="form-input h-auto resize-y py-3"
+            />
+          </Field>
+          <Field label="Applies to">
+            <input
+              aria-label="Rule path glob"
+              value={form.pathGlob}
+              onChange={(event) =>
+                setForm({ ...form, pathGlob: event.target.value })
+              }
+              placeholder="src/server/api/**/*.ts"
+              className="form-input font-mono"
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Scope">
+              <select
+                aria-label="Rule scope"
+                value={form.scope}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    scope: event.target.value as typeof form.scope,
+                  })
+                }
+                className="form-input"
+              >
+                <option value="file">Per file</option>
+                <option value="repository">Repository-wide</option>
+              </select>
+            </Field>
+            <Field label="Severity">
+              <select
+                aria-label="Rule severity"
+                value={form.severity}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    severity: event.target.value as typeof form.severity,
+                  })
+                }
+                className="form-input"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </Field>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              className="flex-1"
+              loading={add.isPending || update.isPending}
+              disabled={
+                !form.title.trim() ||
+                !form.instruction.trim() ||
+                !form.pathGlob.trim()
+              }
+              onClick={save}
+            >
+              {editingId ? "Save changes" : "Add rule"}
+            </Button>
+            {editingId && (
+              <Button variant="ghost" onClick={reset}>
+                Cancel
+              </Button>
+            )}
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+/** Labels one rule or repository-picker field. */
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="block text-xs font-medium text-mist">
+      <span className="mb-2 block">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** Lists repository-scoped audit history newest first. */
+function History({
+  monitor,
+  onOpenFindings,
+}: {
+  monitor: Monitors[number];
+  onOpenFindings: (jobId: string) => void;
+}) {
+  const history = api.repoReviews.history.useQuery({ monitorId: monitor.id });
+  return (
+    <div className="space-y-2">
+      {(history.data ?? []).map((run) => (
+        <button
+          key={run.id}
+          type="button"
+          onClick={() => onOpenFindings(run.id)}
+          className="flex w-full items-center gap-4 rounded-2xl border border-line bg-surface p-4 text-left hover:border-line-strong"
+        >
+          <span className="flex size-10 items-center justify-center rounded-xl bg-surface-subtle text-lime">
+            {run.reviewPurpose === "compliance" ? (
+              <ShieldCheck className="size-5" />
+            ) : (
+              <Code2 className="size-5" />
+            )}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-cloud">
+              {run.reviewPurpose === "compliance"
+                ? "Compliance check"
+                : "Code audit"}
+            </span>
+            <span
+              className="mt-1 block text-xs text-mist"
+              suppressHydrationWarning
+            >
+              {run.createdAt.toLocaleString()}
+            </span>
+          </span>
+          <RunStatus status={run.status} progress={run.progress} />
+          <ChevronRight className="size-4 text-mist" />
+        </button>
+      ))}
+      {!history.isLoading && history.data?.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-line p-12 text-center text-sm text-mist">
+          Review runs will appear here.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Selects an imported repository and exact provider branch to monitor. */
+function AddRepositoryDialog({
+  repositories,
+  monitors,
+  onClose,
+  onAdded,
+}: {
+  repositories: Repositories;
+  monitors: Monitors;
+  onClose: () => void;
+  onAdded: (monitorId: string) => void;
+}) {
+  const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? "");
+  const branches = api.repoReviews.listBranches.useQuery(
+    { repositoryId: repositoryId || EMPTY_UUID },
+    { enabled: Boolean(repositoryId) },
+  );
+  const monitoredBranches = useMemo(
+    () =>
+      new Set(
+        monitors
+          .filter((monitor) => monitor.repositoryId === repositoryId)
+          .map((monitor) => monitor.branch),
+      ),
+    [monitors, repositoryId],
+  );
+  const [branch, setBranch] = useState("");
+  useEffect(() => {
+    setBranch((current) => {
+      if (
+        current &&
+        !monitoredBranches.has(current) &&
+        branches.data?.some(({ name }) => name === current)
+      ) {
+        return current;
+      }
+      return (
+        branches.data?.find(({ name }) => !monitoredBranches.has(name))?.name ??
+        ""
+      );
+    });
+  }, [branches.data, monitoredBranches]);
+  useEffect(() => {
+    /** Closes the repository picker from the standard escape key. */
+    const close = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [onClose]);
+  const add = api.repoReviews.add.useMutation({
+    onSuccess: ({ monitor }) => {
+      toast.success("Repository added", {
+        description: "The first complete snapshot is being prepared.",
+      });
+      onAdded(monitor.id);
+    },
+    onError: (error) =>
+      toast.error("Could not add repository", { description: error.message }),
+  });
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 p-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-repository-title"
+        className="w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2
+              id="add-repository-title"
+              className="text-xl font-semibold text-cloud"
+            >
+              Monitor a repository
+            </h2>
+            <p className="mt-1 text-sm text-mist">
+              Pick an imported repository and the exact branch to follow.
+            </p>
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+        {repositories.length === 0 ? (
+          <div className="mt-8 rounded-2xl border border-dashed border-line p-8 text-center">
+            <p className="text-sm text-mist">
+              Import a repository from a code provider first.
+            </p>
+            <Button asChild className="mt-5">
+              <Link href="/settings/providers">Open provider settings</Link>
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-7 space-y-5">
+            <Field label="Repository">
+              <select
+                aria-label="Repository"
+                value={repositoryId}
+                onChange={(event) => {
+                  setRepositoryId(event.target.value);
+                  setBranch("");
+                }}
+                className="form-input"
+              >
+                {repositories.map((repository) => (
+                  <option key={repository.id} value={repository.id}>
+                    {repository.owner}/{repository.name} ·{" "}
+                    {providerLabel[repository.provider]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Branch">
+              <select
+                aria-label="Branch"
+                value={branch}
+                onChange={(event) => setBranch(event.target.value)}
+                disabled={branches.isLoading || branches.isError}
+                className="form-input"
+              >
+                <option value="">
+                  {branches.isLoading
+                    ? "Loading branches…"
+                    : branches.isError
+                      ? "Branches unavailable"
+                      : "Choose a branch"}
+                </option>
+                {branches.data?.map((item) => (
+                  <option
+                    key={item.name}
+                    value={item.name}
+                    disabled={monitoredBranches.has(item.name)}
+                  >
+                    {item.name}
+                    {item.isDefault ? " (default)" : ""}
+                    {monitoredBranches.has(item.name)
+                      ? " (already monitored)"
+                      : ""}
+                  </option>
+                ))}
+              </select>
+              {branches.error && (
+                <span className="mt-2 block text-xs text-red-300">
+                  {branches.error.message}
+                </span>
+              )}
+              {!branches.isLoading &&
+                !branches.isError &&
+                branches.data?.length !== 0 &&
+                !branch && (
+                  <span className="mt-2 block text-xs text-mist">
+                    Every branch in this repository is already monitored.
+                  </span>
+                )}
+            </Field>
+            <div className="rounded-xl border border-line bg-surface-subtle/45 p-3 text-xs leading-5 text-mist">
+              The initial snapshot reads the full branch. Later checks compare
+              the branch head and carry your reading progress across unchanged
+              code.
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                loading={add.isPending}
+                disabled={!repositoryId || !branch}
+                onClick={() => add.mutate({ repositoryId, branch })}
+              >
+                <Plus className="size-4" /> Add and sync
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Bot,
   Flame,
+  GitBranch,
   LayoutDashboard,
   PlugZap,
   Search,
@@ -48,6 +49,14 @@ import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 const navigation = [
+  {
+    href: "/repo-reviews",
+    label: "Repo reviews",
+    mobileLabel: "Repos",
+    icon: GitBranch,
+    shortcut: [{ key: "g" }, { key: "b" }],
+    eagerPrefetch: true,
+  },
   {
     href: "/dashboard",
     label: "Pull requests",
@@ -137,11 +146,22 @@ export function AppShell({
   });
   const reconcileIntakeRef = useRef(reconcileIntake);
   reconcileIntakeRef.current = reconcileIntake;
+  const reconcileRepositories = api.repoReviews.reconcile.useMutation({
+    onSuccess: (result) => {
+      if (result.queued === 0) return;
+      void utils.repoReviews.list.invalidate();
+    },
+  });
+  const reconcileRepositoriesRef = useRef(reconcileRepositories);
+  reconcileRepositoriesRef.current = reconcileRepositories;
   useEffect(() => {
     /** Refreshes provider state without overlapping an existing reconciliation. */
     const reconcile = () => {
       if (!reconcileIntakeRef.current.isPending) {
         reconcileIntakeRef.current.mutate();
+      }
+      if (!reconcileRepositoriesRef.current.isPending) {
+        reconcileRepositoriesRef.current.mutate();
       }
     };
     reconcile();

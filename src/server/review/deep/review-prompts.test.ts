@@ -5,6 +5,7 @@ import {
   DEEP_REVIEW_NO_PLAN_SENTINEL,
   DEEP_REVIEW_PLAN_SYSTEM_PROMPT,
   DEEP_REVIEW_REFUTE_SYSTEM_PROMPT,
+  DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT,
   DEEP_REVIEW_RELOCATE_SYSTEM_PROMPT,
   DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
   DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
@@ -180,6 +181,19 @@ describe("plan prompts", () => {
     expect(DEEP_REVIEW_PLAN_SYSTEM_PROMPT).toContain('"focus"');
     expect(DEEP_REVIEW_PLAN_SYSTEM_PROMPT).toContain('"lines"');
     expect(DEEP_REVIEW_PLAN_SYSTEM_PROMPT).toContain('"why"');
+  });
+
+  it("plans across established code for repository snapshots", () => {
+    expect(DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT).toContain(NEVER_FOLLOW);
+    expect(DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT).toContain(
+      "entire current file is in scope",
+    );
+    expect(DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT).toContain(
+      "established code",
+    );
+    expect(DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT).not.toContain(
+      "Only plan around code this pull request",
+    );
   });
 
   it("escapes the path and omits the plan block from its own input", () => {

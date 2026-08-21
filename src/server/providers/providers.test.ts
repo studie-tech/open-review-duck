@@ -44,6 +44,112 @@ function requestUrl(input: string | URL | Request) {
 }
 
 describe("provider normalization", () => {
+  it("lists and resolves GitHub branches with slash-safe links", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review-duck",
+          full_name: "acme/review-duck",
+          private: true,
+          html_url: "https://github.com/acme/review-duck",
+          default_branch: "main",
+        });
+      }
+      if (url.includes("/branches/feature%2Freader")) {
+        return jsonResponse({
+          name: "feature/reader",
+          commit: { sha: "feature-sha" },
+        });
+      }
+      return jsonResponse([
+        { name: "main", commit: { sha: "main-sha" } },
+        { name: "feature/reader", commit: { sha: "feature-sha" } },
+      ]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    expect(await provider.listBranches("42")).toEqual([
+      {
+        name: "main",
+        sha: "main-sha",
+        webUrl: "https://github.com/acme/review-duck/tree/main",
+        isDefault: true,
+      },
+      {
+        name: "feature/reader",
+        sha: "feature-sha",
+        webUrl: "https://github.com/acme/review-duck/tree/feature/reader",
+        isDefault: false,
+      },
+    ]);
+    expect((await provider.getBranch("42", "feature/reader")).sha).toBe(
+      "feature-sha",
+    );
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        requestUrl(input).includes("feature%2Freader"),
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes GitLab branches and identifies the default", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      return url.includes("/repository/branches")
+        ? jsonResponse([
+            {
+              name: "main",
+              commit: { id: "main-sha" },
+              web_url: "https://gitlab.com/acme/app/-/tree/main",
+            },
+          ])
+        : jsonResponse({
+            id: 9,
+            path: "app",
+            path_with_namespace: "acme/app",
+            visibility: "private",
+            web_url: "https://gitlab.com/acme/app",
+            default_branch: "main",
+          });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await new GitLabProvider("token").listBranches("9")).toEqual([
+      {
+        name: "main",
+        sha: "main-sha",
+        webUrl: "https://gitlab.com/acme/app/-/tree/main",
+        isDefault: true,
+      },
+    ]);
+  });
+
+  it("rejects an Azure prefix match when resolving an exact branch", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      return url.includes("/refs?")
+        ? jsonResponse({
+            value: [{ name: "refs/heads/main-old", objectId: "old-sha" }],
+          })
+        : jsonResponse({
+            id: "repo",
+            name: "app",
+            webUrl: "https://dev.azure.com/acme/project/_git/app",
+            defaultBranch: "refs/heads/main",
+            project: { name: "project" },
+          });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      new AzureDevOpsProvider("token", "https://dev.azure.com/acme").getBranch(
+        "repo",
+        "main",
+      ),
+    ).rejects.toThrow("Branch main was not found");
+  });
+
   it("normalizes GitHub repositories", async () => {
     mockJson([
       {

@@ -12,6 +12,7 @@ import {
 import { bigPickleSourceDecision } from "~/server/ai/source-policy";
 import type { db as database } from "~/server/db";
 import { readSourceText } from "~/server/storage/source-blobs";
+import { applicableRepositoryRules } from "~/server/repo-reviews/rules";
 import type { DeepReviewItemState } from "./coverage";
 import { rulebookCorpusDigest } from "./rulebooks";
 import {
@@ -47,6 +48,8 @@ type ReviewChildJobParent = Pick<
   | "model"
   | "provider"
   | "agentVersion"
+  | "reviewScope"
+  | "reviewPurpose"
 >;
 
 interface CreateReviewChildJobInput {
@@ -132,6 +135,8 @@ async function createReviewChildJob(
       kind: input.kind,
       parentJobId: input.parent.id,
       ruleConfigDigest: input.ruleConfigDigest,
+      reviewScope: input.parent.reviewScope,
+      reviewPurpose: input.parent.reviewPurpose,
       agentVersion: input.parent.agentVersion,
       status: "queued",
       model: input.parent.model,
@@ -208,12 +213,14 @@ async function readSealedPlan(
     orderBy: [asc(aiReviewItems.path)],
   });
   // A sealed plan that selected nothing has no item rows to find it by, so
-  // the terminal state the same transaction wrote is what proves it ran.
+  // either the terminal state or its survey child proves it ran.
   const skipped = parent.deepReviewTerminalState === "skipped";
-  if (rows.length === 0 && !skipped) return null;
   const children = await reader.query.aiJobs.findMany({
     where: eq(aiJobs.parentJobId, parent.id),
   });
+  const surveyJobId =
+    children.find((child) => child.kind === "review_survey")?.id ?? null;
+  if (rows.length === 0 && !skipped && !surveyJobId) return null;
   const items = rows.map((row) => ({
     itemId: row.id,
     path: row.path,
@@ -230,8 +237,7 @@ async function readSealedPlan(
     ruleConfigDigest: parent.ruleConfigDigest ?? rulebookCorpusDigest(),
     skipped,
     items,
-    surveyJobId:
-      children.find((child) => child.kind === "review_survey")?.id ?? null,
+    surveyJobId,
   });
 }
 
@@ -369,10 +375,18 @@ export async function sealReviewPlan(
   if (!snapshot) throw new Error("Deep review snapshot not found");
   const files = await loadPlanFiles(db, parent.snapshotId);
   const byPath = new Map(files.map((file) => [file.candidate.path, file]));
-  const selection = selectReviewFiles(
-    files.map((file) => file.candidate),
-    { maxSourceBytes: options.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES },
-  );
+  const complianceRules = parent.reviewRules ?? [];
+  const candidateFiles = files
+    .map((file) => file.candidate)
+    .filter(
+      (file) =>
+        parent.reviewPurpose !== "compliance" ||
+        applicableRepositoryRules(complianceRules, file.path, "file").length >
+          0,
+    );
+  const selection = selectReviewFiles(candidateFiles, {
+    maxSourceBytes: options.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES,
+  });
   const waived: WaivedPlanFile[] = [...selection.waived];
   const selected: ReviewCandidateFile[] = [];
   // Read outside the transaction and one file at a time: the source is object
@@ -455,14 +469,19 @@ export async function sealReviewPlan(
           target: [aiReviewItems.parentJobId, aiReviewItems.path],
         });
     }
-    const survey =
-      selected.length > 0
-        ? await createReviewChildJob(tx, {
-            parent: current,
-            kind: "review_survey",
-            ruleConfigDigest,
-          })
-        : undefined;
+    const needsSurvey =
+      selected.length > 0 ||
+      (current.reviewPurpose === "compliance" &&
+        (current.reviewRules ?? []).some(
+          (rule) => rule.scope === "repository",
+        ));
+    const survey = needsSurvey
+      ? await createReviewChildJob(tx, {
+          parent: current,
+          kind: "review_survey",
+          ruleConfigDigest,
+        })
+      : undefined;
     await tx
       .update(aiJobs)
       .set({
@@ -474,14 +493,14 @@ export async function sealReviewPlan(
         startedAt: current.startedAt ?? startedAt,
         progress: 1,
         ruleConfigDigest,
-        deepReviewTerminalState: selected.length === 0 ? "skipped" : null,
+        deepReviewTerminalState: needsSurvey ? null : "skipped",
       })
       .where(eq(aiJobs.id, parentJobId));
     items.sort(compareSealedItems);
     return sealedReviewPlan({
       parentJobId,
       ruleConfigDigest,
-      skipped: selected.length === 0,
+      skipped: !needsSurvey,
       items,
       surveyJobId: survey?.id ?? null,
     });

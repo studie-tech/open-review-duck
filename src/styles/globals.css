@@ -131,6 +131,27 @@ select,
 textarea {
   font: inherit;
 }
+.form-input {
+  width: 100%;
+  height: 2.75rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
+  background: var(--app-surface-subtle);
+  padding-inline: 0.75rem;
+  color: var(--app-text);
+  outline: none;
+}
+.form-input::placeholder {
+  color: var(--app-text-subtle);
+}
+.form-input:focus {
+  border-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent) 12%, transparent);
+}
+.form-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {
   cursor: pointer;

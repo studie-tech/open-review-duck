@@ -41,6 +41,9 @@ import { sanitizeReason } from "./redaction";
 import {
   DEEP_REVIEW_PLAN_MAX_CHECKPOINTS,
   DEEP_REVIEW_PLAN_SYSTEM_PROMPT,
+  DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT,
+  DEEP_REVIEW_REPOSITORY_SCOUT_SYSTEM_PROMPT,
+  DEEP_REVIEW_REPOSITORY_SURVEY_SYSTEM_PROMPT,
   DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
   DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
   type DeepReviewLineRange,
@@ -51,6 +54,10 @@ import {
   surveyUserPrompt,
 } from "./review-prompts";
 import { resolveRulebooks } from "./rulebooks";
+import {
+  applicableRepositoryRules,
+  repositoryRulebookText,
+} from "~/server/repo-reviews/rules";
 import {
   deepReviewSurveyFinished,
   deepReviewSurveyPromptInput,
@@ -875,7 +882,10 @@ async function runAgentTurn(
 function fileScoutAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
   const { job, item, repository } = input;
   return {
-    systemPrompt: DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
+    systemPrompt:
+      input.parent.reviewScope === "repository_snapshot"
+        ? DEEP_REVIEW_REPOSITORY_SCOUT_SYSTEM_PROMPT
+        : DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
     operation: "ai.deep-review-file-turn",
     buildPrompt: () => buildScoutPrompt(db, input),
     buildTools: (tools) =>
@@ -899,17 +909,32 @@ function fileScoutAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
 function surveyAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
   const { job, item, repository } = input;
   return {
-    systemPrompt: DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
+    systemPrompt:
+      input.parent.reviewScope === "repository_snapshot"
+        ? DEEP_REVIEW_REPOSITORY_SURVEY_SYSTEM_PROMPT
+        : DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
     operation: "ai.deep-review-survey-turn",
     buildPrompt: async () => ({
       role: "user",
-      content: surveyUserPrompt(
-        await deepReviewSurveyPromptInput(db, {
+      content: surveyUserPrompt({
+        ...(await deepReviewSurveyPromptInput(db, {
           job,
           parentJobId: input.parent.id,
           repository,
-        }),
-      ),
+        })),
+        reviewScope:
+          input.parent.reviewScope === "repository_snapshot"
+            ? "repository_snapshot"
+            : "pull_request",
+        reviewChecklist:
+          input.parent.reviewPurpose === "compliance"
+            ? repositoryRulebookText(
+                (input.parent.reviewRules ?? []).filter(
+                  (rule) => rule.scope === "repository",
+                ),
+              )
+            : undefined,
+      }),
     }),
     buildTools: (tools) =>
       deepReviewSurveyTools({
@@ -966,6 +991,7 @@ async function validateReviewedFile(db: Database, input: AgentTurnInput) {
       item.changeType,
       currentSource,
       previousSource,
+      input.parent.reviewScope,
     ),
     units: (await repository.units())
       .filter((unit) => unit.path === item.path)
@@ -1002,13 +1028,23 @@ async function buildScoutPrompt(
   const promptInput: ScoutPromptInput = {
     path: item.path,
     changeType: item.changeType,
-    rulebookText: resolveRulebooks(item.path).text,
+    rulebookText:
+      input.parent.reviewPurpose === "compliance"
+        ? repositoryRulebookText(
+            applicableRepositoryRules(
+              input.parent.reviewRules,
+              item.path,
+              "file",
+            ),
+          )
+        : resolveRulebooks(item.path).text,
     currentSource,
     previousSource,
     changedRanges: fileChangedRanges(
       item.changeType,
       currentSource,
       previousSource,
+      input.parent.reviewScope,
     ),
     unitManifest: (await repository.units())
       .filter((unit) => unit.path === item.path)
@@ -1024,6 +1060,10 @@ async function buildScoutPrompt(
       sourceBranch: pullRequest.sourceBranch,
       targetBranch: pullRequest.targetBranch,
     },
+    reviewScope:
+      input.parent.reviewScope === "repository_snapshot"
+        ? "repository_snapshot"
+        : "pull_request",
   };
   const planCheckpoints =
     item.changedLineCount >= DEEP_REVIEW_PLAN_LINE_THRESHOLD
@@ -1049,6 +1089,10 @@ async function resolvePlanCheckpoints(
 ): Promise<readonly DeepReviewPlanCheckpoint[] | undefined> {
   const { job, parent, usage } = input;
   try {
+    const planSystemPrompt =
+      parent.reviewScope === "repository_snapshot"
+        ? DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT
+        : DEEP_REVIEW_PLAN_SYSTEM_PROMPT;
     const resolved = await resolveAiModel(db, {
       workspaceId: job.workspaceId,
       provider: job.provider ?? "",
@@ -1057,7 +1101,7 @@ async function resolvePlanCheckpoints(
     const budget = boundedTurnOutput({
       pendingInputTokens: estimatePendingInputTokens(
         promptInput,
-        DEEP_REVIEW_PLAN_SYSTEM_PROMPT,
+        planSystemPrompt,
       ),
       reservedTokens: parent.reservedInputTokens + parent.reservedOutputTokens,
       consumedTokens: usage.consumedTokens,
@@ -1071,7 +1115,7 @@ async function resolvePlanCheckpoints(
       () =>
         generateText({
           model: resolved.model,
-          system: DEEP_REVIEW_PLAN_SYSTEM_PROMPT,
+          system: planSystemPrompt,
           prompt: planUserPrompt(promptInput),
           maxRetries: 0,
           maxOutputTokens: Math.min(
@@ -1129,10 +1173,14 @@ export function fileChangedRanges(
   changeType: string,
   currentSource: string | null,
   previousSource: string | null,
+  reviewScope: string = "pull_request",
 ): DeepReviewLineRange[] {
   if (changeType === "deleted" || currentSource === null) return [];
   const lineCount = currentSource === "" ? 0 : currentSource.split("\n").length;
   if (lineCount === 0) return [];
+  if (reviewScope === "repository_snapshot") {
+    return [{ startLine: 1, endLine: lineCount }];
+  }
   return explanationChangedLineRanges({
     changeType,
     startLine: 1,

@@ -2009,14 +2009,18 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     // the file at all — a mode change and some rebases report a file as
     // modified with both sides identical, and scoping is what drops those.
     const scopedReviewUnits = adapter?.reviewsWholeFile
-      ? changeType === "modified" && file.previousContent === file.content
+      ? !file.reviewWholeFile &&
+        changeType === "modified" &&
+        file.previousContent === file.content
         ? []
         : unscopedReviewUnits
-      : prScopedReviewUnits(
-          file,
-          adapter?.language ?? "text",
-          unscopedReviewUnits,
-        );
+      : file.reviewWholeFile
+        ? unscopedReviewUnits
+        : prScopedReviewUnits(
+            file,
+            adapter?.language ?? "text",
+            unscopedReviewUnits,
+          );
     // Preserve the analyzer's existing high-confidence atomic units. Broader
     // multi-file concepts are built as a separate presentation layer.
     const atomicReviewUnits = clusterRelatedChangeUnits(

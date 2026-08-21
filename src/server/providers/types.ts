@@ -11,6 +11,13 @@ export interface RepositoryIdentity {
   isPrivate: boolean;
 }
 
+export interface RepositoryBranch {
+  name: string;
+  sha: string;
+  webUrl: string;
+  isDefault: boolean;
+}
+
 export interface PullRequestSummary {
   externalId: string;
   number: number;
@@ -95,6 +102,13 @@ export interface PullRequestProvider {
   }>;
   /** Lists every repository accessible through the provider connection. */
   listRepositories(): Promise<RepositoryIdentity[]>;
+  /** Lists repository branches with their immutable current revisions. */
+  listBranches(repositoryExternalId: string): Promise<RepositoryBranch[]>;
+  /** Resolves one exact branch without accepting tags or arbitrary refs. */
+  getBranch(
+    repositoryExternalId: string,
+    branch: string,
+  ): Promise<RepositoryBranch>;
   /** Ensures provider events for this repository reach the signed SaaS endpoint. */
   ensureRepositoryWebhook(input: {
     repositoryExternalId: string;
