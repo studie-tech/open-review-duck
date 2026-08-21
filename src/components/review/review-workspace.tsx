@@ -10,9 +10,11 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  Columns2,
   CornerUpLeft,
   ExternalLink,
   FileCode2,
+  FolderInput,
   GitBranch,
   Info,
   Keyboard,
@@ -867,6 +869,7 @@ import {
   AskAiLineButton,
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
+  ConceptMoveDialog,
   conceptMembersInReadingOrder,
   ExplanationLoader,
   INITIAL_PATH_ITEMS,
@@ -1122,6 +1125,7 @@ export function ReviewWorkspace({
   const [conceptGroupingDialogOpen, setConceptGroupingDialogOpen] =
     useState(false);
   const [pullRequestDetailsOpen, setPullRequestDetailsOpen] = useState(false);
+  const [moveMemberDialogOpen, setMoveMemberDialogOpen] = useState(false);
   // Empty means every severity, so the four chips start as a legend rather
   // than as four filters the reviewer must switch on before seeing anything.
   const [findingSeverityFilter, setFindingSeverityFilter] = useState(
@@ -2382,6 +2386,11 @@ export function ReviewWorkspace({
     : replaceConceptLayout.isPending && conceptLayoutAction === "improve"
       ? "Applying grouping…"
       : "Improve grouping with AI";
+  const movingMember =
+    replaceConceptLayout.isPending && conceptLayoutAction === "move";
+  const moveMemberLabel = movingMember
+    ? "Moving unit…"
+    : "Move this unit to another concept";
   /** Finds the next filtered match, then resumes the global review path. */
   function nextReviewIndexAfterAction(
     nextUnits: ReviewUnit[],
@@ -4406,8 +4415,8 @@ export function ReviewWorkspace({
     });
   }
 
-  /** Moves the active atomic member into the next concept in review order. */
-  function moveActiveMemberToNextConcept() {
+  /** Moves the active atomic member into the concept the reviewer picked. */
+  function moveActiveMemberToConcept(targetConceptId: string) {
     if (
       !activeUnit ||
       !activeConcept ||
@@ -4418,12 +4427,11 @@ export function ReviewWorkspace({
     ) {
       return;
     }
-    const sourceIndex = initialData.concepts.findIndex(
-      ({ id }) => id === activeConcept.id,
+    const target = initialData.concepts.find(
+      ({ id }) => id === targetConceptId,
     );
-    const target =
-      initialData.concepts[(sourceIndex + 1) % initialData.concepts.length];
     if (!target || target.id === activeConcept.id) return;
+    setMoveMemberDialogOpen(false);
     setConceptLayoutAction("move");
     replaceConceptLayout.mutate({
       pullRequestId: initialData.pullRequest.id,
@@ -5765,7 +5773,8 @@ export function ReviewWorkspace({
       resetDialogOpen ||
       aiReviewDialogOpen ||
       conceptGroupingDialogOpen ||
-      pullRequestDetailsOpen,
+      pullRequestDetailsOpen ||
+      moveMemberDialogOpen,
   });
 
   useEffect(() => {
@@ -6701,19 +6710,17 @@ export function ReviewWorkspace({
                 initialData.concepts.length > 1 && (
                   <button
                     type="button"
-                    onClick={moveActiveMemberToNextConcept}
+                    onClick={() => setMoveMemberDialogOpen(true)}
                     disabled={replaceConceptLayout.isPending}
-                    className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
-                    title="Move this member to the next review concept"
+                    aria-label={moveMemberLabel}
+                    title={moveMemberLabel}
+                    className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05] disabled:opacity-50"
                   >
-                    {replaceConceptLayout.isPending &&
-                      conceptLayoutAction === "move" && (
-                        <LoaderCircle className="size-3.5 animate-spin" />
-                      )}
-                    {replaceConceptLayout.isPending &&
-                    conceptLayoutAction === "move"
-                      ? "Moving…"
-                      : "Move member"}
+                    {movingMember ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <FolderInput className="size-3.5" />
+                    )}
                   </button>
                 )}
               <button
@@ -6729,24 +6736,25 @@ export function ReviewWorkspace({
                 <button
                   type="button"
                   aria-pressed={sideBySideVisible}
-                  aria-label={
-                    sideBySideVisible
-                      ? "Show current source with review comments"
-                      : "Show code diff"
-                  }
+                  aria-label="Side-by-side diff"
                   title={
                     sideBySideVisible
-                      ? "Show current source with review comments"
-                      : "Show side-by-side code diff"
+                      ? "Showing the side-by-side diff — switch to current source"
+                      : "Showing current source — switch to the side-by-side diff"
                   }
                   onClick={() => {
                     setShowDiff((value) => !value);
                     setContextBefore(0);
                     setContextAfter(0);
                   }}
-                  className="text-mist hover:text-cloud h-8 rounded-lg border border-line px-2.5 text-[10px] transition"
+                  className={cn(
+                    "grid size-8 shrink-0 place-items-center rounded-lg border transition",
+                    sideBySideVisible
+                      ? "border-cyan/45 bg-cyan/15 text-cyan"
+                      : "text-mist hover:text-cloud border-line hover:border-cyan/25",
+                  )}
                 >
-                  {sideBySideVisible ? "Current" : "Diff"}
+                  <Columns2 className="size-3.5" />
                 </button>
               )}
               <button
@@ -8008,6 +8016,17 @@ export function ReviewWorkspace({
           <PullRequestDetailsDialog
             pullRequest={initialData.pullRequest}
             onClose={() => setPullRequestDetailsOpen(false)}
+          />
+        )}
+
+        {moveMemberDialogOpen && activeConcept && (
+          <ConceptMoveDialog
+            concepts={initialData.concepts}
+            currentConceptId={activeConcept.id}
+            pending={movingMember}
+            unitName={activeUnit.name}
+            onSelect={moveActiveMemberToConcept}
+            onClose={() => setMoveMemberDialogOpen(false)}
           />
         )}
 

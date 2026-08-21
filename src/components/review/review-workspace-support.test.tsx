@@ -18,6 +18,7 @@ import type { RouterOutputs } from "~/trpc/react";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
+  ConceptMoveDialog,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
   nextAnchorableLine,
@@ -50,6 +51,8 @@ vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
 });
 
 type WorkspacePullRequest = RouterOutputs["review"]["workspace"]["pullRequest"];
+type WorkspaceConcept =
+  RouterOutputs["review"]["workspace"]["concepts"][number];
 
 afterEach(cleanup);
 
@@ -2131,5 +2134,145 @@ describe("PullRequestDetailsDialog", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ConceptMoveDialog", () => {
+  /** Builds one workspace concept with the fields a test overrides. */
+  function concept(
+    overrides: Partial<WorkspaceConcept> = {},
+  ): WorkspaceConcept {
+    return {
+      id: "concept-1",
+      stableKey: "concept:1",
+      title: "Waiting concepts leave the review path",
+      rationale: "Groups the wait rules with the code that reads them.",
+      reviewOrder: 0,
+      changedLineCount: 40,
+      fileCount: 2,
+      oversized: false,
+      dependencies: [],
+      memberIds: ["unit-1", "unit-2"],
+      status: "pending",
+      signedMemberCount: 0,
+      ...overrides,
+    };
+  }
+
+  const others = [
+    concept({
+      id: "concept-2",
+      title: "Sign-off refuses a paused concept",
+      memberIds: ["unit-3"],
+      changedLineCount: 12,
+      fileCount: 1,
+    }),
+    concept({
+      id: "concept-3",
+      title: "Tests for the wait rules",
+      memberIds: ["unit-4", "unit-5", "unit-6"],
+      changedLineCount: 90,
+      fileCount: 3,
+    }),
+  ];
+
+  it("offers every concept except the one the unit is already in", async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConceptMoveDialog
+        concepts={[concept(), ...others]}
+        currentConceptId="concept-1"
+        pending={false}
+        unitName="releaseReviewWaitsSchema"
+        onSelect={onSelect}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("releaseReviewWaitsSchema")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Now reviewed in Waiting concepts leave the review path",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: /Waiting concepts leave the review path/,
+      }),
+    ).not.toBeInTheDocument();
+
+    const destination = screen.getByRole("button", {
+      name: /Tests for the wait rules/,
+    });
+    expect(destination).toHaveTextContent(
+      "3 units · 90 changed lines in 3 files",
+    );
+    expect(
+      screen.getByRole("button", { name: /Sign-off refuses a paused concept/ }),
+    ).toHaveTextContent("1 unit · 12 changed lines in 1 file");
+
+    await user.click(destination);
+    expect(onSelect).toHaveBeenCalledWith("concept-3");
+  });
+
+  it("warns when the move empties the concept the unit is leaving", () => {
+    render(
+      <ConceptMoveDialog
+        concepts={[concept({ memberIds: ["unit-1"] }), ...others]}
+        currentConceptId="concept-1"
+        pending={false}
+        unitName="releaseReviewWaitsSchema"
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "This is the last unit in its concept, so that concept is removed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when the review holds no other concept", () => {
+    render(
+      <ConceptMoveDialog
+        concepts={[concept()]}
+        currentConceptId="concept-1"
+        pending={false}
+        unitName="releaseReviewWaitsSchema"
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByText(/no other concept to move the unit into/),
+    ).toBeInTheDocument();
+  });
+
+  it("holds the dialog open while the move is being written", async () => {
+    const onClose = vi.fn();
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConceptMoveDialog
+        concepts={[concept(), ...others]}
+        currentConceptId="concept-1"
+        pending={true}
+        unitName="releaseReviewWaitsSchema"
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await user.click(screen.getByRole("dialog"));
+    expect(onClose).not.toHaveBeenCalled();
+
+    expect(
+      screen.getByRole("button", { name: /Tests for the wait rules/ }),
+    ).toBeDisabled();
   });
 });
