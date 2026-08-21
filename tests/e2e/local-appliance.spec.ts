@@ -43,7 +43,7 @@ test("bootstraps local provider setup and preserves the session across restart",
 
   await page.goto(bootstrapUrl());
   await expect(
-    page.getByRole("heading", { name: "What needs your attention." }),
+    page.getByRole("heading", { name: "Choose where to focus." }),
   ).toBeVisible();
 
   await page.goto("/settings/providers");
@@ -86,7 +86,7 @@ test("bootstraps local provider setup and preserves the session across restart",
 
   await page.goto("/dashboard");
   await expect(
-    page.getByRole("heading", { name: "What needs your attention." }),
+    page.getByRole("heading", { name: "Choose where to focus." }),
   ).toBeVisible();
   await page.goto("/settings/providers");
   await expect(
