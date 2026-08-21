@@ -10,15 +10,30 @@ interface LanguageDefinition {
   lexical?: string;
 }
 
+/** A quote-specific interpolation delimiter pair, such as `${` / `}`. */
+export interface LexicalInterpolation {
+  close: string;
+  open: string;
+  quotes: readonly string[];
+}
+
 /** Comment, string and directive syntax a language can be scanned with. */
 export interface LexicalSyntax {
   lineComments: readonly string[];
   blockComments: readonly (readonly [string, string])[];
+  interpolations: readonly LexicalInterpolation[];
   quotes: readonly string[];
   directive?: string;
 }
 
+interface LexicalInterpolationDefinition {
+  close?: string;
+  open?: string;
+  quotes?: readonly string[];
+}
+
 interface LexicalSyntaxDefinition {
+  interpolations?: readonly LexicalInterpolationDefinition[];
   lineComments?: readonly string[];
   blockComments?: readonly (readonly string[])[];
   quotes?: readonly string[];
@@ -92,6 +107,14 @@ export const lexicalSyntaxes = Object.fromEntries(
         const [open, close] = pair;
         return open && close ? [[open, close] as const] : [];
       }),
+      interpolations: (definition.interpolations ?? []).flatMap(
+        (interpolation) => {
+          const { close, open, quotes } = interpolation;
+          return open && close && quotes && quotes.length > 0
+            ? [{ close, open, quotes }]
+            : [];
+        },
+      ),
       quotes: definition.quotes ?? [],
       directive: definition.directive,
     };

@@ -115,6 +115,44 @@ describe("lexicalLines", () => {
     );
   });
 
+  it("highlights interpolations inside declared template quotes", () => {
+    const tokens = tokensOf(
+      lexicalLines(
+        `const message = \`Hello \${name.toUpperCase()}!\`;`,
+        "typescript",
+      ),
+    );
+
+    expect(tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "`Hello ", className: "tok-string" }),
+        expect.objectContaining({ text: "${", className: "tok-operator" }),
+        expect.objectContaining({
+          text: "name",
+          className: "tok-variableName",
+        }),
+        expect.objectContaining({
+          text: "toUpperCase",
+          className: "tok-variableName",
+        }),
+        expect.objectContaining({ text: "!`", className: "tok-string" }),
+      ]),
+    );
+  });
+
+  it("leaves Go raw strings uninterpolated", () => {
+    const tokens = tokensOf(lexicalLines(`msg := \`Hello \${name}\``, "go"));
+
+    expect(tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: `\`Hello \${name}\``,
+          className: "tok-string",
+        }),
+      ]),
+    );
+  });
+
   it("keeps a multi-line template literal inside one string", () => {
     const tokens = tokensOf(
       lexicalLines("const a = `one\ntwo`;\nb;", "typescript"),

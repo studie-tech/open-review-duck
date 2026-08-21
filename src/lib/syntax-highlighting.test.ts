@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { treeSitterLanguageFixtures } from "~/test/tree-sitter-language-fixtures";
-import { highlightSource } from "./syntax-highlighting";
+import {
+  highlightSource,
+  isInterpolationContext,
+  isStringContext,
+} from "./syntax-highlighting";
+
+describe("interpolation context", () => {
+  it("recognizes embedded-expression nodes across grammars", () => {
+    expect(isInterpolationContext("template_substitution")).toBe(true);
+    expect(isInterpolationContext("interpolation")).toBe(true);
+    expect(isInterpolationContext("string_interpolation")).toBe(true);
+    expect(isInterpolationContext("interpolated_expression")).toBe(true);
+    expect(isInterpolationContext("command_substitution")).toBe(true);
+    expect(isInterpolationContext("simple_expansion")).toBe(true);
+    expect(isInterpolationContext("template_string")).toBe(false);
+    expect(isInterpolationContext("string")).toBe(false);
+  });
+
+  it("treats only string-bearing template nodes as string text", () => {
+    expect(isStringContext("template_string")).toBe(true);
+    expect(isStringContext("string_fragment")).toBe(true);
+    expect(isStringContext("template_chars")).toBe(true);
+    expect(isStringContext("template_declaration")).toBe(false);
+    expect(isStringContext("template_parameter_list")).toBe(false);
+  });
+});
 
 describe("highlightSource", () => {
   it("preserves source text and line boundaries exactly", async () => {
@@ -56,6 +81,69 @@ describe("highlightSource", () => {
         }),
       ]),
     );
+  });
+
+  it("highlights interpolated expressions inside template strings", async () => {
+    const tokens = (
+      await highlightSource(
+        `return \`NPC-only quests cannot start: \${blockedTargets.map((target) => target.name).join(", ")}\`;`,
+        "typescript",
+      )
+    ).flatMap((line) => line.tokens);
+
+    expect(tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "blockedTargets",
+          className: "tok-variableName",
+        }),
+        expect.objectContaining({ text: "map", className: "tok-variableName" }),
+        expect.objectContaining({
+          text: "target",
+          className: "tok-variableName",
+        }),
+        expect.objectContaining({ text: "${", className: "tok-operator" }),
+      ]),
+    );
+    const blocked = tokens.find((token) => token.text === "blockedTargets");
+    expect(blocked?.className).not.toBe("tok-string");
+  });
+
+  it("highlights interpolated expressions inside Python format strings", async () => {
+    const tokens = (
+      await highlightSource('return f"Hello {name.upper()}!"', "python")
+    ).flatMap((line) => line.tokens);
+
+    expect(tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "name",
+          className: "tok-variableName",
+        }),
+        expect.objectContaining({
+          text: "upper",
+          className: "tok-variableName",
+        }),
+      ]),
+    );
+    expect(tokens.find((token) => token.text === "name")?.className).not.toBe(
+      "tok-string",
+    );
+  });
+
+  it("does not treat C++ template parameters as strings", async () => {
+    const tokens = (
+      await highlightSource("template <typename T> T id(T value);", "cpp")
+    ).flatMap((line) => line.tokens);
+
+    expect(tokens.find((token) => token.text === "T")?.className).toBe(
+      "tok-typeName",
+    );
+    expect(
+      tokens.some(
+        (token) => token.text === "T" && token.className === "tok-string",
+      ),
+    ).toBe(false);
   });
 
   it("assigns semantic token classes to Python", async () => {
