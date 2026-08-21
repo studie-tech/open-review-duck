@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowUpFromLine,
   Check,
   ChevronDown,
   ChevronRight,
@@ -8,6 +9,7 @@ import {
   CircleDot,
   Clock3,
   ExternalLink,
+  FolderInput,
   GitBranch,
   GripVertical,
   Info,
@@ -3256,7 +3258,19 @@ export function UnitImportContext({
   if (pairs.length === 0) return null;
 
   return (
-    <section aria-label="Imports for this unit" className="mb-3">
+    <section
+      aria-label="Imports for this unit"
+      className="mx-4 mb-3 overflow-hidden rounded-xl border border-line bg-surface/35 font-sans"
+    >
+      <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
+        <span className="text-fog flex items-center gap-2 text-[9px] font-semibold tracking-[.12em] uppercase">
+          <ArrowUpFromLine className="text-cyan size-3" aria-hidden="true" />
+          Imports this unit uses
+        </span>
+        <span className="text-fog shrink-0 text-[9px]">
+          Declared elsewhere in this file
+        </span>
+      </header>
       {pairs.map((pair) => (
         <ImportContextPair
           key={importPairKey(pair)}
@@ -3689,6 +3703,136 @@ export function ReviewHierarchyDialog({
         <footer className="text-fog flex items-center justify-between gap-3 border-t border-line px-4 py-3 text-[9px] sm:px-5">
           <span>Shared dependencies appear under their first concept.</span>
           <span className="shrink-0">Esc closes</span>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Lets the reviewer choose which concept the open unit should join.
+ *
+ * The control this replaces moved the unit to whichever concept happened to
+ * come next and wrapped around at the end, so the destination was neither
+ * stated nor chosen. Naming every candidate makes the move deliberate.
+ */
+export function ConceptMoveDialog({
+  concepts,
+  currentConceptId,
+  pending,
+  unitName,
+  onSelect,
+  onClose,
+}: {
+  concepts: WorkspaceData["concepts"];
+  currentConceptId: string;
+  pending: boolean;
+  unitName: string;
+  onSelect: (conceptId: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    /** Closes the move dialog from the keyboard. */
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !pending) onClose();
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, pending]);
+  const source = concepts.find(({ id }) => id === currentConceptId);
+  const destinations = concepts.filter(({ id }) => id !== currentConceptId);
+  // A concept with nothing left in it is dropped rather than kept empty, and
+  // the reviewer should know that before the last member leaves.
+  const emptiesSource = source?.memberIds.length === 1;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="concept-move-title"
+      className="fixed inset-0 z-50 grid place-items-center bg-black/65 p-3 backdrop-blur-sm sm:p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !pending) onClose();
+      }}
+    >
+      <div className="bg-panel flex max-h-[82dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-line shadow-2xl">
+        <header className="flex items-start justify-between gap-4 border-b border-line px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="bg-cyan/10 grid size-9 shrink-0 place-items-center rounded-xl">
+              <FolderInput className="text-cyan size-4" />
+            </span>
+            <div className="min-w-0">
+              <h2
+                id="concept-move-title"
+                className="text-cloud text-sm font-medium"
+              >
+                Move this unit to another concept
+              </h2>
+              <p className="text-mist mt-1 truncate font-mono text-[11px]">
+                {unitName}
+              </p>
+              {source && (
+                <p className="text-fog mt-0.5 truncate text-[10px] leading-4">
+                  Now reviewed in {source.title}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close move dialog"
+            disabled={pending}
+            onClick={onClose}
+            className="text-mist hover:text-cloud grid size-8 shrink-0 place-items-center rounded-lg transition hover:bg-surface-subtle disabled:opacity-50"
+          >
+            <X className="size-4" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto p-3 sm:p-4">
+          <p className="text-fog mb-3 px-1 text-[10px] leading-4">
+            Pick where it should be reviewed instead. The code under review does
+            not change — only which concept you read it alongside.
+          </p>
+          <div className="space-y-2">
+            {destinations.length === 0 ? (
+              <p className="text-mist rounded-xl border border-dashed border-line p-4 text-xs leading-5">
+                This review has no other concept to move the unit into. Split a
+                concept first, and the pieces become destinations.
+              </p>
+            ) : (
+              destinations.map((concept) => (
+                <button
+                  key={concept.id}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => onSelect(concept.id)}
+                  className="hover:border-cyan/30 hover:bg-cyan/[.03] flex w-full items-center gap-3 rounded-xl border border-line px-3 py-2.5 text-left transition disabled:opacity-50"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="text-cloud block truncate text-[11px]">
+                      {concept.title}
+                    </span>
+                    <span className="text-fog mt-0.5 block truncate text-[9px]">
+                      {concept.memberIds.length}{" "}
+                      {concept.memberIds.length === 1 ? "unit" : "units"} ·{" "}
+                      {concept.changedLineCount} changed lines in{" "}
+                      {concept.fileCount}{" "}
+                      {concept.fileCount === 1 ? "file" : "files"}
+                    </span>
+                  </span>
+                  <ChevronRight className="text-mist size-3.5 shrink-0" />
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+        <footer className="text-fog flex items-center justify-between gap-3 border-t border-line px-4 py-3 text-[9px] sm:px-5">
+          <span>
+            {emptiesSource
+              ? "This is the last unit in its concept, so that concept is removed."
+              : "Reordering a concept never removes a unit from the review."}
+          </span>
+          <span className="shrink-0">{pending ? "Moving…" : "Esc closes"}</span>
         </footer>
       </div>
     </div>
