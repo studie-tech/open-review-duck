@@ -16,6 +16,10 @@ import {
   LinkPendingSpinner,
 } from "~/components/ui/link-status";
 import {
+  dashboardFilters,
+  rememberDashboardFilters,
+} from "~/lib/dashboard-filters";
+import {
   comparePriorityInboxText,
   filterPriorityInbox,
   type PriorityInboxItem,
@@ -80,6 +84,7 @@ export function DashboardContent({
   >("all");
   const [repositoryFilter, setRepositoryFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [filtersReady, setFiltersReady] = useState(false);
   const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
@@ -246,6 +251,21 @@ export function DashboardContent({
       ),
     [providerFilter, repositorySource],
   );
+  useEffect(() => {
+    const stored = dashboardFilters(window.localStorage);
+    setProviderFilter(stored.provider);
+    setRepositoryFilter(stored.repository);
+    setSearchQuery(stored.search);
+    setFiltersReady(true);
+  }, []);
+  useEffect(() => {
+    if (!filtersReady) return;
+    rememberDashboardFilters(window.localStorage, {
+      provider: providerFilter,
+      repository: repositoryFilter,
+      search: searchQuery,
+    });
+  }, [filtersReady, providerFilter, repositoryFilter, searchQuery]);
   useEffect(() => {
     if (
       repositoryFilter !== "all" &&
