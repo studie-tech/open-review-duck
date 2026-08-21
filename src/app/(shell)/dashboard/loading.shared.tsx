@@ -1,30 +1,25 @@
 import { PageContainer } from "~/components/page-container";
 import { Skeleton } from "~/components/ui/skeleton";
 
-/** Shows the review inbox placeholder while the dashboard loads. */
+/** Shows the workspace overview placeholder while the dashboard loads. */
 export default function DashboardLoading() {
   return (
-    <PageContainer>
-      <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
-        <div className="w-full max-w-xl">
-          <Skeleton className="h-3 w-28" />
-          <Skeleton className="mt-4 h-9 w-80 max-w-full" />
+    <PageContainer className="mx-auto max-w-[1500px]">
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-end">
+        <div className="w-full max-w-2xl">
+          <Skeleton className="h-3 w-36" />
+          <Skeleton className="mt-4 h-12 w-96 max-w-full" />
           <Skeleton className="mt-3 h-4 w-full" />
         </div>
-        <Skeleton className="h-11 w-40 shrink-0" />
+        <Skeleton className="h-20 rounded-2xl" />
       </div>
-      <div className="mt-8 flex flex-wrap gap-2">
-        <Skeleton className="h-9 w-32" />
-        <Skeleton className="h-9 w-28" />
-        <Skeleton className="h-9 w-32" />
-        <Skeleton className="h-9 w-36" />
+      <div className="mt-10 grid gap-5 lg:grid-cols-2">
+        <Skeleton className="h-[29rem] rounded-3xl" />
+        <Skeleton className="h-[29rem] rounded-3xl" />
       </div>
-      <div className="mt-6 space-y-3">
-        <Skeleton className="h-20 rounded-2xl" />
-        <Skeleton className="h-20 rounded-2xl" />
-        <Skeleton className="h-20 rounded-2xl" />
-        <Skeleton className="h-20 rounded-2xl" />
-        <Skeleton className="h-20 rounded-2xl" />
+      <div className="mt-10 grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <Skeleton className="h-96 rounded-3xl" />
+        <Skeleton className="h-80 rounded-3xl" />
       </div>
     </PageContainer>
   );

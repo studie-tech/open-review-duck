@@ -6,7 +6,9 @@ import {
   Bot,
   Flame,
   GitBranch,
+  GitPullRequest,
   LayoutDashboard,
+  MoreHorizontal,
   PlugZap,
   Search,
   Settings,
@@ -50,22 +52,33 @@ import { api, type RouterOutputs } from "~/trpc/react";
 
 const navigation = [
   {
+    href: "/dashboard",
+    label: "Dashboard",
+    mobileLabel: "Home",
+    icon: LayoutDashboard,
+    shortcut: [{ key: "g" }, { key: "d" }],
+    eagerPrefetch: true,
+    primary: true,
+  },
+  {
+    href: "/pullrequests",
+    label: "Pull requests",
+    mobileLabel: "Reviews",
+    icon: GitPullRequest,
+    shortcut: [{ key: "g" }, { key: "r" }],
+    // The inbox refetches its queries on mount, so a full prefetch can
+    // never pin stale data to the screen.
+    eagerPrefetch: true,
+    primary: true,
+  },
+  {
     href: "/repo-reviews",
     label: "Repo reviews",
     mobileLabel: "Repos",
     icon: GitBranch,
     shortcut: [{ key: "g" }, { key: "b" }],
     eagerPrefetch: true,
-  },
-  {
-    href: "/dashboard",
-    label: "Pull requests",
-    mobileLabel: "Reviews",
-    icon: LayoutDashboard,
-    shortcut: [{ key: "g" }, { key: "r" }],
-    // The dashboard refetches its queries on mount, so a full prefetch can
-    // never pin stale data to the screen.
-    eagerPrefetch: true,
+    primary: true,
   },
   {
     href: "/dashboard/achievements",
@@ -74,6 +87,7 @@ const navigation = [
     icon: Trophy,
     shortcut: [{ key: "g" }, { key: "p" }],
     eagerPrefetch: true,
+    primary: false,
   },
   {
     href: "/settings/ai",
@@ -82,6 +96,7 @@ const navigation = [
     icon: Sparkles,
     shortcut: [{ key: "g" }, { key: "a" }],
     eagerPrefetch: false,
+    primary: false,
   },
   {
     href: "/settings",
@@ -90,6 +105,7 @@ const navigation = [
     icon: Settings,
     shortcut: [{ key: "g" }, { key: "s" }],
     eagerPrefetch: false,
+    primary: false,
   },
 ] satisfies Array<{
   href: string;
@@ -98,6 +114,7 @@ const navigation = [
   icon: typeof LayoutDashboard;
   shortcut: KeyboardShortcut;
   eagerPrefetch: boolean;
+  primary: boolean;
 }>;
 
 /** Checks whether a navigation item matches the current route. */
@@ -105,10 +122,57 @@ function isNavigationActive(pathname: string, href: string) {
   if (href === "/dashboard") {
     return pathname === href;
   }
+  if (href === "/pullrequests") {
+    return pathname === href;
+  }
   if (href === "/settings") {
     return pathname === href || pathname.startsWith("/settings/providers");
   }
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** Renders one desktop sidebar destination with its navigation state. */
+function DesktopNavigationLink({
+  item,
+  active,
+  showShortcut,
+}: {
+  item: (typeof navigation)[number];
+  active: boolean;
+  showShortcut: boolean;
+}) {
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      prefetch={item.eagerPrefetch || undefined}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition",
+        active
+          ? "bg-surface-hover text-cloud"
+          : "text-mist hover:bg-surface-subtle hover:text-cloud",
+      )}
+    >
+      <LinkNavigationStatus
+        idle={
+          <Icon
+            className={cn("size-4", active && "text-lime")}
+            aria-hidden="true"
+          />
+        }
+        pending={<Spinner className="navigation-pending-reveal size-4" />}
+      />
+      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      <ShortcutHint
+        shortcut={item.shortcut}
+        className={cn(
+          "transition",
+          showShortcut ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
+      />
+    </Link>
+  );
 }
 
 type Guidance = RouterOutputs["workspace"]["guidance"];
@@ -188,6 +252,8 @@ export function AppShell({
   const [commandCenterMode, setCommandCenterMode] =
     useState<CommandCenterMode>();
   const [pageCommands, setPageCommands] = useState<CommandCenterItem[]>([]);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const mobileMoreRef = useRef<HTMLDivElement>(null);
   const openCommands = useCallback(() => setCommandCenterMode("commands"), []);
   const openShortcuts = useCallback(
     () => setCommandCenterMode("shortcuts"),
@@ -239,6 +305,31 @@ export function AppShell({
   const showNavigationShortcuts =
     pendingShortcut?.prefix.length === 1 &&
     pendingShortcut.prefix[0]?.key.toLowerCase() === "g";
+  const primaryNavigation = navigation.filter(({ primary }) => primary);
+  const secondaryNavigation = navigation.filter(({ primary }) => !primary);
+  const mobileMoreActive = secondaryNavigation.some(({ href }) =>
+    isNavigationActive(pathname, href),
+  );
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    /** Closes the compact navigation menu after an outside click or Escape. */
+    function closeMobileMore(event: MouseEvent | KeyboardEvent) {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") setMobileMoreOpen(false);
+        return;
+      }
+      if (!mobileMoreRef.current?.contains(event.target as Node)) {
+        setMobileMoreOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", closeMobileMore);
+    document.addEventListener("keydown", closeMobileMore);
+    return () => {
+      document.removeEventListener("mousedown", closeMobileMore);
+      document.removeEventListener("keydown", closeMobileMore);
+    };
+  }, [mobileMoreOpen]);
 
   return (
     <div className="bg-ink min-h-screen">
@@ -248,46 +339,29 @@ export function AppShell({
           <span className="font-semibold tracking-tight">ReviewDuck.ai</span>
         </Link>
         <nav className="mt-10 space-y-1">
-          {navigation.map(({ href, label, icon: Icon, shortcut, ...item }) => {
-            const active = isNavigationActive(pathname, href);
-
-            return (
-              <Link
-                key={href}
-                href={href}
-                prefetch={item.eagerPrefetch || undefined}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition",
-                  active
-                    ? "bg-surface-hover text-cloud"
-                    : "text-mist hover:bg-surface-subtle hover:text-cloud",
-                )}
-              >
-                <LinkNavigationStatus
-                  idle={
-                    <Icon
-                      className={cn("size-4", active && "text-lime")}
-                      aria-hidden="true"
-                    />
-                  }
-                  pending={
-                    <Spinner className="navigation-pending-reveal size-4" />
-                  }
-                />
-                <span className="min-w-0 flex-1 truncate">{label}</span>
-                <ShortcutHint
-                  shortcut={shortcut}
-                  className={cn(
-                    "transition",
-                    showNavigationShortcuts
-                      ? "opacity-100"
-                      : "opacity-0 group-hover:opacity-100",
-                  )}
-                />
-              </Link>
-            );
-          })}
+          <p className="text-fog px-3 pb-2 text-[10px] font-semibold tracking-[.12em] uppercase">
+            Workspace
+          </p>
+          {primaryNavigation.map((item) => (
+            <DesktopNavigationLink
+              key={item.href}
+              item={item}
+              active={isNavigationActive(pathname, item.href)}
+              showShortcut={showNavigationShortcuts}
+            />
+          ))}
+          <div className="my-4 border-t border-line" />
+          <p className="text-fog px-3 pb-2 text-[10px] font-semibold tracking-[.12em] uppercase">
+            Workspace tools
+          </p>
+          {secondaryNavigation.map((item) => (
+            <DesktopNavigationLink
+              key={item.href}
+              item={item}
+              active={isNavigationActive(pathname, item.href)}
+              showShortcut={showNavigationShortcuts}
+            />
+          ))}
         </nav>
         {guidance && (
           <Link
@@ -359,8 +433,8 @@ export function AppShell({
             {deploymentMode === "saas" && <UserButton />}
           </div>
         </header>
-        <nav className="bg-panel grid grid-cols-4 gap-1 border-b border-line px-4 py-2 lg:hidden">
-          {navigation.map(({ href, label, mobileLabel, icon: Icon }) => {
+        <nav className="bg-panel relative grid grid-cols-4 gap-1 border-b border-line px-4 py-2 lg:hidden">
+          {primaryNavigation.map(({ href, label, mobileLabel, icon: Icon }) => {
             const active = isNavigationActive(pathname, href);
 
             return (
@@ -388,6 +462,47 @@ export function AppShell({
               </Link>
             );
           })}
+          <div ref={mobileMoreRef} className="relative">
+            <button
+              type="button"
+              aria-label="More navigation"
+              aria-expanded={mobileMoreOpen}
+              onClick={() => setMobileMoreOpen((open) => !open)}
+              className={cn(
+                "flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-1 py-2 text-xs transition sm:gap-2 sm:px-3",
+                mobileMoreActive || mobileMoreOpen
+                  ? "bg-surface-hover text-cloud"
+                  : "text-mist hover:text-cloud",
+              )}
+            >
+              <MoreHorizontal className="size-3.5 shrink-0" />
+              <span>More</span>
+            </button>
+            {mobileMoreOpen && (
+              <div className="bg-panel absolute top-[calc(100%+.65rem)] right-0 z-30 w-52 overflow-hidden rounded-2xl border border-line p-1.5 shadow-[0_18px_60px_var(--app-shadow)]">
+                {secondaryNavigation.map(({ href, label, icon: Icon }) => {
+                  const active = isNavigationActive(pathname, href);
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      onClick={() => setMobileMoreOpen(false)}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition",
+                        active
+                          ? "bg-surface-hover text-cloud"
+                          : "text-mist hover:bg-surface-subtle hover:text-cloud",
+                      )}
+                    >
+                      <Icon className="size-4" />
+                      {label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </nav>
         <PageCommandCenterProvider
           value={{

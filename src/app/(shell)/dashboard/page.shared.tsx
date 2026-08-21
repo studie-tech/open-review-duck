@@ -1,11 +1,18 @@
-import { DashboardContent } from "~/components/dashboard/dashboard-content";
+import { DashboardOverview } from "~/components/dashboard/dashboard-overview";
 import { protectApplicationRoute } from "~/server/auth";
 import { api } from "~/trpc/server";
 
-/** Renders the dashboard page interface. */
+/** Renders the cross-workspace dashboard overview. */
 export default async function DashboardPage() {
   await protectApplicationRoute();
+  const [pullRequests, monitors] = await Promise.all([
+    api.review.dashboard(),
+    api.repoReviews.list(),
+  ]);
   return (
-    <DashboardContent initialPullRequests={await api.review.dashboard()} />
+    <DashboardOverview
+      initialPullRequests={pullRequests}
+      initialMonitors={monitors}
+    />
   );
 }

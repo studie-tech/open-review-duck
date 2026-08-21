@@ -291,7 +291,7 @@ export default async function Home() {
           </p>
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
             <Link
-              href="/dashboard"
+              href="/pullrequests"
               className="bg-lime text-accent-foreground group inline-flex items-center justify-center gap-2 rounded-xl border border-lime px-5 py-3.5 text-sm font-semibold shadow-[0_12px_35px_var(--app-shadow)] transition hover:-translate-y-px hover:bg-accent-hover"
             >
               Review a pull request

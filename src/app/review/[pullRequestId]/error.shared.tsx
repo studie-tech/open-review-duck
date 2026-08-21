@@ -12,7 +12,7 @@ export default function ReviewError({
 }) {
   return (
     <RecoveryError
-      backHref="/dashboard"
+      backHref="/pullrequests"
       backLabel="Back to reviews"
       description="The data connection may still be waking up or temporarily unavailable. Your existing review progress is safe."
       error={error}

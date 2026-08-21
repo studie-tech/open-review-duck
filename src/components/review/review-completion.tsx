@@ -5,7 +5,6 @@ import {
   Check,
   CheckCheck,
   GitPullRequest,
-  LayoutDashboard,
   Sparkles,
   X,
 } from "lucide-react";
@@ -311,8 +310,8 @@ export function ReviewCompletion({
               loading={navigationPending}
               onClick={onDashboard}
             >
-              {!navigationPending && <LayoutDashboard className="size-4" />}
-              Dashboard
+              {!navigationPending && <GitPullRequest className="size-4" />}
+              Pull requests
               <ShortcutHint
                 shortcut={dashboardShortcut}
                 className="hidden sm:inline-flex"

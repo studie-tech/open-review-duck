@@ -351,7 +351,7 @@ export function RepositoryDetail({
             </p>
           </div>
           <Button asChild size="sm" variant="secondary">
-            <Link href="/dashboard">
+            <Link href="/pullrequests">
               <LinkPendingSpinner />
               Open review queue
             </Link>

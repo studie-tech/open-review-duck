@@ -3890,7 +3890,10 @@ export function ReviewWorkspace({
     reviewComplete && completionOpen && footerSaveState === "idle";
   const waitingCompletionVisible =
     reviewCaughtUp && waitingCompletionOpen && footerSaveState === "idle";
-  const openDashboard = useCallback(() => navigate("/dashboard"), [navigate]);
+  const openPullRequests = useCallback(
+    () => navigate("/pullrequests"),
+    [navigate],
+  );
   const openNextReview = useCallback(() => {
     if (nextReview) navigate(`/review/${nextReview.id}`);
   }, [nextReview, navigate]);
@@ -5824,12 +5827,12 @@ export function ReviewWorkspace({
       onSelect: openNextReview,
     },
     {
-      id: "return-dashboard",
+      id: "return-pull-requests",
       label: "Return to pull requests",
       group: "Navigate",
       icon: <ArrowLeft className="size-4" />,
       shortcut: reviewShortcuts.dashboard,
-      onSelect: openDashboard,
+      onSelect: openPullRequests,
     },
     {
       id: "configure-ai",
@@ -5984,9 +5987,9 @@ export function ReviewWorkspace({
             Synchronize this pull request after its first file change.
           </p>
           <Button asChild className="mt-6">
-            <Link href="/dashboard">
+            <Link href="/pullrequests">
               <LinkPendingSpinner />
-              Back to dashboard
+              Back to pull requests
             </Link>
           </Button>
         </div>
@@ -5998,8 +6001,8 @@ export function ReviewWorkspace({
     <div className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-hidden">
       <header className="flex h-16 items-center gap-4 border-b border-line px-4 sm:px-6">
         <Link
-          href="/dashboard"
-          aria-label="Back to dashboard"
+          href="/pullrequests"
+          aria-label="Back to pull requests"
           className="text-mist hover:text-cloud grid size-9 place-items-center rounded-full transition hover:bg-surface-subtle"
         >
           <LinkNavigationStatus
@@ -6604,7 +6607,7 @@ export function ReviewWorkspace({
               releasingConceptId={releasingWaitingConceptId}
               reviewedConcepts={signedConceptCount}
               totalConcepts={conceptProgress.length}
-              onDashboard={openDashboard}
+              onDashboard={openPullRequests}
               onDismiss={() => setWaitingCompletionOpen(false)}
               onNextReview={openNextReview}
               onOpenConcept={openWaitingConcept}
@@ -6638,7 +6641,7 @@ export function ReviewWorkspace({
                 />
               }
               queueLoading={reviewQueue.isLoading}
-              onDashboard={openDashboard}
+              onDashboard={openPullRequests}
               onDismiss={() => setCompletionOpen(false)}
               onNextReview={openNextReview}
             />
@@ -7544,10 +7547,10 @@ export function ReviewWorkspace({
                   <Button
                     className="h-10 px-3 sm:h-11 sm:px-5"
                     loading={navigationPending}
-                    onClick={openDashboard}
+                    onClick={openPullRequests}
                   >
                     {!navigationPending && <ArrowLeft className="size-4" />}
-                    Dashboard
+                    Pull requests
                     <ShortcutHint
                       shortcut={reviewShortcuts.dashboard}
                       className="hidden sm:inline-flex"
@@ -7610,10 +7613,10 @@ export function ReviewWorkspace({
                 ) : (
                   <Button
                     className="h-10 px-3 sm:h-11 sm:px-5"
-                    onClick={openDashboard}
+                    onClick={openPullRequests}
                   >
                     <ArrowLeft className="size-4" />
-                    Dashboard
+                    Pull requests
                     <ShortcutHint
                       shortcut={reviewShortcuts.dashboard}
                       className="hidden sm:inline-flex"
