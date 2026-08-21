@@ -26,8 +26,10 @@ import {
   type ProviderConversationActions,
   ProviderConversationHistory,
   PullRequestDetailsDialog,
-  ReviewConceptMemberPreview,
+  REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
+  ReviewConceptMemberPreview,
+  ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   rememberAiConversationVisibility,
   reviewShortcuts,
@@ -110,6 +112,53 @@ describe("ReviewCodeViewSwitch", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Focus view" }));
     expect(onChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("ReviewRevisionLoadedNotice", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("counts down on the button and dismisses after ten seconds", () => {
+    vi.useFakeTimers();
+    const onAcknowledge = vi.fn();
+    render(
+      <ReviewRevisionLoadedNotice onAcknowledge={onAcknowledge}>
+        GitHub moved from 5591601 to 83e2e65.
+      </ReviewRevisionLoadedNotice>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Got it, dismissing in 10 seconds" }),
+    ).toHaveTextContent("Got it · 10s");
+
+    act(() => {
+      vi.advanceTimersByTime(REVISION_NOTICE_DISMISS_MS - 1);
+    });
+    expect(onAcknowledge).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Got it, dismissing in 1 second" }),
+    ).toBeVisible();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(onAcknowledge).toHaveBeenCalledOnce();
+  });
+
+  it("dismisses immediately when the reviewer acknowledges", async () => {
+    const onAcknowledge = vi.fn();
+    render(
+      <ReviewRevisionLoadedNotice onAcknowledge={onAcknowledge}>
+        No reviewed units were reopened.
+      </ReviewRevisionLoadedNotice>,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Got it, dismissing in/ }),
+    );
+    expect(onAcknowledge).toHaveBeenCalledOnce();
   });
 });
 
