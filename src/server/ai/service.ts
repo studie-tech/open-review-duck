@@ -27,6 +27,7 @@ import {
   managedAiMonthlyTokenLimit,
   managedAiMonthWindow,
   managedSaasModel,
+  type ManagedAiPlanTier,
 } from "~/server/ai/plan";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
@@ -113,6 +114,7 @@ async function jobScope(
     pullRequestId: string;
     userId: string;
     subscribed: boolean;
+    planTier?: ManagedAiPlanTier;
   },
 ) {
   const [scope] = await db
@@ -149,6 +151,9 @@ async function jobScope(
       })
     : undefined;
   const subscribed = !local && input.subscribed;
+  const planTier: ManagedAiPlanTier = local
+    ? "free"
+    : (input.planTier ?? (subscribed ? "pro" : "free"));
   const selectedModel = local
     ? (preference?.selectedModel ?? "big-pickle")
     : managedSaasModel();
@@ -171,7 +176,7 @@ async function jobScope(
     model: selectedModel,
     provider,
     snapshot,
-    monthlyTokenLimit: managedAiMonthlyTokenLimit(subscribed),
+    monthlyTokenLimit: managedAiMonthlyTokenLimit(planTier),
     useManagedQuota: !local,
     workspaceId: scope.workspace.id,
   };
@@ -342,6 +347,7 @@ export async function createAiJob(
     threadId?: string;
     userId: string;
     subscribed: boolean;
+    planTier?: ManagedAiPlanTier;
   },
 ) {
   // Entitlement is read once, here, and never again: a job that exists is a

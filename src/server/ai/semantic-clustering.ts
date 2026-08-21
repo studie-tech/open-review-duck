@@ -85,6 +85,7 @@ export async function proposeSemanticConceptLayout(
     layoutVersion: number;
     userId: string;
     subscribed: boolean;
+    planTier?: import("~/server/ai/plan").ManagedAiPlanTier;
   },
 ) {
   const job = await createAiJob(db, semanticClusterJobInput(input));

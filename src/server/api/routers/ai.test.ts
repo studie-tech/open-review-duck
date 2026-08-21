@@ -39,6 +39,16 @@ vi.mock("~/server/workspaces/service", () => ({
 }));
 vi.mock("~/server/ai/plan", () => ({
   PAID_AI_FEATURE: "paid_ai_models",
+  SCALE_AI_FEATURE: "managed_ai_scale",
+  ULTRA_AI_FEATURE: "managed_ai_ultra",
+  managedAiPlanTier: (hasFeature: (feature: string) => boolean) =>
+    hasFeature("managed_ai_ultra")
+      ? "ultra"
+      : hasFeature("managed_ai_scale")
+        ? "scale"
+        : hasFeature("paid_ai_models")
+          ? "pro"
+          : "free",
   managedSaasModel: () => "managed-model",
   managedAiPlanUsage: vi.fn(),
   managedAiMonthlyTokenLimit: () => 100_000,

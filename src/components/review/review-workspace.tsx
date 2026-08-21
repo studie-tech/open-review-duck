@@ -10,7 +10,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
-  Columns2,
   CornerUpLeft,
   ExternalLink,
   FileCode2,
@@ -885,9 +884,11 @@ import {
   providerLabel,
   ReviewConceptMemberHeader,
   ReviewConceptMemberPreview,
+  ReviewCodeViewSwitch,
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewScopeMarker,
+  ReviewUnitViewOptions,
   relatedReviewRanges,
   rememberAiConversationVisibility,
   reviewShortcuts,
@@ -1095,6 +1096,12 @@ export function ReviewWorkspace({
   }, [initialData.sourceDelivery, sourceHydrationInput, sourceSnapshotId]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [showDiff, setShowDiff] = useState(true);
+  const [importContextUnitIds, setImportContextUnitIds] = useState(
+    () => new Set<string>(),
+  );
+  const [fullFileUnitIds, setFullFileUnitIds] = useState(
+    () => new Set<string>(),
+  );
   const [pathSearch, setPathSearch] = useState("");
   const [queueLimit, setQueueLimit] = useState(INITIAL_PATH_ITEMS);
   const [searchLimit, setSearchLimit] = useState(INITIAL_PATH_ITEMS);
@@ -1124,6 +1131,7 @@ export function ReviewWorkspace({
   const [aiReviewDialogOpen, setAiReviewDialogOpen] = useState(false);
   const [conceptGroupingDialogOpen, setConceptGroupingDialogOpen] =
     useState(false);
+  const [splitConceptDialogOpen, setSplitConceptDialogOpen] = useState(false);
   const [pullRequestDetailsOpen, setPullRequestDetailsOpen] = useState(false);
   const [moveMemberDialogOpen, setMoveMemberDialogOpen] = useState(false);
   // Empty means every severity, so the four chips start as a legend rather
@@ -1569,6 +1577,12 @@ export function ReviewWorkspace({
         Boolean(activeModule?.previousSource)),
   );
   const sideBySideVisible = showDiff && diffAvailable;
+  const importsVisible = activeUnit
+    ? importContextUnitIds.has(activeUnit.id)
+    : false;
+  const fullFileVisible = activeUnit
+    ? fullFileUnitIds.has(activeUnit.id)
+    : false;
   const previousUnitStartLine =
     activeUnit?.changeType === "deleted"
       ? activeUnit.startLine
@@ -1636,15 +1650,18 @@ export function ReviewWorkspace({
     contextAvailable && activeUnit
       ? Math.max(0, fullFileLines.length - activeUnit.endLine)
       : 0;
-  const visibleStartLine =
-    contextAvailable && activeUnit
+  const visibleStartLine = fullFileVisible
+    ? 1
+    : contextAvailable && activeUnit
       ? activeUnit.startLine - Math.min(contextBefore, availableBefore)
       : (activeUnit?.startLine ?? 1);
-  const visibleEndLine =
-    contextAvailable && activeUnit
+  const visibleEndLine = fullFileVisible
+    ? fullFileLines.length
+    : contextAvailable && activeUnit
       ? activeUnit.endLine + Math.min(contextAfter, availableAfter)
       : (activeUnit?.endLine ?? 1);
-  const contextVisible = contextBefore > 0 || contextAfter > 0;
+  const contextVisible =
+    fullFileVisible || contextBefore > 0 || contextAfter > 0;
   const changedCurrentLines = useMemo(() => {
     const changedLines = new Set<number>();
     if (
@@ -4388,6 +4405,7 @@ export function ReviewWorkspace({
     ) {
       return;
     }
+    setSplitConceptDialogOpen(false);
     setConceptLayoutAction("split");
     replaceConceptLayout.mutate({
       pullRequestId: initialData.pullRequest.id,
@@ -5773,6 +5791,7 @@ export function ReviewWorkspace({
       resetDialogOpen ||
       aiReviewDialogOpen ||
       conceptGroupingDialogOpen ||
+      splitConceptDialogOpen ||
       pullRequestDetailsOpen ||
       moveMemberDialogOpen,
   });
@@ -6690,10 +6709,10 @@ export function ReviewWorkspace({
                 activeConceptMembers.length > 1 && (
                   <button
                     type="button"
-                    onClick={splitActiveConcept}
+                    onClick={() => setSplitConceptDialogOpen(true)}
                     disabled={replaceConceptLayout.isPending}
                     className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
-                    title="Split this concept into atomic units"
+                    title="Split this concept"
                   >
                     {replaceConceptLayout.isPending &&
                       conceptLayoutAction === "split" && (
@@ -6733,29 +6752,15 @@ export function ReviewWorkspace({
                 <GitBranch className="size-3.5" />
               </button>
               {diffAvailable && (
-                <button
-                  type="button"
-                  aria-pressed={sideBySideVisible}
-                  aria-label="Side-by-side diff"
-                  title={
-                    sideBySideVisible
-                      ? "Showing the side-by-side diff — switch to current source"
-                      : "Showing current source — switch to the side-by-side diff"
-                  }
-                  onClick={() => {
-                    setShowDiff((value) => !value);
+                <ReviewCodeViewSwitch
+                  diffVisible={sideBySideVisible}
+                  onChange={(diffVisible) => {
+                    if (diffVisible === sideBySideVisible) return;
+                    setShowDiff(diffVisible);
                     setContextBefore(0);
                     setContextAfter(0);
                   }}
-                  className={cn(
-                    "grid size-8 shrink-0 place-items-center rounded-lg border transition",
-                    sideBySideVisible
-                      ? "border-cyan/45 bg-cyan/15 text-cyan"
-                      : "text-mist hover:text-cloud border-line hover:border-cyan/25",
-                  )}
-                >
-                  <Columns2 className="size-3.5" />
-                </button>
+                />
               )}
               <button
                 type="button"
@@ -6875,8 +6880,53 @@ export function ReviewWorkspace({
                 index={activeConceptMemberIndex}
                 count={activeConceptMembers.length}
                 selected
+                actions={
+                  activeUnit.kind !== "binary" ? (
+                    <ReviewUnitViewOptions
+                      importsVisible={importsVisible}
+                      fullFileVisible={fullFileVisible}
+                      importsDisabled={!activeModule}
+                      fullFileDisabled={!contextAvailable}
+                      onToggleImports={() =>
+                        setImportContextUnitIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(activeUnit.id))
+                            next.delete(activeUnit.id);
+                          else next.add(activeUnit.id);
+                          return next;
+                        })
+                      }
+                      onToggleFullFile={() =>
+                        setFullFileUnitIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(activeUnit.id))
+                            next.delete(activeUnit.id);
+                          else next.add(activeUnit.id);
+                          return next;
+                        })
+                      }
+                    />
+                  ) : undefined
+                }
               />
             </div>
+            {importsVisible && activeSourceAvailable && activeModule && (
+              <UnitImportContext
+                key={activeUnit.id}
+                fileSource={activeModule.source}
+                previousFileSource={activeModule.previousSource ?? undefined}
+                unitSource={activeUnit.source}
+                language={activeUnit.language}
+                unitId={activeUnit.id}
+                visibleStartLine={activeUnit.startLine}
+                visibleEndLine={activeUnit.endLine}
+                previousVisibleStartLine={previousUnitStartLine}
+                previousVisibleEndLine={previousUnitEndLine}
+                resolvingImport={resolvingImport}
+                continued={sideBySideVisible}
+                onFollow={(reference) => void followImport(reference)}
+              />
+            )}
             {sideBySideVisible && (
               <div className="-mt-px px-4">
                 <SideBySideUnitDiff
@@ -6916,6 +6966,7 @@ export function ReviewWorkspace({
                   selectedLine={selectedLine}
                   keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
                   findingLine={findingLine}
+                  expanded={fullFileVisible}
                   onSelectReviewLine={openInlineComment}
                   onAskReviewLine={openAiQuestionAt}
                   renderLineDetails={renderReviewLineDetails}
@@ -6956,25 +7007,10 @@ export function ReviewWorkspace({
                 </div>
               </div>
             )}
-            {!sideBySideVisible && activeSourceAvailable && activeModule && (
-              <UnitImportContext
-                key={activeUnit.id}
-                fileSource={activeModule.source}
-                previousFileSource={activeModule.previousSource ?? undefined}
-                unitSource={activeUnit.source}
-                language={activeUnit.language}
-                unitId={activeUnit.id}
-                visibleStartLine={visibleStartLine}
-                visibleEndLine={visibleEndLine}
-                previousVisibleStartLine={previousUnitStartLine}
-                previousVisibleEndLine={previousUnitEndLine}
-                resolvingImport={resolvingImport}
-                onFollow={(reference) => void followImport(reference)}
-              />
-            )}
             {!sideBySideVisible &&
               activeSourceAvailable &&
               contextAvailable &&
+              !fullFileVisible &&
               contextBefore < availableBefore && (
                 <div className="mb-3 flex items-center gap-3 px-4 font-sans">
                   <span className="h-px flex-1 bg-line" />
@@ -7035,13 +7071,12 @@ export function ReviewWorkspace({
                   : [];
                 return (
                   <Fragment key={`${activeUnit.id}-${index}`}>
-                    {contextBefore > 0 &&
-                      lineNumber === activeUnit.startLine && (
-                        <ReviewScopeMarker
-                          edge="start"
-                          line={activeUnit.startLine}
-                        />
-                      )}
+                    {contextVisible && lineNumber === activeUnit.startLine && (
+                      <ReviewScopeMarker
+                        edge="start"
+                        line={activeUnit.startLine}
+                      />
+                    )}
                     {lineNumber === activeUnit.startLine &&
                       previousRewriteLines.map((line, previousIndex) => {
                         const previousLineNumber =
@@ -7194,7 +7229,7 @@ export function ReviewWorkspace({
                       </pre>
                     </div>
                     {isUnitLine && renderReviewLineDetails(lineNumber)}
-                    {contextAfter > 0 && lineNumber === activeUnit.endLine && (
+                    {contextVisible && lineNumber === activeUnit.endLine && (
                       <ReviewScopeMarker edge="end" line={activeUnit.endLine} />
                     )}
                   </Fragment>
@@ -7202,6 +7237,7 @@ export function ReviewWorkspace({
               })}
             {!sideBySideVisible &&
               contextAvailable &&
+              !fullFileVisible &&
               contextAfter < availableAfter && (
                 <div className="mt-3 flex items-center gap-3 px-4 font-sans">
                   <span className="h-px flex-1 bg-line" />
@@ -8009,6 +8045,25 @@ export function ReviewWorkspace({
             icon={<Sparkles className="text-violet size-4" />}
             onCancel={() => setConceptGroupingDialogOpen(false)}
             onConfirm={improveGroupingWithAi}
+          />
+        )}
+
+        {splitConceptDialogOpen && activeConcept && (
+          <ConfirmationDialog
+            title="Split this concept?"
+            description={
+              <>
+                Each of the {activeConcept.memberIds.length} units in &ldquo;
+                {activeConcept.title}&rdquo; will become its own concept in your
+                personal layout. Code, comments, sign-offs, and review coverage
+                will not change — only how this review is grouped.
+              </>
+            }
+            confirmLabel={`Split into ${activeConcept.memberIds.length} concepts`}
+            icon={<GitBranch className="text-cyan size-4" />}
+            iconClassName="bg-cyan/10"
+            onCancel={() => setSplitConceptDialogOpen(false)}
+            onConfirm={splitActiveConcept}
           />
         )}
 

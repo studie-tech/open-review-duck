@@ -80,7 +80,17 @@ export const env = createEnv({
       .number()
       .int()
       .positive()
-      .default(5_000_000),
+      .default(20_000_000),
+    MANAGED_AI_SCALE_MONTHLY_TOKEN_LIMIT: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(200_000_000),
+    MANAGED_AI_ULTRA_MONTHLY_TOKEN_LIMIT: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1_000_000_000),
     AI_MAX_MODEL_STEPS: z.coerce.number().int().min(9).max(64).default(64),
     AI_MAX_TOOL_CALLS: z.coerce.number().int().min(32).max(256).default(256),
     AI_MAX_DISTINCT_FILES: z.coerce
@@ -207,6 +217,10 @@ export const env = createEnv({
       process.env.MANAGED_AI_FREE_MONTHLY_TOKEN_LIMIT,
     MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT:
       process.env.MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT,
+    MANAGED_AI_SCALE_MONTHLY_TOKEN_LIMIT:
+      process.env.MANAGED_AI_SCALE_MONTHLY_TOKEN_LIMIT,
+    MANAGED_AI_ULTRA_MONTHLY_TOKEN_LIMIT:
+      process.env.MANAGED_AI_ULTRA_MONTHLY_TOKEN_LIMIT,
     AI_MAX_MODEL_STEPS: process.env.AI_MAX_MODEL_STEPS,
     AI_MAX_TOOL_CALLS: process.env.AI_MAX_TOOL_CALLS,
     AI_MAX_DISTINCT_FILES: process.env.AI_MAX_DISTINCT_FILES,

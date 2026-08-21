@@ -4,21 +4,39 @@ vi.mock("~/env", () => ({
   env: {
     OPENROUTER_MODEL_ALLOWLIST: "provider/model",
     MANAGED_AI_FREE_MONTHLY_TOKEN_LIMIT: 100_000,
-    MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT: 5_000_000,
+    MANAGED_AI_PAID_MONTHLY_TOKEN_LIMIT: 20_000_000,
+    MANAGED_AI_SCALE_MONTHLY_TOKEN_LIMIT: 200_000_000,
+    MANAGED_AI_ULTRA_MONTHLY_TOKEN_LIMIT: 1_000_000_000,
   },
 }));
 
 import {
   managedAiMonthlyTokenLimit,
   managedAiMonthWindow,
+  managedAiPlanTier,
   managedAiPlanUsage,
   managedSaasModel,
 } from "./plan";
 
 describe("managed AI plans", () => {
-  it("uses the configured free and subscriber token allowances", () => {
-    expect(managedAiMonthlyTokenLimit(false)).toBe(100_000);
-    expect(managedAiMonthlyTokenLimit(true)).toBe(5_000_000);
+  it("uses the configured allowance for every plan", () => {
+    expect(managedAiMonthlyTokenLimit("free")).toBe(100_000);
+    expect(managedAiMonthlyTokenLimit("pro")).toBe(20_000_000);
+    expect(managedAiMonthlyTokenLimit("scale")).toBe(200_000_000);
+    expect(managedAiMonthlyTokenLimit("ultra")).toBe(1_000_000_000);
+  });
+
+  it("chooses the highest account entitlement", () => {
+    expect(managedAiPlanTier(() => false)).toBe("free");
+    expect(managedAiPlanTier((feature) => feature === "paid_ai_models")).toBe(
+      "pro",
+    );
+    expect(
+      managedAiPlanTier((feature) =>
+        ["paid_ai_models", "managed_ai_scale"].includes(feature),
+      ),
+    ).toBe("scale");
+    expect(managedAiPlanTier(() => true)).toBe("ultra");
   });
 
   it("returns the deployment-managed SaaS model", () => {
@@ -52,7 +70,7 @@ describe("managed AI plans", () => {
     await expect(
       managedAiPlanUsage(db as never, {
         userId: "user_1",
-        subscribed: false,
+        tier: "free",
         now: new Date("2026-08-03T12:00:00Z"),
       }),
     ).resolves.toEqual({
