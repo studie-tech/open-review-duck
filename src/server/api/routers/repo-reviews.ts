@@ -15,7 +15,7 @@ import {
   signOffs,
   snapshotFiles,
 } from "@/drizzle/schema";
-import { PAID_AI_FEATURE } from "~/server/ai/plan";
+import { managedAiPlanTier } from "~/server/ai/plan";
 import { createAiJob, scheduleAiJob } from "~/server/ai/service";
 import type { db as database } from "~/server/db";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
@@ -666,11 +666,15 @@ export const repoReviewsRouter = createTRPCRouter({
         });
       }
       try {
+        const planTier = managedAiPlanTier((feature) =>
+          ctx.auth.has({ feature }),
+        );
         const job = await createAiJob(ctx.db, {
           pullRequestId: scope.monitor.pullRequestId,
           kind: "review",
           userId: ctx.auth.userId,
-          subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
+          subscribed: planTier !== "free",
+          planTier,
           reviewScope: "repository_snapshot",
           reviewPurpose: input.purpose,
           ruleConfigDigest:
