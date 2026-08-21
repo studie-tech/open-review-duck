@@ -105,62 +105,27 @@ export function SaasAiSettings({
         )}
       </div>
 
-      <section aria-labelledby="ai-plan-usage-heading" className="mt-8">
-        <h2 id="ai-plan-usage-heading" className="sr-only">
-          Plan and token usage
-        </h2>
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <article className="bg-surface/70 min-w-0 rounded-2xl border border-line p-5 sm:p-6">
-            <p className="text-mist text-xs font-medium tracking-wide uppercase">
-              Monthly token usage
-            </p>
-            <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-              <p className="text-2xl font-semibold tracking-tight sm:text-3xl">
-                <span className="tabular-nums">
-                  {usage.usedTokens.toLocaleString("en-US")}
-                </span>{" "}
-                <span className="text-mist text-base font-normal">
-                  / {planTokenLimit}
-                </span>
+      <div className="mt-8 grid items-start gap-4 lg:grid-cols-2">
+        <section
+          aria-labelledby="ai-plan-usage-heading"
+          className="bg-surface/70 min-w-0 rounded-2xl border border-line p-5 sm:p-6"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2
+                id="ai-plan-usage-heading"
+                className="text-mist text-xs font-medium tracking-wide uppercase"
+              >
+                Monthly token usage
+              </h2>
+              <p className="text-fog mt-2 text-xs leading-5">
+                {currentPlan.monthlyPrice
+                  ? `${planTokenLimit} managed AI tokens each month for $${currentPlan.monthlyPrice} USD.`
+                  : `${planTokenLimit} managed AI tokens included each month.`}
               </p>
-              <div className="min-w-0 flex-1 lg:max-w-xl">
-                <div
-                  className="bg-surface-subtle h-2 overflow-hidden rounded-full"
-                  role="progressbar"
-                  aria-label="Monthly AI token usage"
-                  aria-valuemin={0}
-                  aria-valuemax={usage.limitTokens}
-                  aria-valuenow={usage.usedTokens}
-                >
-                  <div
-                    className={cn(
-                      "h-full rounded-full transition-[width]",
-                      usagePercent >= 90 ? "bg-lime" : "bg-violet",
-                    )}
-                    style={{ width: `${usagePercent}%` }}
-                  />
-                </div>
-                <div className="text-fog mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs">
-                  <span>
-                    {formatTokenCount(usage.remainingTokens)} tokens left
-                  </span>
-                  <span>
-                    Resets{" "}
-                    <time dateTime={usage.resetsAt.toISOString()}>
-                      {resetLabel}
-                    </time>
-                  </span>
-                </div>
-              </div>
             </div>
-          </article>
-
-          <article className="bg-surface/70 flex min-w-0 flex-col rounded-2xl border border-line p-5 sm:p-6">
-            <p className="text-mist text-xs font-medium tracking-wide uppercase">
-              Current plan
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <p className="text-2xl font-semibold tracking-tight">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-lg font-semibold tracking-tight">
                 {currentPlan.name}
               </p>
               <Badge
@@ -173,21 +138,48 @@ export function SaasAiSettings({
                 {usage.subscribed ? "Active" : "Current"}
               </Badge>
             </div>
-            <p className="text-fog mt-2 text-xs leading-5">
-              {currentPlan.monthlyPrice
-                ? `${planTokenLimit} managed AI tokens each month for $${currentPlan.monthlyPrice} USD.`
-                : `${planTokenLimit} managed AI tokens included each month.`}
+          </div>
+          <div className="mt-5 flex flex-col gap-5">
+            <p className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              <span className="tabular-nums">
+                {usage.usedTokens.toLocaleString("en-US")}
+              </span>{" "}
+              <span className="text-mist text-base font-normal">
+                / {planTokenLimit}
+              </span>
             </p>
-          </article>
-        </div>
-      </section>
+            <div className="min-w-0">
+              <div
+                className="bg-surface-subtle h-2 overflow-hidden rounded-full"
+                role="progressbar"
+                aria-label="Monthly AI token usage"
+                aria-valuemin={0}
+                aria-valuemax={usage.limitTokens}
+                aria-valuenow={usage.usedTokens}
+              >
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-[width]",
+                    usagePercent >= 90 ? "bg-lime" : "bg-violet",
+                  )}
+                  style={{ width: `${usagePercent}%` }}
+                />
+              </div>
+              <div className="text-fog mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs">
+                <span>
+                  {formatTokenCount(usage.remainingTokens)} tokens left
+                </span>
+                <span>
+                  Resets{" "}
+                  <time dateTime={usage.resetsAt.toISOString()}>
+                    {resetLabel}
+                  </time>
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
 
-      <div
-        className={cn(
-          "mt-4 grid items-start gap-4",
-          !usage.subscribed && "xl:grid-cols-[minmax(0,1fr)_22rem]",
-        )}
-      >
         <section
           aria-labelledby="ai-preferences-heading"
           className="bg-surface/70 overflow-hidden rounded-2xl border border-line"
@@ -301,21 +293,38 @@ export function SaasAiSettings({
             </Button>
           </div>
         </section>
+      </div>
 
-        {!usage.subscribed && (
-          <section id="plans" className="scroll-mt-8">
-            <div className="bg-surface/70 overflow-x-auto rounded-2xl border border-line p-5 sm:p-6">
-              <h2 className="text-base font-medium">Plans</h2>
-              <p className="text-mist mt-1 text-sm leading-6">
+      {!usage.subscribed && (
+        <section
+          id="plans"
+          aria-labelledby="ai-plans-heading"
+          className="mt-4 scroll-mt-8"
+        >
+          <div className="bg-surface/70 overflow-hidden rounded-2xl border border-line">
+            <div className="border-b border-line px-5 py-5 sm:px-6">
+              <h2 id="ai-plans-heading" className="text-base font-medium">
+                Plans
+              </h2>
+              <p className="text-mist mt-1 max-w-2xl text-sm leading-6">
                 Choose 20 million, 200 million, or 1 billion managed AI tokens
                 per month. Plans start at $20 USD and can be managed here at any
                 time.
               </p>
-              <div className="mt-5">
+            </div>
+            <div className="p-5 sm:p-6">
+              <div className="min-w-0 overflow-x-auto">
                 <PricingTable
                   for="user"
                   highlightedPlan="pro"
                   newSubscriptionRedirectUrl="/settings/ai"
+                  appearance={{
+                    elements: {
+                      rootBox: "w-full",
+                      pricingTable:
+                        "w-full grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(16rem,1fr))]",
+                    },
+                  }}
                   fallback={
                     <div className="text-mist grid min-h-48 place-items-center text-sm">
                       Loading subscription options…
@@ -324,9 +333,9 @@ export function SaasAiSettings({
                 />
               </div>
             </div>
-          </section>
-        )}
-      </div>
+          </div>
+        </section>
+      )}
     </PageContainer>
   );
 }
