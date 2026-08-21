@@ -122,15 +122,12 @@ export const reviewShortcuts = {
   undoSignOff: [{ key: "u", mod: true }],
   context: [{ key: "c" }],
   signOff: [{ key: "s" }],
-  // Shift, not the command key: the browser keeps ⌘W for closing the tab and
-  // will not hand it to a page, so a concept chord built on it would shut the
-  // review instead of pausing it. Shift already carries the wider variant of
-  // an action here — deletions, reset, the next review.
+  // Shift already carries the wider variant of an action here — concept
+  // sign-off, deletions, reset, the next review.
   signOffConcept: [{ key: "s", shift: true }],
   signOffDeletions: [{ key: "d", shift: true }],
   undoReview: [{ key: "u" }],
   awaitResponse: [{ key: "w" }],
-  awaitConcept: [{ key: "w", shift: true }],
   refresh: [{ key: "r" }],
   reset: [{ key: "r", shift: true }],
   loadChanges: [{ key: "r" }],

@@ -10,6 +10,7 @@ import {
   overviewViewportFromElements,
   ReviewScrollOverview,
   seekOverviewRatio,
+  shouldShowReviewScrollOverview,
 } from "./review-scroll-overview";
 
 afterEach(cleanup);
@@ -92,6 +93,44 @@ describe("overviewViewportFromElements", () => {
   it("clamps a pane that sits past either end of the file", () => {
     expect(clampOverviewRatio(-0.2)).toBe(0);
     expect(clampOverviewRatio(1.4)).toBe(1);
+  });
+});
+
+describe("shouldShowReviewScrollOverview", () => {
+  const mixed = [
+    { kind: "unchanged" as const },
+    { kind: "added" as const },
+    { kind: "unchanged" as const },
+  ];
+
+  it("hides a file that is only additions or only deletions", () => {
+    expect(
+      shouldShowReviewScrollOverview([{ kind: "added" }, { kind: "added" }], {
+        end: 0.4,
+        start: 0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowReviewScrollOverview(
+        [{ kind: "deleted" }, { kind: "deleted" }],
+        { end: 0.4, start: 0 },
+      ),
+    ).toBe(false);
+  });
+
+  it("hides a mixed file that already fits in the pane", () => {
+    expect(shouldShowReviewScrollOverview(mixed, { end: 1, start: 0 })).toBe(
+      false,
+    );
+  });
+
+  it("shows a mixed file when some of it is off-screen", () => {
+    expect(shouldShowReviewScrollOverview(mixed, { end: 0.4, start: 0 })).toBe(
+      true,
+    );
+    expect(shouldShowReviewScrollOverview(mixed, { end: 1, start: 0.2 })).toBe(
+      true,
+    );
   });
 });
 

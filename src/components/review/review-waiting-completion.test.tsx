@@ -5,10 +5,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  filterWaitingReviewConcepts,
-  orderWaitingReviewConcepts,
+  filterWaitingReviewUnits,
+  orderWaitingReviewUnits,
   ReviewWaitingCompletion,
-  type WaitingReviewConcept,
+  type WaitingReviewUnit,
 } from "./review-waiting-completion";
 
 afterEach(cleanup);
@@ -19,34 +19,33 @@ const shortcutProps = {
   nextReviewShortcut: [{ key: "n", shift: true }],
 };
 
-/** Builds a waiting-concept fixture with focused per-test overrides. */
-const waitingConcept = (
+/** Builds a waiting-unit fixture with focused per-test overrides. */
+const waitingUnit = (
   index: number,
-  overrides: Partial<WaitingReviewConcept> = {},
-): WaitingReviewConcept => ({
+  overrides: Partial<WaitingReviewUnit> = {},
+): WaitingReviewUnit => ({
   answered: false,
   commentCount: 1,
-  id: `concept-${index}`,
+  id: `unit-${index}`,
   latestComment: {
     author: "reviewer",
     body: `Question about behavior ${index}`,
   },
-  paths: [`src/concept-${index}.ts`],
+  path: `src/unit-${index}.ts`,
   threadCount: 1,
-  title: `Concept ${index}`,
-  unitIds: [`unit-${index}`],
+  title: `Unit ${index}`,
   waitingSince: new Date(Date.UTC(2026, 7, index + 1, 10)),
   ...overrides,
 });
 
-describe("waiting review concept selection", () => {
+describe("waiting review unit selection", () => {
   it("orders the oldest wait first without mutating its input", () => {
-    const newer = waitingConcept(4);
-    const older = waitingConcept(1);
-    const unknown = waitingConcept(8, { waitingSince: null });
+    const newer = waitingUnit(4);
+    const older = waitingUnit(1);
+    const unknown = waitingUnit(8, { waitingSince: null });
     const input = [unknown, newer, older];
 
-    expect(orderWaitingReviewConcepts(input).map(({ id }) => id)).toEqual([
+    expect(orderWaitingReviewUnits(input).map(({ id }) => id)).toEqual([
       older.id,
       newer.id,
       unknown.id,
@@ -54,32 +53,26 @@ describe("waiting review concept selection", () => {
     expect(input).toEqual([unknown, newer, older]);
   });
 
-  it("puts an answered concept ahead of one that waited longer", () => {
-    const answered = waitingConcept(6, { answered: true });
-    const older = waitingConcept(1);
+  it("puts an answered unit ahead of one that waited longer", () => {
+    const answered = waitingUnit(6, { answered: true });
+    const older = waitingUnit(1);
 
     expect(
-      orderWaitingReviewConcepts([older, answered]).map(({ id }) => id),
+      orderWaitingReviewUnits([older, answered]).map(({ id }) => id),
     ).toEqual([answered.id, older.id]);
   });
 
-  it("searches concept titles, files, authors, and comment bodies", () => {
-    const concepts = [
-      waitingConcept(1, { paths: ["src/bloodline.ts"] }),
-      waitingConcept(2, {
+  it("searches unit titles, files, authors, and comment bodies", () => {
+    const units = [
+      waitingUnit(1, { path: "src/bloodline.ts" }),
+      waitingUnit(2, {
         latestComment: { author: "Mathias", body: "Does Sage Mode apply?" },
       }),
     ];
 
-    expect(filterWaitingReviewConcepts(concepts, "bloodline")).toEqual([
-      concepts[0],
-    ]);
-    expect(filterWaitingReviewConcepts(concepts, "sage mode")).toEqual([
-      concepts[1],
-    ]);
-    expect(filterWaitingReviewConcepts(concepts, "mathias")).toEqual([
-      concepts[1],
-    ]);
+    expect(filterWaitingReviewUnits(units, "bloodline")).toEqual([units[0]]);
+    expect(filterWaitingReviewUnits(units, "sage mode")).toEqual([units[1]]);
+    expect(filterWaitingReviewUnits(units, "mathias")).toEqual([units[1]]);
   });
 });
 
@@ -93,7 +86,7 @@ describe("ReviewWaitingCompletion", () => {
     const { unmount } = render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={[waitingConcept(1)]}
+        units={[waitingUnit(1)]}
         providerName="GitHub"
         queueLoading={false}
         reviewedConcepts={9}
@@ -101,7 +94,7 @@ describe("ReviewWaitingCompletion", () => {
         onDashboard={vi.fn()}
         onDismiss={onDismiss}
         onNextReview={vi.fn()}
-        onOpenConcept={vi.fn()}
+        onOpenUnit={vi.fn()}
         onStopWaiting={vi.fn()}
       />,
     );
@@ -126,15 +119,15 @@ describe("ReviewWaitingCompletion", () => {
     outside.remove();
   });
 
-  it("surfaces answered concepts as ready to resume", async () => {
+  it("surfaces answered units as ready to resume", async () => {
     const onStopWaiting = vi.fn();
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={[
-          waitingConcept(1, { answered: true, title: "Answered concept" }),
-          waitingConcept(2, { title: "Still waiting" }),
+        units={[
+          waitingUnit(1, { answered: true, title: "Answered unit" }),
+          waitingUnit(2, { title: "Still waiting" }),
         ]}
         providerName="GitHub"
         queueLoading={false}
@@ -143,7 +136,7 @@ describe("ReviewWaitingCompletion", () => {
         onDashboard={vi.fn()}
         onDismiss={vi.fn()}
         onNextReview={vi.fn()}
-        onOpenConcept={vi.fn()}
+        onOpenUnit={vi.fn()}
         onStopWaiting={onStopWaiting}
       />,
     );
@@ -151,11 +144,11 @@ describe("ReviewWaitingCompletion", () => {
     expect(screen.getByText("Ready now").nextSibling).toHaveTextContent("1");
     expect(screen.getByText(/1 response is ready to review/)).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: /View 2 concepts/i }));
+    await user.click(screen.getByRole("button", { name: /View 2 units/i }));
     expect(screen.getByText("Response received")).toBeVisible();
     const resume = screen.getByRole("button", { name: /Resume review/ });
     await user.click(resume);
-    expect(onStopWaiting).toHaveBeenCalledWith("concept-1");
+    expect(onStopWaiting).toHaveBeenCalledWith("unit-1");
     expect(
       screen.getByRole("button", { name: /Stop waiting/ }),
     ).toBeInTheDocument();
@@ -165,7 +158,7 @@ describe("ReviewWaitingCompletion", () => {
     render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={[waitingConcept(1)]}
+        units={[waitingUnit(1)]}
         nextReview={{
           id: "next-pr",
           number: 7,
@@ -182,7 +175,7 @@ describe("ReviewWaitingCompletion", () => {
         onDashboard={vi.fn()}
         onDismiss={vi.fn()}
         onNextReview={vi.fn()}
-        onOpenConcept={vi.fn()}
+        onOpenUnit={vi.fn()}
         onStopWaiting={vi.fn()}
       />,
     );
@@ -203,7 +196,7 @@ describe("ReviewWaitingCompletion", () => {
     render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={[waitingConcept(1, { waitingSince: null })]}
+        units={[waitingUnit(1, { waitingSince: null })]}
         providerName="GitHub"
         queueLoading={false}
         reviewedConcepts={9}
@@ -211,24 +204,22 @@ describe("ReviewWaitingCompletion", () => {
         onDashboard={vi.fn()}
         onDismiss={vi.fn()}
         onNextReview={vi.fn()}
-        onOpenConcept={vi.fn()}
+        onOpenUnit={vi.fn()}
         onStopWaiting={vi.fn()}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /View 1 concept/i }));
+    await user.click(screen.getByRole("button", { name: /View 1 unit/i }));
     expect(screen.getByText("Waiting for provider activity")).toBeVisible();
   });
 
   it("summarizes a large waiting set before rendering its rows", async () => {
-    const concepts = Array.from({ length: 42 }, (_, index) =>
-      waitingConcept(index),
-    );
+    const units = Array.from({ length: 42 }, (_, index) => waitingUnit(index));
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={concepts}
+        units={units}
         providerName="GitHub"
         queueLoading={false}
         reviewedConcepts={132}
@@ -236,7 +227,7 @@ describe("ReviewWaitingCompletion", () => {
         onDashboard={vi.fn()}
         onDismiss={vi.fn()}
         onNextReview={vi.fn()}
-        onOpenConcept={vi.fn()}
+        onOpenUnit={vi.fn()}
         onStopWaiting={vi.fn()}
       />,
     );
@@ -247,25 +238,25 @@ describe("ReviewWaitingCompletion", () => {
     expect(screen.getByText("42")).toBeVisible();
     expect(screen.queryByText("Question about behavior 20")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: /View 42 concepts/i }));
+    await user.click(screen.getByRole("button", { name: /View 42 units/i }));
     expect(
       screen.getByRole("heading", {
-        name: "42 concepts waiting for response",
+        name: "42 units waiting for response",
       }),
     ).toBeVisible();
     expect(screen.getByText("Question about behavior 20")).toBeVisible();
   });
 
-  it("searches the waiting room and exposes concept-level actions", async () => {
-    const onOpenConcept = vi.fn();
+  it("searches the waiting room and exposes unit-level actions", async () => {
+    const onOpenUnit = vi.fn();
     const onStopWaiting = vi.fn();
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={[
-          waitingConcept(1, { title: "Bloodline behavior" }),
-          waitingConcept(2, {
+        units={[
+          waitingUnit(1, { title: "Bloodline behavior" }),
+          waitingUnit(2, {
             commentCount: 40,
             title: "Sage mode validation",
           }),
@@ -277,14 +268,14 @@ describe("ReviewWaitingCompletion", () => {
         onDashboard={vi.fn()}
         onDismiss={vi.fn()}
         onNextReview={vi.fn()}
-        onOpenConcept={onOpenConcept}
+        onOpenUnit={onOpenUnit}
         onStopWaiting={onStopWaiting}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /View 2 concepts/i }));
+    await user.click(screen.getByRole("button", { name: /View 2 units/i }));
     await user.type(
-      screen.getByRole("textbox", { name: "Find a waiting concept" }),
+      screen.getByRole("textbox", { name: "Find a waiting unit" }),
       "sage",
     );
     expect(screen.getByText("Sage mode validation")).toBeVisible();
@@ -292,32 +283,32 @@ describe("ReviewWaitingCompletion", () => {
     expect(screen.queryByText("Bloodline behavior")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Open" }));
-    expect(onOpenConcept).toHaveBeenCalledWith("concept-2");
+    expect(onOpenUnit).toHaveBeenCalledWith("unit-2");
     await user.click(screen.getByRole("button", { name: "Stop waiting" }));
-    expect(onStopWaiting).toHaveBeenCalledWith("concept-2");
+    expect(onStopWaiting).toHaveBeenCalledWith("unit-2");
   });
 
-  it("allows only one waiting concept release at a time", async () => {
+  it("allows only one waiting unit release at a time", async () => {
     const onStopWaiting = vi.fn();
     const user = userEvent.setup();
     render(
       <ReviewWaitingCompletion
         {...shortcutProps}
-        concepts={[waitingConcept(1), waitingConcept(2)]}
+        units={[waitingUnit(1), waitingUnit(2)]}
         providerName="GitHub"
         queueLoading={false}
-        releasingConceptId="concept-1"
+        releasingUnitId="unit-1"
         reviewedConcepts={10}
         totalConcepts={12}
         onDashboard={vi.fn()}
         onDismiss={vi.fn()}
         onNextReview={vi.fn()}
-        onOpenConcept={vi.fn()}
+        onOpenUnit={vi.fn()}
         onStopWaiting={onStopWaiting}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /View 2 concepts/i }));
+    await user.click(screen.getByRole("button", { name: /View 2 units/i }));
     const resuming = screen.getByRole("button", { name: "Resuming…" });
     const otherRelease = screen.getByRole("button", { name: "Stop waiting" });
     expect(resuming).toBeDisabled();

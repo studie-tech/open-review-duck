@@ -20,52 +20,53 @@ import {
   useReviewDialogFocus,
 } from "./review-completion";
 
-export interface WaitingReviewConcept {
+export interface WaitingReviewUnit {
   answered: boolean;
   commentCount: number;
+  conceptTitle?: string;
   id: string;
   latestComment?: {
     author: string;
     body: string;
   };
-  paths: string[];
+  path: string;
   threadCount: number;
   title: string;
-  unitIds: string[];
   waitingSince: Date | null;
 }
 
 interface ReviewWaitingCompletionProps {
-  concepts: WaitingReviewConcept[];
   dashboardShortcut: KeyboardShortcut;
   dismissShortcut: KeyboardShortcut;
   nextReview?: ReviewCompletionCandidate;
   nextReviewShortcut: KeyboardShortcut;
   providerName: string;
   queueLoading: boolean;
-  releasingConceptId?: string;
+  releasingUnitId?: string;
   reviewedConcepts: number;
   totalConcepts: number;
+  units: WaitingReviewUnit[];
   onDashboard: () => void;
   onDismiss: () => void;
   onNextReview: () => void;
-  onOpenConcept: (conceptId: string) => void;
-  onStopWaiting: (conceptId: string) => void;
+  onOpenUnit: (unitId: string) => void;
+  onStopWaiting: (unitId: string) => void;
 }
 
-/** Narrows a large waiting room by its concept, files, or latest conversation. */
-export function filterWaitingReviewConcepts(
-  concepts: WaitingReviewConcept[],
+/** Narrows a large waiting room by its unit, file, concept, or conversation. */
+export function filterWaitingReviewUnits(
+  units: WaitingReviewUnit[],
   search: string,
 ) {
   const query = search.trim().toLowerCase();
-  if (!query) return concepts;
-  return concepts.filter((concept) =>
+  if (!query) return units;
+  return units.filter((unit) =>
     [
-      concept.title,
-      ...concept.paths,
-      concept.latestComment?.author ?? "",
-      concept.latestComment?.body ?? "",
+      unit.title,
+      unit.path,
+      unit.conceptTitle ?? "",
+      unit.latestComment?.author ?? "",
+      unit.latestComment?.body ?? "",
     ]
       .join(" ")
       .toLowerCase()
@@ -73,9 +74,9 @@ export function filterWaitingReviewConcepts(
   );
 }
 
-/** Orders answered concepts first, then the concept paused the longest. */
-export function orderWaitingReviewConcepts(concepts: WaitingReviewConcept[]) {
-  return [...concepts].sort((left, right) => {
+/** Orders answered units first, then the unit paused the longest. */
+export function orderWaitingReviewUnits(units: WaitingReviewUnit[]) {
+  return [...units].sort((left, right) => {
     const leftTime = left.waitingSince?.getTime() ?? Number.MAX_SAFE_INTEGER;
     const rightTime = right.waitingSince?.getTime() ?? Number.MAX_SAFE_INTEGER;
     return (
@@ -100,37 +101,34 @@ function waitingTimestamp(value: Date | null) {
 
 /** Shows the distinct end state where all available work is done but waits remain. */
 export function ReviewWaitingCompletion({
-  concepts,
   dashboardShortcut,
   dismissShortcut,
   nextReview,
   nextReviewShortcut,
   providerName,
   queueLoading,
-  releasingConceptId,
+  releasingUnitId,
   reviewedConcepts,
   totalConcepts,
+  units,
   onDashboard,
   onDismiss,
   onNextReview,
-  onOpenConcept,
+  onOpenUnit,
   onStopWaiting,
 }: ReviewWaitingCompletionProps) {
   const { dialogRef, initialFocusRef } = useReviewDialogFocus();
   const { pending: navigationPending } = usePendingNavigation();
   const [waitingRoomOpen, setWaitingRoomOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const ordered = useMemo(
-    () => orderWaitingReviewConcepts(concepts),
-    [concepts],
-  );
+  const ordered = useMemo(() => orderWaitingReviewUnits(units), [units]);
   const filtered = useMemo(
-    () => filterWaitingReviewConcepts(ordered, search),
+    () => filterWaitingReviewUnits(ordered, search),
     [ordered, search],
   );
   const oldest = ordered[0];
-  const waitingLabel = `${concepts.length} ${concepts.length === 1 ? "concept" : "concepts"}`;
-  const answeredCount = concepts.filter(({ answered }) => answered).length;
+  const waitingLabel = `${units.length} ${units.length === 1 ? "unit" : "units"}`;
+  const answeredCount = units.filter(({ answered }) => answered).length;
 
   return (
     <div className="bg-ink/90 absolute inset-0 z-30 grid place-items-center overflow-y-auto p-4 font-sans backdrop-blur-[3px] sm:p-8">
@@ -191,21 +189,21 @@ export function ReviewWaitingCompletion({
                 id="review-waiting-description"
                 className="text-mist mt-2 max-w-2xl text-sm leading-6"
               >
-                These concepts return to the review path automatically when
-                their {providerName} conversations or code change.
+                These units return to the review path automatically when their{" "}
+                {providerName} conversations or code change.
               </p>
               <label className="border-line-strong bg-surface mt-5 flex h-10 items-center gap-2 rounded-xl border px-3">
                 <Search className="text-fog size-3.5" aria-hidden="true" />
-                <span className="sr-only">Find a waiting concept</span>
+                <span className="sr-only">Find a waiting unit</span>
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Find a concept, file, or conversation…"
+                  placeholder="Find a unit, file, or conversation…"
                   className="text-cloud placeholder:text-fog min-w-0 flex-1 bg-transparent text-xs outline-none"
                 />
                 {search.trim() && (
                   <span className="text-fog text-[9px]">
-                    {filtered.length}/{concepts.length}
+                    {filtered.length}/{units.length}
                   </span>
                 )}
               </label>
@@ -214,69 +212,70 @@ export function ReviewWaitingCompletion({
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-8">
               {filtered.length > 0 ? (
                 <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface/35">
-                  {filtered.map((concept) => (
+                  {filtered.map((unit) => (
                     <article
-                      key={concept.id}
+                      key={unit.id}
                       className="hover:bg-surface-hover/45 px-4 py-4 transition sm:px-5"
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                         <button
                           type="button"
-                          onClick={() => onOpenConcept(concept.id)}
+                          onClick={() => onOpenUnit(unit.id)}
                           className="min-w-0 flex-1 text-left"
                         >
                           <span className="flex items-center gap-2">
-                            {concept.answered ? (
+                            {unit.answered ? (
                               <MessageSquareText className="text-lime size-3.5 shrink-0" />
                             ) : (
                               <Clock3 className="text-cyan size-3.5 shrink-0" />
                             )}
                             <span className="truncate text-sm font-medium text-cloud">
-                              {concept.title}
+                              {unit.title}
                             </span>
-                            {concept.answered && (
+                            {unit.answered && (
                               <span className="border-lime/25 bg-lime/10 text-lime shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-wider uppercase">
                                 Response received
                               </span>
                             )}
                           </span>
                           <span className="text-fog mt-1.5 block truncate pl-5.5 font-mono text-[9px]">
-                            {concept.paths.join(" · ")}
+                            {unit.path}
+                            {unit.conceptTitle ? ` · ${unit.conceptTitle}` : ""}
                           </span>
                           <span className="text-mist mt-1 block pl-5.5 text-[9px]">
                             <time
                               dateTime={
-                                concept.waitingSince?.toISOString() ?? undefined
+                                unit.waitingSince?.toISOString() ?? undefined
                               }
                               suppressHydrationWarning
                             >
-                              {waitingTimestamp(concept.waitingSince)}
+                              {waitingTimestamp(unit.waitingSince)}
                             </time>
-                            {concept.threadCount > 0 && (
+                            {unit.threadCount > 0 && (
                               <>
                                 {" "}
-                                · {concept.threadCount}{" "}
-                                {concept.threadCount === 1
+                                · {unit.threadCount}{" "}
+                                {unit.threadCount === 1
                                   ? "conversation"
                                   : "conversations"}
                               </>
                             )}
-                            {concept.commentCount > 0 && (
+                            {unit.commentCount > 0 && (
                               <>
                                 {" "}
-                                · {concept.commentCount}{" "}
-                                {concept.commentCount === 1
+                                · {unit.commentCount}{" "}
+                                {unit.commentCount === 1
                                   ? "comment"
                                   : "comments"}
                               </>
                             )}
                           </span>
-                          {concept.latestComment && (
+                          {unit.latestComment && (
                             <span className="border-cyan/25 text-mist mt-2 block line-clamp-2 border-l-2 pl-3 text-[10px] leading-4">
                               <span className="text-cloud font-medium">
-                                {concept.latestComment.author}:
+                                {unit.latestComment.author}:
                               </span>{" "}
-                              {concept.latestComment.body}
+                              {unit.latestComment.body}
                             </span>
                           )}
                         </button>
@@ -285,27 +284,27 @@ export function ReviewWaitingCompletion({
                             type="button"
                             size="sm"
                             variant="ghost"
-                            onClick={() => onOpenConcept(concept.id)}
+                            onClick={() => onOpenUnit(unit.id)}
                           >
                             Open
                           </Button>
                           <Button
                             type="button"
                             size="sm"
-                            variant={concept.answered ? "primary" : "secondary"}
-                            disabled={Boolean(releasingConceptId)}
-                            onClick={() => onStopWaiting(concept.id)}
+                            variant={unit.answered ? "primary" : "secondary"}
+                            disabled={Boolean(releasingUnitId)}
+                            onClick={() => onStopWaiting(unit.id)}
                           >
-                            {releasingConceptId === concept.id ? (
+                            {releasingUnitId === unit.id ? (
                               <LoaderCircle className="size-3.5 animate-spin" />
-                            ) : concept.answered ? (
+                            ) : unit.answered ? (
                               <MessageSquareText className="size-3.5" />
                             ) : (
                               <Clock3 className="size-3.5" />
                             )}
-                            {releasingConceptId === concept.id
+                            {releasingUnitId === unit.id
                               ? "Resuming…"
-                              : concept.answered
+                              : unit.answered
                                 ? "Resume review"
                                 : "Stop waiting"}
                           </Button>
@@ -316,7 +315,7 @@ export function ReviewWaitingCompletion({
                 </div>
               ) : (
                 <div className="text-mist grid min-h-40 place-items-center rounded-2xl border border-dashed border-line px-5 text-center text-xs">
-                  No waiting concepts match “{search.trim()}”.
+                  No waiting units match “{search.trim()}”.
                 </div>
               )}
             </div>
@@ -397,7 +396,7 @@ export function ReviewWaitingCompletion({
                     Waiting
                   </dt>
                   <dd className="text-cyan mt-1 font-mono text-lg">
-                    {concepts.length}
+                    {units.length}
                   </dd>
                 </div>
                 <div className="px-3 py-4 text-center sm:px-5">

@@ -107,7 +107,6 @@ import {
   startPullRequestSync,
 } from "~/server/workflows/service";
 import {
-  awaitResponseConceptSchema,
   editReviewThreadCommentSchema,
   importTargetSchema,
   improveConceptGroupingSchema,
@@ -1732,68 +1731,11 @@ async function finalizeSignOffs(
 }
 
 /**
- * Widens a set of units to every member of the concepts holding them.
- *
- * A reviewer pauses a concept rather than a unit, so the reply that ends one
- * member's wait ends the whole concept's: the workspace can only show a
- * concept as waiting when any member is, and a half-released concept would sit
- * outside the review path with nothing left to wait for.
- */
-async function conceptSiblingUnitIds(
-  db: typeof database,
-  userId: string,
-  snapshotId: string,
-  unitIds: string[],
-) {
-  if (unitIds.length === 0) return [];
-  const layouts = await db
-    .select({
-      id: reviewConceptLayouts.id,
-      userId: reviewConceptLayouts.userId,
-    })
-    .from(reviewConceptLayouts)
-    .where(
-      and(
-        eq(reviewConceptLayouts.snapshotId, snapshotId),
-        or(
-          eq(reviewConceptLayouts.userId, userId),
-          isNull(reviewConceptLayouts.userId),
-        ),
-      ),
-    );
-  const active =
-    layouts.find((layout) => layout.userId === userId) ??
-    layouts.find((layout) => layout.userId === null);
-  if (!active) return [];
-  const members = await db
-    .select({
-      conceptId: reviewConceptMembers.conceptId,
-      unitId: reviewConceptMembers.unitId,
-    })
-    .from(reviewConceptMembers)
-    .innerJoin(
-      reviewConcepts,
-      eq(reviewConceptMembers.conceptId, reviewConcepts.id),
-    )
-    .where(eq(reviewConcepts.layoutId, active.id));
-  const released = new Set(unitIds);
-  const releasedConcepts = new Set(
-    members
-      .filter(({ unitId }) => released.has(unitId))
-      .map(({ conceptId }) => conceptId),
-  );
-  return members
-    .filter(({ conceptId }) => releasedConcepts.has(conceptId))
-    .map(({ unitId }) => unitId);
-}
-
-/**
  * Records one reviewer's wait on every named unit of a single snapshot.
  *
- * The provider conversation is read once for the whole set, so pausing a
- * concept costs the one round trip pausing a single unit already did. A unit
- * with no thread of its own still gets a wait: what the reviewer paused is the
- * set, and it comes back as a set once any of its threads moves.
+ * Each wait watches that unit's own conversation. A unit with no thread of
+ * its own cannot be paused, because there is nothing for a later poll to
+ * notice having moved.
  */
 async function beginReviewWaits(
   db: typeof database,
@@ -1926,9 +1868,7 @@ async function beginReviewWaits(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        unitIds.length === 1
-          ? "This unit needs a live provider conversation before it can await a response"
-          : "This concept needs a live provider conversation before it can await a response",
+        "This unit needs a live provider conversation before it can await a response",
     });
   }
 
@@ -2963,22 +2903,12 @@ export const reviewRouter = createTRPCRouter({
             answeredUnitIds.push(wait.unitId);
           }
         }
-        const answered = new Set([
-          ...answeredUnitIds,
-          ...(await conceptSiblingUnitIds(
-            ctx.db,
-            ctx.auth.userId,
-            snapshot.id,
-            answeredUnitIds,
-          )),
-        ]);
         // The waits stay held: releasing them here would clear the waiting
-        // state before the reviewer has seen what answered it. A sibling the
-        // reviewer never paused is already in the review path, so only the
-        // waits actually held are reported as answered — the reviewer resumes
-        // them from the workspace once the response is read.
+        // state before the reviewer has seen what answered it. Only the unit
+        // whose conversation moved is reported as answered — a sibling in the
+        // same concept stays on the review path unless it was paused itself.
         const answeredWaits = waits.filter(({ unitId }) =>
-          answered.has(unitId),
+          answeredUnitIds.includes(unitId),
         );
         return {
           provider: scope.provider,
@@ -3041,45 +2971,6 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       return wait;
-    }),
-
-  awaitResponseConcept: protectedProcedure
-    .input(awaitResponseConceptSchema)
-    .mutation(async ({ ctx, input }) => {
-      await enforceRateLimit(
-        ctx.db,
-        `review-await:${ctx.auth.userId}`,
-        40,
-        60_000,
-      );
-      await enforceRateLimit(
-        ctx.db,
-        `review-await-resource:${ctx.auth.userId}:${input.conceptId}`,
-        20,
-        60_000,
-      );
-      // Resolving the concept takes the layout lock a sign-off takes, so the
-      // members read are one grouping rather than a mix of the layout that is
-      // being replaced alongside it.
-      const concept = await ctx.db.transaction(async (tx) => {
-        const snapshotId = await conceptLayoutSnapshotId(tx, input.layoutId);
-        await lockConceptLayoutScope(tx, ctx.auth.userId, snapshotId);
-        await assertSnapshotIsCurrent(
-          tx,
-          snapshotId,
-          "Synchronize the pull request before waiting for a response",
-        );
-        return conceptMembersForMutation(tx, ctx.auth.userId, input);
-      });
-      const waits = await beginReviewWaits(
-        ctx.db,
-        ctx.auth.userId,
-        concept.members.map(({ id }) => id),
-      );
-      return {
-        conceptId: concept.conceptId,
-        waitingUnitIds: waits.map(({ unitId }) => unitId),
-      };
     }),
 
   /**
