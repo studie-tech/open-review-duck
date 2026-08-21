@@ -266,6 +266,28 @@ export function RepositoryReader({
               )}
             </div>
             <div className="p-2">
+              {paths.length === 0 && (
+                <div
+                  className="mx-2 mt-4 rounded-xl border border-dashed border-line px-4 py-6 text-center"
+                  aria-live="polite"
+                >
+                  <Search className="mx-auto size-5 text-fog" />
+                  <p className="mt-3 text-xs font-medium text-cloud">
+                    {search.trim()
+                      ? `No files or symbols match “${search.trim()}”.`
+                      : "No reviewable symbols are available in this snapshot."}
+                  </p>
+                  {search.trim() && (
+                    <button
+                      type="button"
+                      className="mt-3 text-xs font-medium text-lime hover:text-lime-bright"
+                      onClick={() => setSearch("")}
+                    >
+                      Clear search
+                    </button>
+                  )}
+                </div>
+              )}
               {paths.map(([path, pathUnits]) => (
                 <div key={path} className="mb-2">
                   <div className="flex items-center gap-2 px-2 py-2 text-[11px] font-medium text-mist">

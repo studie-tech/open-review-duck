@@ -184,6 +184,24 @@ export function RepoReviewsContent({
               />
             </label>
             <div className="mt-4 space-y-1.5">
+              {visibleMonitors.length === 0 && search.trim() && (
+                <div
+                  className="rounded-2xl border border-dashed border-line px-4 py-6 text-center"
+                  aria-live="polite"
+                >
+                  <Search className="mx-auto size-5 text-fog" />
+                  <p className="mt-3 text-xs font-medium text-cloud">
+                    No monitored repositories match “{search.trim()}”.
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-3 text-xs font-medium text-lime hover:text-lime-bright"
+                    onClick={() => setSearch("")}
+                  >
+                    Clear filter
+                  </button>
+                </div>
+              )}
               {visibleMonitors.map((monitor) => {
                 const selected = monitor.id === selectedMonitor?.id;
                 const syncing = Boolean(monitor.activeSync);
@@ -812,14 +830,14 @@ function Findings({
   }
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <select
           value={selectedJobId ?? ""}
           onChange={(event) => {
             setJobId(event.target.value);
             setSelected(new Set());
           }}
-          className="h-10 rounded-xl border border-line bg-surface px-3 text-sm text-cloud outline-none focus:border-lime/50"
+          className="h-10 w-full min-w-0 rounded-xl border border-line bg-surface px-3 text-sm text-cloud outline-none focus:border-lime/50 md:flex-1"
         >
           {runs.map((run) => (
             <option key={run.id} value={run.id} suppressHydrationWarning>
@@ -829,7 +847,7 @@ function Findings({
             </option>
           ))}
         </select>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 gap-2">
           <Button
             size="sm"
             variant="secondary"
