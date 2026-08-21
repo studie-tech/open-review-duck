@@ -102,6 +102,7 @@ import {
 } from "~/lib/review-revision";
 import {
   currentChangedLineIndexes,
+  sideBySideDiff,
   sourceByteOffsetLine,
   sourceEndLine,
   sourceStartLine,
@@ -136,6 +137,12 @@ import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
 import { ProviderCommentBody } from "./provider-comment-body";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
+import {
+  overviewMarksFromDiffRows,
+  overviewRangeFromDiffRows,
+  ReviewScrollOverview,
+  useReviewCodeOverview,
+} from "./review-scroll-overview";
 import {
   ReviewWaitingCompletion,
   type WaitingReviewConcept,
@@ -882,9 +889,9 @@ import {
   type ProviderConversationActions,
   PullRequestDetailsDialog,
   providerLabel,
+  ReviewCodeViewSwitch,
   ReviewConceptMemberHeader,
   ReviewConceptMemberPreview,
-  ReviewCodeViewSwitch,
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewScopeMarker,
@@ -1199,6 +1206,7 @@ export function ReviewWorkspace({
   const [undoPending, setUndoPending] = useState(false);
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
+  const codeOverviewRef = useRef<HTMLDivElement>(null);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState<string>();
   const [signOffQueue, dispatchSignOffQueue] = useReducer(
@@ -1637,6 +1645,57 @@ export function ReviewWorkspace({
   const diffCurrentSource =
     activeModule?.source ??
     (activeUnit?.changeType === "deleted" ? "" : (activeUnit?.source ?? ""));
+  const overviewRows = useMemo(
+    () =>
+      activeSourceAvailable && activeUnit?.kind !== "binary"
+        ? sideBySideDiff(diffPreviousSource, diffCurrentSource)
+        : [],
+    [
+      activeSourceAvailable,
+      activeUnit?.kind,
+      diffCurrentSource,
+      diffPreviousSource,
+    ],
+  );
+  const overviewMarks = useMemo(
+    () => overviewMarksFromDiffRows(overviewRows),
+    [overviewRows],
+  );
+  const overviewUnitRange = useMemo(() => {
+    if (!activeUnit || overviewRows.length === 0) return undefined;
+    return overviewRangeFromDiffRows(
+      overviewRows,
+      activeUnit.changeType === "deleted"
+        ? previousUnitStartLine
+        : activeUnit.startLine,
+      activeUnit.changeType === "deleted"
+        ? previousUnitEndLine
+        : activeUnit.endLine,
+      {
+        currentStartLine: 1,
+        previousStartLine: 1,
+      },
+    );
+  }, [activeUnit, overviewRows, previousUnitEndLine, previousUnitStartLine]);
+  const overviewLineCount = Math.max(
+    diffCurrentSource ? diffCurrentSource.split("\n").length : 0,
+    diffPreviousSource ? diffPreviousSource.split("\n").length : 0,
+  );
+  const showScrollOverview =
+    Boolean(activeUnit) &&
+    activeSourceAvailable &&
+    activeUnit?.kind !== "binary" &&
+    overviewLineCount >= 24;
+  const {
+    scrolled: codePaneScrolled,
+    seek: seekCodeOverview,
+    update: updateCodeOverview,
+    viewport: overviewViewport,
+  } = useReviewCodeOverview(
+    codeScrollRef,
+    codeOverviewRef,
+    `${activeUnit?.id ?? ""}:${sideBySideVisible}:${overviewLineCount}`,
+  );
   const fullFileLines = useMemo(
     () => activeModule?.source.split("\n") ?? [],
     [activeModule?.source],
@@ -5951,11 +6010,15 @@ export function ReviewWorkspace({
           <p className="truncate text-sm font-medium">
             {initialData.pullRequest.title}
           </p>
-          <p className="text-fog truncate text-[10px]">
-            {initialData.pullRequest.repositoryOwner}/
-            {initialData.pullRequest.repositoryName} #
-            {initialData.pullRequest.number}
-          </p>
+          <a
+            href={initialData.pullRequest.repositoryWebUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={initialData.pullRequest.repositoryWebUrl}
+            className="text-fog hover:text-mist block truncate text-[10px] hover:underline"
+          >
+            {initialData.pullRequest.repositoryWebUrl}
+          </a>
         </div>
         <div className="hidden items-center gap-3 sm:flex">
           <span className="text-mist text-xs">
@@ -6596,195 +6659,218 @@ export function ReviewWorkspace({
               onNextReview={openNextReview}
             />
           )}
-          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-b border-line px-3 py-3 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4 lg:px-7">
-            <button
-              type="button"
-              aria-label="Show review path"
-              aria-controls="review-path-panel"
-              aria-expanded={pathPanelOpen}
-              title="Show review path"
-              onClick={showPathPanel}
-              className={cn(
-                "text-mist hover:text-cyan h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-cyan/25 hover:bg-cyan/[.05]",
-                pathPanelCollapsed ? "flex" : "flex 2xl:hidden",
-              )}
-            >
-              <PanelLeftOpen className="size-3.5" />
-              <span className="hidden text-[10px] sm:inline">Review path</span>
-              <ShortcutHint
-                shortcut={reviewShortcuts.togglePathPanel}
-                className="hidden lg:inline-flex"
-              />
-            </button>
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <h1
-                  className="truncate text-sm font-medium"
-                  title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
-                >
-                  {activeConcept?.title ?? activeUnit.name}
-                </h1>
-                {activeConceptProgress?.status === "waiting" &&
-                  (activeConceptAnswered ? (
-                    <Badge className="border-lime/25 bg-lime/10 text-lime">
-                      <MessageSquareText className="size-3" />
-                      Response received
-                    </Badge>
-                  ) : (
-                    <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
-                      <Clock3 className="size-3" />
-                      Waiting for response
-                    </Badge>
-                  ))}
-                {activeUnit.changedSinceSignOff && (
-                  <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
-                    Changed
-                  </Badge>
-                )}
-                {activeUnit.changeType !== "modified" && (
-                  <Badge
-                    className={cn(
-                      "capitalize",
-                      activeUnit.changeType === "deleted" &&
-                        "border-red-500/25 bg-red-400/10 text-red-700 dark:border-red-300/20 dark:text-red-200",
-                    )}
-                  >
-                    {activeUnit.changeType}
-                  </Badge>
-                )}
-              </div>
-              <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
-                <span className="text-mist font-mono">{activeUnit.path}</span>
-                <span aria-hidden="true">·</span>
-                <span className="shrink-0">
-                  {activeConceptMembers.length > 1
-                    ? `Member ${activeConceptMemberIndex + 1}/${activeConceptMembers.length}`
-                    : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
-                </span>
-                {activeConcept && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span className="shrink-0">
-                      {activeConcept.changedLineCount} changed lines in{" "}
-                      {activeConcept.fileCount}{" "}
-                      {activeConcept.fileCount === 1 ? "file" : "files"}
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
-            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-              {sourceHydrationPending && (
-                <span
-                  role="status"
-                  aria-label="Loading private review source"
-                  className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
-                  title="Loading and verifying review source in the background"
-                >
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                  <span className="hidden lg:inline">Loading source…</span>
-                </span>
-              )}
-              {initialData.conceptLayout && !conceptLayoutLocked && (
-                <button
-                  type="button"
-                  onClick={() => setConceptGroupingDialogOpen(true)}
-                  disabled={
-                    improveConceptGrouping.isPending ||
-                    replaceConceptLayout.isPending
-                  }
-                  aria-label={improveGroupingLabel}
-                  className="text-violet hover:bg-violet/[.06] grid size-8 shrink-0 place-items-center rounded-lg border border-violet/20 transition disabled:cursor-wait disabled:opacity-60"
-                  title={improveGroupingLabel}
-                >
-                  {groupingImproving ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="size-3.5" />
-                  )}
-                </button>
-              )}
-              {initialData.conceptLayout &&
-                !conceptLayoutLocked &&
-                activeConceptMembers.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setSplitConceptDialogOpen(true)}
-                    disabled={replaceConceptLayout.isPending}
-                    className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
-                    title="Split this concept"
-                  >
-                    {replaceConceptLayout.isPending &&
-                      conceptLayoutAction === "split" && (
-                        <LoaderCircle className="size-3.5 animate-spin" />
-                      )}
-                    {replaceConceptLayout.isPending &&
-                    conceptLayoutAction === "split"
-                      ? "Splitting…"
-                      : "Split"}
-                  </button>
-                )}
-              {initialData.conceptLayout &&
-                !conceptLayoutLocked &&
-                initialData.concepts.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setMoveMemberDialogOpen(true)}
-                    disabled={replaceConceptLayout.isPending}
-                    aria-label={moveMemberLabel}
-                    title={moveMemberLabel}
-                    className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05] disabled:opacity-50"
-                  >
-                    {movingMember ? (
-                      <LoaderCircle className="size-3.5 animate-spin" />
-                    ) : (
-                      <FolderInput className="size-3.5" />
-                    )}
-                  </button>
-                )}
+          <div
+            className={cn(
+              "bg-panel sticky top-0 z-20 shrink-0 border-b border-line",
+              codePaneScrolled &&
+                "shadow-[0_10px_24px_color-mix(in_srgb,var(--app-shadow)_55%,transparent)]",
+            )}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-3 py-3 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4 lg:px-7">
               <button
                 type="button"
-                aria-label="Open review hierarchy"
-                title="Review hierarchy"
-                onClick={() => setHierarchyOpen(true)}
-                className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05]"
-              >
-                <GitBranch className="size-3.5" />
-              </button>
-              {diffAvailable && (
-                <ReviewCodeViewSwitch
-                  diffVisible={sideBySideVisible}
-                  onChange={(diffVisible) => {
-                    if (diffVisible === sideBySideVisible) return;
-                    setShowDiff(diffVisible);
-                    setContextBefore(0);
-                    setContextAfter(0);
-                  }}
-                />
-              )}
-              <button
-                type="button"
-                aria-label="Show AI assistance"
-                aria-controls="code-explanation-panel"
-                aria-expanded={insightsPanelOpen}
-                title="Show AI assistance"
-                onClick={showInsightsPanel}
+                aria-label="Show review path"
+                aria-controls="review-path-panel"
+                aria-expanded={pathPanelOpen}
+                title="Show review path"
+                onClick={showPathPanel}
                 className={cn(
-                  "text-mist hover:text-violet h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-violet/25 hover:bg-violet/[.05]",
-                  insightsPanelCollapsed ? "flex" : "flex xl:hidden",
+                  "text-mist hover:text-cyan h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-cyan/25 hover:bg-cyan/[.05]",
+                  pathPanelCollapsed ? "flex" : "flex 2xl:hidden",
                 )}
               >
-                <PanelRightOpen className="size-3.5" />
-                <span className="hidden text-[10px] sm:inline">Details</span>
+                <PanelLeftOpen className="size-3.5" />
+                <span className="hidden text-[10px] sm:inline">
+                  Review path
+                </span>
                 <ShortcutHint
-                  shortcut={reviewShortcuts.toggleInsightsPanel}
+                  shortcut={reviewShortcuts.togglePathPanel}
                   className="hidden lg:inline-flex"
                 />
               </button>
-              <Badge className="hidden h-8 py-0 capitalize sm:inline-flex">
-                {activeUnit.kind}
-              </Badge>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <h1
+                    className="truncate text-sm font-medium"
+                    title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                  >
+                    {activeConcept?.title ?? activeUnit.name}
+                  </h1>
+                  {activeConceptProgress?.status === "waiting" &&
+                    (activeConceptAnswered ? (
+                      <Badge className="border-lime/25 bg-lime/10 text-lime">
+                        <MessageSquareText className="size-3" />
+                        Response received
+                      </Badge>
+                    ) : (
+                      <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                        <Clock3 className="size-3" />
+                        Waiting for response
+                      </Badge>
+                    ))}
+                  {activeUnit.changedSinceSignOff && (
+                    <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+                      Changed
+                    </Badge>
+                  )}
+                  {activeUnit.changeType !== "modified" && (
+                    <Badge
+                      className={cn(
+                        "capitalize",
+                        activeUnit.changeType === "deleted" &&
+                          "border-red-500/25 bg-red-400/10 text-red-700 dark:border-red-300/20 dark:text-red-200",
+                      )}
+                    >
+                      {activeUnit.changeType}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
+                  <span className="text-mist font-mono">{activeUnit.path}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="shrink-0">
+                    {activeConceptMembers.length > 1
+                      ? `Member ${activeConceptMemberIndex + 1}/${activeConceptMembers.length}`
+                      : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                  </span>
+                  {activeConcept && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="shrink-0">
+                        {activeConcept.changedLineCount} changed lines in{" "}
+                        {activeConcept.fileCount}{" "}
+                        {activeConcept.fileCount === 1 ? "file" : "files"}
+                      </span>
+                    </>
+                  )}
+                </p>
+              </div>
+              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                {sourceHydrationPending && (
+                  <span
+                    role="status"
+                    aria-label="Loading private review source"
+                    className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
+                    title="Loading and verifying review source in the background"
+                  >
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                    <span className="hidden lg:inline">Loading source…</span>
+                  </span>
+                )}
+                {initialData.conceptLayout && !conceptLayoutLocked && (
+                  <button
+                    type="button"
+                    onClick={() => setConceptGroupingDialogOpen(true)}
+                    disabled={
+                      improveConceptGrouping.isPending ||
+                      replaceConceptLayout.isPending
+                    }
+                    aria-label={improveGroupingLabel}
+                    className="text-violet hover:bg-violet/[.06] grid size-8 shrink-0 place-items-center rounded-lg border border-violet/20 transition disabled:cursor-wait disabled:opacity-60"
+                    title={improveGroupingLabel}
+                  >
+                    {groupingImproving ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-3.5" />
+                    )}
+                  </button>
+                )}
+                {initialData.conceptLayout &&
+                  !conceptLayoutLocked &&
+                  activeConceptMembers.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setSplitConceptDialogOpen(true)}
+                      disabled={replaceConceptLayout.isPending}
+                      className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
+                      title="Split this concept"
+                    >
+                      {replaceConceptLayout.isPending &&
+                        conceptLayoutAction === "split" && (
+                          <LoaderCircle className="size-3.5 animate-spin" />
+                        )}
+                      {replaceConceptLayout.isPending &&
+                      conceptLayoutAction === "split"
+                        ? "Splitting…"
+                        : "Split"}
+                    </button>
+                  )}
+                {initialData.conceptLayout &&
+                  !conceptLayoutLocked &&
+                  initialData.concepts.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setMoveMemberDialogOpen(true)}
+                      disabled={replaceConceptLayout.isPending}
+                      aria-label={moveMemberLabel}
+                      title={moveMemberLabel}
+                      className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05] disabled:opacity-50"
+                    >
+                      {movingMember ? (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      ) : (
+                        <FolderInput className="size-3.5" />
+                      )}
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  aria-label="Open review hierarchy"
+                  title="Review hierarchy"
+                  onClick={() => setHierarchyOpen(true)}
+                  className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05]"
+                >
+                  <GitBranch className="size-3.5" />
+                </button>
+                {diffAvailable && (
+                  <ReviewCodeViewSwitch
+                    diffVisible={sideBySideVisible}
+                    onChange={(diffVisible) => {
+                      if (diffVisible === sideBySideVisible) return;
+                      setShowDiff(diffVisible);
+                      setContextBefore(0);
+                      setContextAfter(0);
+                    }}
+                  />
+                )}
+                <button
+                  type="button"
+                  aria-label="Show AI assistance"
+                  aria-controls="code-explanation-panel"
+                  aria-expanded={insightsPanelOpen}
+                  title="Show AI assistance"
+                  onClick={showInsightsPanel}
+                  className={cn(
+                    "text-mist hover:text-violet h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-violet/25 hover:bg-violet/[.05]",
+                    insightsPanelCollapsed ? "flex" : "flex xl:hidden",
+                  )}
+                >
+                  <PanelRightOpen className="size-3.5" />
+                  <span className="hidden text-[10px] sm:inline">Details</span>
+                  <ShortcutHint
+                    shortcut={reviewShortcuts.toggleInsightsPanel}
+                    className="hidden lg:inline-flex"
+                  />
+                </button>
+                <Badge className="hidden h-8 py-0 capitalize sm:inline-flex">
+                  {activeUnit.kind}
+                </Badge>
+              </div>
             </div>
+            {showScrollOverview && (
+              <ReviewScrollOverview
+                label={
+                  activeUnit
+                    ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
+                    : undefined
+                }
+                marks={overviewMarks}
+                unitRange={overviewUnitRange}
+                viewport={overviewViewport}
+                onSeek={seekCodeOverview}
+              />
+            )}
           </div>
           {activeUnit.changedSinceSignOff && !activeUnit.previousSource && (
             <div className="border-cyan/15 bg-cyan/[.035] text-cyan border-b px-5 py-2 text-[10px] sm:px-7">
@@ -6830,7 +6916,10 @@ export function ReviewWorkspace({
           <div
             ref={codeScrollRef}
             data-code-scroll-pane
-            onScroll={closeSymbolPeek}
+            onScroll={() => {
+              closeSymbolPeek();
+              updateCodeOverview();
+            }}
             {...peekHandlers}
             className="min-h-0 flex-1 overflow-auto bg-code py-5 font-mono text-[11px] leading-5 [overflow-anchor:none]"
           >
@@ -6873,394 +6962,425 @@ export function ReviewWorkspace({
               ref={reviewUnitStartRef}
               data-review-member-id={activeUnit.id}
               data-selected="true"
-              className="mx-4 overflow-hidden rounded-t-xl border border-cyan/35 bg-surface/20 shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]"
+              className="mx-4"
             >
-              <ReviewConceptMemberHeader
-                unit={activeUnit}
-                index={activeConceptMemberIndex}
-                count={activeConceptMembers.length}
-                selected
-                actions={
-                  activeUnit.kind !== "binary" ? (
-                    <ReviewUnitViewOptions
-                      importsVisible={importsVisible}
-                      fullFileVisible={fullFileVisible}
-                      importsDisabled={!activeModule}
-                      fullFileDisabled={!contextAvailable}
-                      onToggleImports={() =>
-                        setImportContextUnitIds((current) => {
-                          const next = new Set(current);
-                          if (next.has(activeUnit.id))
-                            next.delete(activeUnit.id);
-                          else next.add(activeUnit.id);
-                          return next;
-                        })
-                      }
-                      onToggleFullFile={() =>
-                        setFullFileUnitIds((current) => {
-                          const next = new Set(current);
-                          if (next.has(activeUnit.id))
-                            next.delete(activeUnit.id);
-                          else next.add(activeUnit.id);
-                          return next;
-                        })
-                      }
-                    />
-                  ) : undefined
-                }
-              />
-            </div>
-            {importsVisible && activeSourceAvailable && activeModule && (
-              <UnitImportContext
-                key={activeUnit.id}
-                fileSource={activeModule.source}
-                previousFileSource={activeModule.previousSource ?? undefined}
-                unitSource={activeUnit.source}
-                language={activeUnit.language}
-                unitId={activeUnit.id}
-                visibleStartLine={activeUnit.startLine}
-                visibleEndLine={activeUnit.endLine}
-                previousVisibleStartLine={previousUnitStartLine}
-                previousVisibleEndLine={previousUnitEndLine}
-                resolvingImport={resolvingImport}
-                continued={sideBySideVisible}
-                onFollow={(reference) => void followImport(reference)}
-              />
-            )}
-            {sideBySideVisible && (
-              <div className="-mt-px px-4">
-                <SideBySideUnitDiff
-                  key={activeUnit.id}
-                  ref={diffContextRef}
-                  previousSource={diffPreviousSource}
-                  currentSource={diffCurrentSource}
-                  language={activeUnit.language}
-                  previousStartLine={1}
-                  currentStartLine={1}
-                  previousFocusRanges={
-                    activeUnit.relatedRanges ? previousRelatedRanges : undefined
+              <div className="sticky top-0 z-20 overflow-hidden rounded-t-xl border border-cyan/35 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]">
+                <ReviewConceptMemberHeader
+                  unit={activeUnit}
+                  index={activeConceptMemberIndex}
+                  count={activeConceptMembers.length}
+                  selected
+                  actions={
+                    activeUnit.kind !== "binary" ? (
+                      <ReviewUnitViewOptions
+                        importsVisible={importsVisible}
+                        fullFileVisible={fullFileVisible}
+                        importsDisabled={!activeModule}
+                        fullFileDisabled={!contextAvailable}
+                        onToggleImports={() =>
+                          setImportContextUnitIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(activeUnit.id))
+                              next.delete(activeUnit.id);
+                            else next.add(activeUnit.id);
+                            return next;
+                          })
+                        }
+                        onToggleFullFile={() =>
+                          setFullFileUnitIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(activeUnit.id))
+                              next.delete(activeUnit.id);
+                            else next.add(activeUnit.id);
+                            return next;
+                          })
+                        }
+                      />
+                    ) : undefined
                   }
-                  currentFocusRanges={
-                    activeUnit.relatedRanges ? currentRelatedRanges : undefined
-                  }
-                  previousFocusStartLine={
-                    activeUnit.changeType === "added"
-                      ? null
-                      : previousUnitStartLine
-                  }
-                  previousFocusEndLine={
-                    activeUnit.changeType === "added"
-                      ? null
-                      : previousUnitEndLine
-                  }
-                  currentFocusStartLine={
-                    activeUnit.changeType === "deleted"
-                      ? null
-                      : activeUnit.startLine
-                  }
-                  currentFocusEndLine={
-                    activeUnit.changeType === "deleted"
-                      ? null
-                      : activeUnit.endLine
-                  }
-                  selectedLine={selectedLine}
-                  keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
-                  findingLine={findingLine}
-                  expanded={fullFileVisible}
-                  onSelectReviewLine={openInlineComment}
-                  onAskReviewLine={openAiQuestionAt}
-                  renderLineDetails={renderReviewLineDetails}
                 />
               </div>
-            )}
-            {activeSourceHydrationPending && !activeSourceAvailable && (
               <div
-                className="mx-4 min-h-72 animate-pulse rounded-b-xl border-x border-b border-line bg-surface/10 px-5 py-6 font-sans"
-                aria-live="polite"
+                ref={codeOverviewRef}
+                className={cn(
+                  "-mt-px",
+                  !sideBySideVisible &&
+                    "overflow-hidden rounded-b-xl border-x border-b border-line bg-code",
+                )}
               >
-                <span className="sr-only">
-                  Loading and verifying private source…
-                </span>
-                <div aria-hidden="true" className="space-y-3">
-                  <div className="bg-line-strong h-2 w-2/5 rounded-full" />
-                  <div className="bg-line h-2 w-4/5 rounded-full" />
-                  <div className="bg-line h-2 w-3/5 rounded-full" />
-                  <div className="bg-line h-2 w-11/12 rounded-full" />
-                  <div className="bg-line h-2 w-2/3 rounded-full" />
-                </div>
-              </div>
-            )}
-            {!activeSourceHydrationPending && !activeSourceAvailable && (
-              <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
-                <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
-                  <FileCode2
-                    className="text-fog mx-auto size-6"
-                    aria-hidden="true"
+                {sideBySideVisible && (
+                  <SideBySideUnitDiff
+                    key={activeUnit.id}
+                    ref={diffContextRef}
+                    previousSource={diffPreviousSource}
+                    currentSource={diffCurrentSource}
+                    language={activeUnit.language}
+                    previousStartLine={1}
+                    currentStartLine={1}
+                    previousFocusRanges={
+                      activeUnit.relatedRanges
+                        ? previousRelatedRanges
+                        : undefined
+                    }
+                    currentFocusRanges={
+                      activeUnit.relatedRanges
+                        ? currentRelatedRanges
+                        : undefined
+                    }
+                    previousFocusStartLine={
+                      activeUnit.changeType === "added"
+                        ? null
+                        : previousUnitStartLine
+                    }
+                    previousFocusEndLine={
+                      activeUnit.changeType === "added"
+                        ? null
+                        : previousUnitEndLine
+                    }
+                    currentFocusStartLine={
+                      activeUnit.changeType === "deleted"
+                        ? null
+                        : activeUnit.startLine
+                    }
+                    currentFocusEndLine={
+                      activeUnit.changeType === "deleted"
+                        ? null
+                        : activeUnit.endLine
+                    }
+                    selectedLine={selectedLine}
+                    keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
+                    findingLine={findingLine}
+                    expanded={fullFileVisible}
+                    onSelectReviewLine={openInlineComment}
+                    onAskReviewLine={openAiQuestionAt}
+                    renderLineDetails={renderReviewLineDetails}
                   />
-                  <p className="text-cloud mt-4 text-sm font-medium">
-                    Source unavailable
-                  </p>
-                  <p className="text-mist mt-2 text-xs leading-5">
-                    This private source could not be verified and loaded. Reload
-                    the review before signing off this unit.
-                  </p>
-                </div>
-              </div>
-            )}
-            {!sideBySideVisible &&
-              activeSourceAvailable &&
-              contextAvailable &&
-              !fullFileVisible &&
-              contextBefore < availableBefore && (
-                <div className="mb-3 flex items-center gap-3 px-4 font-sans">
-                  <span className="h-px flex-1 bg-line" />
-                  <button
-                    type="button"
-                    onClick={revealContextAbove}
-                    className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                )}
+                {activeSourceHydrationPending && !activeSourceAvailable && (
+                  <div
+                    className="min-h-72 animate-pulse bg-surface/10 px-5 py-6 font-sans"
+                    aria-live="polite"
                   >
-                    <ChevronDown className="size-3 rotate-180" />
-                    Show{" "}
-                    {Math.min(
-                      CONTEXT_PAGE_LINES,
-                      availableBefore - contextBefore,
-                    )}{" "}
-                    {contextBefore > 0 ? "more " : ""}lines above
-                    <ShortcutHint
-                      shortcut={reviewShortcuts.revealContextAbove}
-                      className="ml-1"
-                    />
-                  </button>
-                  <span className="h-px flex-1 bg-line" />
-                </div>
-              )}
-            {activeSourceAvailable && activeUnit.kind === "binary" && (
-              <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
-                <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
-                  <span className="bg-cyan/10 text-cyan mx-auto grid size-11 place-items-center rounded-xl">
-                    <FileCode2 className="size-5" aria-hidden="true" />
-                  </span>
-                  <p className="text-cloud mt-4 text-sm font-medium">
-                    Binary file
-                  </p>
-                  <p className="text-mist mt-2 text-xs leading-5">
-                    ReviewDuck detected binary content. Its bytes are not
-                    displayed, sent to AI, or available for line comments.
-                  </p>
-                  <p className="text-fog mt-3 truncate font-mono text-[10px]">
-                    {activeUnit.path}
-                  </p>
-                </div>
-              </div>
-            )}
-            {!sideBySideVisible &&
-              activeSourceAvailable &&
-              activeUnit.kind !== "binary" &&
-              lines.map((line, index) => {
-                const lineNumber = visibleStartLine + index;
-                const isUnitLine = isPrimaryReviewLine(lineNumber);
-                const isChangedLine =
-                  isUnitLine && changedCurrentLines.has(lineNumber);
-                const isContextLine = !isUnitLine;
-                const coveringExplanations = isUnitLine
-                  ? explanationAnnotations.filter(
-                      (annotation) =>
-                        lineNumber >= annotation.line &&
-                        lineNumber <= (annotation.endLine ?? annotation.line),
-                    )
-                  : [];
-                return (
-                  <Fragment key={`${activeUnit.id}-${index}`}>
-                    {contextVisible && lineNumber === activeUnit.startLine && (
-                      <ReviewScopeMarker
-                        edge="start"
-                        line={activeUnit.startLine}
+                    <span className="sr-only">
+                      Loading and verifying private source…
+                    </span>
+                    <div aria-hidden="true" className="space-y-3">
+                      <div className="bg-line-strong h-2 w-2/5 rounded-full" />
+                      <div className="bg-line h-2 w-4/5 rounded-full" />
+                      <div className="bg-line h-2 w-3/5 rounded-full" />
+                      <div className="bg-line h-2 w-11/12 rounded-full" />
+                      <div className="bg-line h-2 w-2/3 rounded-full" />
+                    </div>
+                  </div>
+                )}
+                {!activeSourceHydrationPending && !activeSourceAvailable && (
+                  <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
+                    <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
+                      <FileCode2
+                        className="text-fog mx-auto size-6"
+                        aria-hidden="true"
                       />
-                    )}
-                    {lineNumber === activeUnit.startLine &&
-                      previousRewriteLines.map((line, previousIndex) => {
-                        const previousLineNumber =
-                          previousUnitStartLine + previousIndex;
-                        return (
-                          <div
-                            key={`${activeUnit.id}-previous-${previousIndex}`}
-                            className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/[.07] px-4 hover:bg-red-400/[.1]"
-                          >
-                            <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
-                              {previousLineNumber}
+                      <p className="text-cloud mt-4 text-sm font-medium">
+                        Source unavailable
+                      </p>
+                      <p className="text-mist mt-2 text-xs leading-5">
+                        This private source could not be verified and loaded.
+                        Reload the review before signing off this unit.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {importsVisible &&
+                  !sideBySideVisible &&
+                  activeSourceAvailable &&
+                  activeModule && (
+                    <UnitImportContext
+                      key={activeUnit.id}
+                      fileSource={activeModule.source}
+                      previousFileSource={
+                        activeModule.previousSource ?? undefined
+                      }
+                      unitSource={activeUnit.source}
+                      language={activeUnit.language}
+                      unitId={activeUnit.id}
+                      visibleStartLine={visibleStartLine}
+                      visibleEndLine={visibleEndLine}
+                      previousVisibleStartLine={previousUnitStartLine}
+                      previousVisibleEndLine={previousUnitEndLine}
+                      resolvingImport={resolvingImport}
+                      onFollow={(reference) => void followImport(reference)}
+                    />
+                  )}
+                {!sideBySideVisible &&
+                  activeSourceAvailable &&
+                  contextAvailable &&
+                  !fullFileVisible &&
+                  contextBefore < availableBefore && (
+                    <div className="mb-3 flex items-center gap-3 px-4 font-sans">
+                      <span className="h-px flex-1 bg-line" />
+                      <button
+                        type="button"
+                        onClick={revealContextAbove}
+                        className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                      >
+                        <ChevronDown className="size-3 rotate-180" />
+                        Show{" "}
+                        {Math.min(
+                          CONTEXT_PAGE_LINES,
+                          availableBefore - contextBefore,
+                        )}{" "}
+                        {contextBefore > 0 ? "more " : ""}lines above
+                        <ShortcutHint
+                          shortcut={reviewShortcuts.revealContextAbove}
+                          className="ml-1"
+                        />
+                      </button>
+                      <span className="h-px flex-1 bg-line" />
+                    </div>
+                  )}
+                {activeSourceAvailable && activeUnit.kind === "binary" && (
+                  <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
+                    <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
+                      <span className="bg-cyan/10 text-cyan mx-auto grid size-11 place-items-center rounded-xl">
+                        <FileCode2 className="size-5" aria-hidden="true" />
+                      </span>
+                      <p className="text-cloud mt-4 text-sm font-medium">
+                        Binary file
+                      </p>
+                      <p className="text-mist mt-2 text-xs leading-5">
+                        ReviewDuck detected binary content. Its bytes are not
+                        displayed, sent to AI, or available for line comments.
+                      </p>
+                      <p className="text-fog mt-3 truncate font-mono text-[10px]">
+                        {activeUnit.path}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {!sideBySideVisible &&
+                  activeSourceAvailable &&
+                  activeUnit.kind !== "binary" &&
+                  lines.map((line, index) => {
+                    const lineNumber = visibleStartLine + index;
+                    const isUnitLine = isPrimaryReviewLine(lineNumber);
+                    const isChangedLine =
+                      isUnitLine && changedCurrentLines.has(lineNumber);
+                    const isContextLine = !isUnitLine;
+                    const coveringExplanations = isUnitLine
+                      ? explanationAnnotations.filter(
+                          (annotation) =>
+                            lineNumber >= annotation.line &&
+                            lineNumber <=
+                              (annotation.endLine ?? annotation.line),
+                        )
+                      : [];
+                    return (
+                      <Fragment key={`${activeUnit.id}-${index}`}>
+                        {contextBefore > 0 &&
+                          lineNumber === activeUnit.startLine && (
+                            <ReviewScopeMarker
+                              edge="start"
+                              line={activeUnit.startLine}
+                            />
+                          )}
+                        {lineNumber === activeUnit.startLine &&
+                          previousRewriteLines.map((line, previousIndex) => {
+                            const previousLineNumber =
+                              previousUnitStartLine + previousIndex;
+                            return (
+                              <div
+                                key={`${activeUnit.id}-previous-${previousIndex}`}
+                                className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/[.07] px-4 hover:bg-red-400/[.1]"
+                              >
+                                <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
+                                  {previousLineNumber}
+                                </span>
+                                <pre className="syntax-code overflow-visible text-cloud/80 line-through opacity-80">
+                                  {line.tokens.length
+                                    ? line.tokens.map((token, tokenIndex) => (
+                                        <span
+                                          key={`${tokenIndex}-${token.text.length}`}
+                                          className={
+                                            token.className || undefined
+                                          }
+                                        >
+                                          {token.text}
+                                        </span>
+                                      ))
+                                    : " "}
+                                </pre>
+                              </div>
+                            );
+                          })}
+                        <div
+                          id={`review-line-${lineNumber}`}
+                          className={cn(
+                            "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
+                            contextVisible &&
+                              isUnitLine &&
+                              "border-l-cyan/35 bg-cyan/[.012]",
+                            isChangedLine &&
+                              "border-l-addition/45 bg-addition/[.075] hover:bg-addition/[.105]",
+                            isContextLine &&
+                              "bg-surface-subtle/15 opacity-55 hover:opacity-80",
+                            coveringExplanations.length > 0 &&
+                              "bg-violet/[.025] shadow-[inset_2px_0_0_var(--app-ai)]",
+                            // Amber already means "AI review finding" in this
+                            // file, and is the one tint not already spoken for by
+                            // the line picker, the composer, additions or
+                            // deletions. Both of those still win over it below.
+                            findingLine === lineNumber &&
+                              "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+                            selectedLine === lineNumber && "bg-violet/[.055]",
+                            keyboardLine === lineNumber &&
+                              "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                            aiQuestionPreviewLine === lineNumber &&
+                              "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
+                          )}
+                        >
+                          {isUnitLine && activeUnit.kind !== "binary" ? (
+                            <span
+                              className={cn(
+                                "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
+                                isChangedLine &&
+                                  "bg-addition/[.11] text-addition",
+                              )}
+                            >
+                              <AskAiLineButton
+                                line={lineNumber}
+                                onAsk={openAiQuestionAt}
+                                visible={aiQuestionLine === lineNumber}
+                              />
+                              <button
+                                type="button"
+                                aria-label={`Comment on line ${lineNumber}`}
+                                aria-pressed={selectedLine === lineNumber}
+                                onClick={() => {
+                                  setKeyboardLine(undefined);
+                                  setSelectedLine((current) =>
+                                    current === lineNumber
+                                      ? undefined
+                                      : lineNumber,
+                                  );
+                                  setFeedback("");
+                                }}
+                                className="hover:text-violet flex items-center gap-1 transition"
+                              >
+                                <MessageSquareText
+                                  className={cn(
+                                    "size-3 transition-opacity",
+                                    selectedLine === lineNumber ||
+                                      keyboardLine === lineNumber
+                                      ? "text-cyan opacity-100"
+                                      : "opacity-0 group-hover:opacity-100",
+                                  )}
+                                />
+                                <span>{lineNumber}</span>
+                              </button>
                             </span>
-                            <pre className="syntax-code overflow-visible text-cloud/80 line-through opacity-80">
-                              {line.tokens.length
-                                ? line.tokens.map((token, tokenIndex) => (
+                          ) : (
+                            <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
+                              {lineNumber}
+                            </span>
+                          )}
+                          <pre className="syntax-code overflow-visible text-cloud/80">
+                            {line.tokens.length
+                              ? line.tokens.map((token, tokenIndex) => {
+                                  const importReference = importReferences.find(
+                                    (reference) =>
+                                      reference.from >= token.from &&
+                                      reference.to <= token.to,
+                                  );
+                                  const resolutionKey = importReference
+                                    ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
+                                    : undefined;
+                                  return importReference ? (
+                                    <button
+                                      type="button"
+                                      key={`${tokenIndex}-${token.text.length}`}
+                                      aria-label={`Open ${importReference.local} from ${importReference.specifier}`}
+                                      title={`Open ${importReference.specifier}`}
+                                      disabled={
+                                        resolvingImport === resolutionKey
+                                      }
+                                      onClick={() =>
+                                        void followImport(importReference)
+                                      }
+                                      className={cn(
+                                        "text-cyan decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
+                                        token.className,
+                                        resolvingImport === resolutionKey &&
+                                          "animate-pulse cursor-wait",
+                                      )}
+                                    >
+                                      {token.text}
+                                    </button>
+                                  ) : isPeekableToken(token) ? (
+                                    <span
+                                      key={`${tokenIndex}-${token.text.length}`}
+                                      {...{
+                                        [SYMBOL_PEEK_ATTRIBUTE]: token.text,
+                                        [SYMBOL_PEEK_LINE_ATTRIBUTE]:
+                                          lineNumber,
+                                      }}
+                                      className={cn(
+                                        "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
+                                        token.className,
+                                      )}
+                                    >
+                                      {token.text}
+                                    </span>
+                                  ) : (
                                     <span
                                       key={`${tokenIndex}-${token.text.length}`}
                                       className={token.className || undefined}
                                     >
                                       {token.text}
                                     </span>
-                                  ))
-                                : " "}
-                            </pre>
-                          </div>
-                        );
-                      })}
-                    <div
-                      id={`review-line-${lineNumber}`}
-                      className={cn(
-                        "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
-                        contextVisible &&
-                          isUnitLine &&
-                          "border-l-cyan/35 bg-cyan/[.012]",
-                        isChangedLine &&
-                          "border-l-addition/45 bg-addition/[.075] hover:bg-addition/[.105]",
-                        isContextLine &&
-                          "bg-surface-subtle/15 opacity-55 hover:opacity-80",
-                        coveringExplanations.length > 0 &&
-                          "bg-violet/[.025] shadow-[inset_2px_0_0_var(--app-ai)]",
-                        // Amber already means "AI review finding" in this
-                        // file, and is the one tint not already spoken for by
-                        // the line picker, the composer, additions or
-                        // deletions. Both of those still win over it below.
-                        findingLine === lineNumber &&
-                          "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
-                        selectedLine === lineNumber && "bg-violet/[.055]",
-                        keyboardLine === lineNumber &&
-                          "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                        aiQuestionPreviewLine === lineNumber &&
-                          "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
-                      )}
-                    >
-                      {isUnitLine && activeUnit.kind !== "binary" ? (
-                        <span
-                          className={cn(
-                            "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
-                            isChangedLine && "bg-addition/[.11] text-addition",
-                          )}
-                        >
-                          <AskAiLineButton
-                            line={lineNumber}
-                            onAsk={openAiQuestionAt}
-                            visible={aiQuestionLine === lineNumber}
-                          />
-                          <button
-                            type="button"
-                            aria-label={`Comment on line ${lineNumber}`}
-                            aria-pressed={selectedLine === lineNumber}
-                            onClick={() => {
-                              setKeyboardLine(undefined);
-                              setSelectedLine((current) =>
-                                current === lineNumber ? undefined : lineNumber,
-                              );
-                              setFeedback("");
-                            }}
-                            className="hover:text-violet flex items-center gap-1 transition"
-                          >
-                            <MessageSquareText
-                              className={cn(
-                                "size-3 transition-opacity",
-                                selectedLine === lineNumber ||
-                                  keyboardLine === lineNumber
-                                  ? "text-cyan opacity-100"
-                                  : "opacity-0 group-hover:opacity-100",
-                              )}
+                                  );
+                                })
+                              : " "}
+                          </pre>
+                        </div>
+                        {isUnitLine && renderReviewLineDetails(lineNumber)}
+                        {contextAfter > 0 &&
+                          lineNumber === activeUnit.endLine && (
+                            <ReviewScopeMarker
+                              edge="end"
+                              line={activeUnit.endLine}
                             />
-                            <span>{lineNumber}</span>
-                          </button>
-                        </span>
-                      ) : (
-                        <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
-                          {lineNumber}
-                        </span>
-                      )}
-                      <pre className="syntax-code overflow-visible text-cloud/80">
-                        {line.tokens.length
-                          ? line.tokens.map((token, tokenIndex) => {
-                              const importReference = importReferences.find(
-                                (reference) =>
-                                  reference.from >= token.from &&
-                                  reference.to <= token.to,
-                              );
-                              const resolutionKey = importReference
-                                ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
-                                : undefined;
-                              return importReference ? (
-                                <button
-                                  type="button"
-                                  key={`${tokenIndex}-${token.text.length}`}
-                                  aria-label={`Open ${importReference.local} from ${importReference.specifier}`}
-                                  title={`Open ${importReference.specifier}`}
-                                  disabled={resolvingImport === resolutionKey}
-                                  onClick={() =>
-                                    void followImport(importReference)
-                                  }
-                                  className={cn(
-                                    "text-cyan decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
-                                    token.className,
-                                    resolvingImport === resolutionKey &&
-                                      "animate-pulse cursor-wait",
-                                  )}
-                                >
-                                  {token.text}
-                                </button>
-                              ) : isPeekableToken(token) ? (
-                                <span
-                                  key={`${tokenIndex}-${token.text.length}`}
-                                  {...{
-                                    [SYMBOL_PEEK_ATTRIBUTE]: token.text,
-                                    [SYMBOL_PEEK_LINE_ATTRIBUTE]: lineNumber,
-                                  }}
-                                  className={cn(
-                                    "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
-                                    token.className,
-                                  )}
-                                >
-                                  {token.text}
-                                </span>
-                              ) : (
-                                <span
-                                  key={`${tokenIndex}-${token.text.length}`}
-                                  className={token.className || undefined}
-                                >
-                                  {token.text}
-                                </span>
-                              );
-                            })
-                          : " "}
-                      </pre>
+                          )}
+                      </Fragment>
+                    );
+                  })}
+                {!sideBySideVisible &&
+                  contextAvailable &&
+                  !fullFileVisible &&
+                  contextAfter < availableAfter && (
+                    <div className="mt-3 flex items-center gap-3 px-4 font-sans">
+                      <span className="h-px flex-1 bg-line" />
+                      <button
+                        type="button"
+                        onClick={revealContextBelow}
+                        className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                      >
+                        <ChevronDown className="size-3" />
+                        Show{" "}
+                        {Math.min(
+                          CONTEXT_PAGE_LINES,
+                          availableAfter - contextAfter,
+                        )}{" "}
+                        {contextAfter > 0 ? "more " : ""}lines below
+                        <ShortcutHint
+                          shortcut={reviewShortcuts.revealContextBelow}
+                          className="ml-1"
+                        />
+                      </button>
+                      <span className="h-px flex-1 bg-line" />
                     </div>
-                    {isUnitLine && renderReviewLineDetails(lineNumber)}
-                    {contextVisible && lineNumber === activeUnit.endLine && (
-                      <ReviewScopeMarker edge="end" line={activeUnit.endLine} />
-                    )}
-                  </Fragment>
-                );
-              })}
-            {!sideBySideVisible &&
-              contextAvailable &&
-              !fullFileVisible &&
-              contextAfter < availableAfter && (
-                <div className="mt-3 flex items-center gap-3 px-4 font-sans">
-                  <span className="h-px flex-1 bg-line" />
-                  <button
-                    type="button"
-                    onClick={revealContextBelow}
-                    className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
-                  >
-                    <ChevronDown className="size-3" />
-                    Show{" "}
-                    {Math.min(
-                      CONTEXT_PAGE_LINES,
-                      availableAfter - contextAfter,
-                    )}{" "}
-                    {contextAfter > 0 ? "more " : ""}lines below
-                    <ShortcutHint
-                      shortcut={reviewShortcuts.revealContextBelow}
-                      className="ml-1"
-                    />
-                  </button>
-                  <span className="h-px flex-1 bg-line" />
-                </div>
-              )}
+                  )}
+              </div>
+            </div>
             {activeConceptMembers
               .slice(activeConceptMemberIndex + 1)
               .map((member, memberOffset) => (
