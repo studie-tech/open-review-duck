@@ -19,6 +19,7 @@ import {
   MessageCircleQuestionMark,
   MessageSquareText,
   Pencil,
+  RefreshCw,
   Send,
   Sparkles,
   Trash2,
@@ -516,6 +517,67 @@ export function ReviewCodeViewSwitch({
         <span className="hidden lg:inline">Diff</span>
       </button>
     </fieldset>
+  );
+}
+
+export const REVISION_NOTICE_DISMISS_MS = 10_000;
+
+/**
+ * Explains a newly loaded pull-request revision and then gets out of the way.
+ *
+ * The banner has to stay readable, but it is not a decision: after ten seconds
+ * the reviewer has either absorbed it or is already in the code. The button
+ * shows the remaining seconds so the auto-dismiss is not a surprise.
+ */
+export function ReviewRevisionLoadedNotice({
+  children,
+  onAcknowledge,
+}: {
+  children: ReactNode;
+  onAcknowledge: () => void;
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(
+    Math.ceil(REVISION_NOTICE_DISMISS_MS / 1000),
+  );
+  const acknowledge = useRef(onAcknowledge);
+  acknowledge.current = onAcknowledge;
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const tick = window.setInterval(() => {
+      const remainingMs = REVISION_NOTICE_DISMISS_MS - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        window.clearInterval(tick);
+        acknowledge.current();
+        return;
+      }
+      setSecondsLeft(Math.ceil(remainingMs / 1000));
+    }, 250);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  return (
+    <div
+      role="status"
+      className="border-cyan/20 bg-cyan/[.045] flex shrink-0 items-start gap-3 border-b px-4 py-3 sm:items-center sm:px-6"
+    >
+      <RefreshCw className="text-cyan mt-0.5 size-4 shrink-0 sm:mt-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-cloud text-xs font-medium">
+          New pull-request revision loaded
+        </p>
+        <p className="text-mist mt-0.5 text-[10px] leading-4">{children}</p>
+      </div>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="shrink-0 tabular-nums"
+        aria-label={`Got it, dismissing in ${secondsLeft} ${secondsLeft === 1 ? "second" : "seconds"}`}
+        onClick={() => acknowledge.current()}
+      >
+        Got it · {secondsLeft}s
+      </Button>
+    </div>
   );
 }
 

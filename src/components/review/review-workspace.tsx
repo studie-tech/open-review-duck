@@ -894,6 +894,7 @@ import {
   ReviewConceptMemberPreview,
   ReviewHierarchyDialog,
   ReviewPathUnit,
+  ReviewRevisionLoadedNotice,
   ReviewScopeMarker,
   ReviewUnitViewOptions,
   relatedReviewRanges,
@@ -6192,38 +6193,19 @@ export function ReviewWorkspace({
       )}
 
       {revisionNotice && (
-        <div
-          role="status"
-          className="border-cyan/20 bg-cyan/[.045] flex shrink-0 items-start gap-3 border-b px-4 py-3 sm:items-center sm:px-6"
-        >
-          <RefreshCw className="text-cyan mt-0.5 size-4 shrink-0 sm:mt-0" />
-          <div className="min-w-0 flex-1">
-            <p className="text-cloud text-xs font-medium">
-              New pull-request revision loaded
-            </p>
-            <p className="text-mist mt-0.5 text-[10px] leading-4">
-              {revisionNotice.previous &&
-              revisionNotice.previous.headSha !== initialData.snapshot.headSha
-                ? `${providerLabel(initialData.pullRequest.provider)} moved from ${shortRevision(revisionNotice.previous.headSha)} to ${shortRevision(initialData.snapshot.headSha)}. `
-                : `Review analysis was recomputed for ${shortRevision(initialData.snapshot.headSha)}. `}
-              {revisionReReviewCount > 0
-                ? `${revisionReReviewCount} previously reviewed ${revisionReReviewCount === 1 ? "unit changed" : "units changed"} and ${revisionReReviewCount === 1 ? "needs" : "need"} another look. `
-                : "No reviewed units were reopened. "}
-              {revisionPreservedCount > 0 &&
-                `${revisionPreservedCount} unaffected ${revisionPreservedCount === 1 ? "sign-off was" : "sign-offs were"} preserved. `}
-              Only a new source or analysis revision can change review state;
-              interface updates cannot.
-            </p>
-          </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="shrink-0"
-            onClick={acknowledgeLoadedRevision}
-          >
-            Got it
-          </Button>
-        </div>
+        <ReviewRevisionLoadedNotice onAcknowledge={acknowledgeLoadedRevision}>
+          {revisionNotice.previous &&
+          revisionNotice.previous.headSha !== initialData.snapshot.headSha
+            ? `${providerLabel(initialData.pullRequest.provider)} moved from ${shortRevision(revisionNotice.previous.headSha)} to ${shortRevision(initialData.snapshot.headSha)}. `
+            : `Review analysis was recomputed for ${shortRevision(initialData.snapshot.headSha)}. `}
+          {revisionReReviewCount > 0
+            ? `${revisionReReviewCount} previously reviewed ${revisionReReviewCount === 1 ? "unit changed" : "units changed"} and ${revisionReReviewCount === 1 ? "needs" : "need"} another look. `
+            : "No reviewed units were reopened. "}
+          {revisionPreservedCount > 0 &&
+            `${revisionPreservedCount} unaffected ${revisionPreservedCount === 1 ? "sign-off was" : "sign-offs were"} preserved. `}
+          Only a new source or analysis revision can change review state;
+          interface updates cannot.
+        </ReviewRevisionLoadedNotice>
       )}
 
       <div
