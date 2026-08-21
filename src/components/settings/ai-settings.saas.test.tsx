@@ -101,7 +101,14 @@ describe("SaasAiSettings", () => {
       }),
     ).toBeVisible();
     expect(screen.getByText("12,500")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Plans" })).toBeVisible();
     expect(screen.getByTestId("clerk-pricing-table")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Monthly token usage" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Assistant preferences" }),
+    ).toBeVisible();
     expect(screen.queryByText("Managed model")).not.toBeInTheDocument();
     expect(screen.queryByText(/Big Pickle/)).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox")).toBeDisabled();
@@ -175,5 +182,8 @@ describe("SaasAiSettings", () => {
       screen.queryByText(/Pull-request review is a Pro capability/),
     ).not.toBeInTheDocument();
     expect(screen.queryByTestId("clerk-pricing-table")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Plans" }),
+    ).not.toBeInTheDocument();
   });
 });
