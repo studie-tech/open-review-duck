@@ -123,6 +123,7 @@ export function semanticClusterJobInput(input: {
   layoutVersion: number;
   userId: string;
   subscribed: boolean;
+  planTier?: import("~/server/ai/plan").ManagedAiPlanTier;
 }) {
   return {
     pullRequestId: input.pullRequestId,
@@ -130,5 +131,6 @@ export function semanticClusterJobInput(input: {
     layoutKey: `${input.layoutId}:${input.layoutVersion}`,
     userId: input.userId,
     subscribed: input.subscribed,
+    planTier: input.planTier,
   };
 }

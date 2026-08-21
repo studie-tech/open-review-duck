@@ -16,9 +16,9 @@ import {
   resolveLocalAiCredentials,
 } from "~/server/ai/local-configuration";
 import {
+  managedAiPlanTier,
   managedAiPlanUsage,
   managedSaasModel,
-  PAID_AI_FEATURE,
 } from "~/server/ai/plan";
 import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
@@ -122,7 +122,7 @@ export const aiRouter = createTRPCRouter({
       // auto-start effect that fires on every pull-request page load. Without
       // it an unentitled account would issue a mutation that can only fail.
       deepReviewAvailable: deepReviewAvailable(
-        ctx.auth.has({ feature: PAID_AI_FEATURE }),
+        managedAiPlanTier((feature) => ctx.auth.has({ feature })) !== "free",
       ),
       managedModel,
       managedModels: [managedModel],
@@ -147,9 +147,10 @@ export const aiRouter = createTRPCRouter({
 
   planUsage: protectedProcedure.query(async ({ ctx }) => {
     if (isLocalDeployment()) return null;
+    const tier = managedAiPlanTier((feature) => ctx.auth.has({ feature }));
     return managedAiPlanUsage(ctx.db, {
       userId: ctx.auth.userId,
-      subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
+      tier,
     });
   }),
 
@@ -446,10 +447,14 @@ export const aiRouter = createTRPCRouter({
           20,
           60_000,
         );
+        const planTier = managedAiPlanTier((feature) =>
+          ctx.auth.has({ feature }),
+        );
         const job = await createAiJob(ctx.db, {
           ...input,
           userId: ctx.auth.userId,
-          subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
+          subscribed: planTier !== "free",
+          planTier,
         });
         const run = await scheduleAiJob(ctx.db, job.id);
         return { ...job, workflowRunId: run.workflowRunId };

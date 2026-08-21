@@ -8,7 +8,9 @@ import {
   CircleCheck,
   CircleDot,
   Clock3,
+  Columns2,
   ExternalLink,
+  FileCode2,
   FolderInput,
   GitBranch,
   GripVertical,
@@ -169,6 +171,7 @@ export function ReviewConceptMemberHeader({
   index,
   count,
   selected,
+  actions,
   onSelect,
   expanded,
   onToggleExpanded,
@@ -177,6 +180,7 @@ export function ReviewConceptMemberHeader({
   index: number;
   count: number;
   selected: boolean;
+  actions?: ReactNode;
   onSelect?: () => void;
   expanded?: boolean;
   onToggleExpanded?: () => void;
@@ -192,6 +196,7 @@ export function ReviewConceptMemberHeader({
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-2 text-[9px]">
+        {actions}
         <span className="text-fog">
           Unit {index + 1}/{count}
         </span>
@@ -255,6 +260,62 @@ export function ReviewConceptMemberHeader({
         </button>
       )}
     </div>
+  );
+}
+
+/** Keeps optional file context scoped to the review unit it explains. */
+export function ReviewUnitViewOptions({
+  importsVisible,
+  fullFileVisible,
+  importsDisabled = false,
+  fullFileDisabled = false,
+  onToggleImports,
+  onToggleFullFile,
+}: {
+  importsVisible: boolean;
+  fullFileVisible: boolean;
+  importsDisabled?: boolean;
+  fullFileDisabled?: boolean;
+  onToggleImports: () => void;
+  onToggleFullFile: () => void;
+}) {
+  return (
+    <span className="flex items-center gap-1 font-sans">
+      <button
+        type="button"
+        aria-pressed={importsVisible}
+        aria-label="Show imports for this unit"
+        title="Show imports declared elsewhere in this file"
+        disabled={importsDisabled}
+        onClick={onToggleImports}
+        className={cn(
+          "flex h-6 items-center gap-1 rounded-md border px-1.5 text-[9px] transition disabled:cursor-not-allowed disabled:opacity-35",
+          importsVisible
+            ? "border-cyan/35 bg-cyan/10 text-cyan"
+            : "border-line text-fog hover:border-cyan/25 hover:text-cyan",
+        )}
+      >
+        <ArrowUpFromLine className="size-3" aria-hidden="true" />
+        <span className="hidden xl:inline">Imports</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={fullFileVisible}
+        aria-label="Show the full file for this unit"
+        title="Show the complete file instead of the focused unit"
+        disabled={fullFileDisabled}
+        onClick={onToggleFullFile}
+        className={cn(
+          "flex h-6 items-center gap-1 rounded-md border px-1.5 text-[9px] transition disabled:cursor-not-allowed disabled:opacity-35",
+          fullFileVisible
+            ? "border-cyan/35 bg-cyan/10 text-cyan"
+            : "border-line text-fog hover:border-cyan/25 hover:text-cyan",
+        )}
+      >
+        <FileCode2 className="size-3" aria-hidden="true" />
+        <span className="hidden xl:inline">Full file</span>
+      </button>
+    </span>
   );
 }
 
@@ -409,6 +470,53 @@ export interface SplitAction {
   label: string;
   onSelect: () => void;
   shortcut: KeyboardShortcut;
+}
+
+/** Makes the two source representations explicit instead of hiding them in one icon. */
+export function ReviewCodeViewSwitch({
+  diffVisible,
+  onChange,
+}: {
+  diffVisible: boolean;
+  onChange: (diffVisible: boolean) => void;
+}) {
+  return (
+    <fieldset className="flex h-8 shrink-0 items-center rounded-lg border border-line bg-surface/25 p-0.5">
+      <legend className="sr-only">Code view</legend>
+      <button
+        type="button"
+        aria-pressed={!diffVisible}
+        aria-label="Focus view"
+        title="Focus view: read the pull-request source with supporting imports and surrounding lines"
+        onClick={() => onChange(false)}
+        className={cn(
+          "flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] transition",
+          !diffVisible
+            ? "bg-cyan/15 text-cyan shadow-sm"
+            : "text-mist hover:bg-surface-hover hover:text-cloud",
+        )}
+      >
+        <FileCode2 className="size-3.5" aria-hidden="true" />
+        <span className="hidden lg:inline">Focus</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={diffVisible}
+        aria-label="Diff view"
+        title="Diff view: compare the base and pull-request versions line by line"
+        onClick={() => onChange(true)}
+        className={cn(
+          "flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] transition",
+          diffVisible
+            ? "bg-cyan/15 text-cyan shadow-sm"
+            : "text-mist hover:bg-surface-hover hover:text-cloud",
+        )}
+      >
+        <Columns2 className="size-3.5" aria-hidden="true" />
+        <span className="hidden lg:inline">Diff</span>
+      </button>
+    </fieldset>
+  );
 }
 
 /**
@@ -1528,6 +1636,7 @@ interface SideBySideUnitDiffProps {
   selectedLine?: number;
   keyboardLine?: number;
   findingLine?: number;
+  expanded?: boolean;
   onSelectReviewLine: (line: number) => void;
   onAskReviewLine?: (line: number) => void;
   renderLineDetails?: (line: number) => ReactNode;
@@ -1622,6 +1731,7 @@ export const SideBySideUnitDiff = forwardRef<
     selectedLine,
     keyboardLine,
     findingLine,
+    expanded = false,
     onSelectReviewLine,
     onAskReviewLine,
     renderLineDetails,
@@ -1722,11 +1832,12 @@ export const SideBySideUnitDiff = forwardRef<
   ]);
   const [contextBeforeRows, setContextBeforeRows] = useState(0);
   const [contextAfterRows, setContextAfterRows] = useState(0);
-  const visibleRowStart = Math.max(0, focusRange.start - contextBeforeRows);
-  const visibleRowEnd = Math.min(
-    rows.length,
-    focusRange.end + contextAfterRows,
-  );
+  const visibleRowStart = expanded
+    ? 0
+    : Math.max(0, focusRange.start - contextBeforeRows);
+  const visibleRowEnd = expanded
+    ? rows.length
+    : Math.min(rows.length, focusRange.end + contextAfterRows);
   const visibleRows = useMemo(
     () => rows.slice(visibleRowStart, visibleRowEnd),
     [rows, visibleRowEnd, visibleRowStart],
@@ -1743,6 +1854,13 @@ export const SideBySideUnitDiff = forwardRef<
     (row) => row.kind !== "unchanged",
   );
   const compactRows = useMemo(() => {
+    if (expanded) {
+      return visibleRows.map((row, rowIndex) => ({
+        kind: "row" as const,
+        row,
+        rowIndex,
+      }));
+    }
     const focusStart = Math.max(0, focusRange.start - visibleRowStart);
     const focusEnd = Math.min(
       visibleRows.length,
@@ -1768,6 +1886,7 @@ export const SideBySideUnitDiff = forwardRef<
     });
   }, [
     explicitFocusHasDiff,
+    expanded,
     focusRange.end,
     focusRange.ownRegions,
     focusRange.start,
@@ -3189,7 +3308,7 @@ export function ExplanationLoader({ unitKind }: { unitKind: string }) {
   );
 }
 
-/** Renders file imports as relevance-aware context for the active unit. */
+/** Renders file imports as relevance-aware context for the focused unit view. */
 export function UnitImportContext({
   fileSource,
   previousFileSource,
@@ -3201,6 +3320,7 @@ export function UnitImportContext({
   previousVisibleStartLine,
   previousVisibleEndLine,
   resolvingImport,
+  continued = false,
   onFollow,
 }: {
   fileSource: string;
@@ -3213,6 +3333,7 @@ export function UnitImportContext({
   previousVisibleStartLine?: number;
   previousVisibleEndLine?: number;
   resolvingImport?: string;
+  continued?: boolean;
   onFollow: (reference: ImportReference) => void;
 }) {
   const currentStatements = useImportStatements(fileSource, language);
@@ -3260,15 +3381,18 @@ export function UnitImportContext({
   return (
     <section
       aria-label="Imports for this unit"
-      className="mx-4 mb-3 overflow-hidden rounded-xl border border-line bg-surface/35 font-sans"
+      className={cn(
+        "mx-4 -mt-px overflow-hidden border-x border-b border-line bg-surface/35 font-sans",
+        continued ? undefined : "mb-3 rounded-b-xl",
+      )}
     >
       <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
         <span className="text-fog flex items-center gap-2 text-[9px] font-semibold tracking-[.12em] uppercase">
           <ArrowUpFromLine className="text-cyan size-3" aria-hidden="true" />
-          Imports this unit uses
+          Imports
         </span>
         <span className="text-fog shrink-0 text-[9px]">
-          Declared elsewhere in this file
+          Declared outside this unit · used names highlighted
         </span>
       </header>
       {pairs.map((pair) => (

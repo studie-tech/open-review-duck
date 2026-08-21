@@ -48,7 +48,7 @@ import {
   definitionIsWhereTheNameWasRead,
   SYMBOL_PEEK_MAXIMUM_LINES,
 } from "~/lib/symbol-peek";
-import { PAID_AI_FEATURE } from "~/server/ai/plan";
+import { managedAiPlanTier } from "~/server/ai/plan";
 import {
   proposeSemanticConceptLayout,
   SEMANTIC_CLUSTER_TIMED_OUT,
@@ -4248,10 +4248,14 @@ export const reviewRouter = createTRPCRouter({
         60 * 60_000,
       );
       try {
+        const planTier = managedAiPlanTier((feature) =>
+          ctx.auth.has({ feature }),
+        );
         return await proposeSemanticConceptLayout(ctx.db, {
           ...input,
           userId: ctx.auth.userId,
-          subscribed: ctx.auth.has({ feature: PAID_AI_FEATURE }),
+          subscribed: planTier !== "free",
+          planTier,
         });
       } catch (cause) {
         console.error("Semantic review grouping failed", cause);

@@ -27,6 +27,8 @@ import {
   ProviderConversationHistory,
   PullRequestDetailsDialog,
   ReviewConceptMemberPreview,
+  ReviewCodeViewSwitch,
+  ReviewUnitViewOptions,
   rememberAiConversationVisibility,
   reviewShortcuts,
   SideBySideUnitDiff,
@@ -89,6 +91,54 @@ describe("review shortcuts", () => {
   it("steps through review findings on the bracket keys", () => {
     expect(reviewShortcuts.nextFinding).toEqual([{ key: "]" }]);
     expect(reviewShortcuts.previousFinding).toEqual([{ key: "[" }]);
+  });
+});
+
+describe("ReviewCodeViewSwitch", () => {
+  it("names both representations and reports the selected one", async () => {
+    const onChange = vi.fn();
+    render(<ReviewCodeViewSwitch diffVisible onChange={onChange} />);
+
+    expect(screen.getByRole("button", { name: "Focus view" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Diff view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Focus view" }));
+    expect(onChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("ReviewUnitViewOptions", () => {
+  it("keeps both unit context options off until explicitly enabled", async () => {
+    const onToggleImports = vi.fn();
+    const onToggleFullFile = vi.fn();
+    render(
+      <ReviewUnitViewOptions
+        importsVisible={false}
+        fullFileVisible={false}
+        onToggleImports={onToggleImports}
+        onToggleFullFile={onToggleFullFile}
+      />,
+    );
+
+    const imports = screen.getByRole("button", {
+      name: "Show imports for this unit",
+    });
+    const fullFile = screen.getByRole("button", {
+      name: "Show the full file for this unit",
+    });
+    expect(imports).toHaveAttribute("aria-pressed", "false");
+    expect(fullFile).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(imports);
+    await userEvent.click(fullFile);
+    expect(onToggleImports).toHaveBeenCalledOnce();
+    expect(onToggleFullFile).toHaveBeenCalledOnce();
   });
 });
 
@@ -1823,6 +1873,43 @@ describe("SideBySideUnitDiff", () => {
 
     expect(diff).toHaveTextContent("distant before 15");
     expect(diff).toHaveTextContent("distant after 15");
+  });
+
+  it("shows the entire file without collapsed gaps when expanded", () => {
+    const before = Array.from(
+      { length: 30 },
+      (_, index) => `distant before ${index}`,
+    );
+    const after = Array.from(
+      { length: 30 },
+      (_, index) => `distant after ${index}`,
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource={[...before, "old behavior", ...after].join("\n")}
+        currentSource={[...before, "new behavior", ...after].join("\n")}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={31}
+        previousFocusEndLine={31}
+        currentFocusStartLine={31}
+        currentFocusEndLine={31}
+        expanded
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const diff = screen.getByRole("region", {
+      name: "Side-by-side code diff",
+    });
+    expect(diff).toHaveTextContent("distant before 0");
+    expect(diff).toHaveTextContent("distant before 15");
+    expect(diff).toHaveTextContent("distant after 15");
+    expect(diff).toHaveTextContent("distant after 29");
+    expect(
+      screen.queryByRole("button", { name: /Show .* lines/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("reveals surrounding file context in pages without making it commentable", async () => {

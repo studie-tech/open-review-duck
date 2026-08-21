@@ -17,6 +17,13 @@ type Configuration = RouterOutputs["ai"]["configuration"];
 type PlanUsage = NonNullable<RouterOutputs["ai"]["planUsage"]>;
 type AssistanceMode = Configuration["mode"];
 
+const planDetails = {
+  free: { name: "Free", monthlyPrice: null },
+  pro: { name: "Pro", monthlyPrice: 20 },
+  scale: { name: "Scale", monthlyPrice: 100 },
+  ultra: { name: "Ultra", monthlyPrice: 200 },
+} as const;
+
 /** Renders SaaS AI preferences, monthly usage, and Clerk subscription controls. */
 export function SaasAiSettings({
   initialConfiguration,
@@ -40,6 +47,7 @@ export function SaasAiSettings({
     refetchOnWindowFocus: true,
   });
   const usage = planUsage.data ?? initialPlanUsage;
+  const currentPlan = planDetails[usage.tier];
   const usagePercent = Math.min(
     100,
     Math.round((usage.usedTokens / usage.limitTokens) * 100),
@@ -91,7 +99,7 @@ export function SaasAiSettings({
         ) : (
           <Button asChild variant="secondary" className="w-full sm:w-auto">
             <a href="#plans">
-              View Pro plan <ArrowUpRight className="size-4" />
+              View plans <ArrowUpRight className="size-4" />
             </a>
           </Button>
         )}
@@ -153,7 +161,7 @@ export function SaasAiSettings({
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <p className="text-2xl font-semibold tracking-tight">
-                {usage.subscribed ? "Pro" : "Free"}
+                {currentPlan.name}
               </p>
               <Badge
                 className={
@@ -166,8 +174,8 @@ export function SaasAiSettings({
               </Badge>
             </div>
             <p className="text-fog mt-2 text-xs leading-5">
-              {usage.subscribed
-                ? `${planTokenLimit} managed AI tokens each month for $20 USD.`
+              {currentPlan.monthlyPrice
+                ? `${planTokenLimit} managed AI tokens each month for $${currentPlan.monthlyPrice} USD.`
                 : `${planTokenLimit} managed AI tokens included each month.`}
             </p>
           </article>
@@ -299,8 +307,9 @@ export function SaasAiSettings({
             <div className="bg-surface/70 overflow-x-auto rounded-2xl border border-line p-5 sm:p-6">
               <h2 className="text-base font-medium">Plans</h2>
               <p className="text-mist mt-1 text-sm leading-6">
-                Upgrade securely through Clerk for 5 million tokens every month.
-                Cancel from this page at any time.
+                Choose 20 million, 200 million, or 1 billion managed AI tokens
+                per month. Plans start at $20 USD and can be managed here at any
+                time.
               </p>
               <div className="mt-5">
                 <PricingTable

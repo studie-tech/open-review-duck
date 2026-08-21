@@ -156,8 +156,8 @@ describe("SaasAiSettings", () => {
           tier: "pro",
           subscribed: true,
           usedTokens: 500_000,
-          limitTokens: 5_000_000,
-          remainingTokens: 4_500_000,
+          limitTokens: 20_000_000,
+          remainingTokens: 19_500_000,
           resetsAt: new Date("2026-09-01T00:00:00Z"),
         }}
       />,
@@ -165,7 +165,7 @@ describe("SaasAiSettings", () => {
 
     expect(screen.getByText("Pro")).toBeVisible();
     expect(
-      screen.getByText("5,000,000 managed AI tokens each month for $20 USD."),
+      screen.getByText("20,000,000 managed AI tokens each month for $20 USD."),
     ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Manage subscription" }),
