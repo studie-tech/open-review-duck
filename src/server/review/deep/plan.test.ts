@@ -336,6 +336,34 @@ describe("sealReviewPlan", () => {
     expect(fake.items()).toHaveLength(2);
   });
 
+  it("replays a repository-only compliance survey without duplicating it", async () => {
+    const rule = {
+      id: "rule-1",
+      version: 1,
+      title: "Layer boundaries",
+      instruction: "Routers may not import persistence adapters directly.",
+      pathGlob: "**/*",
+      scope: "repository",
+      severity: "high",
+    };
+    const fake = createFakeDatabase([{ path: "src/router.ts" }], {
+      reviewScope: "repository_snapshot",
+      reviewPurpose: "compliance",
+      reviewRules: [rule],
+      ruleConfigDigest: "c".repeat(64),
+    });
+
+    const first = await sealReviewPlan(fake.db, PARENT_ID);
+    const jobCount = fake.jobs().length;
+    const second = await sealReviewPlan(fake.db, PARENT_ID);
+
+    expect(first.items).toEqual([]);
+    expect(first.terminalState).toBeNull();
+    expect(first.surveyJobId).not.toBeNull();
+    expect(second.surveyJobId).toBe(first.surveyJobId);
+    expect(fake.jobs()).toHaveLength(jobCount);
+  });
+
   it("counts the denominator by dispatch, not by item state", async () => {
     const fake = createFakeDatabase([{ path: "src/a.ts" }]);
 

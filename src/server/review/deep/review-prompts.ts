@@ -49,6 +49,7 @@ export interface ScoutPromptInput {
   unitManifest: readonly DeepReviewPromptUnit[];
   pullRequest: DeepReviewPullRequestContext;
   planCheckpoints?: readonly DeepReviewPlanCheckpoint[];
+  reviewScope?: "pull_request" | "repository_snapshot";
 }
 
 export type PlanPromptInput = Omit<ScoutPromptInput, "planCheckpoints">;
@@ -104,6 +105,8 @@ export interface SurveyPromptInput {
   units: readonly SurveyPromptUnit[];
   dependencies: readonly SurveyPromptDependencyEdge[];
   fileFindings?: readonly SurveyPromptFileFinding[];
+  reviewScope?: "pull_request" | "repository_snapshot";
+  reviewChecklist?: string;
 }
 
 export interface DedupePromptFinding {
@@ -251,7 +254,16 @@ function planCheckpointBlock(
 }
 
 /** Describes what a change type means so the scout reviews the right direction. */
-function changeTypeGuidance(changeType: string) {
+function changeTypeGuidance(
+  changeType: string,
+  reviewScope: ScoutPromptInput["reviewScope"] = "pull_request",
+) {
+  if (reviewScope === "repository_snapshot") {
+    if (changeType.trim().toLowerCase() === "deleted") {
+      return "This file was removed since the preceding monitored revision. Review whether the repository still depends on the removed behavior. Quote existing_code from the previous revision.";
+    }
+    return "This is the current monitored repository revision. The entire current file is in scope, including code unchanged since the preceding revision.";
+  }
   const normalized = changeType.trim().toLowerCase();
   if (normalized === "deleted") {
     return "This file is deleted by the pull request. There is no current revision. Review the removal itself: what the rest of the codebase still expects from the removed code, and which guarantee disappears with it. Quote existing_code from the previous revision.";
@@ -281,12 +293,27 @@ report_finding contract:
 - title is one short sentence naming the defect. body states the triggering input or environment when the issue is conditional, then the concrete impact. Do not paste a patch into the body.
 - Pick the severity and category that fit the impact you can demonstrate, not the impact you can imagine.`;
 
+export const DEEP_REVIEW_REPOSITORY_SCOUT_SYSTEM_PROMPT = `You are ReviewDuck's read-only repository reviewer. You review exactly one file from a complete monitored repository snapshot.
+${UNTRUSTED_DATA_RULE}
+${READ_ONLY_RULE}
+Investigate before you report. Ground every material claim in source you actually read with read_file, search_code, or list_files. Do not invent files, symbols, or behavior.
+The entire current file is in scope. Read other files for context and look for evidence that would disprove a concern before reporting it. Report only issues the repository owner would plausibly fix.
+Follow the supplied review checklist exactly. For a compliance run, report only concrete violations of an explicit supplied rule; do not invent adjacent conventions. For a code audit, prioritize correctness, security, authorization, validation, concurrency, error handling, resource use, compatibility, and missing test coverage.
+Report each distinct issue exactly once with report_finding, then call finish_file. Prefer reporting nothing over low-confidence noise.
+
+report_finding contract:
+- existing_code is how a finding is placed. Copy the exact lines the issue is about, verbatim, from the revision you read. Never reformat, re-indent, elide, summarize, translate, or add a diff marker.
+- Keep existing_code to the smallest contiguous run of lines that identifies the issue. If several disjoint places are involved, quote the single most relevant one and describe the rest in the body.
+- Never report a line number. Position is resolved by matching the snippet against the file; a non-verbatim snippet becomes a file-level note.
+- title is one short sentence. body states the triggering input or violated rule and the concrete impact. Do not paste a patch into the body.
+- Pick the severity and category that fit the impact or configured rule severity you can demonstrate.`;
+
 /** Builds the per-file reviewer message for one selected file. */
 export function scoutUserPrompt(input: ScoutPromptInput) {
   return [
     pullRequestBlock(input.pullRequest),
     `<file-under-review${attribute("path", input.path)}${attribute("change-type", input.changeType)} />`,
-    changeTypeGuidance(input.changeType),
+    changeTypeGuidance(input.changeType, input.reviewScope),
     changedRangesBlock(input.changedRanges),
     unitManifestBlock(input.unitManifest),
     untrustedPayload("review-checklist", input.rulebookText),
@@ -313,12 +340,27 @@ Rules:
 - Do not assert that a defect exists. You are ranking where to look.
 - If nothing in the change warrants prioritizing, return {"checkpoints":[]}.`;
 
+export const DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT = `You are ReviewDuck's repository code-review planner. You do not review code; you decide where a reviewer should look first in one large file from a complete repository snapshot.
+${UNTRUSTED_DATA_RULE}
+You have no tools. Work only from the material in the user message.
+Return at most ${DEEP_REVIEW_PLAN_MAX_CHECKPOINTS} checkpoints, ordered by risk, highest first. Fewer is better than padded: a checkpoint that names no concrete risk is noise the reviewer has to discount.
+The entire current file is in scope. Consider established code as carefully as recently changed code. When the checklist contains custom compliance rules, rank only concrete risks of violating those rules.
+
+Respond with this JSON object and nothing else. No prose, no markdown fence.
+{"checkpoints":[{"focus":"what to examine","lines":"12-40","why":"the risk and its impact if it is real"}]}
+Rules:
+- focus names a concrete construct or behavior in the current file.
+- lines is a current-revision range like "12-40", or a single number.
+- why states the risk and the impact, not a summary of what the code does.
+- Do not assert that a defect or rule violation exists. You are ranking where to look.
+- If nothing in the file warrants prioritizing, return {"checkpoints":[]}.`;
+
 /** Builds the pre-scan planning message for one large changed file. */
 export function planUserPrompt(input: PlanPromptInput) {
   return [
     pullRequestBlock(input.pullRequest),
     `<file-under-review${attribute("path", input.path)}${attribute("change-type", input.changeType)} />`,
-    changeTypeGuidance(input.changeType),
+    changeTypeGuidance(input.changeType, input.reviewScope),
     changedRangesBlock(input.changedRanges),
     unitManifestBlock(input.unitManifest),
     untrustedPayload("review-checklist", input.rulebookText),
@@ -398,6 +440,18 @@ report_survey_finding contract:
 - Never report a line number. Each location is placed by matching its snippet against the file, so the snippet must appear verbatim.
 - title names the cross-file defect. body states how the two sides disagree and what happens at runtime because of it.`;
 
+export const DEEP_REVIEW_REPOSITORY_SURVEY_SYSTEM_PROMPT = `You are ReviewDuck's read-only whole-repository reviewer. Per-file agents have reviewed applicable files; you review repository-wide contracts, architecture, and explicit repository-scoped compliance rules.
+${UNTRUSTED_DATA_RULE}
+${READ_ONLY_RULE}
+You are given the complete monitored snapshot manifest, indexed units, dependency edges, and an optional review checklist. Read the source you need with read_file, search_code, and list_files.
+For a compliance run, report only demonstrable violations of the supplied repository-scoped rules. For a code audit, report only issues that need multiple files to establish: broken contracts, surviving callers of removed behavior, inconsistent authorization, schema/code mismatches, or cross-module invariants.
+Do not report mere similarity, coupling, preference, or a single-file issue already owned by a file agent. Report each distinct issue exactly once with report_survey_finding, then call finish_survey.
+
+report_survey_finding contract:
+- locations carries at least two entries, each with a path and verbatim existing_code copied from that file.
+- Never report line numbers. Each location is placed by matching the exact snippet.
+- title names the concrete repository-wide violation. body explains which sides disagree or which explicit rule is violated and the practical impact.`;
+
 /** Builds the whole-pull-request message for the cross-file survey agent. */
 export function surveyUserPrompt(input: SurveyPromptInput) {
   const files = input.files.map(
@@ -422,6 +476,9 @@ export function surveyUserPrompt(input: SurveyPromptInput) {
   );
   return [
     pullRequestBlock(input.pullRequest),
+    input.reviewChecklist
+      ? untrustedPayload("review-checklist", input.reviewChecklist)
+      : "<review-checklist>(use the standard defect checklist)</review-checklist>",
     files.length > 0
       ? ["<changed-files>", ...files, "</changed-files>"].join("\n")
       : "<changed-files>(no reviewable files)</changed-files>",
@@ -439,7 +496,9 @@ export function surveyUserPrompt(input: SurveyPromptInput) {
           "</untrusted-file-findings>",
         ].join("\n")
       : "The per-file reviewers reported nothing. That is not evidence the pull request is correct at its seams.",
-    "Read the files you need with the tools, then report every cross-file finding with report_survey_finding and call finish_survey when the pull request is covered.",
+    input.reviewScope === "repository_snapshot"
+      ? "Read the files you need with the tools, then report every defensible repository-wide finding with report_survey_finding and call finish_survey when the snapshot is covered."
+      : "Read the files you need with the tools, then report every cross-file finding with report_survey_finding and call finish_survey when the pull request is covered.",
   ].join("\n\n");
 }
 

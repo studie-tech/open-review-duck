@@ -13,6 +13,7 @@ import type {
   PullRequestListOptions,
   PullRequestProvider,
   PullRequestSummary,
+  RepositoryBranch,
   RepositoryIdentity,
 } from "./types";
 
@@ -69,6 +70,10 @@ interface AzureItem {
   path: string;
   gitObjectType?: "blob" | "tree";
   isFolder?: boolean;
+}
+interface AzureRef {
+  name: string;
+  objectId: string;
 }
 interface AzureHookSubscription {
   id: string;
@@ -146,6 +151,63 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       webUrl: repo.webUrl,
       isPrivate: true,
     }));
+  }
+  /** Lists every branch visible through the configured Azure credential. */
+  async listBranches(
+    repositoryExternalId: string,
+  ): Promise<RepositoryBranch[]> {
+    const [repository, refs] = await Promise.all([
+      providerFetch<AzureRepository>(
+        this.name,
+        `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}?api-version=7.1`,
+        { headers: this.headers },
+      ),
+      this.getAllPages<AzureRef>(
+        `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/refs?filter=heads/&api-version=7.1`,
+      ),
+    ]);
+    const defaultBranch = repository.defaultBranch?.replace("refs/heads/", "");
+    return refs.map((ref) => {
+      const name = ref.name.replace("refs/heads/", "");
+      const webUrl = new URL(repository.webUrl);
+      webUrl.searchParams.set("version", `GB${name}`);
+      return {
+        name,
+        sha: ref.objectId,
+        webUrl: webUrl.toString(),
+        isDefault: name === defaultBranch,
+      };
+    });
+  }
+
+  /** Resolves one Azure branch and rejects arbitrary refs. */
+  async getBranch(
+    repositoryExternalId: string,
+    branch: string,
+  ): Promise<RepositoryBranch> {
+    const [repository, refs] = await Promise.all([
+      providerFetch<AzureRepository>(
+        this.name,
+        `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}?api-version=7.1`,
+        { headers: this.headers },
+      ),
+      providerFetch<{ value: AzureRef[] }>(
+        this.name,
+        `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/refs?filter=${encodeURIComponent(`heads/${branch}`)}&api-version=7.1`,
+        { headers: this.headers },
+      ),
+    ]);
+    const exactName = `refs/heads/${branch}`;
+    const resolved = refs.value.find((ref) => ref.name === exactName);
+    if (!resolved) throw new Error(`Branch ${branch} was not found`);
+    const webUrl = new URL(repository.webUrl);
+    webUrl.searchParams.set("version", `GB${branch}`);
+    return {
+      name: branch,
+      sha: resolved.objectId,
+      webUrl: webUrl.toString(),
+      isDefault: repository.defaultBranch === exactName,
+    };
   }
   /** Creates the Azure service-hook subscriptions required for PR lifecycle events. */
   async ensureRepositoryWebhook(input: {

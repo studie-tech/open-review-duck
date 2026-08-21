@@ -13,6 +13,7 @@ import type {
   PullRequestListOptions,
   PullRequestProvider,
   PullRequestSummary,
+  RepositoryBranch,
   RepositoryIdentity,
 } from "./types";
 
@@ -61,6 +62,11 @@ interface GitLabChange {
 interface GitLabTreeEntry {
   path: string;
   type: "blob" | "tree";
+}
+interface GitLabBranch {
+  name: string;
+  web_url: string;
+  commit: { id: string };
 }
 interface GitLabProjectHook {
   id: number;
@@ -123,6 +129,54 @@ export class GitLabProvider implements PullRequestProvider {
       webUrl: project.web_url,
       isPrivate: project.visibility !== "public",
     }));
+  }
+  /** Lists every branch visible through the configured GitLab credential. */
+  async listBranches(
+    repositoryExternalId: string,
+  ): Promise<RepositoryBranch[]> {
+    const projectId = encodeURIComponent(repositoryExternalId);
+    const [project, branches] = await Promise.all([
+      providerFetch<GitLabProject>(
+        this.name,
+        `${this.apiUrl}/projects/${projectId}`,
+        { headers: this.headers },
+      ),
+      this.getAllPages<GitLabBranch>(
+        `${this.apiUrl}/projects/${projectId}/repository/branches?per_page=100`,
+      ),
+    ]);
+    return branches.map((branch) => ({
+      name: branch.name,
+      sha: branch.commit.id,
+      webUrl: branch.web_url,
+      isDefault: branch.name === project.default_branch,
+    }));
+  }
+
+  /** Resolves one GitLab branch and rejects arbitrary refs. */
+  async getBranch(
+    repositoryExternalId: string,
+    branch: string,
+  ): Promise<RepositoryBranch> {
+    const projectId = encodeURIComponent(repositoryExternalId);
+    const [project, resolved] = await Promise.all([
+      providerFetch<GitLabProject>(
+        this.name,
+        `${this.apiUrl}/projects/${projectId}`,
+        { headers: this.headers },
+      ),
+      providerFetch<GitLabBranch>(
+        this.name,
+        `${this.apiUrl}/projects/${projectId}/repository/branches/${encodeURIComponent(branch)}`,
+        { headers: this.headers },
+      ),
+    ]);
+    return {
+      name: resolved.name,
+      sha: resolved.commit.id,
+      webUrl: resolved.web_url,
+      isDefault: resolved.name === project.default_branch,
+    };
   }
   /** Creates one idempotent merge-request hook for an imported project. */
   async ensureRepositoryWebhook(input: {

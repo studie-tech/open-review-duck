@@ -73,13 +73,16 @@ export function deepReviewAvailable(subscribed: boolean) {
 }
 /** Estimates a conservative token reservation for one investigation. */
 function estimateAiReservation(
-  units: Array<{
-    source: string;
-    previousSource: string | null;
-    path: string;
-    name: string;
-    kind: string;
-  }>,
+  units: Array<
+    {
+      path: string;
+      name: string;
+      kind: string;
+    } & (
+      | { source: string; previousSource: string | null }
+      | { sourceBytes: number; previousSourceBytes: number }
+    )
+  >,
   kind: "explain" | "review" | "semantic_cluster",
   monthlyTokenLimit: number,
   priorConversationBytes: number,
@@ -89,16 +92,20 @@ function estimateAiReservation(
   const requestBytes =
     priorConversationBytes +
     questionBytes +
-    units.reduce(
-      (total, unit) =>
+    units.reduce((total, unit) => {
+      const sourceBytes =
+        "sourceBytes" in unit
+          ? unit.sourceBytes + unit.previousSourceBytes
+          : Buffer.byteLength(unit.source) +
+            Buffer.byteLength(unit.previousSource ?? "");
+      return (
         total +
-        Buffer.byteLength(unit.source) +
-        Buffer.byteLength(unit.previousSource ?? "") +
+        sourceBytes +
         Buffer.byteLength(unit.path) +
         Buffer.byteLength(unit.name) +
-        Buffer.byteLength(unit.kind),
-      0,
-    );
+        Buffer.byteLength(unit.kind)
+      );
+    }, 0);
   return managedInvestigationReservation({
     requestBytes,
     minimumInputBytes: priorConversationBytes + questionBytes + 12_000,
@@ -115,6 +122,10 @@ async function jobScope(
     userId: string;
     subscribed: boolean;
     planTier?: ManagedAiPlanTier;
+    reviewScope?: "pull_request" | "repository_snapshot";
+    reviewPurpose?: "code" | "compliance";
+    ruleConfigDigest?: string;
+    reviewRules?: NonNullable<typeof aiJobs.$inferInsert.reviewRules>;
   },
 ) {
   const [scope] = await db
@@ -348,6 +359,10 @@ export async function createAiJob(
     userId: string;
     subscribed: boolean;
     planTier?: ManagedAiPlanTier;
+    reviewScope?: "pull_request" | "repository_snapshot";
+    reviewPurpose?: "code" | "compliance";
+    ruleConfigDigest?: string;
+    reviewRules?: NonNullable<typeof aiJobs.$inferInsert.reviewRules>;
   },
 ) {
   // Entitlement is read once, here, and never again: a job that exists is a
@@ -358,18 +373,34 @@ export async function createAiJob(
     throw new Error(DEEP_REVIEW_UNENTITLED_MESSAGE);
   }
   const scope = await jobScope(db, input);
-  const units = await hydrateReviewUnits(
-    db,
-    await db.query.reviewUnits.findMany({
-      where: input.unitId
-        ? and(
-            eq(reviewUnits.snapshotId, scope.snapshot.id),
-            eq(reviewUnits.id, input.unitId),
-          )
-        : eq(reviewUnits.snapshotId, scope.snapshot.id),
-    }),
-  );
-  if (units.length === 0) throw new Error("No review context found");
+  const storedUnits = await db.query.reviewUnits.findMany({
+    where: input.unitId
+      ? and(
+          eq(reviewUnits.snapshotId, scope.snapshot.id),
+          eq(reviewUnits.id, input.unitId),
+        )
+      : eq(reviewUnits.snapshotId, scope.snapshot.id),
+  });
+  if (storedUnits.length === 0) throw new Error("No review context found");
+  // A repository review plans by file. Its file-context units already span
+  // each source object once, so their persisted byte ranges give an accurate
+  // reservation without hydrating and duplicating the same object per symbol.
+  const units =
+    input.kind === "review" && input.reviewScope === "repository_snapshot"
+      ? storedUnits
+          .filter(({ kind }) => kind === "file")
+          .map((unit) => ({
+            path: unit.path,
+            name: unit.name,
+            kind: unit.kind,
+            sourceBytes: Math.max(0, unit.endByte - unit.startByte),
+            previousSourceBytes: Math.max(
+              0,
+              (unit.previousEndByte ?? 0) -
+                (unit.previousStartByte ?? unit.previousEndByte ?? 0),
+            ),
+          }))
+      : await hydrateReviewUnits(db, storedUnits);
   const priorConversation = await loadPriorConversation(db, {
     threadId: input.threadId,
     userId: input.userId,
@@ -391,7 +422,9 @@ export async function createAiJob(
       // A clustering run is identified by the layout revision it proposes
       // for, so two of them collide only when they would produce the same
       // answer. Anything else keys on the unit it reads.
-      const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:automatic:${input.layoutKey ?? input.unitId ?? "pull-request"}`;
+      const reviewScope = input.reviewScope ?? "pull_request";
+      const reviewPurpose = input.reviewPurpose ?? "code";
+      const dedupeKey = `${scope.snapshot.id}:${input.userId}:${input.kind}:automatic:${input.layoutKey ?? input.unitId ?? "pull-request"}:${reviewScope}:${reviewPurpose}:${input.ruleConfigDigest ?? "default-rules"}`;
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${dedupeKey}))`,
       );
@@ -401,6 +434,13 @@ export async function createAiJob(
           eq(aiJobs.userId, input.userId),
           eq(aiJobs.kind, input.kind),
           eq(aiJobs.agentVersion, CURRENT_AI_AGENT_VERSION),
+          eq(aiJobs.reviewScope, reviewScope),
+          eq(aiJobs.reviewPurpose, reviewPurpose),
+          input.ruleConfigDigest
+            ? eq(aiJobs.ruleConfigDigest, input.ruleConfigDigest)
+            : input.kind === "review"
+              ? undefined
+              : isNull(aiJobs.ruleConfigDigest),
           input.unitId
             ? eq(aiJobs.unitId, input.unitId)
             : isNull(aiJobs.unitId),
@@ -452,6 +492,10 @@ export async function createAiJob(
         focusLine: input.focusLine,
         threadId: input.threadId,
         layoutKey: input.layoutKey,
+        reviewScope: input.reviewScope ?? "pull_request",
+        reviewPurpose: input.reviewPurpose ?? "code",
+        ruleConfigDigest: input.ruleConfigDigest,
+        reviewRules: input.reviewRules,
         agentVersion: CURRENT_AI_AGENT_VERSION,
         status: "queued",
         model: scope.model,

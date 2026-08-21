@@ -515,6 +515,98 @@ export const pullRequests = createTable(
   ],
 );
 
+/** One long-lived repository branch the workspace keeps prepared for review. */
+export const repositoryBranchMonitors = createTable(
+  "repository_branch_monitor",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    repositoryId: uuid()
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    /** The local review subject backed by the normal snapshot and sign-off machinery. */
+    pullRequestId: uuid()
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: "cascade" })
+      .unique(),
+    branch: varchar({ length: 255 }).notNull(),
+    currentHeadSha: varchar({ length: 64 }),
+    lastCheckedAt: timestamp({ withTimezone: true }),
+    lastSyncedAt: timestamp({ withTimezone: true }),
+    lastError: text(),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    check(
+      "repository_branch_monitor_branch_check",
+      sql`length(btrim(${t.branch})) > 0`,
+    ),
+    uniqueIndex("repository_branch_monitor_target_idx").on(
+      t.repositoryId,
+      t.branch,
+    ),
+    index("repository_branch_monitor_workspace_idx").on(
+      t.workspaceId,
+      t.updatedAt,
+    ),
+  ],
+);
+
+/** A versioned natural-language convention assigned to one monitored branch. */
+export const repositoryReviewRules = createTable(
+  "repository_review_rule",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    monitorId: uuid()
+      .notNull()
+      .references(() => repositoryBranchMonitors.id, { onDelete: "cascade" }),
+    title: varchar({ length: 200 }).notNull(),
+    instruction: text().notNull(),
+    pathGlob: varchar({ length: 500 }).notNull().default("**/*"),
+    scope: varchar({ length: 24 }).notNull().default("file"),
+    severity: findingSeverityEnum().notNull().default("medium"),
+    enabled: boolean().notNull().default(true),
+    version: integer().notNull().default(1),
+    archivedAt: timestamp({ withTimezone: true }),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    check(
+      "repository_review_rule_content_check",
+      sql`length(btrim(${t.title})) > 0 and length(btrim(${t.instruction})) > 0 and length(btrim(${t.pathGlob})) > 0`,
+    ),
+    check(
+      "repository_review_rule_scope_check",
+      sql`${t.scope} in ('file', 'repository')`,
+    ),
+    check("repository_review_rule_version_check", sql`${t.version} > 0`),
+    index("repository_review_rule_monitor_idx").on(
+      t.monitorId,
+      t.archivedAt,
+      t.updatedAt,
+    ),
+  ],
+);
+
 export const reviewQueueItems = createTable(
   "review_queue_item",
   {
@@ -938,6 +1030,42 @@ export const workflowRuns = createTable(
   (t) => [index("workflow_run_target_idx").on(t.kind, t.targetId, t.createdAt)],
 );
 
+/** One durable synchronization of a monitored repository branch. */
+export const repositoryBranchSyncRuns = createTable(
+  "repository_branch_sync_run",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    monitorId: uuid()
+      .notNull()
+      .references(() => repositoryBranchMonitors.id, { onDelete: "cascade" }),
+    workflowRunId: uuid().references(() => workflowRuns.id, {
+      onDelete: "set null",
+    }),
+    status: workflowRunStatusEnum().notNull().default("queued"),
+    progress: integer().notNull().default(0),
+    force: boolean().notNull().default(false),
+    error: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp({ withTimezone: true }),
+    completedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [
+    index("repository_branch_sync_monitor_idx").on(
+      t.monitorId,
+      t.status,
+      t.createdAt,
+    ),
+    index("repository_branch_sync_workspace_idx").on(
+      t.workspaceId,
+      t.status,
+      t.createdAt,
+    ),
+  ],
+);
+
 export const syncRuns = createTable(
   "sync_run",
   {
@@ -1023,6 +1151,23 @@ export const aiJobs = createTable(
      */
     parentJobId: uuid(),
     ruleConfigDigest: varchar({ length: 64 }),
+    /** Whether this run reviews a PR delta or an entire repository snapshot. */
+    reviewScope: varchar({ length: 32 }).notNull().default("pull_request"),
+    /** Separates general defect discovery from user-authored compliance rules. */
+    reviewPurpose: varchar({ length: 24 }).notNull().default("code"),
+    /** Immutable rule copies keep compliance history meaningful after edits. */
+    reviewRules:
+      jsonb().$type<
+        Array<{
+          id: string;
+          version: number;
+          title: string;
+          instruction: string;
+          pathGlob: string;
+          scope: "file" | "repository";
+          severity: "critical" | "high" | "medium" | "low";
+        }>
+      >(),
     deepReviewTerminalState: deepReviewTerminalStateEnum(),
     runFailureClass: reviewFailureClassEnum(),
     agentVersion: integer().notNull().default(1),
@@ -1078,6 +1223,14 @@ export const aiJobs = createTable(
     quotaSettledAt: timestamp({ withTimezone: true }),
   },
   (t) => [
+    check(
+      "ai_job_review_scope_check",
+      sql`${t.reviewScope} in ('pull_request', 'repository_snapshot')`,
+    ),
+    check(
+      "ai_job_review_purpose_check",
+      sql`${t.reviewPurpose} in ('code', 'compliance')`,
+    ),
     check(
       "ai_job_question_context_check",
       sql`(

@@ -3,6 +3,29 @@ import { analyzeFiles, reconcileSignOffs } from "./engine";
 import { applySourceBudget } from "./types";
 
 describe("review analysis engine", () => {
+  it("keeps a complete repository map when a file is unchanged", () => {
+    const content = [
+      "export const first = () => 1;",
+      "export const second = () => first();",
+    ].join("\n");
+    const units = analyzeFiles([
+      {
+        path: "complete.ts",
+        content,
+        previousContent: content,
+        changeType: "modified",
+        reviewWholeFile: true,
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units).toHaveLength(1);
+    expect(units[0]?.source).toContain("first");
+    expect(units[0]?.source).toContain("second");
+    expect(units.every(({ changedLineCount }) => changedLineCount === 0)).toBe(
+      true,
+    );
+  });
+
   it("orders dependencies before their callers", () => {
     const result = analyzeFiles([
       {

@@ -171,6 +171,8 @@ export interface SourceFile {
   isBinary?: boolean;
   binaryHash?: string;
   changeType?: SourceChangeType;
+  /** Keeps every current declaration reviewable instead of PR-diff scoping it. */
+  reviewWholeFile?: boolean;
 }
 
 const binaryExtensions = new Set([

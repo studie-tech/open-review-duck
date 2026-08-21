@@ -80,7 +80,7 @@ export async function pullRequestReviewWorkflow(parentJobId: string) {
 
   const { workflowRunId } = getWorkflowMetadata();
   const plan = await sealDeepReviewPlan(parentJobId, workflowRunId);
-  if (plan.files.length === 0) {
+  if (plan.files.length === 0 && !plan.surveyJobId) {
     return await finalizeDeepReviewRun(parentJobId, workflowRunId, {
       expectedItemCount: plan.itemCount,
     });

@@ -14,6 +14,7 @@ import {
   type PullRequestListOptions,
   type PullRequestProvider,
   type PullRequestSummary,
+  type RepositoryBranch,
   type RepositoryIdentity,
 } from "./types";
 
@@ -76,6 +77,10 @@ interface GitHubFile {
 interface GitHubTree {
   truncated: boolean;
   tree: Array<{ path: string; type: "blob" | "tree" | "commit" }>;
+}
+interface GitHubBranch {
+  name: string;
+  commit: { sha: string };
 }
 interface GitHubReviewComment {
   id: number;
@@ -191,6 +196,50 @@ export class GitHubProvider implements PullRequestProvider {
       webUrl: repo.html_url,
       isPrivate: repo.private,
     }));
+  }
+  /** Lists every branch visible through the configured GitHub credential. */
+  async listBranches(
+    repositoryExternalId: string,
+  ): Promise<RepositoryBranch[]> {
+    const [repository, branches] = await Promise.all([
+      this.repository(repositoryExternalId),
+      this.getAllPages<GitHubBranch>(
+        `${this.apiUrl}/repositories/${repositoryExternalId}/branches?per_page=100`,
+      ),
+    ]);
+    return branches.map((branch) => ({
+      name: branch.name,
+      sha: branch.commit.sha,
+      webUrl: `${repository.html_url}/tree/${branch.name
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+      isDefault: branch.name === repository.default_branch,
+    }));
+  }
+
+  /** Resolves one GitHub branch and rejects arbitrary refs. */
+  async getBranch(
+    repositoryExternalId: string,
+    branch: string,
+  ): Promise<RepositoryBranch> {
+    const [repository, resolved] = await Promise.all([
+      this.repository(repositoryExternalId),
+      providerFetch<GitHubBranch>(
+        this.name,
+        `${this.apiUrl}/repositories/${repositoryExternalId}/branches/${encodeURIComponent(branch)}`,
+        { headers: this.headers },
+      ),
+    ]);
+    return {
+      name: resolved.name,
+      sha: resolved.commit.sha,
+      webUrl: `${repository.html_url}/tree/${resolved.name
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+      isDefault: resolved.name === repository.default_branch,
+    };
   }
   /**
    * Confirms the GitHub App webhook model.

@@ -216,6 +216,20 @@ describe("pullRequestReviewWorkflow", () => {
     );
   });
 
+  it("runs a repository-only compliance survey without file agents", async () => {
+    mocks.sealReviewPlan.mockResolvedValue(sealedPlan(0));
+
+    await pullRequestReviewWorkflow(parentJobId);
+
+    expect(mocks.executeReviewFileTurn).not.toHaveBeenCalled();
+    expect(mocks.executeReviewSurveyTurn).toHaveBeenCalledTimes(1);
+    expect(mocks.finalizeDeepReview).toHaveBeenCalledWith(
+      expect.anything(),
+      parentJobId,
+      expect.objectContaining({ expectedItemCount: 1 }),
+    );
+  });
+
   it("dispatches only the files a child job was created for", async () => {
     const plan = sealedPlan(2);
     plan.items.push({

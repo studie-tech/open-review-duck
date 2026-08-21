@@ -1,11 +1,16 @@
 import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
-import { aiJobs, syncRuns, workflowRuns } from "@/drizzle/schema";
+import {
+  aiJobs,
+  repositoryBranchSyncRuns,
+  syncRuns,
+  workflowRuns,
+} from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 
 type Database = typeof database;
-type WorkflowKind = "sync_pull_request" | "ai_job";
+type WorkflowKind = "sync_pull_request" | "sync_repository_branch" | "ai_job";
 
 /** Idempotently attaches a durable provider run to its persisted application target. */
 export async function ensureWorkflowRunLink(
@@ -26,9 +31,13 @@ export async function ensureWorkflowRunLink(
         ? await tx.query.syncRuns.findFirst({
             where: eq(syncRuns.id, input.targetId),
           })
-        : await tx.query.aiJobs.findFirst({
-            where: eq(aiJobs.id, input.targetId),
-          });
+        : input.kind === "sync_repository_branch"
+          ? await tx.query.repositoryBranchSyncRuns.findFirst({
+              where: eq(repositoryBranchSyncRuns.id, input.targetId),
+            })
+          : await tx.query.aiJobs.findFirst({
+              where: eq(aiJobs.id, input.targetId),
+            });
     if (!target) throw new Error("Workflow target not found");
 
     const linked = target.workflowRunId
@@ -51,6 +60,11 @@ export async function ensureWorkflowRunLink(
             .update(syncRuns)
             .set({ workflowRunId: linked.id })
             .where(eq(syncRuns.id, input.targetId));
+        } else if (input.kind === "sync_repository_branch") {
+          await tx
+            .update(repositoryBranchSyncRuns)
+            .set({ workflowRunId: linked.id })
+            .where(eq(repositoryBranchSyncRuns.id, input.targetId));
         } else {
           await tx
             .update(aiJobs)
@@ -85,6 +99,11 @@ export async function ensureWorkflowRunLink(
         .update(syncRuns)
         .set({ workflowRunId: created.id })
         .where(eq(syncRuns.id, input.targetId));
+    } else if (input.kind === "sync_repository_branch") {
+      await tx
+        .update(repositoryBranchSyncRuns)
+        .set({ workflowRunId: created.id })
+        .where(eq(repositoryBranchSyncRuns.id, input.targetId));
     } else {
       await tx
         .update(aiJobs)

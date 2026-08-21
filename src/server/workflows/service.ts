@@ -4,6 +4,8 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getRun, start } from "workflow/api";
 import {
   aiJobs,
+  repositoryBranchMonitors,
+  repositoryBranchSyncRuns,
   repositories,
   syncQueueRequests,
   syncRuns,
@@ -13,10 +15,122 @@ import type { db as database } from "~/server/db";
 import type { ReviewQueueSource } from "~/server/review/queue";
 import { aiJobWorkflow } from "./ai-job";
 import { pullRequestReviewWorkflow } from "./pull-request-review";
+import { repositoryBranchSyncWorkflow } from "./repository-branch-sync";
 import { ensureWorkflowRunLink } from "./run-link";
 import { syncPullRequestWorkflow } from "./sync-pull-request";
 
 type Database = typeof database;
+
+/** Starts one idempotent durable synchronization of a monitored branch. */
+export async function startRepositoryBranchSync(
+  db: Database,
+  input: { workspaceId: string; monitorId: string; force?: boolean },
+) {
+  const reservation = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`repository-sync-workflow:${input.monitorId}`}))`,
+    );
+    const monitor = await tx.query.repositoryBranchMonitors.findFirst({
+      where: and(
+        eq(repositoryBranchMonitors.id, input.monitorId),
+        eq(repositoryBranchMonitors.workspaceId, input.workspaceId),
+      ),
+    });
+    if (!monitor) throw new Error("Repository monitor not found");
+    const active = await tx.query.repositoryBranchSyncRuns.findFirst({
+      where: and(
+        eq(repositoryBranchSyncRuns.monitorId, input.monitorId),
+        inArray(repositoryBranchSyncRuns.status, ["queued", "running"]),
+      ),
+      orderBy: [desc(repositoryBranchSyncRuns.createdAt)],
+    });
+    if (active?.workflowRunId) {
+      const workflow = await tx.query.workflowRuns.findFirst({
+        where: eq(workflowRuns.id, active.workflowRunId),
+      });
+      if (workflow) {
+        return {
+          shouldStart: false as const,
+          status: active.status,
+          syncId: active.id,
+          workflowRunId: workflow.providerRunId,
+        };
+      }
+    }
+    if (active) {
+      return {
+        shouldStart: false as const,
+        status: active.status,
+        syncId: active.id,
+        workflowRunId: null,
+      };
+    }
+    const [run] = await tx
+      .insert(repositoryBranchSyncRuns)
+      .values({
+        workspaceId: input.workspaceId,
+        monitorId: input.monitorId,
+        force: input.force ?? false,
+      })
+      .returning();
+    if (!run)
+      throw new Error("Could not create repository synchronization run");
+    return {
+      shouldStart: true as const,
+      status: "queued" as const,
+      syncId: run.id,
+      workflowRunId: null,
+    };
+  });
+
+  if (!reservation.shouldStart) {
+    const workflowRunId =
+      reservation.workflowRunId ??
+      (await waitForWorkflowLink(
+        db,
+        "sync_repository_branch",
+        reservation.syncId,
+      ));
+    return {
+      status: reservation.status,
+      syncId: reservation.syncId,
+      workflowRunId,
+    };
+  }
+
+  let run: Awaited<ReturnType<typeof start>>;
+  try {
+    run = await start(repositoryBranchSyncWorkflow, [reservation.syncId]);
+  } catch (cause) {
+    await db
+      .update(repositoryBranchSyncRuns)
+      .set({
+        status: "failed",
+        error:
+          cause instanceof Error
+            ? cause.message.slice(0, 300)
+            : "Workflow start failed",
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(repositoryBranchSyncRuns.id, reservation.syncId),
+          eq(repositoryBranchSyncRuns.status, "queued"),
+        ),
+      );
+    throw cause;
+  }
+  await ensureWorkflowRunLink(db, {
+    kind: "sync_repository_branch",
+    targetId: reservation.syncId,
+    providerRunId: run.runId,
+  });
+  return {
+    status: reservation.status,
+    syncId: reservation.syncId,
+    workflowRunId: run.runId,
+  };
+}
 
 /** Starts an idempotent durable pull-request synchronization. */
 export async function startPullRequestSync(
@@ -227,7 +341,7 @@ export async function startAiJob(db: Database, jobId: string) {
 /** Waits briefly for a concurrent starter or the workflow itself to persist its link. */
 async function waitForWorkflowLink(
   db: Database,
-  kind: "sync_pull_request" | "ai_job",
+  kind: "sync_pull_request" | "sync_repository_branch" | "ai_job",
   targetId: string,
 ) {
   for (let attempt = 0; attempt < 8; attempt += 1) {

@@ -1,0 +1,6 @@
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "ai_job_review_scope_check" CHECK ("open_review_duck_ai_job"."reviewScope" in ('pull_request', 'repository_snapshot'));--> statement-breakpoint
+ALTER TABLE "open_review_duck_ai_job" ADD CONSTRAINT "ai_job_review_purpose_check" CHECK ("open_review_duck_ai_job"."reviewPurpose" in ('code', 'compliance'));--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository_branch_monitor" ADD CONSTRAINT "repository_branch_monitor_branch_check" CHECK (length(btrim("open_review_duck_repository_branch_monitor"."branch")) > 0);--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository_review_rule" ADD CONSTRAINT "repository_review_rule_content_check" CHECK (length(btrim("open_review_duck_repository_review_rule"."title")) > 0 and length(btrim("open_review_duck_repository_review_rule"."instruction")) > 0 and length(btrim("open_review_duck_repository_review_rule"."pathGlob")) > 0);--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository_review_rule" ADD CONSTRAINT "repository_review_rule_scope_check" CHECK ("open_review_duck_repository_review_rule"."scope" in ('file', 'repository'));--> statement-breakpoint
+ALTER TABLE "open_review_duck_repository_review_rule" ADD CONSTRAINT "repository_review_rule_version_check" CHECK ("open_review_duck_repository_review_rule"."version" > 0);

@@ -5,6 +5,7 @@ import {
 } from "~/server/api/trpc";
 import { aiRouter } from "./routers/ai";
 import { providerRouter } from "./routers/provider";
+import { repoReviewsRouter } from "./routers/repo-reviews";
 import { reviewRouter } from "./routers/review";
 import { workspaceRouter } from "./routers/workspace";
 
@@ -17,6 +18,7 @@ export const appRouter = createTRPCRouter({
   health: publicProcedure.query(() => ({ status: "ok" as const })),
   ai: aiRouter,
   provider: providerRouter,
+  repoReviews: repoReviewsRouter,
   review: reviewRouter,
   workspace: workspaceRouter,
 });
