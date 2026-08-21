@@ -10,6 +10,7 @@ import {
   ExternalLink,
   GitBranch,
   GripVertical,
+  Info,
   LoaderCircle,
   MessageCircleQuestionMark,
   MessageSquareText,
@@ -3687,6 +3688,112 @@ export function ReviewHierarchyDialog({
         </div>
         <footer className="text-fog flex items-center justify-between gap-3 border-t border-line px-4 py-3 text-[9px] sm:px-5">
           <span>Shared dependencies appear under their first concept.</span>
+          <span className="shrink-0">Esc closes</span>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Presents the pull request the reviewer is working through.
+ *
+ * ReviewDuck deliberately opens on the code rather than on the prose around
+ * it, so the author's own account of the change is a click away instead of a
+ * trip back to the provider. The body is provider Markdown and is rendered
+ * through the same allowlist as every other untrusted provider text.
+ */
+export function PullRequestDetailsDialog({
+  pullRequest,
+  onClose,
+}: {
+  pullRequest: WorkspaceData["pullRequest"];
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    /** Closes the details dialog from the keyboard. */
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  const description = pullRequest.description?.trim();
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pull-request-details-title"
+      className="fixed inset-0 z-50 grid place-items-center bg-black/65 p-3 backdrop-blur-sm sm:p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="bg-panel flex max-h-[82dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line shadow-2xl">
+        <header className="flex items-start justify-between gap-4 border-b border-line px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="bg-cyan/10 grid size-9 shrink-0 place-items-center rounded-xl">
+              <Info className="text-cyan size-4" />
+            </span>
+            <div className="min-w-0">
+              <h2
+                id="pull-request-details-title"
+                className="text-cloud text-sm font-medium"
+              >
+                {pullRequest.title}
+              </h2>
+              <p className="text-fog mt-1 truncate text-[10px] leading-4">
+                {pullRequest.repositoryOwner}/{pullRequest.repositoryName} #
+                {pullRequest.number} · {providerLabel(pullRequest.provider)}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close pull request details"
+            onClick={onClose}
+            className="text-mist hover:text-cloud grid size-8 shrink-0 place-items-center rounded-lg transition hover:bg-surface-subtle"
+          >
+            <X className="size-4" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-5">
+          <div className="text-fog flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px]">
+            <span className="text-mist">{pullRequest.authorLogin}</span>
+            <span
+              role="img"
+              aria-label={`${pullRequest.sourceBranch} into ${pullRequest.targetBranch}`}
+              className="border-line bg-surface-subtle text-mist inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono"
+            >
+              <GitBranch className="text-cyan size-3" aria-hidden="true" />
+              <span className="truncate">{pullRequest.sourceBranch}</span>
+              <ChevronRight className="size-3 shrink-0" aria-hidden="true" />
+              <span className="truncate">{pullRequest.targetBranch}</span>
+            </span>
+          </div>
+          {description ? (
+            <ProviderCommentBody
+              body={description}
+              className="mt-4 max-w-none"
+            />
+          ) : (
+            <p className="text-mist mt-4 rounded-xl border border-dashed border-line p-4 text-xs leading-5">
+              This pull request has no description on{" "}
+              {providerLabel(pullRequest.provider)}.
+            </p>
+          )}
+        </div>
+        <footer className="text-fog flex items-center justify-between gap-3 border-t border-line px-4 py-3 text-[9px] sm:px-5">
+          <a
+            href={pullRequest.webUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-cyan inline-flex items-center gap-1.5 transition hover:underline"
+          >
+            <ExternalLink className="size-3" aria-hidden="true" />
+            Open on {providerLabel(pullRequest.provider)}
+          </a>
           <span className="shrink-0">Esc closes</span>
         </footer>
       </div>

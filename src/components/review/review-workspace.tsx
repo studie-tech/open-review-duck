@@ -14,6 +14,7 @@ import {
   ExternalLink,
   FileCode2,
   GitBranch,
+  Info,
   Keyboard,
   LoaderCircle,
   MessageSquareText,
@@ -877,6 +878,7 @@ import {
   PROVIDER_CONVERSATION_REFRESH_MS,
   ProviderConversation,
   type ProviderConversationActions,
+  PullRequestDetailsDialog,
   providerLabel,
   ReviewConceptMemberHeader,
   ReviewConceptMemberPreview,
@@ -1117,6 +1119,9 @@ export function ReviewWorkspace({
   const [hierarchyOpen, setHierarchyOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [aiReviewDialogOpen, setAiReviewDialogOpen] = useState(false);
+  const [conceptGroupingDialogOpen, setConceptGroupingDialogOpen] =
+    useState(false);
+  const [pullRequestDetailsOpen, setPullRequestDetailsOpen] = useState(false);
   // Empty means every severity, so the four chips start as a legend rather
   // than as four filters the reviewer must switch on before seeing anything.
   const [findingSeverityFilter, setFindingSeverityFilter] = useState(
@@ -2367,6 +2372,16 @@ export function ReviewWorkspace({
       toast.error(error.message);
     },
   });
+  // The regrouping spans two mutations: the model proposes concepts, then the
+  // layout is replaced. Both stages read as one action to the reviewer.
+  const groupingImproving =
+    improveConceptGrouping.isPending ||
+    (replaceConceptLayout.isPending && conceptLayoutAction === "improve");
+  const improveGroupingLabel = improveConceptGrouping.isPending
+    ? "Improving grouping…"
+    : replaceConceptLayout.isPending && conceptLayoutAction === "improve"
+      ? "Applying grouping…"
+      : "Improve grouping with AI";
   /** Finds the next filtered match, then resumes the global review path. */
   function nextReviewIndexAfterAction(
     nextUnits: ReviewUnit[],
@@ -4341,6 +4356,18 @@ export function ReviewWorkspace({
     });
   }
 
+  /** Asks the model to regroup this layout once the reviewer has agreed. */
+  function improveGroupingWithAi() {
+    if (groupingImproving || !initialData.conceptLayout) return;
+    setConceptGroupingDialogOpen(false);
+    setConceptLayoutAction("improve");
+    improveConceptGrouping.mutate({
+      pullRequestId: initialData.pullRequest.id,
+      layoutId: initialData.conceptLayout.id,
+      layoutVersion: initialData.conceptLayout.version,
+    });
+  }
+
   /** Splits the active concept into atomic personal-layout concepts. */
   function splitActiveConcept() {
     if (
@@ -4973,6 +5000,37 @@ export function ReviewWorkspace({
           </Button>
         )}
       </div>
+    );
+  }
+
+  /**
+   * Opens the author's own account of the change beside the AI controls.
+   *
+   * The wide panel names the control, because an unlabelled icon under an
+   * "AI assistance" heading reads as an explanation of that heading rather
+   * than of the pull request.
+   */
+  function renderPullRequestDetailsButton({
+    className,
+    label,
+  }: {
+    className: string;
+    label?: string;
+  }) {
+    return (
+      <button
+        type="button"
+        aria-label="About this pull request"
+        title="About this pull request"
+        onClick={() => setPullRequestDetailsOpen(true)}
+        className={cn(
+          "text-mist hover:text-cloud flex shrink-0 items-center justify-center gap-1.5 rounded-lg transition hover:bg-surface-hover",
+          className,
+        )}
+      >
+        <Info className="size-4 shrink-0" />
+        {label}
+      </button>
     );
   }
 
@@ -5705,7 +5763,9 @@ export function ReviewWorkspace({
       importPreview !== undefined ||
       hierarchyOpen ||
       resetDialogOpen ||
-      aiReviewDialogOpen,
+      aiReviewDialogOpen ||
+      conceptGroupingDialogOpen ||
+      pullRequestDetailsOpen,
   });
 
   useEffect(() => {
@@ -6600,36 +6660,20 @@ export function ReviewWorkspace({
               {initialData.conceptLayout && !conceptLayoutLocked && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setConceptLayoutAction("improve");
-                    improveConceptGrouping.mutate({
-                      pullRequestId: initialData.pullRequest.id,
-                      layoutId: initialData.conceptLayout?.id ?? "",
-                      layoutVersion: initialData.conceptLayout?.version ?? 1,
-                    });
-                  }}
+                  onClick={() => setConceptGroupingDialogOpen(true)}
                   disabled={
                     improveConceptGrouping.isPending ||
                     replaceConceptLayout.isPending
                   }
-                  className="text-violet hover:bg-violet/[.06] flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-violet/20 px-2.5 text-[10px] transition disabled:cursor-wait disabled:opacity-60"
-                  title="Use the configured AI provider to create a personal intent-based grouping"
+                  aria-label={improveGroupingLabel}
+                  className="text-violet hover:bg-violet/[.06] grid size-8 shrink-0 place-items-center rounded-lg border border-violet/20 transition disabled:cursor-wait disabled:opacity-60"
+                  title={improveGroupingLabel}
                 >
-                  {improveConceptGrouping.isPending ||
-                  (replaceConceptLayout.isPending &&
-                    conceptLayoutAction === "improve") ? (
+                  {groupingImproving ? (
                     <LoaderCircle className="size-3.5 animate-spin" />
                   ) : (
                     <Sparkles className="size-3.5" />
                   )}
-                  <span className="hidden lg:inline">
-                    {improveConceptGrouping.isPending
-                      ? "Improving grouping…"
-                      : replaceConceptLayout.isPending &&
-                          conceptLayoutAction === "improve"
-                        ? "Applying grouping…"
-                        : "Improve grouping with AI"}
-                  </span>
                 </button>
               )}
               {initialData.conceptLayout &&
@@ -7204,8 +7248,11 @@ export function ReviewWorkspace({
               />
             </details>
           )}
-          <div className="border-violet/15 bg-violet/[.025] flex items-center justify-end border-t px-3 py-3 sm:px-4 xl:hidden">
+          <div className="border-violet/15 bg-violet/[.025] flex items-center justify-end gap-2 border-t px-3 py-3 sm:px-4 xl:hidden">
             {renderAiActionButtons()}
+            {renderPullRequestDetailsButton({
+              className: "size-11 border border-line",
+            })}
           </div>
           <div className="bg-panel/45 flex items-center justify-end gap-2 border-t border-line px-3 py-3 sm:gap-3 sm:px-7 sm:py-4">
             <div className="text-fog mr-auto hidden min-w-0 items-center gap-4 text-[9px] sm:flex">
@@ -7665,7 +7712,16 @@ export function ReviewWorkspace({
               : "xl:static xl:flex xl:w-auto xl:bg-panel/30 xl:shadow-none",
           )}
         >
-          <div className="border-violet/15 bg-panel z-10 flex shrink-0 items-center border-b px-4 py-4">
+          <div className="border-violet/15 bg-panel z-10 flex shrink-0 flex-col gap-2.5 border-b px-4 py-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
+                AI assistance
+              </p>
+              {renderPullRequestDetailsButton({
+                className: "h-7 px-1.5 text-[10px]",
+                label: "About this PR",
+              })}
+            </div>
             {renderAiActionButtons()}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -7926,6 +7982,32 @@ export function ReviewWorkspace({
             icon={<Sparkles className="text-violet size-4" />}
             onCancel={() => setAiReviewDialogOpen(false)}
             onConfirm={reviewPullRequestWithAi}
+          />
+        )}
+
+        {conceptGroupingDialogOpen && (
+          <ConfirmationDialog
+            title="Regroup this review with AI?"
+            description={
+              <>
+                The model reads the changed code and rebuilds your personal
+                concepts around what the change is trying to do, so related
+                edits across files are reviewed together. Every atomic unit
+                stays in the review — only the grouping changes. This uses your
+                configured model and contributes to this PR&apos;s token usage.
+              </>
+            }
+            confirmLabel="Improve grouping"
+            icon={<Sparkles className="text-violet size-4" />}
+            onCancel={() => setConceptGroupingDialogOpen(false)}
+            onConfirm={improveGroupingWithAi}
+          />
+        )}
+
+        {pullRequestDetailsOpen && (
+          <PullRequestDetailsDialog
+            pullRequest={initialData.pullRequest}
+            onClose={() => setPullRequestDetailsOpen(false)}
           />
         )}
 

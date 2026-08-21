@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
+import type { RouterOutputs } from "~/trpc/react";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
@@ -23,6 +24,7 @@ import {
   ProviderConversation,
   type ProviderConversationActions,
   ProviderConversationHistory,
+  PullRequestDetailsDialog,
   ReviewConceptMemberPreview,
   rememberAiConversationVisibility,
   reviewShortcuts,
@@ -46,6 +48,8 @@ vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
     ),
   };
 });
+
+type WorkspacePullRequest = RouterOutputs["review"]["workspace"]["pullRequest"];
 
 afterEach(cleanup);
 
@@ -2035,5 +2039,97 @@ describe("SplitActionButton", () => {
     } finally {
       document.removeEventListener("keydown", onWorkspaceEscape);
     }
+  });
+});
+
+describe("PullRequestDetailsDialog", () => {
+  /** Builds the workspace pull request with the fields a test overrides. */
+  function pullRequest(
+    overrides: Partial<WorkspacePullRequest> = {},
+  ): WorkspacePullRequest {
+    return {
+      id: "pull-request-1",
+      number: 42,
+      title: "Keep the waiting concept out of the review path",
+      description: "## Why\n\nA waiting concept was still offered as work.",
+      authorLogin: "reviewer",
+      sourceBranch: "fix/waiting-concept",
+      targetBranch: "main",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      webUrl: "https://github.com/studie-tech/open-review-duck/pull/42",
+      repositoryId: "repository-1",
+      repositoryOwner: "studie-tech",
+      repositoryName: "open-review-duck",
+      repositoryWebUrl: "https://github.com/studie-tech/open-review-duck",
+      provider: "github",
+      ...overrides,
+    };
+  }
+
+  it("formats the provider description the author wrote", () => {
+    render(
+      <PullRequestDetailsDialog
+        pullRequest={pullRequest()}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Keep the waiting concept out of the review path",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Why" })).toBeInTheDocument();
+    expect(
+      screen.getByText("A waiting concept was still offered as work."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("reviewer")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "fix/waiting-concept into main" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Open on GitHub/ }),
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/studie-tech/open-review-duck/pull/42",
+    );
+  });
+
+  it("names the provider when the author left no description", () => {
+    render(
+      <PullRequestDetailsDialog
+        pullRequest={pullRequest({ description: "   ", provider: "gitlab" })}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByText("This pull request has no description on GitLab."),
+    ).toBeInTheDocument();
+  });
+
+  it("closes on Escape and on the backdrop, but not on the panel", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <PullRequestDetailsDialog
+        pullRequest={pullRequest()}
+        onClose={onClose}
+      />,
+    );
+
+    await user.click(screen.getByRole("dialog"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByRole("heading", {
+        name: "Keep the waiting concept out of the review path",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
