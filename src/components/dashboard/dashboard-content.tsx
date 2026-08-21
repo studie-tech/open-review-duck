@@ -71,7 +71,7 @@ function isHistoryView(
 }
 
 /** Renders live dashboard data and follows durable synchronization progress. */
-export function DashboardContent({
+export function PullRequestsContent({
   initialPullRequests,
 }: {
   initialPullRequests: DashboardPullRequests;

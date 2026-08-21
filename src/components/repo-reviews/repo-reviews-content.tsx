@@ -92,9 +92,11 @@ function RunStatus({ status, progress }: { status: string; progress: number }) {
 export function RepoReviewsContent({
   initialMonitors,
   initialRepositories,
+  initialMonitorId,
 }: {
   initialMonitors: Monitors;
   initialRepositories: Repositories;
+  initialMonitorId?: string;
 }) {
   const utils = api.useUtils();
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
@@ -117,7 +119,9 @@ export function RepoReviewsContent({
   );
   const monitors = monitorsQuery.data ?? initialMonitors;
   const [selectedMonitorId, setSelectedMonitorId] = useState(
-    initialMonitors[0]?.id,
+    initialMonitors.some(({ id }) => id === initialMonitorId)
+      ? initialMonitorId
+      : initialMonitors[0]?.id,
   );
   const [section, setSection] = useState<Section>("overview");
   const [search, setSearch] = useState("");

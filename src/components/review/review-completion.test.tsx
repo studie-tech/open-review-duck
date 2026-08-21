@@ -159,7 +159,7 @@ describe("ReviewCompletion", () => {
     expect(onNextReview).toHaveBeenCalledOnce();
   });
 
-  it("makes the cleared queue explicit and keeps dashboard navigation available", async () => {
+  it("makes the cleared queue explicit and keeps inbox navigation available", async () => {
     const onDashboard = vi.fn();
     const user = userEvent.setup();
     render(
@@ -182,7 +182,7 @@ describe("ReviewCompletion", () => {
       screen.queryByRole("button", { name: /Review next PR/i }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Dashboard/i }));
+    await user.click(screen.getByRole("button", { name: /Pull requests/i }));
     expect(onDashboard).toHaveBeenCalledOnce();
   });
 });

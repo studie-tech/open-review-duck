@@ -114,7 +114,7 @@ describe("ReviewWaitingCompletion", () => {
     expect(dismiss).toHaveFocus();
 
     await user.tab({ shift: true });
-    expect(screen.getByRole("button", { name: /Dashboard/ })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Pull requests/ })).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(onDismiss).toHaveBeenCalledOnce();
@@ -187,7 +187,11 @@ describe("ReviewWaitingCompletion", () => {
       />,
     );
 
-    for (const name of [/Keep review open/, /Dashboard/, /Review next PR/]) {
+    for (const name of [
+      /Keep review open/,
+      /Pull requests/,
+      /Review next PR/,
+    ]) {
       expect(
         screen.getByRole("button", { name }).querySelector("kbd"),
       ).toBeInTheDocument();

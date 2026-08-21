@@ -56,6 +56,6 @@ export function sidebarGuidance(
     description:
       "Sign off one review unit today to build your review practice.",
     action: "Open reviews",
-    href: "/dashboard",
+    href: "/pullrequests",
   };
 }

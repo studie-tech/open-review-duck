@@ -3,8 +3,13 @@ import { protectApplicationRoute } from "~/server/auth";
 import { api } from "~/trpc/server";
 
 /** Renders the monitored-repository cockpit. */
-export default async function RepoReviewsPage() {
+export default async function RepoReviewsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ monitor?: string | string[] }>;
+}) {
   await protectApplicationRoute();
+  const monitor = (await searchParams).monitor;
   const [monitors, repositories] = await Promise.all([
     api.repoReviews.list(),
     api.provider.listImportedRepositories(),
@@ -13,6 +18,7 @@ export default async function RepoReviewsPage() {
     <RepoReviewsContent
       initialMonitors={monitors}
       initialRepositories={repositories}
+      initialMonitorId={typeof monitor === "string" ? monitor : undefined}
     />
   );
 }

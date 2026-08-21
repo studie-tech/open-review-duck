@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dashboardFilters } from "~/lib/dashboard-filters";
-import { DashboardContent } from "./dashboard-content";
+import { PullRequestsContent } from "./dashboard-content";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -103,13 +103,15 @@ afterEach(() => {
   queryState.restoreMutate.mockReset();
 });
 
-describe("DashboardContent", () => {
+describe("PullRequestsContent", () => {
   /** Builds one dashboard item with focused test overrides. */
   const pullRequest = (
     overrides: Partial<
-      ComponentProps<typeof DashboardContent>["initialPullRequests"][number]
+      ComponentProps<typeof PullRequestsContent>["initialPullRequests"][number]
     > & { id: string },
-  ): ComponentProps<typeof DashboardContent>["initialPullRequests"][number] => {
+  ): ComponentProps<
+    typeof PullRequestsContent
+  >["initialPullRequests"][number] => {
     const { id, ...rest } = overrides;
     return {
       id,
@@ -136,7 +138,7 @@ describe("DashboardContent", () => {
   };
 
   it("shows durable sync progress and refreshes reviews when it finishes", async () => {
-    const view = render(<DashboardContent initialPullRequests={[]} />);
+    const view = render(<PullRequestsContent initialPullRequests={[]} />);
 
     expect(screen.getByText("Preparing a review")).toBeVisible();
     expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
@@ -158,7 +160,7 @@ describe("DashboardContent", () => {
     ).toBeVisible();
 
     queryState.activeSyncs = [];
-    view.rerender(<DashboardContent initialPullRequests={[]} />);
+    view.rerender(<PullRequestsContent initialPullRequests={[]} />);
 
     await waitFor(() =>
       expect(queryState.dashboardRefetch).toHaveBeenCalledTimes(1),
@@ -183,7 +185,7 @@ describe("DashboardContent", () => {
       },
     ];
 
-    render(<DashboardContent initialPullRequests={[]} />);
+    render(<PullRequestsContent initialPullRequests={[]} />);
 
     expect(screen.getByText("A review could not be prepared")).toBeVisible();
     expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
@@ -226,7 +228,7 @@ describe("DashboardContent", () => {
         totalUnits: 0,
       }),
     ];
-    const view = render(<DashboardContent initialPullRequests={items} />);
+    const view = render(<PullRequestsContent initialPullRequests={items} />);
 
     const continued = screen.getByText("Inventory improvements");
     const ready = screen.getByText("Retry settlement webhooks");
@@ -276,7 +278,7 @@ describe("DashboardContent", () => {
       "gitlab:payments/api",
     );
     view.rerender(
-      <DashboardContent
+      <PullRequestsContent
         initialPullRequests={items.filter(({ id }) => id !== "ready")}
       />,
     );
@@ -291,7 +293,7 @@ describe("DashboardContent", () => {
     queryState.activeSyncs = [];
     const user = userEvent.setup();
     render(
-      <DashboardContent
+      <PullRequestsContent
         initialPullRequests={[
           pullRequest({ id: "open", title: "Inventory improvements" }),
           pullRequest({
@@ -342,7 +344,7 @@ describe("DashboardContent", () => {
         signedUnits: 2,
       }),
     ];
-    const view = render(<DashboardContent initialPullRequests={items} />);
+    const view = render(<PullRequestsContent initialPullRequests={items} />);
 
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Filter by provider" }),
@@ -363,7 +365,7 @@ describe("DashboardContent", () => {
     });
 
     view.unmount();
-    render(<DashboardContent initialPullRequests={items} />);
+    render(<PullRequestsContent initialPullRequests={items} />);
     await waitFor(() => {
       expect(
         screen.getByRole("combobox", { name: "Filter by provider" }),
