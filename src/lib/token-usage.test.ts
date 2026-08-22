@@ -43,4 +43,10 @@ describe("parseOptionalReviewTokenCap", () => {
     expect(parseOptionalReviewTokenCap("abc").valid).toBe(false);
     expect(parseOptionalReviewTokenCap("1000000001").valid).toBe(false);
   });
+
+  it("rejects comma-only and malformed grouping", () => {
+    expect(parseOptionalReviewTokenCap(",").valid).toBe(false);
+    expect(parseOptionalReviewTokenCap("50,").valid).toBe(false);
+    expect(parseOptionalReviewTokenCap("5,00").valid).toBe(false);
+  });
 });

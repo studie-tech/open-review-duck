@@ -3,10 +3,12 @@ export const MAX_REVIEW_TOKEN_CAP = 1_000_000_000;
 
 /** Parses a settings field that is empty for “no limit”. */
 export function parseOptionalReviewTokenCap(value: string) {
-  const trimmed = value.trim().replace(/,/g, "");
+  const trimmed = value.trim();
   if (!trimmed) return { cap: null, valid: true as const };
-  if (!/^[0-9]+$/.test(trimmed)) return { cap: null, valid: false as const };
-  const parsed = Number(trimmed);
+  if (!/^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)$/.test(trimmed)) {
+    return { cap: null, valid: false as const };
+  }
+  const parsed = Number(trimmed.replace(/,/g, ""));
   if (
     !Number.isSafeInteger(parsed) ||
     parsed < 1 ||
