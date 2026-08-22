@@ -56,7 +56,7 @@ export function managedAiMonthlyTokenLimit(tier: ManagedAiPlanTier) {
   }
 }
 
-/** Returns settled and in-flight managed token usage for the current month. */
+/** Returns settled managed token usage for the current month. */
 export async function managedAiPlanUsage(
   db: Database,
   input: { userId: string; tier: ManagedAiPlanTier; now?: Date },
@@ -66,8 +66,6 @@ export async function managedAiPlanUsage(
     .select({
       input: sum(aiUsage.inputTokens),
       output: sum(aiUsage.outputTokens),
-      reservedInput: sum(aiUsage.reservedInputTokens),
-      reservedOutput: sum(aiUsage.reservedOutputTokens),
     })
     .from(aiUsage)
     .where(
@@ -77,11 +75,7 @@ export async function managedAiPlanUsage(
         lt(aiUsage.day, resetsAt),
       ),
     );
-  const usedTokens =
-    Number(usage?.input ?? 0) +
-    Number(usage?.output ?? 0) +
-    Number(usage?.reservedInput ?? 0) +
-    Number(usage?.reservedOutput ?? 0);
+  const usedTokens = Number(usage?.input ?? 0) + Number(usage?.output ?? 0);
   const limitTokens = managedAiMonthlyTokenLimit(input.tier);
   return {
     tier: input.tier,

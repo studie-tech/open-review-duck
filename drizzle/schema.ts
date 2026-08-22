@@ -951,6 +951,7 @@ export const aiPreferences = createTable("ai_preference", {
   selectedModel: varchar({ length: 255 }).notNull().default("big-pickle"),
   mode: aiModeEnum().notNull().default("on_demand"),
   reviewPullRequests: boolean().notNull().default(false),
+  maxReviewTokens: integer(),
   freeProviderDisclosureVersion: varchar({ length: 64 }),
   freeProviderDisclosureAcceptedAt: timestamp({ withTimezone: true }),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),

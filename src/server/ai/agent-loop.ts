@@ -275,7 +275,7 @@ export async function executeAiTurn(
     await finishAtLimit(
       db,
       job,
-      "Investigation stopped at its managed quota reservation.",
+      "Investigation stopped at its token limit.",
       job.reservedMicroUsd > 0 && job.actualMicroUsd >= job.reservedMicroUsd
         ? "cost_limit"
         : "quota_limit",

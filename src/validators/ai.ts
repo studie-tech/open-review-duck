@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_REVIEW_TOKEN_CAP } from "~/lib/token-usage";
 
 const aiProviderSchema = z
   .string()
@@ -32,6 +33,13 @@ const aiConfigurationSchema = z.object({
   useManagedModels: z.boolean(),
   mode: z.enum(["off", "on_demand", "automatic"]),
   reviewPullRequests: z.boolean(),
+  maxReviewTokens: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_REVIEW_TOKEN_CAP)
+    .nullable()
+    .optional(),
 });
 
 /** Validates an optional provider URL against the selected AI protocol. */

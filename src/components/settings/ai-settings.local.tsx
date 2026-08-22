@@ -12,6 +12,7 @@ import {
   localDefaultAiPreset,
   matchingAiProviderPreset,
 } from "~/lib/ai-provider-presets";
+import { parseOptionalReviewTokenCap } from "~/lib/token-usage";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -47,6 +48,11 @@ export function LocalAiSettings({
   const [reviewPullRequests, setReviewPullRequests] = useState(
     initialConfiguration.reviewPullRequests,
   );
+  const [maxReviewTokensInput, setMaxReviewTokensInput] = useState(
+    initialConfiguration.maxReviewTokens?.toString() ?? "",
+  );
+  const maxReviewTokensField =
+    parseOptionalReviewTokenCap(maxReviewTokensInput);
   const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
   const [disclosureAccepted, setDisclosureAccepted] = useState(
     initialConfiguration.disclosure.accepted,
@@ -142,6 +148,7 @@ export function LocalAiSettings({
     useManagedModels: false as const,
     mode,
     reviewPullRequests,
+    maxReviewTokens: maxReviewTokensField.cap,
   });
 
   /** Tests the current model configuration and stores its verification proof. */
@@ -252,6 +259,29 @@ export function LocalAiSettings({
             onChange={(event) => setReviewPullRequests(event.target.checked)}
             className="accent-lime size-4"
           />
+        </label>
+        <label
+          htmlFor="ai-review-token-cap"
+          className="text-mist grid gap-2 text-xs"
+        >
+          Tokens per review
+          <input
+            id="ai-review-token-cap"
+            inputMode="numeric"
+            value={maxReviewTokensInput}
+            placeholder="No limit"
+            onChange={(event) => setMaxReviewTokensInput(event.target.value)}
+            className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-4 text-sm outline-none"
+          />
+          <span>
+            Optional cap on one review. Leave empty for no limit. New reviews
+            cannot start after your monthly plan tokens are used up.
+          </span>
+          {!maxReviewTokensField.valid && (
+            <span className="text-red-700 dark:text-red-300">
+              Enter a whole number of tokens, or leave this empty.
+            </span>
+          )}
         </label>
         <label className="text-mist grid gap-2 text-xs">
           Provider
@@ -452,7 +482,12 @@ export function LocalAiSettings({
             </Button>
             <Button
               className="w-full sm:w-auto"
-              disabled={!byokIsValid || !isVerified || save.isPending}
+              disabled={
+                !byokIsValid ||
+                !isVerified ||
+                !maxReviewTokensField.valid ||
+                save.isPending
+              }
               onClick={() => save.mutate(byokInput())}
             >
               {save.isPending && <Loader2 className="size-4 animate-spin" />}

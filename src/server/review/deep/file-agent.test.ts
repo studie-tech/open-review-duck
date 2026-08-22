@@ -313,7 +313,11 @@ function modelResult(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.deepReviewFileTools.mockReturnValue({});
+  mocks.deepReviewFileTools.mockReturnValue({
+    read_file: {},
+    report_finding: {},
+    finish_file: {},
+  });
   mocks.deepReviewFileFinished.mockResolvedValue(false);
   mocks.deepReviewSurveyTools.mockReturnValue({});
   mocks.deepReviewSurveyFinished.mockResolvedValue(false);
@@ -351,6 +355,7 @@ describe("deepReviewRunStop", () => {
       now: 2_000,
     });
     expect(stop?.failureClass).toBe("cancelled");
+    expect(stop?.allowClosingTurn).toBeFalsy();
   });
 
   it("measures the wall clock from the parent, not from the file", () => {
@@ -360,6 +365,7 @@ describe("deepReviewRunStop", () => {
       now: 1_000 + 1_800_000,
     });
     expect(stop?.failureClass).toBe("timeout");
+    expect(stop?.allowClosingTurn).toBeFalsy();
   });
 
   it("counts tool calls across the whole tree", () => {
@@ -369,6 +375,7 @@ describe("deepReviewRunStop", () => {
       now: 2_000,
     });
     expect(stop?.failureClass).toBe("tool_limit");
+    expect(stop?.allowClosingTurn).toBeFalsy();
   });
 
   it("bounds source exposure across the whole tree", () => {
@@ -378,6 +385,7 @@ describe("deepReviewRunStop", () => {
       now: 2_000,
     });
     expect(stop?.failureClass).toBe("budget");
+    expect(stop?.allowClosingTurn).toBeFalsy();
   });
 
   it("stops when the tree consumed the parent's token reservation", () => {
@@ -391,6 +399,7 @@ describe("deepReviewRunStop", () => {
       now: 2_000,
     });
     expect(stop?.failureClass).toBe("budget");
+    expect(stop?.allowClosingTurn).toBe(true);
   });
 
   it("stops when the tree consumed the parent's cost reservation", () => {
@@ -400,6 +409,7 @@ describe("deepReviewRunStop", () => {
       now: 2_000,
     });
     expect(stop?.failureClass).toBe("budget");
+    expect(stop?.allowClosingTurn).toBe(true);
   });
 });
 
@@ -588,6 +598,104 @@ describe("executeReviewFileTurn", () => {
     expect(result).toMatchObject({ done: true, state: "failed" });
     expect(result.failureClass).toBe("cancelled");
     expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
+  it("fails an unstarted file when the run token cap is already spent", async () => {
+    const state = createState({ consumedTokens: 1_000 });
+    state.parent.reservedInputTokens = 1_000;
+    const { db } = createFakeDb(state);
+
+    const result = await executeReviewFileTurn(db, {
+      childJobId,
+      turnIndex: 0,
+      context: fakeRepository(),
+    });
+
+    expect(result).toMatchObject({ done: true, state: "failed" });
+    expect(result.failureClass).toBe("budget");
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
+  it("closes an investigated file with the last-turn tools after the token cap", async () => {
+    const state = createState({ consumedTokens: 1_000 });
+    state.parent.reservedInputTokens = 1_000;
+    state.turns = [
+      {
+        id: "turn-0",
+        sequence: 0,
+        role: "user",
+        content: JSON.stringify({ role: "user", content: "review this file" }),
+      },
+      {
+        id: "turn-1",
+        sequence: 1,
+        role: "assistant",
+        content: JSON.stringify({
+          role: "assistant",
+          content: "The retry loop can spin if the token is empty.",
+        }),
+      },
+    ];
+    const { db } = createFakeDb(state);
+
+    const result = await executeReviewFileTurn(db, {
+      childJobId,
+      turnIndex: 1,
+      maxTurns: 3,
+      context: fakeRepository(),
+    });
+
+    expect(result).toMatchObject({
+      done: true,
+      state: "completed",
+      reason: "token_limit",
+    });
+    expect(mocks.generateText).toHaveBeenCalledOnce();
+    const call = mocks.generateText.mock.calls[0]?.[0] as {
+      maxOutputTokens: number;
+      messages: Array<{ content: string }>;
+      tools: Record<string, unknown>;
+    };
+    expect(call.maxOutputTokens).toBe(4_000);
+    expect(call.messages.at(-1)?.content).toContain("final turn");
+    expect(Object.keys(call.tools)).toEqual(["report_finding", "finish_file"]);
+  });
+
+  it("closes an investigated file when the remaining token budget cannot fit another turn", async () => {
+    const state = createState({ consumedTokens: 2_000 });
+    state.parent.reservedInputTokens = 3_000;
+    state.turns = [
+      {
+        id: "turn-0",
+        sequence: 0,
+        role: "user",
+        content: JSON.stringify({ role: "user", content: "review this file" }),
+      },
+      {
+        id: "turn-1",
+        sequence: 1,
+        role: "assistant",
+        content: JSON.stringify({
+          role: "assistant",
+          content: "The retry loop can spin if the token is empty.",
+        }),
+      },
+    ];
+    const { db } = createFakeDb(state);
+
+    const result = await executeReviewFileTurn(db, {
+      childJobId,
+      turnIndex: 1,
+      maxTurns: 3,
+      context: fakeRepository(),
+    });
+
+    expect(result).toMatchObject({
+      done: true,
+      state: "completed",
+      reason: "token_limit",
+    });
+    expect(mocks.generateText).toHaveBeenCalledOnce();
   });
 
   it("stops a file whose tree already exhausted the tool-call ceiling", async () => {

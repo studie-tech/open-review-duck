@@ -16,7 +16,6 @@ import { normalizeNodePostgresUrl } from "./db/url.js";
  * @property {string | undefined} [STORAGE_ID_KEY]
  * @property {string | undefined} [OPENROUTER_MANAGEMENT_KEY]
  * @property {string | undefined} [OPENROUTER_MODEL_ALLOWLIST]
- * @property {number | undefined} [OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD]
  * @property {string | undefined} [GITHUB_APP_ID]
  * @property {string | undefined} [GITHUB_APP_SLUG]
  * @property {string | undefined} [GITHUB_APP_CLIENT_ID]
@@ -63,10 +62,6 @@ export function validateDeploymentConfiguration(configuration) {
     ["STORAGE_ID_KEY", configuration.STORAGE_ID_KEY],
     ["OPENROUTER_MANAGEMENT_KEY", configuration.OPENROUTER_MANAGEMENT_KEY],
     ["OPENROUTER_MODEL_ALLOWLIST", configuration.OPENROUTER_MODEL_ALLOWLIST],
-    [
-      "OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD",
-      configuration.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD,
-    ],
     ["OAUTH_STATE_SECRET", configuration.OAUTH_STATE_SECRET],
     ["GITHUB_APP_ID", configuration.GITHUB_APP_ID],
     ["GITHUB_APP_SLUG", configuration.GITHUB_APP_SLUG],

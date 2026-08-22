@@ -22,6 +22,15 @@ export function estimatePendingInputTokens(
   return contentBytes + 2_000;
 }
 
+/** Stores an optional per-review token cap on the job that enforces it. */
+export function reviewJobTokenReservation(
+  maxReviewTokens: number | null | undefined,
+) {
+  const cap = Math.trunc(maxReviewTokens ?? 0);
+  if (!Number.isFinite(cap) || cap <= 0) return { input: 0, output: 0 };
+  return { input: cap, output: 0 };
+}
+
 /** Reserves enough managed quota for repeated turns over a growing transcript. */
 export function managedInvestigationReservation(input: {
   requestBytes: number;

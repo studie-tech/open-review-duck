@@ -15,7 +15,6 @@ const { configuration } = vi.hoisted(() => ({
     STORAGE_ID_KEY: "storage-test",
     OPENROUTER_MANAGEMENT_KEY: "openrouter-management-test",
     OPENROUTER_MODEL_ALLOWLIST: "openai/gpt-test",
-    OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD: 20,
     GITHUB_APP_ID: "12345",
     GITHUB_APP_SLUG: "reviewduck-test",
     GITHUB_APP_CLIENT_ID: "github-client-test",

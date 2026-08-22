@@ -50,14 +50,12 @@ describe("managed AI plans", () => {
     });
   });
 
-  it("counts settled and in-flight tokens against the account allowance", async () => {
+  it("counts settled tokens against the account allowance", async () => {
     const where = vi.fn(() =>
       Promise.resolve([
         {
           input: 20_000,
           output: 5_000,
-          reservedInput: 2_000,
-          reservedOutput: 1_000,
         },
       ]),
     );
@@ -76,9 +74,9 @@ describe("managed AI plans", () => {
     ).resolves.toEqual({
       tier: "free",
       subscribed: false,
-      usedTokens: 28_000,
+      usedTokens: 25_000,
       limitTokens: 100_000,
-      remainingTokens: 72_000,
+      remainingTokens: 75_000,
       resetsAt: new Date("2026-09-01T00:00:00Z"),
     });
     expect(where).toHaveBeenCalledOnce();
