@@ -56,7 +56,31 @@ export function repositoryRuleGlob(pattern: string) {
     source += escapeLiteral(character ?? "");
     index += 1;
   }
-  return new RegExp(`^${source}$`, "i");
+  return new RegExp(`^${source}$`);
+}
+
+/**
+ * Caches compiled globs by pattern.
+ *
+ * Callers match rules against every changed file in a review, so recompiling
+ * one rule's glob per file turns the plan phase into O(files × rules) regex
+ * builds for no benefit — a pattern compiles to exactly one matcher.
+ */
+const globCache = new Map<string, RegExp>();
+const GLOB_CACHE_LIMIT = 512;
+
+/** Compiles a rule glob once per distinct pattern. */
+function cachedRuleGlob(pattern: string) {
+  let glob = globCache.get(pattern);
+  if (!glob) {
+    glob = repositoryRuleGlob(pattern);
+    if (globCache.size >= GLOB_CACHE_LIMIT) {
+      const oldest = globCache.keys().next().value;
+      if (oldest) globCache.delete(oldest);
+    }
+    globCache.set(pattern, glob);
+  }
+  return glob;
 }
 
 /** Selects immutable rules that apply to one path and execution scope. */
@@ -69,7 +93,7 @@ export function applicableRepositoryRules(
   return (rules ?? []).filter(
     (rule) =>
       rule.scope === scope &&
-      repositoryRuleGlob(rule.pathGlob).test(normalizedPath),
+      cachedRuleGlob(rule.pathGlob).test(normalizedPath),
   );
 }
 
@@ -92,8 +116,12 @@ export function repositoryRulebookText(
 export function repositoryRuleDigest(
   rules: readonly RepositoryReviewRuleSnapshot[],
 ) {
+  // A byte-wise comparator keeps the order — and therefore the digest —
+  // identical across runtimes regardless of their ICU collation tables.
   const stable = [...rules]
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+    )
     .map((rule) => ({
       id: rule.id,
       version: rule.version,
