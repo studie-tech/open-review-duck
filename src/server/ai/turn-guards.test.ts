@@ -5,6 +5,7 @@ import {
   clampManagedInvestigationReservation,
   estimatePendingInputTokens,
   managedInvestigationReservation,
+  reviewJobTokenReservation,
 } from "./turn-guards";
 
 describe("AI turn guards", () => {
@@ -143,5 +144,22 @@ describe("AI turn guards", () => {
         12_999,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("reviewJobTokenReservation", () => {
+  it("stores no cap when the reviewer left the field empty", () => {
+    expect(reviewJobTokenReservation(null)).toEqual({ input: 0, output: 0 });
+    expect(reviewJobTokenReservation(undefined)).toEqual({
+      input: 0,
+      output: 0,
+    });
+  });
+
+  it("stores a positive cap on the job input reservation", () => {
+    expect(reviewJobTokenReservation(50_000)).toEqual({
+      input: 50_000,
+      output: 0,
+    });
   });
 });

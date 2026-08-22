@@ -29,6 +29,13 @@
       "when": 1787334200374,
       "tag": "0003_silly_namorita",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787379600000,
+      "tag": "0004_max_review_tokens",
+      "breakpoints": true
     }
   ]
 }

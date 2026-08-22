@@ -9,7 +9,10 @@ import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { formatTokenCount } from "~/lib/token-usage";
+import {
+  formatTokenCount,
+  parseOptionalReviewTokenCap,
+} from "~/lib/token-usage";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -38,6 +41,11 @@ export function SaasAiSettings({
   const [reviewPullRequests, setReviewPullRequests] = useState(
     initialConfiguration.reviewPullRequests,
   );
+  const [maxReviewTokensInput, setMaxReviewTokensInput] = useState(
+    initialConfiguration.maxReviewTokens?.toString() ?? "",
+  );
+  const maxReviewTokensField =
+    parseOptionalReviewTokenCap(maxReviewTokensInput);
   // Read from the configuration rather than from `planUsage.subscribed`, so
   // this page and the review workspace gate on exactly one predicate.
   const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
@@ -60,7 +68,8 @@ export function SaasAiSettings({
   const planTokenLimit = usage.limitTokens.toLocaleString("en-US");
   const dirty =
     mode !== initialConfiguration.mode ||
-    reviewPullRequests !== initialConfiguration.reviewPullRequests;
+    reviewPullRequests !== initialConfiguration.reviewPullRequests ||
+    maxReviewTokensField.cap !== (initialConfiguration.maxReviewTokens ?? null);
   const save = api.ai.saveConfiguration.useMutation({
     onSuccess: () => {
       void Promise.all([
@@ -85,7 +94,9 @@ export function SaasAiSettings({
           </h1>
           <p className="text-mist mt-2 max-w-2xl text-sm leading-6">
             ReviewDuck manages one privacy-protected model for every account.
-            Your plan controls how many tokens you can use each month.
+            Your plan controls how many tokens you can use each month. A review
+            that is already running can finish even if it crosses that monthly
+            allowance.
           </p>
         </div>
         {usage.subscribed ? (
@@ -268,13 +279,43 @@ export function SaasAiSettings({
                 </span>
               </label>
             </div>
+
+            <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
+              <label htmlFor="ai-review-token-cap" className="min-w-0">
+                <span className="text-cloud block text-sm font-medium">
+                  Tokens per review
+                </span>
+                <span className="text-mist mt-1 block text-xs leading-5">
+                  Optional cap on one review. Leave empty for no limit. New
+                  reviews cannot start after your monthly plan tokens are used
+                  up.
+                </span>
+              </label>
+              <div className="min-w-0">
+                <input
+                  id="ai-review-token-cap"
+                  inputMode="numeric"
+                  value={maxReviewTokensInput}
+                  placeholder="No limit"
+                  onChange={(event) =>
+                    setMaxReviewTokensInput(event.target.value)
+                  }
+                  className="bg-surface text-cloud focus:border-violet/40 h-11 w-full rounded-xl border border-line px-3 text-sm outline-none"
+                />
+                {!maxReviewTokensField.valid && (
+                  <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+                    Enter a whole number of tokens, or leave this empty.
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="border-t border-line px-5 py-4 sm:flex sm:justify-end sm:px-6">
             <Button
               className="w-full sm:w-auto"
               variant={dirty ? "primary" : "secondary"}
-              disabled={!dirty || save.isPending}
+              disabled={!dirty || !maxReviewTokensField.valid || save.isPending}
               onClick={() =>
                 save.mutate({
                   provider: "openrouter",
@@ -285,6 +326,7 @@ export function SaasAiSettings({
                   useManagedModels: true,
                   mode,
                   reviewPullRequests,
+                  maxReviewTokens: maxReviewTokensField.cap,
                 })
               }
             >

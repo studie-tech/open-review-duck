@@ -103,6 +103,9 @@ const DEEP_REVIEW_PROVIDER_ATTEMPTS = 3;
 /** The reason recorded on an item whose scout used every turn it was given. */
 const TURN_LIMIT_REASON = "turn_limit";
 
+/** The reason recorded when a token or cost cap forced the last-turn closer. */
+const TOKEN_LIMIT_CLOSE_REASON = "token_limit";
+
 /** How much of one revision may be inlined into the scout's first prompt. */
 const MAX_PROMPT_SOURCE_BYTES = 512_000;
 
@@ -110,6 +113,9 @@ const MAX_PROMPT_SOURCE_BYTES = 512_000;
 const PLAN_MAX_OUTPUT_TOKENS = 1_500;
 
 const MAX_TURN_TIMEOUT_MS = 120_000;
+
+/** Output room for a forced closing turn after the run token cap is spent. */
+const CLOSING_TURN_MAX_OUTPUT_TOKENS = 4_000;
 
 const planResponseSchema = z.object({
   checkpoints: z
@@ -155,6 +161,11 @@ export interface DeepReviewRunGateInput {
 export interface DeepReviewRunStop {
   failureClass: ReviewFailureClass;
   reason: string;
+  /**
+   * A token or cost ceiling can still harvest findings from a file that
+   * already investigated. Cancellation and timeouts cannot.
+   */
+  allowClosingTurn?: boolean;
 }
 
 export interface ExecuteReviewFileTurnInput {
@@ -192,6 +203,8 @@ interface AgentTurnInput {
   turnIndex: number;
   maxTurns: number;
   repository: DeepReviewContext;
+  /** The run's token cap is spent; this file still has a transcript to close. */
+  forceClose?: boolean;
 }
 
 interface AgentToolInput {
@@ -276,6 +289,14 @@ async function persistMessage(
     .onConflictDoNothing({
       target: [aiJobTurns.jobId, aiJobTurns.sequence],
     });
+}
+
+/**
+ * Reports whether a file already spoke, so a token-cap stop has something to
+ * harvest. A prompt-only transcript has no findings to extract.
+ */
+function transcriptHasInvestigation(messages: readonly ModelMessage[]) {
+  return messages.some((message) => message.role !== "user");
 }
 
 /**
@@ -536,7 +557,8 @@ export function deepReviewRunStop(
     return {
       failureClass: "budget",
       reason:
-        "The review reached its token reservation before this file was reviewed.",
+        "The review reached its token limit before this file was reviewed.",
+      allowClosingTurn: true,
     };
   }
   if (
@@ -547,6 +569,7 @@ export function deepReviewRunStop(
       failureClass: "budget",
       reason:
         "The review reached its cost reservation before this file was reviewed.",
+      allowClosingTurn: true,
     };
   }
   return null;
@@ -587,6 +610,9 @@ export async function executeReviewSurveyTurn(
  * Investigation is open-ended and the model will always find one more thing
  * worth reading, so the turn budget alone does not produce a conclusion. This
  * says the budget is spent and pairs with a tool set that can only conclude.
+ * A run that hit its token cap reuses this closer rather than a second
+ * extractor: the transcript is already the evidence, and `report_finding`
+ * is already the persistence path.
  */
 const FINAL_TURN_PROMPT =
   "This is your final turn for this file; no further investigation is possible. Report every defect you have already established with report_finding, quoting the exact existing code for each, then call finish_file. If you found nothing you can support with evidence, call finish_file with no findings.";
@@ -690,7 +716,20 @@ async function executeDeepReviewTurn(
       ),
     },
   });
-  if (stop) {
+  if (stop && !stop.allowClosingTurn) {
+    return await closeItem(db, {
+      job,
+      item,
+      state: "failed",
+      failureClass: stop.failureClass,
+      reason: stop.reason,
+      error: stop.reason,
+    });
+  }
+  const forceClose =
+    Boolean(stop?.allowClosingTurn) &&
+    transcriptHasInvestigation(await loadMessages(db, job));
+  if (stop && !forceClose) {
     return await closeItem(db, {
       job,
       item,
@@ -710,6 +749,7 @@ async function executeDeepReviewTurn(
       turnIndex: input.turnIndex,
       maxTurns,
       repository: input.context ?? (await createDeepReviewContext(db, { job })),
+      forceClose,
     };
     return await runAgentTurn(
       db,
@@ -737,7 +777,7 @@ async function runAgentTurn(
   input: AgentTurnInput,
   agent: DeepReviewAgent,
 ): Promise<ReviewFileTurnResult> {
-  const { job, parent, item, usage, turnIndex, maxTurns } = input;
+  const { job, parent, item, usage, turnIndex, maxTurns, forceClose } = input;
   await db
     .update(aiJobs)
     .set({
@@ -787,7 +827,13 @@ async function runAgentTurn(
     consumedMicroUsd: usage.consumedMicroUsd,
     pricing,
   });
-  if (turnBudget.limit) {
+  // Same closer as a last turn: the cap forbids more investigation, not
+  // report_finding / finish_file. The run-level token stop and this remaining-
+  // budget gate are one policy, checked where each has its numbers.
+  const tokenCapClose =
+    Boolean(forceClose) ||
+    Boolean(turnBudget.limit && transcriptHasInvestigation(messages));
+  if (turnBudget.limit && !tokenCapClose) {
     const reason =
       "The review reached its managed reservation before this file was reviewed.";
     return await closeItem(db, {
@@ -804,7 +850,7 @@ async function runAgentTurn(
   // On its last turn the agent must conclude. Left with the investigation
   // tools it will keep investigating and run out of budget having reported
   // nothing, which is exactly what a whole first run of this reviewer did.
-  const finalTurn = turnIndex + 1 >= maxTurns;
+  const finalTurn = tokenCapClose || turnIndex + 1 >= maxTurns;
   let finished = false;
   const allTools = agent.buildTools({
     execute: (invocation) =>
@@ -831,7 +877,9 @@ async function runAgentTurn(
         tools,
         stopWhen: stepCountIs(1),
         maxRetries: 0,
-        maxOutputTokens: turnBudget.maxOutputTokens,
+        maxOutputTokens: turnBudget.limit
+          ? CLOSING_TURN_MAX_OUTPUT_TOKENS
+          : turnBudget.maxOutputTokens,
         timeout: Math.min(MAX_TURN_TIMEOUT_MS, env.AI_MAX_DURATION_MS),
         providerOptions: resolved.providerOptions,
         telemetry: { isEnabled: false },
@@ -850,7 +898,7 @@ async function runAgentTurn(
     await agent.settle();
     return await closeItem(db, { job, item, state: "completed" });
   }
-  if (turnIndex + 1 >= maxTurns) {
+  if (finalTurn) {
     // The item was reviewed for its whole budget and its findings are already
     // persisted, so this is covered rather than failed — but the run records
     // that the agent never declared itself done.
@@ -859,7 +907,7 @@ async function runAgentTurn(
       job,
       item,
       state: "completed",
-      reason: TURN_LIMIT_REASON,
+      reason: tokenCapClose ? TOKEN_LIMIT_CLOSE_REASON : TURN_LIMIT_REASON,
     });
   }
   return {

@@ -439,8 +439,8 @@ async function surfacedFindings(
  * Every model call happens on a child, and `settleAiJobQuota` reads one job
  * row and returns before the `ai_usage` write when that row reserved nothing.
  * Without this, a multi-million-token review records no monthly tokens and no
- * spend, leaving both the managed token limit and the workspace budget
- * unenforced. The parent row is deliberately excluded from the aggregate: it
+ * spend, leaving the managed token limit unenforced. The parent row is
+ * deliberately excluded from the aggregate: it
  * makes no model calls of its own, and including the row the rollup is written
  * back onto would double the total on every replayed finalize.
  */

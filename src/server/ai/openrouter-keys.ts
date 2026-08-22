@@ -58,7 +58,49 @@ const createKeyResponse = z.object({
   key: z.string().min(1),
 });
 
-/** Returns the workspace's service-owned, provider-limited OpenRouter key. */
+/** Issues a management request against one workspace OpenRouter key. */
+async function openRouterManagementRequest(
+  method: string,
+  path: string,
+  body?: Record<string, unknown>,
+) {
+  if (!env.OPENROUTER_MANAGEMENT_KEY) {
+    throw new Error("Managed OpenRouter credentials are not configured");
+  }
+  const response = await fetch(`https://openrouter.ai/api/v1${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${env.OPENROUTER_MANAGEMENT_KEY}`,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  return response;
+}
+
+/** Removes a leftover provider-side spend cap from an existing workspace key. */
+async function liftOpenRouterWorkspaceKeyLimit(
+  db: Database,
+  credential: typeof managedAiCredentials.$inferSelect,
+) {
+  if (credential.monthlyLimitMicroUsd <= 0) return;
+  const response = await openRouterManagementRequest(
+    "PATCH",
+    `/keys/${encodeURIComponent(credential.providerKeyId)}`,
+    { limit: null, limit_reset: null },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`OpenRouter key update failed (${response.status})`);
+  }
+  await db
+    .update(managedAiCredentials)
+    .set({ monthlyLimitMicroUsd: 0 })
+    .where(eq(managedAiCredentials.id, credential.id));
+}
+
+/** Returns the workspace's service-owned OpenRouter key. */
 export async function openRouterWorkspaceKey(
   db: Database,
   workspaceId: string,
@@ -68,27 +110,8 @@ export async function openRouterWorkspaceKey(
       and(eq(table.workspaceId, workspaceId), eq(table.provider, "openrouter")),
   });
   if (!credential) {
-    if (
-      !env.OPENROUTER_MANAGEMENT_KEY ||
-      !env.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD
-    ) {
-      throw new Error("Managed OpenRouter credentials are not configured");
-    }
-    const limit = env.OPENROUTER_WORKSPACE_MONTHLY_LIMIT_USD;
-    const response = await fetch("https://openrouter.ai/api/v1/keys", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.OPENROUTER_MANAGEMENT_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        name: `reviewduck-${workspaceId}`,
-        limit,
-        limit_reset: "monthly",
-        include_byok_in_limit: false,
-      }),
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
+    const response = await openRouterManagementRequest("POST", "/keys", {
+      name: `reviewduck-${workspaceId}`,
     });
     if (!response.ok) {
       throw new Error(`OpenRouter key creation failed (${response.status})`);
@@ -107,7 +130,7 @@ export async function openRouterWorkspaceKey(
         provider: "openrouter",
         providerKeyId: created.data.hash,
         encryptedCredential,
-        monthlyLimitMicroUsd: Math.ceil(limit * 1_000_000),
+        monthlyLimitMicroUsd: 0,
       })
       .onConflictDoNothing({
         target: [
@@ -127,20 +150,14 @@ export async function openRouterWorkspaceKey(
       }));
     if (!inserted) {
       // A concurrent request won. Revoke the unused provider key immediately.
-      await fetch(
-        `https://openrouter.ai/api/v1/keys/${encodeURIComponent(created.data.hash)}`,
-        {
-          method: "DELETE",
-          headers: {
-            authorization: `Bearer ${env.OPENROUTER_MANAGEMENT_KEY}`,
-          },
-          redirect: "error",
-          signal: AbortSignal.timeout(15_000),
-        },
+      await openRouterManagementRequest(
+        "DELETE",
+        `/keys/${encodeURIComponent(created.data.hash)}`,
       );
     }
   }
   if (!credential) throw new Error("OpenRouter workspace key is unavailable");
+  await liftOpenRouterWorkspaceKeyLimit(db, credential);
   return openVaultSecret(
     {
       workspaceId,

@@ -73,6 +73,7 @@ describe("SaasAiSettings", () => {
           managedModel: "provider/model",
           managedModels: ["provider/model"],
           reviewPullRequests: false,
+          maxReviewTokens: null,
           deepReviewAvailable: false,
           configuration: {
             provider: "openrouter",
@@ -111,6 +112,7 @@ describe("SaasAiSettings", () => {
     ).toBeVisible();
     expect(screen.queryByText("Managed model")).not.toBeInTheDocument();
     expect(screen.queryByText(/Big Pickle/)).not.toBeInTheDocument();
+    expect(screen.getByText("Tokens per review")).toBeVisible();
     expect(screen.getByRole("checkbox")).toBeDisabled();
     expect(
       screen.getByText(/Pull-request review is a Pro capability/),
@@ -133,6 +135,7 @@ describe("SaasAiSettings", () => {
       useManagedModels: true,
       mode: "automatic",
       reviewPullRequests: false,
+      maxReviewTokens: null,
     });
     expect(mocks.configurationInvalidate).toHaveBeenCalledOnce();
     expect(mocks.guidanceInvalidate).toHaveBeenCalledOnce();
@@ -148,6 +151,7 @@ describe("SaasAiSettings", () => {
           managedModel: "provider/model",
           managedModels: ["provider/model"],
           reviewPullRequests: true,
+          maxReviewTokens: 50_000,
           deepReviewAvailable: true,
           configuration: {
             provider: "openrouter",

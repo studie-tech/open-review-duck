@@ -82,7 +82,6 @@ const safeAiStartMessages = new Set([
   "Daily managed AI request limit reached",
   "Daily user AI request limit reached",
   "Monthly AI token limit reached",
-  "Workspace monthly AI budget is exhausted",
   "The managed model is missing a current tool-capable catalog entry",
   "Configure a local AI provider before using AI",
   "Too many requests. Wait a moment and try again.",
@@ -118,6 +117,7 @@ export const aiRouter = createTRPCRouter({
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
+      maxReviewTokens: preference?.maxReviewTokens ?? null,
       // Both review entry points read this: the Review button and the
       // auto-start effect that fires on every pull-request page load. Without
       // it an unentitled account would issue a mutation that can only fail.
@@ -344,6 +344,7 @@ export const aiRouter = createTRPCRouter({
           selectedModel,
           mode: input.mode,
           reviewPullRequests: input.reviewPullRequests,
+          maxReviewTokens: input.maxReviewTokens ?? null,
         })
         .onConflictDoUpdate({
           target: aiPreferences.workspaceId,
@@ -351,6 +352,7 @@ export const aiRouter = createTRPCRouter({
             selectedModel,
             mode: input.mode,
             reviewPullRequests: input.reviewPullRequests,
+            maxReviewTokens: input.maxReviewTokens ?? null,
           },
         });
       return { ok: true as const };
