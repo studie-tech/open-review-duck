@@ -29,6 +29,20 @@ function codeFence(source: string) {
   return `${fence}\n${source}\n${fence}`;
 }
 
+/**
+ * Neutralizes Markdown structure inside finding-authored text.
+ *
+ * Titles and bodies come from a model, so a crafted heading or rule could
+ * otherwise forge instructions in the brief another agent is told to execute.
+ */
+function escapeMarkdownText(value: string) {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("#", "\\#")
+    .replaceAll("---", "\\-\\-\\-")
+    .replaceAll("`", "\\`");
+}
+
 /** Builds a self-contained fixing brief safe to paste into another agent. */
 export function repositoryReviewReport(input: RepositoryReportInput) {
   const heading =
@@ -36,11 +50,17 @@ export function repositoryReviewReport(input: RepositoryReportInput) {
       ? "Repository compliance report"
       : "Repository code-review report";
   const findings = input.findings.map((finding, index) => {
+    // Line numbers are positions, so only the absence of one (null) may drop
+    // the location — a stored 0 would otherwise silently hide where to look.
+    const startLine =
+      finding.startLine !== null && finding.startLine >= 0
+        ? finding.startLine
+        : null;
     const location = finding.path
       ? `${finding.path}${
-          finding.startLine
-            ? `:${finding.startLine}${
-                finding.endLine && finding.endLine !== finding.startLine
+          startLine !== null
+            ? `:${startLine}${
+                finding.endLine !== null && finding.endLine > startLine
                   ? `-${finding.endLine}`
                   : ""
               }`
@@ -48,12 +68,12 @@ export function repositoryReviewReport(input: RepositoryReportInput) {
         }`
       : "Repository-wide";
     return [
-      `## ${index + 1}. ${finding.title}`,
-      `- Severity: ${finding.severity}`,
-      `- Category: ${finding.category}`,
-      `- Location: ${location}`,
+      `## ${index + 1}. ${escapeMarkdownText(finding.title)}`,
+      `- Severity: ${escapeMarkdownText(finding.severity)}`,
+      `- Category: ${escapeMarkdownText(finding.category)}`,
+      `- Location: ${escapeMarkdownText(location)}`,
       "",
-      finding.body,
+      escapeMarkdownText(finding.body),
       ...(finding.existingCode
         ? ["", "Current code:", "", codeFence(finding.existingCode)]
         : []),
@@ -79,16 +99,34 @@ export function repositoryReviewReport(input: RepositoryReportInput) {
   ].join("\n");
 }
 
+/**
+ * Short synchronous fingerprint used only to disambiguate truncated filenames.
+ * Not cryptographic; the brief's integrity lives in the file content itself.
+ */
+function filenameDigest(input: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0");
+}
+
 /** Builds a portable, bounded filename for a Markdown fixing brief. */
 export function repositoryReportFilename(
   repository: string,
   branch: string,
   purpose: "code" | "compliance",
 ) {
-  const safe = `${repository}-${branch}-${purpose}-report`
+  const raw = `${repository}-${branch}-${purpose}-report`;
+  const safe = raw
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-  return `${safe || "repository-review"}.md`;
+    .replace(/^-+|-+$/g, "");
+  if (safe.length <= 120) {
+    return `${safe || "repository-review"}.md`;
+  }
+  // Distinct long names must not collapse onto one truncated filename and
+  // silently overwrite earlier briefs, so the tail carries a stable digest.
+  return `${safe.slice(0, 112)}-${filenameDigest(raw)}.md`;
 }

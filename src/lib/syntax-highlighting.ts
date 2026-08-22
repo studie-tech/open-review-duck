@@ -392,3 +392,23 @@ export function useHighlightedSource(source: string, language: string) {
 export async function preloadSyntaxLanguage(language: string) {
   if (language !== "text") await grammarFor(language);
 }
+
+/** Checks whether syntax highlighting supports a language identifier. */
+export function knownLanguage(language: string) {
+  return supportedLanguages.includes(language as SupportedLanguage)
+    ? (language as SupportedLanguage)
+    : undefined;
+}
+
+/**
+ * Names a language the grammars cover, or throws.
+ *
+ * `review_unit.language` is stored unconstrained, so a value that predates a
+ * grammar being renamed or removed can reach the client. Callers that only
+ * want to know whether a feature applies ask `knownLanguage` instead.
+ */
+export function supportedLanguage(language: string) {
+  const known = knownLanguage(language);
+  if (known) return known;
+  throw new Error(`Unsupported review language: ${language}`);
+}

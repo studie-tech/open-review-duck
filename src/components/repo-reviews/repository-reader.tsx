@@ -2,12 +2,16 @@
 
 import {
   ArrowLeft,
+  BookOpenCheck,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   FileCode2,
   GitBranch,
+  History,
   LoaderCircle,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,24 +19,35 @@ import {
   Undo2,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
+import {
+  type CommandCenterItem,
+  ShortcutHint,
+} from "~/components/command-center";
+import { usePageCommandCenter } from "~/components/page-command-center";
+import { HighlightedSourceLines } from "~/components/review/highlighted-source-lines";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
-import { hydratePrivateReviewSources } from "~/lib/private-source-client";
+import { lockDocumentScroll } from "~/lib/document-scroll-lock";
+import {
+  hydratePrivateReviewSources,
+  prioritizePrivateReviewSources,
+} from "~/lib/private-source-client";
+import { readerShortcuts } from "~/lib/review-shortcuts";
+import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
 type Monitor = RouterOutputs["repoReviews"]["list"][number];
-
-/** Converts a unit source range into numbered display rows. */
-function sourceLines(source: string, startLine: number) {
-  return source.split("\n").map((content, index) => ({
-    number: startLine + index,
-    content,
-  }));
-}
 
 /** Finds the old revision's first line when a symbol moved between snapshots. */
 function previousStartLine(unit: Workspace["units"][number] | undefined) {
@@ -62,15 +77,40 @@ export function RepositoryReader({
   const [sourceLoading, setSourceLoading] = useState(
     initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
   );
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const codeScrollRef = useRef<HTMLDivElement>(null);
   const activeIndex = Math.max(
     0,
     units.findIndex(({ id }) => id === activeId),
   );
   const active = units[activeIndex];
+  // The reader takes over the viewport like the pull-request workspace, so
+  // the shell behind it must stop scrolling out of view.
+  useLayoutEffect(() => lockDocumentScroll(document), []);
+
+  // A snapshot is immutable. Keep its download manifest stable so a same-
+  // snapshot refresh does not abort and restart verified source downloads.
+  // The unit you opened first downloads ahead of everything else.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot identity owns its immutable source manifest
+  const hydrationPlan = useMemo(() => {
+    const firstPending =
+      initialData.units.find(({ status }) => status !== "signed_off")?.id ??
+      initialData.units[0]?.id;
+    return {
+      snapshotId:
+        initialData.sourceDelivery === "direct"
+          ? initialData.snapshot?.id
+          : undefined,
+      units: prioritizePrivateReviewSources(initialData.units, {
+        activeId: firstPending,
+        activePath: initialData.units.find(({ id }) => id === firstPending)
+          ?.path,
+      }),
+    };
+  }, [initialData.snapshot?.id]);
 
   useEffect(() => {
-    if (initialData.sourceDelivery !== "direct" || !initialData.snapshot)
-      return;
+    if (!hydrationPlan.snapshotId) return;
     let live = true;
     const controller = new AbortController();
     const cache = new Map<string, Promise<Uint8Array>>();
@@ -98,8 +138,8 @@ export function RepositoryReader({
     };
     setSourceLoading(true);
     void hydratePrivateReviewSources(
-      initialData.units,
-      initialData.snapshot.id,
+      hydrationPlan.units,
+      hydrationPlan.snapshotId,
       cache,
       6,
       controller.signal,
@@ -135,7 +175,7 @@ export function RepositoryReader({
       if (flushTimer !== undefined) clearTimeout(flushTimer);
       cache.clear();
     };
-  }, [initialData]);
+  }, [hydrationPlan]);
 
   const paths = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -152,9 +192,28 @@ export function RepositoryReader({
     }
     return [...grouped.entries()];
   }, [search, units]);
-  const signed = units.filter(({ status }) => status === "signed_off").length;
+  const pending = useMemo(
+    () => units.filter(({ status }) => status !== "signed_off"),
+    [units],
+  );
+  const signed = units.length - pending.length;
   const percent = units.length ? Math.round((signed / units.length) * 100) : 0;
-  const pending = units.filter(({ status }) => status !== "signed_off");
+
+  /**
+   * Selects one unit and returns the code pane to its top.
+   *
+   * Every navigation path funnels through here so keyboard steps, sidebar
+   * clicks, and footer buttons share one behaviour.
+   */
+  const selectUnit = useCallback(
+    (unit: Workspace["units"][number] | undefined) => {
+      if (!unit) return;
+      setActiveId(unit.id);
+      setPreviousUnitId(undefined);
+      codeScrollRef.current?.scrollTo?.({ top: 0 });
+    },
+    [],
+  );
 
   const signOff = api.review.signOff.useMutation({
     onMutate: ({ unitId }) => {
@@ -169,10 +228,17 @@ export function RepositoryReader({
       return { previousStatus };
     },
     onSuccess: (_result, { unitId }) => {
-      const next = units.find(
-        (unit) => unit.id !== unitId && unit.status !== "signed_off",
+      // `units` still holds the pre-mutation statuses here, so the unit just
+      // signed off is excluded by id rather than by status.
+      const current = units.findIndex(({ id }) => id === unitId);
+      const ordered = [
+        ...units.slice(current + 1),
+        ...units.slice(0, Math.max(current, 0)),
+      ];
+      const next = ordered.find(
+        ({ id, status }) => id !== unitId && status !== "signed_off",
       );
-      if (next) setActiveId(next.id);
+      if (next) selectUnit(next);
       toast.success("Marked as read");
     },
     onError: (error, { unitId }, context) => {
@@ -211,18 +277,230 @@ export function RepositoryReader({
       toast.error("Could not restore unit", { description: error.message });
     },
   });
+
+  // The mutation result object is rebuilt on every render, so the callbacks
+  // and command registrations below may only depend on its stable members.
+  const signOffStart = signOff.mutate;
+  const unreviewStart = unreview.mutate;
+
+  /** Advances to the next unread unit, wrapping once past the end. */
+  const resumeQueue = useCallback(() => {
+    if (pending.length === 0) {
+      toast.info("Everything in this snapshot is already read");
+      return;
+    }
+    const next =
+      pending.find(
+        (unit) => units.findIndex(({ id }) => id === unit.id) > activeIndex,
+      ) ?? pending[0];
+    selectUnit(next);
+  }, [activeIndex, pending, selectUnit, units]);
+
+  /** Steps to the first unit of the neighbouring file that has readable units. */
+  const stepFile = useCallback(
+    (direction: -1 | 1) => {
+      if (!active) return;
+      let index = activeIndex + direction;
+      while (index >= 0 && index < units.length) {
+        if (units[index]?.path !== active.path) {
+          selectUnit(units[index]);
+          return;
+        }
+        index += direction;
+      }
+    },
+    [active, activeIndex, selectUnit, units],
+  );
+
+  /** Scrolls the source pane by most of a viewport without leaving it. */
+  const scrollCode = useCallback((direction: -1 | 1) => {
+    const pane = codeScrollRef.current;
+    if (!pane) return;
+    pane.scrollBy?.({ top: direction * pane.clientHeight * 0.8 });
+  }, []);
+
+  /** Reveals the search field, opening the review path panel if needed. */
+  const focusSearch = useCallback(() => {
+    setSidebarOpen(true);
+    requestAnimationFrame(() => searchInputRef.current?.focus());
+  }, []);
+
   const showPrevious = previousUnitId === activeId;
-  const displayedSource =
-    showPrevious && active?.previousSource !== null
-      ? active?.previousSource
-      : active?.source;
+  const togglePreviousSource = useCallback(() => {
+    if (!active || active.previousSource === null) return;
+    setPreviousUnitId(showPrevious ? undefined : active.id);
+  }, [active, showPrevious]);
+
+  const canSignOff = Boolean(active) && active?.status !== "signed_off";
+  const runSignOff = useCallback(() => {
+    if (!active || !canSignOff) return;
+    signOffStart({ unitId: active.id, durationSeconds: 0 });
+  }, [active, canSignOff, signOffStart]);
+  const runUnreview = useCallback(() => {
+    if (active?.status !== "signed_off") return;
+    unreviewStart({ unitId: active.id });
+  }, [active, unreviewStart]);
+  const commands = useMemo<CommandCenterItem[]>(
+    () => [
+      {
+        id: "reader-next-unit",
+        label: "Select next unit",
+        description: "Step to the next symbol in the reading path",
+        group: "Reader navigation",
+        icon: <ChevronDown className="size-4" />,
+        shortcut: readerShortcuts.nextUnit,
+        disabled: activeIndex >= units.length - 1,
+        onSelect: () => selectUnit(units[activeIndex + 1]),
+      },
+      {
+        id: "reader-previous-unit",
+        label: "Select previous unit",
+        description: "Step back to the previous symbol in the reading path",
+        group: "Reader navigation",
+        icon: <ChevronUp className="size-4" />,
+        shortcut: readerShortcuts.previousUnit,
+        disabled: activeIndex <= 0,
+        onSelect: () => selectUnit(units[activeIndex - 1]),
+      },
+      {
+        id: "reader-next-file",
+        label: "Open next file",
+        description: "Jump to the first symbol of the following file",
+        group: "Reader navigation",
+        icon: <ChevronRight className="size-4" />,
+        shortcut: readerShortcuts.nextFile,
+        disabled: activeIndex >= units.length - 1,
+        onSelect: () => stepFile(1),
+      },
+      {
+        id: "reader-previous-file",
+        label: "Open previous file",
+        description: "Jump to the first symbol of the preceding file",
+        group: "Reader navigation",
+        icon: <ChevronLeft className="size-4" />,
+        shortcut: readerShortcuts.previousFile,
+        disabled: activeIndex <= 0,
+        onSelect: () => stepFile(-1),
+      },
+      {
+        id: "reader-next-pending",
+        label: "Resume the reading queue",
+        description:
+          signed < units.length
+            ? `Open the next of ${units.length - signed} unread units`
+            : "Every unit in this snapshot is read",
+        group: "Reader navigation",
+        icon: <BookOpenCheck className="size-4" />,
+        shortcut: readerShortcuts.nextPending,
+        disabled: signed >= units.length,
+        onSelect: resumeQueue,
+      },
+      {
+        id: "reader-scroll-down",
+        label: "Scroll source down",
+        description: "Move down through the code view",
+        group: "Reader navigation",
+        icon: <ChevronDown className="size-4" />,
+        shortcut: readerShortcuts.scrollDown,
+        onSelect: () => scrollCode(1),
+      },
+      {
+        id: "reader-scroll-up",
+        label: "Scroll source up",
+        description: "Move up through the code view",
+        group: "Reader navigation",
+        icon: <ChevronUp className="size-4" />,
+        shortcut: readerShortcuts.scrollUp,
+        onSelect: () => scrollCode(-1),
+      },
+      {
+        id: "reader-toggle-previous-source",
+        label: showPrevious
+          ? "Show current revision"
+          : "Show previous revision",
+        description: "Compare what this symbol looked like before the update",
+        group: "Reader navigation",
+        icon: <History className="size-4" />,
+        shortcut: readerShortcuts.togglePreviousSource,
+        disabled: !active || active.previousSource === null,
+        onSelect: togglePreviousSource,
+      },
+      {
+        id: "reader-search-path",
+        label: "Search the reading path",
+        description: "Find a file or symbol in this snapshot",
+        group: "Reader actions",
+        icon: <Search className="size-4" />,
+        shortcut: readerShortcuts.search,
+        onSelect: focusSearch,
+      },
+      {
+        id: "reader-toggle-path-panel",
+        label: "Toggle review path",
+        description: "Show or hide the left reading panel",
+        group: "Reader actions",
+        icon: <PanelLeftOpen className="size-4" />,
+        shortcut: readerShortcuts.togglePathPanel,
+        onSelect: () => setSidebarOpen((value) => !value),
+      },
+      {
+        id: "reader-sign-off",
+        label: "Mark read & continue",
+        description: active
+          ? `Record ${active.name} as read and open the next unread unit`
+          : "Record this unit as read",
+        group: "Reader actions",
+        icon: <Check className="size-4" />,
+        shortcut: readerShortcuts.signOff,
+        alternateShortcut: readerShortcuts.signOffHere,
+        disabled: !canSignOff,
+        onSelect: runSignOff,
+      },
+      {
+        id: "reader-mark-unread",
+        label: "Mark unread",
+        description: "Return this unit to the reading queue",
+        group: "Reader actions",
+        icon: <Undo2 className="size-4" />,
+        shortcut: readerShortcuts.undoSignOff,
+        disabled: active?.status !== "signed_off",
+        onSelect: runUnreview,
+      },
+    ],
+    [
+      active,
+      activeIndex,
+      canSignOff,
+      focusSearch,
+      resumeQueue,
+      runSignOff,
+      runUnreview,
+      scrollCode,
+      selectUnit,
+      showPrevious,
+      signed,
+      stepFile,
+      togglePreviousSource,
+      units,
+    ],
+  );
+  usePageCommandCenter(commands);
+
+  const language = knownLanguage(active?.language ?? "text");
+  const displayedSource = showPrevious
+    ? (active?.previousSource ?? active?.source)
+    : active?.source;
   const displayedStartLine = showPrevious
     ? previousStartLine(active)
     : (active?.startLine ?? 1);
+  const highlightedLines = useHighlightedSource(
+    displayedSource ?? "",
+    language ?? "text",
+  );
 
   return (
-    <main className="flex h-[calc(100vh-4.5rem)] min-h-[620px] flex-col overflow-hidden bg-ink lg:h-screen">
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line bg-panel px-3 sm:px-5">
+    <div className="bg-ink fixed inset-0 z-40 flex flex-col overflow-hidden">
+      <header className="bg-panel flex h-16 shrink-0 items-center gap-3 border-b border-line px-3 sm:px-5">
         <Button size="icon" variant="ghost" asChild>
           <Link href="/repo-reviews" aria-label="Back to repo reviews">
             <ArrowLeft className="size-4" />
@@ -240,12 +518,16 @@ export function RepositoryReader({
           ) : (
             <PanelLeftOpen className="size-4" />
           )}
+          <ShortcutHint
+            shortcut={readerShortcuts.togglePathPanel}
+            className="max-lg:hidden"
+          />
         </Button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-cloud">
+          <div className="text-cloud truncate text-sm font-semibold">
             {monitor.repositoryOwner}/{monitor.repositoryName}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-mist">
+          <div className="text-mist mt-0.5 flex items-center gap-2 text-[11px]">
             <GitBranch className="size-3" /> {monitor.branch}
             <span>·</span>
             <span className="font-mono">
@@ -253,16 +535,25 @@ export function RepositoryReader({
             </span>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={focusSearch}
+          className="text-mist hover:text-cloud hover:bg-surface-hover hidden items-center gap-2 rounded-xl border border-line bg-surface/75 px-3 text-xs transition sm:flex"
+        >
+          <Search className="size-3.5" />
+          Find file or symbol
+          <ShortcutHint shortcut={readerShortcuts.search} />
+        </button>
         <div className="hidden w-44 sm:block">
-          <div className="flex items-center justify-between text-[11px] text-mist">
+          <div className="text-mist flex items-center justify-between text-[11px]">
             <span>
               {signed}/{units.length} read
             </span>
             <span>{percent}%</span>
           </div>
-          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-subtle">
+          <div className="bg-surface-subtle mt-1.5 h-1.5 overflow-hidden rounded-full">
             <div
-              className="h-full rounded-full bg-lime transition-all"
+              className="bg-lime h-full rounded-full transition-all"
               style={{ width: `${percent}%` }}
             />
           </div>
@@ -271,21 +562,30 @@ export function RepositoryReader({
 
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && (
-          <aside className="w-[320px] shrink-0 overflow-y-auto border-r border-line bg-panel max-md:absolute max-md:inset-y-16 max-md:left-0 max-md:z-20 max-md:shadow-2xl">
-            <div className="sticky top-0 z-10 border-b border-line bg-panel p-3">
+          <aside className="bg-panel border-line w-[320px] shrink-0 overflow-y-auto border-r max-md:absolute max-md:inset-y-16 max-md:left-0 max-md:z-20 max-md:shadow-2xl">
+            <div className="bg-panel border-line sticky top-0 z-10 border-b p-3">
               <label className="relative block">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist" />
+                <Search className="text-mist absolute top-1/2 left-3 size-4 -translate-y-1/2" />
                 <input
+                  ref={searchInputRef}
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setSearch("");
+                      event.currentTarget.blur();
+                    }
+                  }}
                   placeholder="Find file or symbol"
-                  className="h-10 w-full rounded-xl border border-line bg-surface pl-9 pr-3 text-xs text-cloud outline-none focus:border-lime/50"
+                  aria-label="Find file or symbol"
+                  className="border-line bg-surface text-cloud focus:border-lime/50 h-10 w-full rounded-xl border pr-3 pl-9 text-xs outline-none"
                 />
               </label>
               {pending.some(
                 ({ changedSinceSignOff }) => changedSinceSignOff,
               ) && (
-                <div className="mt-3 rounded-xl border border-lime/20 bg-lime/7 px-3 py-2 text-[11px] text-lime">
+                <div className="border-lime/20 bg-lime/7 text-lime mt-3 rounded-xl border px-3 py-2 text-[11px]">
                   Changed since your last read is pinned into the path below.
                 </div>
               )}
@@ -293,11 +593,11 @@ export function RepositoryReader({
             <div className="p-2">
               {paths.length === 0 && (
                 <div
-                  className="mx-2 mt-4 rounded-xl border border-dashed border-line px-4 py-6 text-center"
+                  className="border-line mx-2 mt-4 rounded-xl border border-dashed px-4 py-6 text-center"
                   aria-live="polite"
                 >
-                  <Search className="mx-auto size-5 text-fog" />
-                  <p className="mt-3 text-xs font-medium text-cloud">
+                  <Search className="text-fog mx-auto size-5" />
+                  <p className="text-cloud mt-3 text-xs font-medium">
                     {search.trim()
                       ? `No files or symbols match “${search.trim()}”.`
                       : "No reviewable symbols are available in this snapshot."}
@@ -305,7 +605,7 @@ export function RepositoryReader({
                   {search.trim() && (
                     <button
                       type="button"
-                      className="mt-3 text-xs font-medium text-lime hover:text-lime-bright"
+                      className="text-lime hover:text-lime-bright mt-3 text-xs font-medium"
                       onClick={() => setSearch("")}
                     >
                       Clear search
@@ -315,7 +615,7 @@ export function RepositoryReader({
               )}
               {paths.map(([path, pathUnits]) => (
                 <div key={path} className="mb-2">
-                  <div className="flex items-center gap-2 px-2 py-2 text-[11px] font-medium text-mist">
+                  <div className="text-mist flex items-center gap-2 px-2 py-2 text-[11px] font-medium">
                     <FileCode2 className="size-3.5 shrink-0" />
                     <span className="truncate">{path}</span>
                   </div>
@@ -325,7 +625,7 @@ export function RepositoryReader({
                       type="button"
                       aria-current={active?.id === unit.id ? "true" : undefined}
                       onClick={() => {
-                        setActiveId(unit.id);
+                        selectUnit(unit);
                         if (window.innerWidth < 768) setSidebarOpen(false);
                       }}
                       className={cn(
@@ -342,14 +642,14 @@ export function RepositoryReader({
                             ? "bg-lime"
                             : unit.changedSinceSignOff
                               ? "bg-amber-400"
-                              : "border border-line-strong",
+                              : "border-line-strong border",
                         )}
                       />
                       <span className="min-w-0">
                         <span className="block truncate text-xs font-medium">
                           {unit.name}
                         </span>
-                        <span className="mt-0.5 block text-[10px] text-fog">
+                        <span className="text-fog mt-0.5 block text-[10px]">
                           {unit.kind} · lines {unit.startLine}-{unit.endLine}
                         </span>
                       </span>
@@ -361,125 +661,117 @@ export function RepositoryReader({
           </aside>
         )}
 
-        <section className="flex min-w-0 flex-1 flex-col bg-code">
+        <section className="bg-code flex min-w-0 flex-1 flex-col">
           {active ? (
             <>
-              <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-line bg-panel px-4 py-2">
+              <div className="bg-panel border-line flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b px-4 py-2">
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium text-cloud">
+                  <div className="text-cloud truncate text-xs font-medium">
                     {active.path}
                   </div>
-                  <div className="mt-0.5 truncate text-[11px] text-mist">
-                    {active.kind} · {active.name}
+                  <div className="text-mist mt-0.5 truncate text-[11px]">
+                    {active.kind} · {active.name} · Unit {activeIndex + 1}/
+                    {units.length}
                   </div>
                 </div>
                 {active.changedSinceSignOff && (
-                  <span className="rounded-lg border border-amber-400/25 bg-amber-400/8 px-2 py-1 text-[10px] font-semibold text-amber-300">
+                  <span className="border-amber-400/25 bg-amber-400/8 text-amber-300 rounded-lg border px-2 py-1 text-[10px] font-semibold">
                     Changed since read
                   </span>
                 )}
                 {active.previousSource !== null && (
-                  <div className="flex rounded-lg border border-line bg-surface-subtle p-0.5 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => setPreviousUnitId(undefined)}
-                      className={cn(
-                        "rounded-md px-2.5 py-1",
-                        !showPrevious
-                          ? "bg-surface text-cloud shadow-sm"
-                          : "text-mist",
-                      )}
-                    >
-                      Current
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPreviousUnitId(active.id)}
-                      className={cn(
-                        "rounded-md px-2.5 py-1",
-                        showPrevious
-                          ? "bg-surface text-cloud shadow-sm"
-                          : "text-mist",
-                      )}
-                    >
-                      Previous
-                    </button>
-                  </div>
+                  <Button
+                    size="sm"
+                    variant={showPrevious ? "secondary" : "ghost"}
+                    aria-pressed={showPrevious}
+                    onClick={togglePreviousSource}
+                  >
+                    <History className="size-3.5" />
+                    {showPrevious ? "Current revision" : "Previous revision"}
+                    <ShortcutHint
+                      shortcut={readerShortcuts.togglePreviousSource}
+                      className="max-sm:hidden"
+                    />
+                  </Button>
                 )}
               </div>
-              <div className="min-h-0 flex-1 overflow-auto">
+              <div
+                ref={codeScrollRef}
+                className="min-h-0 flex-1 overflow-auto [overflow-anchor:none]"
+              >
                 {sourceLoading && !displayedSource ? (
-                  <div className="flex h-full items-center justify-center gap-2 text-sm text-mist">
+                  <div className="text-mist flex h-full items-center justify-center gap-2 text-sm">
                     <LoaderCircle className="size-4 animate-spin" /> Loading
                     verified source…
                   </div>
                 ) : (
-                  <pre className="min-w-max py-5 font-mono text-[12px] leading-6 text-cloud">
-                    {sourceLines(displayedSource ?? "", displayedStartLine).map(
-                      (line) => (
-                        <div
-                          key={line.number}
-                          className="group flex min-h-6 hover:bg-surface-hover/45"
-                        >
-                          <span className="sticky left-0 w-16 shrink-0 select-none border-r border-line/60 bg-code pr-3 text-right text-fog group-hover:bg-surface-hover">
-                            {line.number}
-                          </span>
-                          <code className="whitespace-pre px-4">
-                            {line.content || " "}
-                          </code>
-                        </div>
-                      ),
-                    )}
-                  </pre>
+                  <HighlightedSourceLines
+                    lines={highlightedLines}
+                    startLine={displayedStartLine}
+                  />
                 )}
               </div>
-              <footer className="flex h-16 shrink-0 items-center justify-between gap-3 border-t border-line bg-panel px-4">
+              <footer className="bg-panel border-line flex h-16 shrink-0 items-center justify-between gap-3 border-t px-4">
                 <Button
                   size="sm"
                   variant="ghost"
                   disabled={activeIndex <= 0}
-                  onClick={() => setActiveId(units[activeIndex - 1]?.id)}
+                  onClick={() => selectUnit(units[activeIndex - 1])}
                 >
                   <ChevronLeft className="size-4" /> Previous
+                  <ShortcutHint
+                    shortcut={readerShortcuts.previousUnit}
+                    className="max-md:hidden"
+                  />
                 </Button>
                 {active.status === "signed_off" ? (
                   <Button
                     size="sm"
                     variant="secondary"
                     loading={unreview.isPending}
-                    onClick={() => unreview.mutate({ unitId: active.id })}
+                    onClick={runUnreview}
                   >
                     <Undo2 className="size-4" /> Mark unread
+                    <ShortcutHint
+                      shortcut={readerShortcuts.undoSignOff}
+                      className="max-sm:hidden"
+                    />
                   </Button>
                 ) : (
                   <Button
                     size="sm"
                     loading={signOff.isPending}
-                    onClick={() =>
-                      signOff.mutate({ unitId: active.id, durationSeconds: 0 })
-                    }
+                    onClick={runSignOff}
                   >
                     <Check className="size-4" /> Mark read &amp; continue
+                    <ShortcutHint
+                      shortcut={readerShortcuts.signOff}
+                      className="max-sm:hidden"
+                    />
                   </Button>
                 )}
                 <Button
                   size="sm"
                   variant="ghost"
                   disabled={activeIndex >= units.length - 1}
-                  onClick={() => setActiveId(units[activeIndex + 1]?.id)}
+                  onClick={() => selectUnit(units[activeIndex + 1])}
                 >
                   Next <ChevronRight className="size-4" />
+                  <ShortcutHint
+                    shortcut={readerShortcuts.nextUnit}
+                    className="max-md:hidden"
+                  />
                 </Button>
               </footer>
             </>
           ) : (
             <div className="flex h-full items-center justify-center text-center">
               <div>
-                <CheckCircle2 className="mx-auto size-9 text-lime" />
-                <h2 className="mt-4 font-semibold text-cloud">
+                <CheckCircle2 className="text-lime mx-auto size-9" />
+                <h2 className="text-cloud mt-4 font-semibold">
                   No reviewable source units
                 </h2>
-                <p className="mt-2 text-sm text-mist">
+                <p className="text-mist mt-2 text-sm">
                   The snapshot contains no supported code symbols.
                 </p>
               </div>
@@ -487,6 +779,6 @@ export function RepositoryReader({
           )}
         </section>
       </div>
-    </main>
+    </div>
   );
 }

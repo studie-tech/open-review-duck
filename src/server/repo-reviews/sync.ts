@@ -91,6 +91,21 @@ interface PreviousRepositoryFile {
   isBinary: boolean;
 }
 
+/**
+ * Keeps one `inArray` under PostgreSQL's 65,535 bind-parameter ceiling.
+ *
+ * A full monorepo snapshot can exceed that in a single query, which would
+ * fail the entire synchronization, so identifier lists are bound in chunks.
+ */
+const QUERY_CHUNK_SIZE = 10_000;
+
+/** Counts displayed source lines without the trailing-newline phantom row. */
+function countLines(content: string) {
+  if (!content) return 0;
+  const lines = content.split("\n");
+  return lines.at(-1) === "" ? lines.length - 1 : lines.length;
+}
+
 /** Loads the current files from the preceding full-tree snapshot. */
 async function previousRepositoryFiles(
   db: Database,
@@ -106,11 +121,17 @@ async function previousRepositoryFiles(
   const blobIds = currentFiles.flatMap((file) =>
     file.currentBlobId ? [file.currentBlobId] : [],
   );
-  const blobs = blobIds.length
-    ? await db.query.sourceBlobs.findMany({
-        where: inArray(sourceBlobs.id, blobIds),
-      })
-    : [];
+  const blobs: Array<typeof sourceBlobs.$inferSelect> = [];
+  for (let offset = 0; offset < blobIds.length; offset += QUERY_CHUNK_SIZE) {
+    blobs.push(
+      ...(await db.query.sourceBlobs.findMany({
+        where: inArray(
+          sourceBlobs.id,
+          blobIds.slice(offset, offset + QUERY_CHUNK_SIZE),
+        ),
+      })),
+    );
+  }
   const blobById = new Map(blobs.map((blob) => [blob.id, blob]));
   const loaded = await mapWithLimit(currentFiles, 4, async (file) => {
     const blob = file.currentBlobId
@@ -498,20 +519,30 @@ export async function syncRepositoryBranch(
   const priorByKey = new Map(
     previousUnits.map((unit) => [unit.stableKey, unit]),
   );
-  const priorSignOffs = previousUnits.length
-    ? await db
-        .select()
-        .from(signOffs)
-        .where(
-          and(
-            inArray(
-              signOffs.unitId,
-              previousUnits.map((unit) => unit.id),
+  const priorSignOffs: (typeof signOffs.$inferSelect)[] = [];
+  if (previousUnits.length) {
+    const previousUnitIds = previousUnits.map((unit) => unit.id);
+    for (
+      let offset = 0;
+      offset < previousUnitIds.length;
+      offset += QUERY_CHUNK_SIZE
+    ) {
+      priorSignOffs.push(
+        ...(await db
+          .select()
+          .from(signOffs)
+          .where(
+            and(
+              inArray(
+                signOffs.unitId,
+                previousUnitIds.slice(offset, offset + QUERY_CHUNK_SIZE),
+              ),
+              isNull(signOffs.invalidatedAt),
             ),
-            isNull(signOffs.invalidatedAt),
-          ),
-        )
-    : [];
+          )),
+      );
+    }
+  }
   const signOffsByUnit = new Map<string, typeof priorSignOffs>();
   for (const signOff of priorSignOffs) {
     signOffsByUnit.set(signOff.unitId, [
@@ -575,8 +606,8 @@ export async function syncRepositoryBranch(
               total +
               Math.max(
                 0,
-                file.content.split("\n").length -
-                  (file.previousContent?.split("\n").length ?? 0),
+                countLines(file.content) -
+                  countLines(file.previousContent ?? ""),
               ),
             0,
           ),
@@ -584,11 +615,11 @@ export async function syncRepositoryBranch(
           (total, file) =>
             total +
             (file.changeType === "deleted"
-              ? file.content.split("\n").length
+              ? countLines(file.content)
               : Math.max(
                   0,
-                  (file.previousContent?.split("\n").length ?? 0) -
-                    file.content.split("\n").length,
+                  countLines(file.previousContent ?? "") -
+                    countLines(file.content),
                 )),
           0,
         ),
@@ -632,16 +663,16 @@ export async function syncRepositoryBranch(
               ? 0
               : Math.max(
                   0,
-                  file.content.split("\n").length -
-                    (file.previousContent?.split("\n").length ?? 0),
+                  countLines(file.content) -
+                    countLines(file.previousContent ?? ""),
                 ),
           deletions:
             file.changeType === "deleted"
-              ? file.content.split("\n").length
+              ? countLines(file.content)
               : Math.max(
                   0,
-                  (file.previousContent?.split("\n").length ?? 0) -
-                    file.content.split("\n").length,
+                  countLines(file.previousContent ?? "") -
+                    countLines(file.content),
                 ),
           isBinary: Boolean(file.isBinary),
           skipReason: file.skipReason,

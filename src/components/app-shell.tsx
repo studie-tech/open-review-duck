@@ -253,7 +253,7 @@ export function AppShell({
         : Flame;
   const [commandCenterMode, setCommandCenterMode] =
     useState<CommandCenterMode>();
-  const [pageCommands, setPageCommands] = useState<CommandCenterItem[]>([]);
+  const [pageCommands, setPageCommands] = useState<CommandCenterItem[][]>([]);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const mobileMoreRef = useRef<HTMLDivElement>(null);
   const openCommands = useCallback(() => setCommandCenterMode("commands"), []);
@@ -262,9 +262,14 @@ export function AppShell({
     [],
   );
   const registerPageCommands = useCallback((next: CommandCenterItem[]) => {
-    setPageCommands(next);
+    // Merge rather than replace: a page composed of several regions (the
+    // repository cockpit plus its selected monitor) registers one array each,
+    // and every registration must stay live until its own region unmounts.
+    setPageCommands((current) =>
+      current.includes(next) ? current : [...current, next],
+    );
     return () =>
-      setPageCommands((current) => (current === next ? [] : current));
+      setPageCommands((current) => current.filter((item) => item !== next));
   }, []);
   const commands = useMemo<CommandCenterItem[]>(
     () => [
@@ -295,7 +300,7 @@ export function AppShell({
         icon: <Bot className="size-4" />,
         onSelect: () => navigate("/settings/ai"),
       },
-      ...pageCommands,
+      ...pageCommands.flat(),
     ],
     [pageCommands, pathname, navigate],
   );

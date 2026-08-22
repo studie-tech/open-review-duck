@@ -57,6 +57,7 @@ import type {
   IndexedReviewUnit,
   ReviewHierarchyNode,
 } from "~/lib/review-navigation";
+import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
   compactSideBySideDiff,
   focusedRowRegions,
@@ -74,10 +75,6 @@ import {
 } from "~/lib/syntax-highlighting";
 import { useImportStatements } from "~/lib/tree-sitter-import-navigation";
 import { cn } from "~/lib/utils";
-import {
-  type SupportedLanguage,
-  supportedLanguages,
-} from "~/server/analysis/types";
 import type { RouterOutputs } from "~/trpc/react";
 import { ProviderCommentBody } from "./provider-comment-body";
 
@@ -99,42 +96,8 @@ export const CONTEXT_PAGE_LINES = 20;
  */
 export const PROVIDER_CONVERSATION_REFRESH_MS = 45_000;
 const DIFF_CONTEXT_PAGE_LINES = 20;
-export const reviewShortcuts = {
-  nextUnit: [{ key: "ArrowDown", mod: true }],
-  previousUnit: [{ key: "ArrowUp", mod: true }],
-  nextConcept: [{ key: "ArrowRight" }],
-  previousConcept: [{ key: "ArrowLeft" }],
-  scrollUp: [{ key: "ArrowUp" }],
-  scrollDown: [{ key: "ArrowDown" }],
-  revealContextAbove: [{ key: "ArrowUp", shift: true }],
-  revealContextBelow: [{ key: "ArrowDown", shift: true }],
-  togglePathPanel: [{ key: "b", mod: true }],
-  toggleInsightsPanel: [{ key: "g", mod: true }],
-  nextPending: [{ key: "n" }],
-  nextReview: [{ key: "n", shift: true }],
-  nextFinding: [{ key: "]" }],
-  previousFinding: [{ key: "[" }],
-  search: [{ key: "f" }],
-  askAi: [{ key: "e" }],
-  reviewPullRequest: [{ key: "a" }],
-  comment: [{ key: "l" }],
-  commentHere: [{ key: "Enter" }],
-  undoSignOff: [{ key: "u", mod: true }],
-  context: [{ key: "c" }],
-  signOff: [{ key: "s" }],
-  // Shift already carries the wider variant of an action here — concept
-  // sign-off, deletions, reset, the next review.
-  signOffConcept: [{ key: "s", shift: true }],
-  signOffDeletions: [{ key: "d", shift: true }],
-  undoReview: [{ key: "u" }],
-  awaitResponse: [{ key: "w" }],
-  refresh: [{ key: "r" }],
-  reset: [{ key: "r", shift: true }],
-  loadChanges: [{ key: "r" }],
-  dashboard: [{ key: "g" }, { key: "r" }],
-  aiSettings: [{ key: "g" }, { key: "a" }],
-  postComment: [{ key: "Enter", mod: true }],
-} satisfies Record<string, KeyboardShortcut>;
+
+export { reviewShortcuts } from "~/lib/review-shortcuts";
 
 /**
  * Reports whether a member no longer needs the reviewer's attention.
@@ -3313,25 +3276,7 @@ export function ProviderConversationHistory({
   );
 }
 /** Checks whether syntax highlighting supports a language identifier. */
-export function supportedLanguage(language: string) {
-  const known = knownLanguage(language);
-  if (known) return known;
-  throw new Error(`Unsupported review language: ${language}`);
-}
-
-/**
- * Names a language the grammars cover, or nothing.
- *
- * `review_unit.language` is stored unconstrained, so a value that predates a
- * grammar being renamed or removed can reach the client. Callers that only
- * want to know whether a feature applies ask this rather than the throwing
- * form, which would take the whole render down with it.
- */
-export function knownLanguage(language: string) {
-  return supportedLanguages.includes(language as SupportedLanguage)
-    ? (language as SupportedLanguage)
-    : undefined;
-}
+export { knownLanguage, supportedLanguage } from "~/lib/syntax-highlighting";
 
 /** Renders the explanation loader interface. */
 export function ExplanationLoader({ unitKind }: { unitKind: string }) {

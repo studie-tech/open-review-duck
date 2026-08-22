@@ -17,8 +17,21 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
+import {
+  type CommandCenterItem,
+  ShortcutHint,
+} from "~/components/command-center";
+import { usePendingNavigation } from "~/components/navigation-progress";
+import { usePageCommandCenter } from "~/components/page-command-center";
 import { PageContainer } from "~/components/page-container";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -27,6 +40,7 @@ import {
   repositoryReportFilename,
   repositoryReviewReport,
 } from "~/lib/repository-review-report";
+import { cockpitShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -45,6 +59,13 @@ const providerLabel = {
   github: "GitHub",
   gitlab: "GitLab",
   azure_devops: "Azure DevOps",
+} as const;
+
+const sectionShortcuts = {
+  overview: cockpitShortcuts.overview,
+  findings: cockpitShortcuts.findings,
+  rules: cockpitShortcuts.rules,
+  history: cockpitShortcuts.history,
 } as const;
 
 /** Formats a provider revision for compact display. */
@@ -125,6 +146,7 @@ export function RepoReviewsContent({
   const [section, setSection] = useState<Section>("overview");
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const selectedMonitor =
     monitors.find(({ id }) => id === selectedMonitorId) ?? monitors[0];
 
@@ -148,6 +170,91 @@ export function RepoReviewsContent({
     );
   }, [monitors, search]);
 
+  const stepMonitor = useMemo(
+    () => (direction: -1 | 1) => {
+      if (visibleMonitors.length < 2) return;
+      const index = visibleMonitors.findIndex(
+        ({ id }) => id === selectedMonitor?.id,
+      );
+      const next =
+        visibleMonitors[
+          (index + direction + visibleMonitors.length) % visibleMonitors.length
+        ];
+      if (next) {
+        setSelectedMonitorId(next.id);
+        setSection("overview");
+      }
+    },
+    [selectedMonitor?.id, visibleMonitors],
+  );
+
+  /** Cockpit-level quick actions; monitor actions live in RepositoryCockpit. */
+  const commands = useMemo<CommandCenterItem[]>(
+    () => [
+      {
+        id: "cockpit-add-repository",
+        label: "Add repository",
+        description: "Follow another repository branch with repo reviews",
+        group: "Repository actions",
+        icon: <Plus className="size-4" />,
+        shortcut: cockpitShortcuts.addRepository,
+        onSelect: () => setAddOpen(true),
+      },
+      {
+        id: "cockpit-search",
+        label: "Find a monitored repository",
+        group: "Repository actions",
+        icon: <Search className="size-4" />,
+        shortcut: cockpitShortcuts.search,
+        onSelect: () => searchInputRef.current?.focus(),
+      },
+      {
+        id: "cockpit-previous-monitor",
+        label: "Previous monitored repository",
+        group: "Repository navigation",
+        icon: <ChevronRight className="size-4 rotate-180" />,
+        shortcut: cockpitShortcuts.previousMonitor,
+        disabled: visibleMonitors.length < 2,
+        onSelect: () => stepMonitor(-1),
+      },
+      {
+        id: "cockpit-next-monitor",
+        label: "Next monitored repository",
+        group: "Repository navigation",
+        icon: <ChevronRight className="size-4" />,
+        shortcut: cockpitShortcuts.nextMonitor,
+        disabled: visibleMonitors.length < 2,
+        onSelect: () => stepMonitor(1),
+      },
+      ...(
+        [
+          [
+            "overview",
+            "Show overview",
+            "Reading progress and primary workflows",
+          ],
+          [
+            "findings",
+            "Show findings",
+            "Review-run findings and fixing briefs",
+          ],
+          ["rules", "Show rules", "Versioned compliance conventions"],
+          ["history", "Show history", "Past code audits and compliance checks"],
+        ] as Array<[Section, string, string]>
+      ).map(([target, label, description]) => ({
+        id: `cockpit-section-${target}`,
+        label,
+        description,
+        group: "Repository navigation",
+        shortcut: sectionShortcuts[target],
+        disabled: !selectedMonitor,
+        onSelect: () => setSection(target),
+      })),
+    ],
+    [selectedMonitor, stepMonitor, visibleMonitors.length],
+  );
+  usePageCommandCenter(commands);
+
   return (
     <PageContainer className="mx-auto max-w-[1600px]">
       <header className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
@@ -166,6 +273,7 @@ export function RepoReviewsContent({
         </div>
         <Button onClick={() => setAddOpen(true)}>
           <Plus className="size-4" /> Add repository
+          <ShortcutHint shortcut={cockpitShortcuts.addRepository} />
         </Button>
       </header>
 
@@ -180,9 +288,18 @@ export function RepoReviewsContent({
             <label className="relative block">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist" />
               <input
+                ref={searchInputRef}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setSearch("");
+                    event.currentTarget.blur();
+                  }
+                }}
                 placeholder="Find a repository"
+                aria-label="Find a monitored repository"
                 className="h-10 w-full rounded-xl border border-line bg-surface pl-9 pr-3 text-sm text-cloud outline-none placeholder:text-mist focus:border-lime/50"
               />
             </label>
@@ -333,6 +450,7 @@ function RepositoryCockpit({
   onRemoved: () => void;
 }) {
   const utils = api.useUtils();
+  const { navigate } = usePendingNavigation();
   const [findingJobId, setFindingJobId] = useState<string>();
   const sync = api.repoReviews.sync.useMutation({
     onSuccess: () => {
@@ -353,6 +471,108 @@ function RepositoryCockpit({
         description: error.message,
       }),
   });
+  const rules = api.repoReviews.rules.useQuery({ monitorId: monitor.id });
+  const enabledRuleCount =
+    rules.data?.filter(({ enabled }) => enabled).length ?? 0;
+  // Owned here rather than in Overview so the keyboard command center can
+  // start the same runs the cards do.
+  const run = api.repoReviews.startRun.useMutation({
+    onSuccess: (result, variables) => {
+      toast.success(
+        variables.purpose === "code"
+          ? "Code audit started"
+          : "Compliance check started",
+      );
+      void Promise.all([
+        utils.repoReviews.list.invalidate(),
+        utils.repoReviews.history.invalidate({ monitorId: monitor.id }),
+      ]);
+      setFindingJobId(result.job.id);
+      onSection("findings");
+    },
+    onError: (error) =>
+      toast.error("Could not start review", { description: error.message }),
+  });
+  /** Starts a code audit or compliance run for this monitor. */
+  const runStart = run.mutate;
+  const syncStart = sync.mutate;
+  const startRun = useCallback(
+    (purpose: "code" | "compliance") => {
+      if (purpose === "compliance" && enabledRuleCount === 0) {
+        onSection("rules");
+        return;
+      }
+      runStart({ monitorId: monitor.id, purpose });
+    },
+    [enabledRuleCount, monitor.id, onSection, runStart],
+  );
+
+  /** Monitor-level quick actions; page-wide actions live in RepoReviewsContent. */
+  const commands = useMemo<CommandCenterItem[]>(
+    () => [
+      {
+        id: "cockpit-open-reader",
+        label: monitor.progress.signed
+          ? "Continue reading this repository"
+          : "Start reading this repository",
+        description: "Open the structured reading path for this snapshot",
+        group: "Repository actions",
+        icon: <BookOpenCheck className="size-4" />,
+        shortcut: cockpitShortcuts.openReader,
+        disabled: !monitor.snapshot,
+        onSelect: () => navigate(`/repo-reviews/${monitor.id}/read`),
+      },
+      {
+        id: "cockpit-check-now",
+        label: "Check repository now",
+        description: "Compare the branch head and refresh the snapshot",
+        group: "Repository actions",
+        icon: <RefreshCw className="size-4" />,
+        shortcut: cockpitShortcuts.checkNow,
+        disabled: Boolean(monitor.activeSync) || sync.isPending,
+        onSelect: () => syncStart({ monitorId: monitor.id }),
+      },
+      {
+        id: "cockpit-run-code-audit",
+        label: "Run code audit",
+        description: "Review the full branch with the evidence-based reviewer",
+        group: "Repository actions",
+        icon: <Code2 className="size-4" />,
+        shortcut: cockpitShortcuts.runCodeAudit,
+        disabled:
+          !monitor.snapshot ||
+          activeStatuses.has(monitor.latestCodeRun?.status ?? ""),
+        onSelect: () => startRun("code"),
+      },
+      {
+        id: "cockpit-run-compliance",
+        label:
+          enabledRuleCount === 0
+            ? "Set up compliance rules"
+            : "Check compliance rules",
+        description:
+          "Verify versioned conventions with file agents and a survey",
+        group: "Repository actions",
+        icon: <ShieldCheck className="size-4" />,
+        shortcut: cockpitShortcuts.runCompliance,
+        disabled:
+          !monitor.snapshot ||
+          rules.isLoading ||
+          activeStatuses.has(monitor.latestComplianceRun?.status ?? ""),
+        onSelect: () => startRun("compliance"),
+      },
+    ],
+    [
+      enabledRuleCount,
+      monitor,
+      navigate,
+      rules.isLoading,
+      startRun,
+      sync.isPending,
+      syncStart,
+    ],
+  );
+  usePageCommandCenter(commands);
 
   return (
     <section className="min-w-0">
@@ -391,6 +611,10 @@ function RepositoryCockpit({
               onClick={() => sync.mutate({ monitorId: monitor.id })}
             >
               <RefreshCw className="size-3.5" /> Check now
+              <ShortcutHint
+                shortcut={cockpitShortcuts.checkNow}
+                className="max-sm:hidden"
+              />
             </Button>
             <Button
               size="icon"
@@ -429,13 +653,17 @@ function RepositoryCockpit({
                 aria-current={section === item ? "page" : undefined}
                 onClick={() => onSection(item)}
                 className={cn(
-                  "border-b-2 pb-3 text-sm font-medium capitalize transition",
+                  "flex items-center gap-2 border-b-2 pb-3 text-sm font-medium capitalize transition",
                   section === item
                     ? "border-lime text-cloud"
                     : "border-transparent text-mist hover:text-cloud",
                 )}
               >
                 {item}
+                <ShortcutHint
+                  shortcut={sectionShortcuts[item]}
+                  className="max-sm:hidden"
+                />
               </button>
             ),
           )}
@@ -447,10 +675,12 @@ function RepositoryCockpit({
           <Overview
             monitor={monitor}
             onSection={onSection}
-            onOpenFindings={(jobId) => {
-              setFindingJobId(jobId);
-              onSection("findings");
-            }}
+            rules={rules}
+            enabledRuleCount={enabledRuleCount}
+            startRun={startRun}
+            runPendingPurpose={
+              run.isPending ? (run.variables?.purpose ?? undefined) : undefined
+            }
           />
         )}
         {section === "findings" && (
@@ -475,32 +705,20 @@ function RepositoryCockpit({
 function Overview({
   monitor,
   onSection,
-  onOpenFindings,
+  rules,
+  enabledRuleCount,
+  startRun,
+  runPendingPurpose,
 }: {
   monitor: Monitors[number];
   onSection: (section: Section) => void;
-  onOpenFindings: (jobId: string) => void;
+  rules: {
+    isLoading: boolean;
+  };
+  enabledRuleCount: number;
+  startRun: (purpose: "code" | "compliance") => void;
+  runPendingPurpose?: "code" | "compliance";
 }) {
-  const utils = api.useUtils();
-  const rules = api.repoReviews.rules.useQuery({ monitorId: monitor.id });
-  const enabledRuleCount =
-    rules.data?.filter(({ enabled }) => enabled).length ?? 0;
-  const run = api.repoReviews.startRun.useMutation({
-    onSuccess: (result, variables) => {
-      toast.success(
-        variables.purpose === "code"
-          ? "Code audit started"
-          : "Compliance check started",
-      );
-      void Promise.all([
-        utils.repoReviews.list.invalidate(),
-        utils.repoReviews.history.invalidate({ monitorId: monitor.id }),
-      ]);
-      onOpenFindings(result.job.id);
-    },
-    onError: (error) =>
-      toast.error("Could not start review", { description: error.message }),
-  });
   const total = monitor.progress.total;
   const percent = total
     ? Math.round((monitor.progress.signed / total) * 100)
@@ -553,6 +771,10 @@ function Overview({
                     ? "Continue reading"
                     : "Start reading"}
                   <LinkPendingSpinner />
+                  <ShortcutHint
+                    shortcut={cockpitShortcuts.openReader}
+                    className="ml-auto"
+                  />
                   <ChevronRight className="size-4" />
                 </Link>
               </Button>
@@ -580,16 +802,18 @@ function Overview({
             <Button
               variant="secondary"
               className="w-full"
-              loading={run.isPending && run.variables?.purpose === "code"}
+              loading={runPendingPurpose === "code"}
               disabled={
                 !monitor.snapshot ||
                 activeStatuses.has(monitor.latestCodeRun?.status ?? "")
               }
-              onClick={() =>
-                run.mutate({ monitorId: monitor.id, purpose: "code" })
-              }
+              onClick={() => startRun("code")}
             >
               <Code2 className="size-4" /> Run code audit
+              <ShortcutHint
+                shortcut={cockpitShortcuts.runCodeAudit}
+                className="ml-auto"
+              />
             </Button>
           }
         />
@@ -610,26 +834,20 @@ function Overview({
             <div className="grid grid-cols-[1fr_auto] gap-2">
               <Button
                 variant="secondary"
-                loading={
-                  run.isPending && run.variables?.purpose === "compliance"
-                }
+                loading={runPendingPurpose === "compliance"}
                 disabled={
                   !monitor.snapshot ||
                   rules.isLoading ||
                   activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
                 }
-                onClick={() => {
-                  if (enabledRuleCount === 0) onSection("rules");
-                  else {
-                    run.mutate({
-                      monitorId: monitor.id,
-                      purpose: "compliance",
-                    });
-                  }
-                }}
+                onClick={() => startRun("compliance")}
               >
                 <ShieldCheck className="size-4" />
                 {enabledRuleCount === 0 ? "Set up rules" : "Check rules"}
+                <ShortcutHint
+                  shortcut={cockpitShortcuts.runCompliance}
+                  className="ml-auto"
+                />
               </Button>
               <Button
                 size="icon"
@@ -770,16 +988,20 @@ function Findings({
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const payload = findings.data;
-  const visibleFindings = payload?.findings ?? [];
+  // Keep one stable identity for the effect below; `payload?.findings ?? []`
+  // would mint a fresh array every render and run it on each pass.
+  const payloadFindings = payload?.findings;
+  const visibleFindings = payloadFindings ?? [];
   const waivedItems =
     payload?.items.filter(({ state }) => state === "waived") ?? [];
   useEffect(() => {
-    const visibleIds = new Set(visibleFindings.map(({ id }) => id));
+    if (!payloadFindings) return;
+    const visibleIds = new Set(payloadFindings.map(({ id }) => id));
     setSelected((current) => {
       const next = new Set([...current].filter((id) => visibleIds.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [visibleFindings]);
+  }, [payloadFindings]);
   const purpose =
     selectedRun?.reviewPurpose === "compliance" ? "compliance" : "code";
   /** Compiles the current finding selection into a fixing brief. */

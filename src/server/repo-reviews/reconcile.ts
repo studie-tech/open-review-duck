@@ -17,6 +17,14 @@ type Database = typeof database;
 /** Minimum interval between automatic provider checks for one monitor. */
 export const REPOSITORY_RECONCILE_INTERVAL_MS = 5 * 60_000;
 
+/**
+ * Bounds one provider head check even when no deadline was supplied.
+ *
+ * A hung provider response would otherwise occupy one of the few concurrency
+ * slots indefinitely and stall the whole reconciliation.
+ */
+const RECONCILE_PROVIDER_TIMEOUT_MS = 15_000;
+
 /** Checks stale monitor heads and queues durable syncs without one failure stopping others. */
 export async function reconcileRepositoryBranchMonitors(
   db: Database,
@@ -68,19 +76,19 @@ export async function reconcileRepositoryBranchMonitors(
     const controller = new AbortController();
     const remaining =
       options.deadline === undefined
-        ? undefined
+        ? RECONCILE_PROVIDER_TIMEOUT_MS
         : Math.max(0, options.deadline - Date.now());
-    const timeout =
-      remaining === undefined
-        ? undefined
-        : setTimeout(() => controller.abort(), remaining);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      remaining === 0 ? 1 : remaining,
+    );
     try {
       const branch = await (
         await providerForConnection(db, scope.connection)
       ).getBranch(
         scope.repository.externalId,
         scope.monitor.branch,
-        remaining === undefined ? undefined : controller.signal,
+        controller.signal,
       );
       await db
         .update(repositoryBranchMonitors)
