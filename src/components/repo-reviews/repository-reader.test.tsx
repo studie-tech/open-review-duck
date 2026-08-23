@@ -218,7 +218,7 @@ describe("RepositoryReader", () => {
     expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
   });
 
-  it("marks the active unit read optimistically with the sign-off stroke", () => {
+  it("marks the active unit read and advances optimistically", () => {
     const first = makeUnit();
     const { container } = render(
       <ShellHarness>
@@ -240,12 +240,11 @@ describe("RepositoryReader", () => {
       options.onMutate({ unitId: first.id });
     });
     expect(container.querySelector("[aria-current='true']")).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: /mark unread/i }),
-    ).toBeInTheDocument();
+    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /mark read/i })).toBeEnabled();
   });
 
-  it("advances to the next unread unit once a sign-off succeeds", () => {
+  it("does not wait for sign-off success before advancing", () => {
     const first = makeUnit();
     render(
       <ShellHarness>
@@ -257,6 +256,7 @@ describe("RepositoryReader", () => {
     );
     const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as
       | {
+          onMutate: (variables: { unitId: string }) => unknown;
           onSuccess: (
             result: unknown,
             variables: { unitId: string },
@@ -265,6 +265,10 @@ describe("RepositoryReader", () => {
         }
       | undefined;
     if (!options) throw new Error("sign-off mutation was not registered");
+    act(() => {
+      options.onMutate({ unitId: first.id });
+    });
+    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
     act(() => {
       options.onSuccess(undefined, { unitId: first.id }, undefined);
     });
