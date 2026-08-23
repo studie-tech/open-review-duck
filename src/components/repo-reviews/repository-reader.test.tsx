@@ -22,6 +22,7 @@ const navigateSpy = vi.hoisted(() => vi.fn());
 const mutationSpies = vi.hoisted(() => ({
   signOffMutate: vi.fn(),
   signOffOptions: vi.fn(),
+  signOffIsPending: vi.fn(() => false),
   unreviewMutate: vi.fn(),
 }));
 
@@ -37,7 +38,7 @@ vi.mock("~/trpc/react", () => ({
           mutationSpies.signOffOptions(options);
           return {
             mutate: mutationSpies.signOffMutate,
-            isPending: false,
+            isPending: mutationSpies.signOffIsPending(),
             variables: undefined,
           };
         },
@@ -145,6 +146,7 @@ afterEach(() => {
   cleanup();
   sequence = 0;
   vi.clearAllMocks();
+  mutationSpies.signOffIsPending.mockReturnValue(false);
 });
 
 describe("RepositoryReader", () => {
@@ -273,6 +275,26 @@ describe("RepositoryReader", () => {
       options.onSuccess(undefined, { unitId: first.id }, undefined);
     });
     expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
+  });
+
+  it("prevents marking a unit unread while a sign-off is pending", () => {
+    mutationSpies.signOffIsPending.mockReturnValue(true);
+    const registrations: CommandCenterItem[][] = [];
+    render(
+      <ShellHarness onRegister={(commands) => registrations.push(commands)}>
+        <RepositoryReader
+          initialData={makeData([makeUnit({ status: "signed_off" })])}
+          monitor={monitor as never}
+        />
+      </ShellHarness>,
+    );
+    expect(screen.getByRole("button", { name: /mark unread/i })).toBeDisabled();
+    const command = registrations
+      .at(-1)
+      ?.find(({ id }) => id === "reader-mark-unread");
+    expect(command?.disabled).toBe(true);
+    command?.onSelect();
+    expect(mutationSpies.unreviewMutate).not.toHaveBeenCalled();
   });
 
   it("focuses the path search with the search stroke and clears it on Escape", async () => {

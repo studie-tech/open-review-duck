@@ -332,14 +332,15 @@ export function RepositoryReader({
   }, [active, showPrevious]);
 
   const canSignOff = Boolean(active) && active?.status !== "signed_off";
+  const canUnreview = active?.status === "signed_off" && !signOff.isPending;
   const runSignOff = useCallback(() => {
     if (!active || !canSignOff) return;
     signOffStart({ unitId: active.id, durationSeconds: 0 });
   }, [active, canSignOff, signOffStart]);
   const runUnreview = useCallback(() => {
-    if (active?.status !== "signed_off") return;
+    if (!active || !canUnreview) return;
     unreviewStart({ unitId: active.id });
-  }, [active, unreviewStart]);
+  }, [active, canUnreview, unreviewStart]);
   const commands = useMemo<CommandCenterItem[]>(
     () => [
       {
@@ -463,7 +464,7 @@ export function RepositoryReader({
         group: "Reader actions",
         icon: <Undo2 className="size-4" />,
         shortcut: readerShortcuts.undoSignOff,
-        disabled: active?.status !== "signed_off",
+        disabled: !canUnreview,
         onSelect: runUnreview,
       },
     ],
@@ -471,6 +472,7 @@ export function RepositoryReader({
       active,
       activeIndex,
       canSignOff,
+      canUnreview,
       focusSearch,
       resumeQueue,
       runSignOff,
@@ -729,6 +731,7 @@ export function RepositoryReader({
                     size="sm"
                     variant="secondary"
                     loading={unreview.isPending}
+                    disabled={!canUnreview}
                     onClick={runUnreview}
                   >
                     <Undo2 className="size-4" /> Mark unread
