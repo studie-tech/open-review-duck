@@ -218,18 +218,6 @@ export function RepositoryReader({
   const signOff = api.review.signOff.useMutation({
     onMutate: ({ unitId }) => {
       const previousStatus = units.find(({ id }) => id === unitId)?.status;
-      setUnits((current) =>
-        current.map((unit) =>
-          unit.id === unitId
-            ? { ...unit, status: "signed_off" as const }
-            : unit,
-        ),
-      );
-      return { previousStatus };
-    },
-    onSuccess: (_result, { unitId }) => {
-      // `units` still holds the pre-mutation statuses here, so the unit just
-      // signed off is excluded by id rather than by status.
       const current = units.findIndex(({ id }) => id === unitId);
       const ordered = [
         ...units.slice(current + 1),
@@ -238,7 +226,19 @@ export function RepositoryReader({
       const next = ordered.find(
         ({ id, status }) => id !== unitId && status !== "signed_off",
       );
+      setUnits((current) =>
+        current.map((unit) =>
+          unit.id === unitId
+            ? { ...unit, status: "signed_off" as const }
+            : unit,
+        ),
+      );
+      // Reading should never wait on persistence. The failed unit is restored
+      // to the queue by onError, while the reader can keep moving forward.
       if (next) selectUnit(next);
+      return { previousStatus };
+    },
+    onSuccess: () => {
       toast.success("Marked as read");
     },
     onError: (error, { unitId }, context) => {

@@ -256,7 +256,7 @@ export function RepoReviewsContent({
   usePageCommandCenter(commands);
 
   return (
-    <PageContainer className="mx-auto max-w-[1600px]">
+    <PageContainer>
       <header className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-lime">
