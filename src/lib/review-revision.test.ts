@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   acknowledgedReviewRevision,
   acknowledgeReviewRevision,
+  rememberedReviewPosition,
+  rememberReviewPosition,
   shortRevision,
 } from "./review-revision";
 
@@ -38,5 +40,30 @@ describe("review revision acknowledgement", () => {
 
   it("uses the conventional seven-character revision label", () => {
     expect(shortRevision("a8cbd45ea14abda")).toBe("a8cbd45");
+  });
+
+  it("remembers a review cursor only for its exact snapshot", () => {
+    const storage = memoryStorage();
+
+    rememberReviewPosition(storage, "pr-1", "snapshot-2", "unit-7");
+
+    expect(rememberedReviewPosition(storage, "pr-1", "snapshot-2")).toBe(
+      "unit-7",
+    );
+    expect(
+      rememberedReviewPosition(storage, "pr-1", "snapshot-3"),
+    ).toBeUndefined();
+    expect(
+      rememberedReviewPosition(storage, "pr-2", "snapshot-2"),
+    ).toBeUndefined();
+  });
+
+  it("ignores a malformed review cursor", () => {
+    const storage = memoryStorage();
+    storage.setItem("reviewduck:review-position:pr-1", '{"unitId":42}');
+
+    expect(
+      rememberedReviewPosition(storage, "pr-1", "snapshot-2"),
+    ).toBeUndefined();
   });
 });

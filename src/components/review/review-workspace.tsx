@@ -98,6 +98,8 @@ import {
   acknowledgedReviewRevision,
   acknowledgeReviewRevision,
   type ReviewRevision,
+  rememberedReviewPosition,
+  rememberReviewPosition,
   shortRevision,
 } from "~/lib/review-revision";
 import {
@@ -1195,6 +1197,42 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
+  const restoredPositionSnapshotId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const snapshotId = initialData.snapshot?.id;
+    if (!snapshotId || units.length === 0) return;
+    if (restoredPositionSnapshotId.current !== snapshotId) {
+      restoredPositionSnapshotId.current = snapshotId;
+      const rememberedUnitId = rememberedReviewPosition(
+        window.localStorage,
+        initialData.pullRequest.id,
+        snapshotId,
+      );
+      const rememberedIndex = units.findIndex(
+        (unit) =>
+          unit.id === rememberedUnitId &&
+          unit.status !== "signed_off" &&
+          unit.status !== "waiting",
+      );
+      if (rememberedIndex >= 0) {
+        if (rememberedIndex !== activeIndex) setActiveIndex(rememberedIndex);
+        return;
+      }
+    }
+    if (!activeUnitId) return;
+    rememberReviewPosition(
+      window.localStorage,
+      initialData.pullRequest.id,
+      snapshotId,
+      activeUnitId,
+    );
+  }, [
+    activeIndex,
+    activeUnitId,
+    initialData.pullRequest.id,
+    initialData.snapshot?.id,
+    units,
+  ]);
   const unitsById = useMemo(
     () => new Map(units.map((unit) => [unit.id, unit])),
     [units],
@@ -2928,7 +2966,17 @@ export function ReviewWorkspace({
       if (!paused) return;
       const unitIndex = units.findIndex((unit) => unit.id === unitId);
       markUnitsWaiting([unitId]);
-      return { paused, unitIndex };
+      return {
+        paused,
+        unitIndex,
+        pathSearch,
+        queueLimit,
+        searchLimit,
+        waitingLimit,
+        selectedLine,
+        feedback,
+        showDiff,
+      };
     },
     // The reviewer may have moved on while the request was in flight, so the
     // unit that was paused is the one the wait row names, not the open one.
@@ -2947,6 +2995,13 @@ export function ReviewWorkspace({
           ),
         );
         if (rollback.unitIndex >= 0) setActiveIndex(rollback.unitIndex);
+        setPathSearch(rollback.pathSearch);
+        setQueueLimit(rollback.queueLimit);
+        setSearchLimit(rollback.searchLimit);
+        setWaitingLimit(rollback.waitingLimit);
+        setSelectedLine(rollback.selectedLine);
+        setFeedback(rollback.feedback);
+        setShowDiff(rollback.showDiff);
         setStartedAt(Date.now());
       }
       toast.error(error.message);

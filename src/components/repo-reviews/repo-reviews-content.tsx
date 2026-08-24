@@ -981,9 +981,19 @@ function Findings({
   const selectedRun = runs.find(({ id }) => id === selectedJobId);
   const deleteReport = api.repoReviews.deleteReport.useMutation({
     onSuccess: async ({ deletedId }) => {
+      let nextJobId: string | undefined;
+      utils.repoReviews.history.setData(
+        { monitorId: monitor.id },
+        (current) => {
+          const remaining = current?.filter(({ id }) => id !== deletedId);
+          nextJobId = remaining?.[0]?.id;
+          return remaining;
+        },
+      );
       setSelected(new Set());
-      setJobId((current) => (current === deletedId ? undefined : current));
+      setJobId(nextJobId);
       await Promise.all([
+        utils.repoReviews.list.invalidate(),
         utils.repoReviews.history.invalidate({ monitorId: monitor.id }),
         utils.repoReviews.findings.invalidate(),
       ]);
