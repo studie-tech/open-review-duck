@@ -8,6 +8,11 @@ import type { PutSourceObject, SourceObjectStore, StoredObject } from "./types";
 const SOURCE_UPLOAD_ATTEMPTS = 3;
 const SOURCE_UPLOAD_RETRY_MILLISECONDS = 250;
 
+/** Removes provider URLs that may contain short-lived credentials. */
+function redactProviderUrls(value: string) {
+  return value.replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted URL]");
+}
+
 /** Finds a bounded HTTP status without retaining a provider response body. */
 function uploadFailureStatus(
   value: unknown,
@@ -53,7 +58,7 @@ function uploadFailureMessage(cause: unknown) {
       : undefined;
   const status = uploadFailureStatus(cause);
   const context = [code, status ? `HTTP ${status}` : undefined].filter(Boolean);
-  return `UploadThing source upload failed: ${message.slice(0, 160)}${context.length ? ` (${context.join(", ")})` : ""}`;
+  return `UploadThing source upload failed: ${redactProviderUrls(message).slice(0, 160)}${context.length ? ` (${context.join(", ")})` : ""}`;
 }
 
 /** Formats a bounded cleanup failure without leaking provider request data. */

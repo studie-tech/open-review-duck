@@ -26,6 +26,42 @@ const mutationSpies = vi.hoisted(() => ({
   signOffIsPending: vi.fn(() => false),
   unreviewMutate: vi.fn(),
 }));
+const sourceHydrationSpies = vi.hoisted(() => ({
+  hydrate: vi.fn(
+    async (
+      sources: Array<{ path: string; source: string }>,
+      _snapshotId: string,
+      _cache: Map<string, Promise<Uint8Array>>,
+      _concurrency: number,
+      _signal?: AbortSignal,
+      onHydrated?: (
+        index: number,
+        source: { path: string; source: string },
+      ) => void,
+    ) => {
+      const units = sources.map((source, index) => {
+        const hydrated = {
+          ...source,
+          source: source.source || `hydrated ${source.path}`,
+        };
+        onHydrated?.(index, hydrated);
+        return hydrated;
+      });
+      return {
+        failures: [],
+        successfulIndexes: units.map((_unit, index) => index),
+        units,
+      };
+    },
+  ),
+}));
+
+vi.mock("~/lib/private-source-client", () => ({
+  hydratePrivateReviewSources: sourceHydrationSpies.hydrate,
+  prioritizePrivateReviewSources: <Source,>(sources: readonly Source[]) => [
+    ...sources,
+  ],
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: navigateSpy }),
@@ -222,6 +258,15 @@ describe("RepositoryReader", () => {
         name: "Create compliance rule from line 10",
       }),
     );
+    fireEvent.change(screen.getByLabelText("Rule name"), {
+      target: { value: "Authorize protected operations" },
+    });
+    fireEvent.change(screen.getByLabelText("Rule instruction"), {
+      target: { value: "Require an authorization check before mutations." },
+    });
+    fireEvent.change(screen.getByLabelText("Rule path glob"), {
+      target: { value: "src/**/*.ts" },
+    });
     fireEvent.click(
       screen.getByRole("button", {
         name: "Create compliance rule from line 12",
@@ -229,21 +274,60 @@ describe("RepositoryReader", () => {
       { shiftKey: true },
     );
     expect(screen.getByText(/lines 10–12/i)).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Rule name"), {
-      target: { value: "Authorize protected operations" },
-    });
-    fireEvent.change(screen.getByLabelText("Rule instruction"), {
-      target: { value: "Require an authorization check before mutations." },
-    });
+    expect(screen.getByLabelText("Rule name")).toHaveValue(
+      "Authorize protected operations",
+    );
+    expect(screen.getByLabelText("Rule instruction")).toHaveValue(
+      "Require an authorization check before mutations.",
+    );
+    expect(screen.getByLabelText("Rule path glob")).toHaveValue("src/**/*.ts");
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
     expect(mutationSpies.addRuleMutate).toHaveBeenCalledWith({
       monitorId: monitor.id,
       title: "Authorize protected operations",
       instruction: "Require an authorization check before mutations.",
-      pathGlob: "src/policy.ts",
+      pathGlob: "src/**/*.ts",
       scope: "file",
       severity: "medium",
     });
+  });
+
+  it("hydrates full-file context only for the active direct-source path", async () => {
+    const first = makeUnit({ path: "src/one.ts" });
+    const second = makeUnit({ path: "src/two.ts" });
+    const data = makeData([first, second]);
+    data.sourceDelivery = "direct";
+    data.snapshot = { id: "snapshot-1" } as ReaderData["snapshot"];
+    data.fileContexts = [
+      { ...first, id: "context-one", kind: "file", source: "" },
+      { ...second, id: "context-two", kind: "file", source: "" },
+    ] as ReaderData["fileContexts"];
+
+    render(
+      <ShellHarness>
+        <RepositoryReader initialData={data} monitor={monitor as never} />
+      </ShellHarness>,
+    );
+
+    await waitFor(() => {
+      expect(sourceHydrationSpies.hydrate).toHaveBeenCalledTimes(2);
+    });
+    const sourceLists = sourceHydrationSpies.hydrate.mock.calls.map(
+      ([sources]) => sources.map(({ path }) => path),
+    );
+    expect(sourceLists).toContainEqual(["src/one.ts", "src/two.ts"]);
+    expect(sourceLists).toContainEqual(["src/one.ts"]);
+    expect(sourceLists.filter((paths) => paths.length > 1)).toEqual([
+      ["src/one.ts", "src/two.ts"],
+    ]);
+
+    fireEvent.click(screen.getByText("unitName2"));
+    await waitFor(() => {
+      expect(sourceHydrationSpies.hydrate).toHaveBeenCalledTimes(3);
+    });
+    expect(sourceHydrationSpies.hydrate.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ path: "src/two.ts" }),
+    ]);
   });
 
   it("steps between units with the next-unit stroke and jumps whole files", () => {
