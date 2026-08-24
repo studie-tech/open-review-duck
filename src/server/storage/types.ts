@@ -5,6 +5,8 @@ export interface StoredObject {
 }
 
 export interface PutSourceObject {
+  /** Distinguishes one upload lease from an earlier failed provider request. */
+  attemptId?: string;
   bytes: Uint8Array;
   digest: string;
   workspaceId: string;

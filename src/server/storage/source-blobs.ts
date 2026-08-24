@@ -13,6 +13,7 @@ const UPLOAD_LEASE_MILLISECONDS = 4 * 60_000;
 const DELETION_LEASE_MILLISECONDS = 15 * 60_000;
 const CONCURRENT_UPLOAD_POLL_MILLISECONDS = 250;
 const CONCURRENT_UPLOAD_WAIT_MILLISECONDS = 30_000;
+const READY_BLOB_REVALIDATE_MILLISECONDS = 24 * 60 * 60_000;
 
 /** Returns the SHA-256 content identity used for source object deduplication. */
 export function sourceDigest(bytes: Uint8Array) {
@@ -31,12 +32,13 @@ export async function persistSourceBlob(
 ) {
   const digest = sourceDigest(input.bytes);
   const store = await sourceObjectStore();
+  const uploadLeaseToken = randomUUID();
   const putInput = {
+    attemptId: uploadLeaseToken,
     bytes: input.bytes,
     digest,
     workspaceId: input.workspaceId,
   };
-  const uploadLeaseToken = randomUUID();
   /**
    * Describes this call's claim, dated where the claim lands.
    *
@@ -60,6 +62,16 @@ export async function persistSourceBlob(
   /** Reuses a ready row only when its immutable object still exists. */
   const reuseReadyBlob = async (blob: typeof sourceBlobs.$inferSelect) => {
     if (blob.storage !== store.kind || !blob.objectKey) return undefined;
+    // The application is the only writer and deleter for source objects, and
+    // pruning never removes a referenced ready row. Trust a recent successful
+    // verification so a large repository sync does not make one provider
+    // request and one database write for every unchanged file on every run.
+    if (
+      Date.now() - blob.updatedAt.getTime() <
+      READY_BLOB_REVALIDATE_MILLISECONDS
+    ) {
+      return blob;
+    }
     // Presence is the only thing in doubt here, and this runs for every
     // deduplicated file of every sync. readSourceBlob would transfer and
     // rehash the whole object; it still verifies the digest on real reads.
