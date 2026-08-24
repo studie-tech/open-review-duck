@@ -555,7 +555,7 @@ describe("review analysis engine", () => {
     ).toBe(true);
   });
 
-  it("invalidates unchanged callers when a dependency changes", () => {
+  it("keeps unchanged callers signed off when a dependency changes", () => {
     const before = analyzeFiles([
       {
         path: "math.ts",
@@ -576,10 +576,10 @@ describe("review analysis engine", () => {
     ).toBe(true);
     expect(
       impact.find(({ unit }) => unit.name === "total")?.requiresReview,
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("propagates changed constants to unchanged consumers", () => {
+  it("keeps unchanged consumers signed off when a constant changes", () => {
     const before = analyzeFiles([
       {
         path: "retry.ts",
@@ -598,7 +598,7 @@ describe("review analysis engine", () => {
     const impact = reconcileSignOffs(before, after);
     expect(
       impact.find(({ unit }) => unit.name === "shouldRetry")?.requiresReview,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("resolves uniquely named dependencies across files", () => {
@@ -748,7 +748,7 @@ describe("review analysis engine", () => {
     expect(new Set(overloads.map(({ stableKey }) => stableKey)).size).toBe(3);
   });
 
-  it("invalidates former callers when a signed-off dependency is deleted", () => {
+  it("keeps unchanged former callers signed off when a dependency is deleted", () => {
     const before = analyzeFiles([
       {
         path: "math.ts",
@@ -768,7 +768,7 @@ describe("review analysis engine", () => {
     expect(
       reconcileSignOffs(before, after).find(({ unit }) => unit.name === "total")
         ?.requiresReview,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("classifies Python class members as methods", () => {

@@ -52,8 +52,12 @@ import {
 
 type Database = typeof database;
 
-const REPOSITORY_SOURCE_BUDGET_BYTES = 20_000_000;
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
+// A full-repository review should not turn the alphabetical tail of an
+// ordinary codebase into "oversized" waivers merely because earlier sources
+// filled a small aggregate allowance. Individual files remain bounded so one
+// generated artifact cannot consume the whole snapshot budget.
+export const REPOSITORY_SOURCE_BUDGET_BYTES = 100_000_000;
+export const MAX_REPOSITORY_FILE_BYTES = 5 * 1024 * 1024;
 const SNAPSHOT_FILE_INSERT_BATCH_SIZE = 500;
 const UNIT_INSERT_BATCH_SIZE = 100;
 const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
@@ -228,7 +232,7 @@ export async function downloadRepositoryFiles(
           input.repositoryExternalId,
           path,
           input.ref,
-          MAX_FILE_BYTES,
+          MAX_REPOSITORY_FILE_BYTES,
         );
         if (content === undefined) {
           return {

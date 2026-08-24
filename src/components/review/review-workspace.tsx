@@ -2898,7 +2898,7 @@ export function ReviewWorkspace({
    * `optimisticallyQueueSignOffs` does: choosing it clears a path filter that
    * matches nothing any more, which a replayed state updater would repeat.
    */
-  function markUnitsWaiting(waitingUnitIds: string[], description: string) {
+  function markUnitsWaiting(waitingUnitIds: string[]) {
     const waiting = new Set(waitingUnitIds);
     const updated = units.map((unit) =>
       waiting.has(unit.id)
@@ -2921,20 +2921,36 @@ export function ReviewWorkspace({
     setFeedback("");
     setShowDiff(true);
     setStartedAt(Date.now());
-    toast.success("Waiting for response", { description });
   }
   const awaitResponse = api.review.awaitResponse.useMutation({
+    onMutate: ({ unitId }) => {
+      const paused = unitsById.get(unitId);
+      if (!paused) return;
+      const unitIndex = units.findIndex((unit) => unit.id === unitId);
+      markUnitsWaiting([unitId]);
+      return { paused, unitIndex };
+    },
     // The reviewer may have moved on while the request was in flight, so the
     // unit that was paused is the one the wait row names, not the open one.
     onSuccess: (wait) => {
       const paused = unitsById.get(wait.unitId);
       if (!paused) return;
-      markUnitsWaiting(
-        [wait.unitId],
-        `${paused.name} will return to your review path when its code or conversation changes.`,
-      );
+      toast.success("Waiting for response", {
+        description: `${paused.name} will return to your review path when its code or conversation changes.`,
+      });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, rollback) => {
+      if (rollback) {
+        setUnits((current) =>
+          current.map((unit) =>
+            unit.id === rollback.paused.id ? rollback.paused : unit,
+          ),
+        );
+        if (rollback.unitIndex >= 0) setActiveIndex(rollback.unitIndex);
+        setStartedAt(Date.now());
+      }
+      toast.error(error.message);
+    },
   });
 
   const releaseReviewWaits = api.review.releaseReviewWaits.useMutation({
