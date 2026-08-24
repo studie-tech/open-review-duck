@@ -98,6 +98,8 @@ import {
   acknowledgedReviewRevision,
   acknowledgeReviewRevision,
   type ReviewRevision,
+  rememberedReviewPosition,
+  rememberReviewPosition,
   shortRevision,
 } from "~/lib/review-revision";
 import {
@@ -1195,6 +1197,42 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
+  const restoredPositionSnapshotId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const snapshotId = initialData.snapshot?.id;
+    if (!snapshotId || units.length === 0) return;
+    if (restoredPositionSnapshotId.current !== snapshotId) {
+      restoredPositionSnapshotId.current = snapshotId;
+      const rememberedUnitId = rememberedReviewPosition(
+        window.localStorage,
+        initialData.pullRequest.id,
+        snapshotId,
+      );
+      const rememberedIndex = units.findIndex(
+        (unit) =>
+          unit.id === rememberedUnitId &&
+          unit.status !== "signed_off" &&
+          unit.status !== "waiting",
+      );
+      if (rememberedIndex >= 0) {
+        if (rememberedIndex !== activeIndex) setActiveIndex(rememberedIndex);
+        return;
+      }
+    }
+    if (!activeUnitId) return;
+    rememberReviewPosition(
+      window.localStorage,
+      initialData.pullRequest.id,
+      snapshotId,
+      activeUnitId,
+    );
+  }, [
+    activeIndex,
+    activeUnitId,
+    initialData.pullRequest.id,
+    initialData.snapshot?.id,
+    units,
+  ]);
   const unitsById = useMemo(
     () => new Map(units.map((unit) => [unit.id, unit])),
     [units],
@@ -2898,7 +2936,7 @@ export function ReviewWorkspace({
    * `optimisticallyQueueSignOffs` does: choosing it clears a path filter that
    * matches nothing any more, which a replayed state updater would repeat.
    */
-  function markUnitsWaiting(waitingUnitIds: string[], description: string) {
+  function markUnitsWaiting(waitingUnitIds: string[]) {
     const waiting = new Set(waitingUnitIds);
     const updated = units.map((unit) =>
       waiting.has(unit.id)
@@ -2921,20 +2959,54 @@ export function ReviewWorkspace({
     setFeedback("");
     setShowDiff(true);
     setStartedAt(Date.now());
-    toast.success("Waiting for response", { description });
   }
   const awaitResponse = api.review.awaitResponse.useMutation({
+    onMutate: ({ unitId }) => {
+      const paused = unitsById.get(unitId);
+      if (!paused) return;
+      const unitIndex = units.findIndex((unit) => unit.id === unitId);
+      markUnitsWaiting([unitId]);
+      return {
+        paused,
+        unitIndex,
+        startedAt,
+        pathSearch,
+        queueLimit,
+        searchLimit,
+        waitingLimit,
+        selectedLine,
+        feedback,
+        showDiff,
+      };
+    },
     // The reviewer may have moved on while the request was in flight, so the
     // unit that was paused is the one the wait row names, not the open one.
     onSuccess: (wait) => {
       const paused = unitsById.get(wait.unitId);
       if (!paused) return;
-      markUnitsWaiting(
-        [wait.unitId],
-        `${paused.name} will return to your review path when its code or conversation changes.`,
-      );
+      toast.success("Waiting for response", {
+        description: `${paused.name} will return to your review path when its code or conversation changes.`,
+      });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, rollback) => {
+      if (rollback) {
+        setUnits((current) =>
+          current.map((unit) =>
+            unit.id === rollback.paused.id ? rollback.paused : unit,
+          ),
+        );
+        if (rollback.unitIndex >= 0) setActiveIndex(rollback.unitIndex);
+        setPathSearch(rollback.pathSearch);
+        setQueueLimit(rollback.queueLimit);
+        setSearchLimit(rollback.searchLimit);
+        setWaitingLimit(rollback.waitingLimit);
+        setSelectedLine(rollback.selectedLine);
+        setFeedback(rollback.feedback);
+        setShowDiff(rollback.showDiff);
+        setStartedAt(rollback.startedAt);
+      }
+      toast.error(error.message);
+    },
   });
 
   const releaseReviewWaits = api.review.releaseReviewWaits.useMutation({

@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { db as database } from "~/server/db";
 import type { PullRequestProvider } from "~/server/providers/types";
-import { downloadRepositoryFiles, repositoryChangedFileCount } from "./sync";
+import {
+  downloadRepositoryFiles,
+  MAX_REPOSITORY_FILE_BYTES,
+  REPOSITORY_SOURCE_BUDGET_BYTES,
+  repositoryChangedFileCount,
+} from "./sync";
 
 describe("repository branch source download", () => {
   it("counts a newly readable prior source without recounting unknown files", () => {
@@ -83,12 +88,21 @@ describe("repository branch source download", () => {
   });
 
   it("stops provider reads in bounded batches once the source budget is full", async () => {
+    const pathCount = 24;
     const paths = Array.from(
-      { length: 20 },
-      (_value, index) => `src/file-${String(19 - index).padStart(2, "0")}.ts`,
+      { length: pathCount },
+      (_value, index) =>
+        `src/file-${String(pathCount - 1 - index).padStart(2, "0")}.ts`,
     );
-    const source = "x".repeat(2 * 1024 * 1024);
-    const getFileContent = vi.fn(async () => source);
+    const source = "x".repeat(MAX_REPOSITORY_FILE_BYTES);
+    const getFileContent = vi.fn(
+      async (
+        _repositoryExternalId: string,
+        _path: string,
+        _ref: string,
+        _maximumBytes?: number,
+      ) => source,
+    );
     const provider = {
       listRepositoryFiles: vi.fn(async () => paths),
       getFileContent,
@@ -104,14 +118,25 @@ describe("repository branch source download", () => {
       provider,
     );
 
-    expect(files).toHaveLength(20);
+    expect(files).toHaveLength(paths.length);
     expect(files.map(({ path }) => path)).toEqual([...paths].sort());
-    expect(files.filter(({ skipReason }) => !skipReason)).toHaveLength(9);
+    const retained = Math.floor(
+      REPOSITORY_SOURCE_BUDGET_BYTES / MAX_REPOSITORY_FILE_BYTES,
+    );
+    expect(files.filter(({ skipReason }) => !skipReason)).toHaveLength(
+      retained,
+    );
     expect(
       files.filter(({ skipReason }) => skipReason === "too_large"),
-    ).toHaveLength(11);
-    // Three four-file batches may already be in flight when the tenth file
-    // exhausts the budget; no later batch is downloaded.
-    expect(getFileContent).toHaveBeenCalledTimes(12);
+    ).toHaveLength(paths.length - retained);
+    const batchSize = 4;
+    const expectedReadCalls = Math.min(
+      paths.length,
+      Math.max(batchSize, Math.ceil(retained / batchSize) * batchSize),
+    );
+    expect(getFileContent).toHaveBeenCalledTimes(expectedReadCalls);
+    for (const call of getFileContent.mock.calls) {
+      expect(call[3]).toBe(MAX_REPOSITORY_FILE_BYTES);
+    }
   });
 });

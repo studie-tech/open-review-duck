@@ -973,11 +973,34 @@ function Findings({
     },
   );
   const [jobId, setJobId] = useState<string | undefined>(requestedJobId);
+  const utils = api.useUtils();
   const runs = history.data ?? [];
   const selectedJobId = runs.some(({ id }) => id === jobId)
     ? jobId
     : runs[0]?.id;
   const selectedRun = runs.find(({ id }) => id === selectedJobId);
+  const deleteReport = api.repoReviews.deleteReport.useMutation({
+    onSuccess: async ({ deletedId }) => {
+      let nextJobId: string | undefined;
+      utils.repoReviews.history.setData(
+        { monitorId: monitor.id },
+        (current) => {
+          const remaining = current?.filter(({ id }) => id !== deletedId);
+          nextJobId = remaining?.[0]?.id;
+          return remaining;
+        },
+      );
+      setSelected(new Set());
+      setJobId(nextJobId);
+      await Promise.all([
+        utils.repoReviews.list.invalidate(),
+        utils.repoReviews.history.invalidate({ monitorId: monitor.id }),
+        utils.repoReviews.findings.invalidate(),
+      ]);
+      toast.success("Repository report deleted");
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const findings = api.repoReviews.findings.useQuery(
     { monitorId: monitor.id, jobId: selectedJobId ?? EMPTY_UUID },
     {
@@ -1090,6 +1113,37 @@ function Findings({
             onClick={download}
           >
             <Download className="size-3.5" /> Download .md
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            loading={deleteReport.isPending}
+            disabled={
+              !selectedRun ||
+              activeStatuses.has(selectedRun.status) ||
+              deleteReport.isPending
+            }
+            aria-label="Delete repository report"
+            title={
+              selectedRun && activeStatuses.has(selectedRun.status)
+                ? "A running report cannot be deleted"
+                : "Delete this report and its findings"
+            }
+            onClick={() => {
+              if (
+                selectedRun &&
+                window.confirm(
+                  "Delete this repository report and all of its findings? This cannot be undone.",
+                )
+              ) {
+                deleteReport.mutate({
+                  monitorId: monitor.id,
+                  jobId: selectedRun.id,
+                });
+              }
+            }}
+          >
+            <Trash2 className="size-3.5" />
           </Button>
         </div>
       </div>

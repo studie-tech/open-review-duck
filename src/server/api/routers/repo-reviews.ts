@@ -36,6 +36,7 @@ import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { deepReviewRunPayload } from "./review";
 
 const monitorIdSchema = z.object({ monitorId: z.uuid() });
+const reportIdSchema = z.object({ monitorId: z.uuid(), jobId: z.uuid() });
 const ruleScopeSchema = z.enum(["file", "repository"]);
 const ruleSeveritySchema = z.enum(["critical", "high", "medium", "low"]);
 const ruleFields = {
@@ -736,8 +737,41 @@ export const repoReviewsRouter = createTRPCRouter({
       });
     }),
 
+  deleteReport: protectedProcedure
+    .input(reportIdSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await monitorScope(
+        ctx.db,
+        ctx.auth.userId,
+        input.monitorId,
+      );
+      const [deleted] = await ctx.db
+        .delete(aiJobs)
+        .where(
+          and(
+            eq(aiJobs.id, input.jobId),
+            eq(aiJobs.pullRequestId, scope.monitor.pullRequestId),
+            eq(aiJobs.userId, ctx.auth.userId),
+            eq(aiJobs.kind, "review"),
+            eq(aiJobs.reviewScope, "repository_snapshot"),
+            isNull(aiJobs.parentJobId),
+            inArray(aiJobs.status, ["completed", "failed", "cancelled"]),
+          ),
+        )
+        .returning({ id: aiJobs.id });
+      if (!deleted) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "That finished repository report no longer exists.",
+        });
+      }
+      // Child agents, coverage items, transcripts, and findings are owned by
+      // the parent job and cascade with it.
+      return { deletedId: deleted.id };
+    }),
+
   findings: protectedProcedure
-    .input(z.object({ monitorId: z.uuid(), jobId: z.uuid() }))
+    .input(reportIdSchema)
     .query(async ({ ctx, input }) => {
       const scope = await monitorScope(
         ctx.db,
