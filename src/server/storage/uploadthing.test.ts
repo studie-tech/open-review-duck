@@ -6,12 +6,14 @@ type MockUploadResult =
       data: null;
       error: { code: string; message: string; data?: unknown };
     };
+type MockFileUrls = { data: Array<{ key: string; url: string }> };
 
 const mocks = vi.hoisted(() => ({
   deleteFiles: vi.fn(),
   generateSignedURL: vi.fn(async () => ({
     ufsUrl: "https://example.test/object",
   })),
+  getFileUrls: vi.fn<() => Promise<MockFileUrls>>(async () => ({ data: [] })),
   uploadFiles: vi.fn<() => Promise<MockUploadResult>>(async () => ({
     data: { key: "object-key" },
     error: null,
@@ -22,6 +24,7 @@ vi.mock("uploadthing/server", () => ({
   UTApi: class {
     deleteFiles = mocks.deleteFiles;
     generateSignedURL = mocks.generateSignedURL;
+    getFileUrls = mocks.getFileUrls;
     uploadFiles = mocks.uploadFiles;
   },
   UTFile: class {},
@@ -38,13 +41,14 @@ describe("UploadThing source storage", () => {
     mocks.generateSignedURL.mockReset().mockResolvedValue({
       ufsUrl: "https://example.test/object",
     });
+    mocks.getFileUrls.mockReset().mockResolvedValue({ data: [] });
     mocks.uploadFiles.mockReset().mockResolvedValue({
       data: { key: "object-key" },
       error: null,
     });
   });
 
-  it("derives stable workspace-scoped identities before uploading", () => {
+  it("derives stable workspace- and lease-scoped identities before uploading", () => {
     const store = new UploadThingSourceObjectStore("token", "identity-key");
     const input = {
       bytes: new Uint8Array([1]),
@@ -55,6 +59,9 @@ describe("UploadThing source storage", () => {
     expect(store.customId(input)).toBe(store.customId(input));
     expect(store.customId(input)).not.toBe(
       store.customId({ ...input, workspaceId: "workspace-two" }),
+    );
+    expect(store.customId({ ...input, attemptId: "lease-one" })).not.toBe(
+      store.customId({ ...input, attemptId: "lease-two" }),
     );
   });
 
@@ -119,9 +126,34 @@ describe("UploadThing source storage", () => {
       objectKey: "recovered-key",
     });
     expect(mocks.uploadFiles).toHaveBeenCalledTimes(2);
+    expect(mocks.getFileUrls).toHaveBeenCalledWith(store.customId(input), {
+      keyType: "customId",
+    });
     expect(mocks.deleteFiles).toHaveBeenCalledWith(store.customId(input), {
       keyType: "customId",
     });
+  });
+
+  it("adopts an upload that committed before its response was lost", async () => {
+    mocks.uploadFiles.mockResolvedValueOnce({
+      data: null,
+      error: { code: "UPLOAD_FAILED", message: "Failed to upload file" },
+    });
+    mocks.getFileUrls.mockResolvedValueOnce({
+      data: [{ key: "committed-key", url: "https://example.test/private" }],
+    });
+    const store = new UploadThingSourceObjectStore("token", "identity-key");
+
+    await expect(
+      store.put({
+        attemptId: "upload-lease",
+        bytes: new Uint8Array([1]),
+        digest: "a".repeat(64),
+        workspaceId: "workspace-one",
+      }),
+    ).resolves.toMatchObject({ objectKey: "committed-key" });
+    expect(mocks.uploadFiles).toHaveBeenCalledOnce();
+    expect(mocks.deleteFiles).not.toHaveBeenCalled();
   });
 
   it("retains safe provider context after bounded upload retries", async () => {

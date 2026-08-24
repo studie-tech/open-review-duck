@@ -95,13 +95,14 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
     });
   }
 
-  /** Derives the stable tenant-bound identity used before an upload starts. */
+  /** Derives the tenant- and lease-bound identity used before an upload starts. */
   customId(input: PutSourceObject) {
-    return createHmac("sha256", this.storageIdKey)
+    const identity = createHmac("sha256", this.storageIdKey)
       .update(input.workspaceId)
       .update("\0")
-      .update(input.digest)
-      .digest("base64url");
+      .update(input.digest);
+    if (input.attemptId) identity.update("\0").update(input.attemptId);
+    return identity.digest("base64url");
   }
 
   /** Uploads one opaque private object with a tenant-bound custom identifier. */
@@ -135,9 +136,23 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
       }
 
       // The ingest request may have committed before its response was lost.
-      // Removing the deterministic identity makes the next attempt a genuine
-      // retry instead of a permanent custom-ID conflict. The database upload
-      // lease guarantees that no ready row can name this object concurrently.
+      // Adopt that object before deleting anything: its lease-bound custom ID
+      // proves it came from this call, while the database still verifies the
+      // content digest when the object is read.
+      try {
+        const committed = await this.api.getFileUrls(customId, {
+          keyType: "customId",
+        });
+        const objectKey = committed.data[0]?.key;
+        if (objectKey) return { customId, objectKey, storage: this.kind };
+      } catch {
+        // This deprecated lookup is recovery-only. Its outage must not hide
+        // the actionable upload error or prevent the bounded retry below.
+      }
+
+      // No committed object was visible. Removing this upload lease's custom
+      // identity makes the next in-call attempt genuine; a later database
+      // lease receives a new identity even if provider deletion is delayed.
       try {
         await this.deleteByCustomId(customId);
       } catch (cause) {

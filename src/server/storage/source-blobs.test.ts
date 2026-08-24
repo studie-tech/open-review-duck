@@ -49,7 +49,7 @@ describe("source blob pruning", () => {
     );
   });
 
-  it("refreshes the reuse timestamp before returning a deduplicated blob", async () => {
+  it("reuses a recently verified blob without another provider probe", async () => {
     mocks.put.mockReset();
     mocks.read.mockReset();
     const bytes = new TextEncoder().encode("reused");
@@ -60,6 +60,7 @@ describe("source blob pruning", () => {
       storage: "local",
       objectKey: "objects/reused",
       digest: sourceDigest(bytes),
+      updatedAt: new Date(),
     };
     const returning = vi.fn(async () => [
       { ...existing, updatedAt: new Date() },
@@ -78,6 +79,43 @@ describe("source blob pruning", () => {
       bytes,
     });
 
+    expect(set).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("revalidates and refreshes an old deduplicated blob", async () => {
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    const bytes = new TextEncoder().encode("revalidate me");
+    mocks.read.mockResolvedValue(bytes);
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/revalidated",
+      digest: sourceDigest(bytes),
+      updatedAt: new Date(0),
+    };
+    const returning = vi.fn(async () => [
+      { ...existing, updatedAt: new Date() },
+    ]);
+    const set = vi.fn(() => ({
+      where: vi.fn(() => ({ returning })),
+    }));
+    const database = {
+      query: {
+        sourceBlobs: { findFirst: vi.fn(async () => existing) },
+      },
+      update: vi.fn(() => ({ set })),
+    };
+
+    await persistSourceBlob(database as never, {
+      workspaceId: "workspace",
+      bytes,
+    });
+
+    expect(mocks.read).toHaveBeenCalledOnce();
     expect(set).toHaveBeenCalledWith({ updatedAt: expect.any(Date) });
     expect(mocks.put).not.toHaveBeenCalled();
   });
@@ -99,6 +137,7 @@ describe("source blob pruning", () => {
       storage: "local",
       objectKey: "objects/missing",
       digest: sourceDigest(bytes),
+      updatedAt: new Date(0),
     };
     const claimed = {
       ...existing,
@@ -158,6 +197,7 @@ describe("source blob pruning", () => {
       storage: "local",
       objectKey: "objects/present",
       digest: sourceDigest(bytes),
+      updatedAt: new Date(0),
     };
     const set = vi.fn(() => ({
       where: vi.fn(() => ({ returning: vi.fn(async () => []) })),
@@ -227,7 +267,9 @@ describe("source blob pruning", () => {
         bytes: new TextEncoder().encode("retry me"),
       }),
     ).resolves.toMatchObject({ state: "ready" });
-    expect(mocks.put).toHaveBeenCalledOnce();
+    expect(mocks.put).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptId: expect.any(String) }),
+    );
   });
 
   it("waits for a concurrent upload of the same content rather than failing", async () => {
@@ -245,6 +287,7 @@ describe("source blob pruning", () => {
       objectKey: null,
       digest: sourceDigest(bytes),
       uploadLeaseExpiresAt: new Date(Date.now() + 60_000),
+      updatedAt: new Date(),
     };
     const ready = {
       ...uploading,
@@ -316,6 +359,7 @@ describe("source blob pruning", () => {
         storage: "local",
         objectKey: "objects/missing",
         digest: sourceDigest(bytes),
+        updatedAt: new Date(0),
       };
       const claimed = {
         ...existing,

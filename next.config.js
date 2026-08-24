@@ -2,6 +2,7 @@
  * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially useful
  * for compilation-only CI builds.
  */
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
 import { withWorkflow } from "workflow/next";
@@ -17,6 +18,23 @@ if (
 
 const deploymentMode =
   process.env.DEPLOYMENT_MODE === "local" ? "local" : "saas";
+const WORKFLOW_MAX_DURATION_SECONDS = 1_800;
+const WORKFLOW_FUNCTION_CONFIG = path.resolve(
+  "src/app/.well-known/workflow/v1/config.json",
+);
+
+/** Raises generated Workflow functions to Vercel's supported Fluid ceiling. */
+async function configureWorkflowDuration() {
+  const generated = JSON.parse(
+    await readFile(WORKFLOW_FUNCTION_CONFIG, "utf8"),
+  );
+  generated.steps.maxDuration = WORKFLOW_MAX_DURATION_SECONDS;
+  generated.workflows.maxDuration = WORKFLOW_MAX_DURATION_SECONDS;
+  await writeFile(
+    WORKFLOW_FUNCTION_CONFIG,
+    `${JSON.stringify(generated, null, 2)}\n`,
+  );
+}
 
 /** @type {import("next").NextConfig} */
 const config = {
@@ -115,7 +133,20 @@ const config = {
   },
 };
 
-const workflowConfig = withWorkflow(config);
+const generatedWorkflowConfig = withWorkflow(config);
+/**
+ * Applies deployment-only Workflow route settings after code generation.
+ *
+ * @param {string} phase
+ * @param {{ defaultConfig: import("next").NextConfig }} context
+ */
+const workflowConfig = async (phase, context) => {
+  const nextConfig = await generatedWorkflowConfig(phase, context);
+  if (phase === "phase-production-build") {
+    await configureWorkflowDuration();
+  }
+  return nextConfig;
+};
 
 export default deploymentMode === "local"
   ? workflowConfig
