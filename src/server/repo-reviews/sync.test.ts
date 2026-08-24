@@ -118,7 +118,7 @@ describe("repository branch source download", () => {
       provider,
     );
 
-    expect(files).toHaveLength(20);
+    expect(files).toHaveLength(paths.length);
     expect(files.map(({ path }) => path)).toEqual([...paths].sort());
     const retained = Math.floor(
       REPOSITORY_SOURCE_BUDGET_BYTES / MAX_REPOSITORY_FILE_BYTES,
