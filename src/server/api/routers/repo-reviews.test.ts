@@ -25,6 +25,7 @@ import { repoReviewsRouter } from "./repo-reviews";
 const createCaller = createCallerFactory(repoReviewsRouter);
 const monitorId = "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10";
 const pullRequestId = "8c2b6f41-2a55-4f0e-9f7d-1b3c5a6e7d80";
+const jobId = "7a4c3e21-9d8b-4f60-a2c1-5e7b9d3f6a40";
 
 type Database = typeof database;
 
@@ -53,9 +54,9 @@ function createFakeDb() {
 }
 
 /** Builds a caller whose Clerk `has` matches one entitlement feature. */
-function caller(features: readonly string[]) {
+function caller(features: readonly string[], db = createFakeDb()) {
   return createCaller({
-    db: createFakeDb(),
+    db,
     auth: {
       userId: "reviewer-1",
       has: ({ feature }: { feature: string }) => features.includes(feature),
@@ -129,5 +130,32 @@ describe("repoReviews.startRun entitlement", () => {
         planTier: "free",
       }),
     );
+  });
+});
+
+describe("repoReviews.deleteReport", () => {
+  it("deletes an authorized finished parent report", async () => {
+    const returning = vi.fn(async () => [{ id: jobId }]);
+    const where = vi.fn(() => ({ returning }));
+    const deleteRow = vi.fn(() => ({ where }));
+    const db = Object.assign(createFakeDb(), { delete: deleteRow });
+
+    await expect(
+      caller([], db).deleteReport({ monitorId, jobId }),
+    ).resolves.toEqual({ deletedId: jobId });
+    expect(deleteRow).toHaveBeenCalledTimes(1);
+    expect(returning).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not present an active or missing report as deleted", async () => {
+    const db = Object.assign(createFakeDb(), {
+      delete: () => ({
+        where: () => ({ returning: async () => [] }),
+      }),
+    });
+
+    await expect(
+      caller([], db).deleteReport({ monitorId, jobId }),
+    ).rejects.toThrow("finished repository report no longer exists");
   });
 });

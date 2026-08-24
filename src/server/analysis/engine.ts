@@ -2184,59 +2184,15 @@ export function reconcileSignOffs(
   next: AnalyzedUnit[],
 ) {
   const previousByKey = new Map(previous.map((unit) => [unit.stableKey, unit]));
-  const nextByKey = new Map(next.map((unit) => [unit.stableKey, unit]));
-  const changedKeys = new Set(
-    next
-      .filter(
-        (unit) =>
-          previousByKey.get(unit.stableKey)?.semanticHash !== unit.semanticHash,
-      )
-      .map((unit) => unit.stableKey),
-  );
-  for (const prior of previous) {
-    if (!nextByKey.has(prior.stableKey)) changedKeys.add(prior.stableKey);
-  }
-
-  let previousGraphChanged = true;
-  while (previousGraphChanged) {
-    previousGraphChanged = false;
-    for (const unit of previous) {
-      if (
-        !changedKeys.has(unit.stableKey) &&
-        unit.dependencies.some((dependency) => changedKeys.has(dependency))
-      ) {
-        changedKeys.add(unit.stableKey);
-        previousGraphChanged = true;
-      }
-    }
-  }
-
-  const requiresReview = new Set(
-    next
-      .filter(
-        (unit) =>
-          !previousByKey.has(unit.stableKey) || changedKeys.has(unit.stableKey),
-      )
-      .map((unit) => unit.stableKey),
-  );
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const unit of next) {
-      if (
-        !requiresReview.has(unit.stableKey) &&
-        unit.dependencies.some((dependency) => requiresReview.has(dependency))
-      ) {
-        requiresReview.add(unit.stableKey);
-        changed = true;
-      }
-    }
-  }
   return next.map((unit) => {
     const prior = previousByKey.get(unit.stableKey);
     return {
       unit,
-      requiresReview: requiresReview.has(unit.stableKey),
+      // A sign-off belongs to this semantic unit. Dependency changes are
+      // reviewed where they occurred; propagating them through the graph makes
+      // identical callers require another sign-off and can fan one edit across
+      // most of a review path.
+      requiresReview: prior?.semanticHash !== unit.semanticHash,
       previousUnit: prior,
     };
   });

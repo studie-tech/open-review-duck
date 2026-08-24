@@ -310,7 +310,7 @@ describe("Python review analysis", () => {
     ).toBe(true);
   });
 
-  it("propagates annotated constant changes to Python consumers", () => {
+  it("keeps unchanged Python consumers signed off after a constant changes", () => {
     const before = analyzeFiles([
       {
         path: "src/retry.py",
@@ -336,6 +336,6 @@ describe("Python review analysis", () => {
       reconcileSignOffs(before, after).find(
         ({ unit }) => unit.name === "should_retry",
       )?.requiresReview,
-    ).toBe(true);
+    ).toBe(false);
   });
 });
