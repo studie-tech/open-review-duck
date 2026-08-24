@@ -88,9 +88,11 @@ describe("repository branch source download", () => {
   });
 
   it("stops provider reads in bounded batches once the source budget is full", async () => {
+    const pathCount = 24;
     const paths = Array.from(
-      { length: 20 },
-      (_value, index) => `src/file-${String(19 - index).padStart(2, "0")}.ts`,
+      { length: pathCount },
+      (_value, index) =>
+        `src/file-${String(pathCount - 1 - index).padStart(2, "0")}.ts`,
     );
     const source = "x".repeat(MAX_REPOSITORY_FILE_BYTES);
     const getFileContent = vi.fn(
@@ -127,7 +129,12 @@ describe("repository branch source download", () => {
     expect(
       files.filter(({ skipReason }) => skipReason === "too_large"),
     ).toHaveLength(paths.length - retained);
-    expect(getFileContent).toHaveBeenCalledTimes(paths.length);
+    const batchSize = 4;
+    const expectedReadCalls = Math.min(
+      paths.length,
+      Math.max(batchSize, Math.ceil(retained / batchSize) * batchSize),
+    );
+    expect(getFileContent).toHaveBeenCalledTimes(expectedReadCalls);
     for (const call of getFileContent.mock.calls) {
       expect(call[3]).toBe(MAX_REPOSITORY_FILE_BYTES);
     }
