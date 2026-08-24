@@ -93,7 +93,14 @@ describe("repository branch source download", () => {
       (_value, index) => `src/file-${String(19 - index).padStart(2, "0")}.ts`,
     );
     const source = "x".repeat(MAX_REPOSITORY_FILE_BYTES);
-    const getFileContent = vi.fn(async () => source);
+    const getFileContent = vi.fn(
+      async (
+        _repositoryExternalId: string,
+        _path: string,
+        _ref: string,
+        _maximumBytes?: number,
+      ) => source,
+    );
     const provider = {
       listRepositoryFiles: vi.fn(async () => paths),
       getFileContent,
@@ -121,5 +128,8 @@ describe("repository branch source download", () => {
       files.filter(({ skipReason }) => skipReason === "too_large"),
     ).toHaveLength(paths.length - retained);
     expect(getFileContent).toHaveBeenCalledTimes(paths.length);
+    for (const call of getFileContent.mock.calls) {
+      expect(call[3]).toBe(MAX_REPOSITORY_FILE_BYTES);
+    }
   });
 });

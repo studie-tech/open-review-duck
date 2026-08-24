@@ -185,9 +185,9 @@ export async function downloadRepositoryFiles(
     left.localeCompare(right),
   );
   const currentPathSet = new Set(orderedPaths);
-  // Each current tree gets the same 20 MB allowance. Comparison may hold the
-  // preceding side as well, so its total allowance is twice that rather than
-  // silently halving current-tree coverage after the first sync.
+  // Each current tree gets the configured 100,000,000-byte allowance.
+  // Comparison may hold the preceding side as well, so its 200,000,000-byte
+  // allowance does not silently halve current-tree coverage after first sync.
   const comparisonBudget = REPOSITORY_SOURCE_BUDGET_BYTES * 2;
   let usedBytes = 0;
   let currentBytes = 0;
