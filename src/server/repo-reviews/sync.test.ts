@@ -139,4 +139,42 @@ describe("repository branch source download", () => {
       expect(call[3]).toBe(MAX_REPOSITORY_FILE_BYTES);
     }
   });
+
+  it("uses provider bulk reads and reports live download progress", async () => {
+    const paths = Array.from(
+      { length: 120 },
+      (_value, index) => `src/file-${String(index).padStart(3, "0")}.ts`,
+    );
+    const getFileContents = vi.fn(
+      async (_repositoryExternalId: string, batchPaths: readonly string[]) =>
+        batchPaths.map((path) => ({ path, content: "export {};" })),
+    );
+    const getFileContent = vi.fn();
+    const provider = {
+      listRepositoryFiles: vi.fn(async () => paths),
+      getFileContents,
+      getFileContent,
+    } as unknown as PullRequestProvider;
+    const progress: number[] = [];
+
+    const files = await downloadRepositoryFiles(
+      {} as typeof database,
+      {
+        monitorId: "monitor",
+        repositoryExternalId: "repository",
+        ref: "revision",
+        onProgress: async (value) => {
+          progress.push(value);
+        },
+      },
+      provider,
+    );
+
+    expect(files).toHaveLength(paths.length);
+    expect(getFileContents).toHaveBeenCalledTimes(3);
+    expect(getFileContent).not.toHaveBeenCalled();
+    expect(progress[0]).toBe(28);
+    expect(progress.at(-1)).toBe(54);
+    expect(progress).toEqual([...progress].sort((left, right) => left - right));
+  });
 });

@@ -40,6 +40,7 @@ import {
   repositoryReportFilename,
   repositoryReviewReport,
 } from "~/lib/repository-review-report";
+import { repositorySyncActivity } from "~/lib/repository-sync-progress";
 import { cockpitShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
@@ -585,8 +586,14 @@ function RepositoryCockpit({
               </h2>
               <Badge>{providerLabel[monitor.provider]}</Badge>
               {monitor.activeSync && (
-                <Badge className="border-amber-400/25 bg-amber-400/8 text-amber-300">
-                  Syncing {monitor.activeSync.progress}%
+                <Badge
+                  className="border-amber-400/25 bg-amber-400/8 text-amber-300"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span className="mr-1 size-1.5 animate-pulse rounded-full bg-amber-300" />
+                  {repositorySyncActivity(monitor.activeSync.progress)} ·{" "}
+                  {monitor.activeSync.progress}%
                 </Badge>
               )}
             </div>
@@ -636,7 +643,7 @@ function RepositoryCockpit({
             </Button>
           </div>
         </div>
-        {monitor.lastError && (
+        {monitor.lastError && !monitor.activeSync && (
           <div className="mt-4 rounded-xl border border-red-400/20 bg-red-400/8 px-4 py-3 text-xs text-red-200">
             {monitor.lastError}
           </div>

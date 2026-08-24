@@ -1,5 +1,6 @@
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
+  mapWithConcurrency,
   providerFetch,
   providerResponse,
   providerText,
@@ -15,6 +16,7 @@ import {
   type PullRequestProvider,
   type PullRequestSummary,
   type RepositoryBranch,
+  type RepositoryFileContent,
   type RepositoryIdentity,
 } from "./types";
 
@@ -76,7 +78,23 @@ interface GitHubFile {
 }
 interface GitHubTree {
   truncated: boolean;
-  tree: Array<{ path: string; type: "blob" | "tree" | "commit" }>;
+  tree: Array<{
+    path: string;
+    type: "blob" | "tree" | "commit";
+    size?: number;
+  }>;
+}
+interface GitHubBlob {
+  byteSize: number;
+  isBinary: boolean | null;
+  isTruncated: boolean;
+  text: string | null;
+}
+interface GitHubRepositoryFilesResponse {
+  data?: {
+    repository?: Record<string, GitHubBlob | null> | null;
+  };
+  errors?: { message: string }[];
 }
 interface GitHubBranch {
   name: string;
@@ -130,11 +148,14 @@ interface GitHubReviewThreadsResponse {
 }
 const MAX_PROVIDER_PAGES = 100;
 const MAX_PROVIDER_ITEMS = 20_000;
+const GITHUB_GRAPHQL_BATCH_MAXIMUM_FILES = 50;
+const GITHUB_GRAPHQL_BATCH_MAXIMUM_BYTES = 6_000_000;
 
 export class GitHubProvider implements PullRequestProvider {
   readonly name = "github" as const;
   private readonly headers: HeadersInit;
   private readonly repositories = new Map<string, Promise<GitHubRepository>>();
+  private readonly repositoryFileSizes = new Map<string, Map<string, number>>();
   /** Initializes an authenticated provider client. */
   constructor(
     token: string,
@@ -515,7 +536,145 @@ export class GitHubProvider implements PullRequestProvider {
     if (paths.length > MAX_PROVIDER_ITEMS) {
       throw new Error("GitHub repository tree exceeded its item limit");
     }
+    this.repositoryFileSizes.set(
+      `${repositoryExternalId}:${ref}`,
+      new Map(
+        tree.tree.flatMap((entry) =>
+          entry.type === "blob" && entry.size !== undefined
+            ? [[entry.path, entry.size] as const]
+            : [],
+        ),
+      ),
+    );
     return paths;
+  }
+
+  /** Loads several GitHub blobs per GraphQL query to conserve REST quota. */
+  async getFileContents(
+    repositoryExternalId: string,
+    paths: readonly string[],
+    ref: string,
+    maximumBytes = 2_000_000,
+  ): Promise<RepositoryFileContent[]> {
+    if (paths.length === 0) return [];
+    const repository = await this.repository(repositoryExternalId);
+    const separator = repository.full_name.indexOf("/");
+    if (separator <= 0 || separator === repository.full_name.length - 1) {
+      throw new ProviderError(
+        this.name,
+        "GitHub returned an invalid repository name",
+      );
+    }
+    const owner = repository.full_name.slice(0, separator);
+    const name = repository.full_name.slice(separator + 1);
+    const sizes = this.repositoryFileSizes.get(
+      `${repositoryExternalId}:${ref}`,
+    );
+    const resultByPath = new Map<string, RepositoryFileContent>();
+    const eligiblePaths = paths.filter((path) => {
+      const size = sizes?.get(path);
+      if (size === undefined || size <= maximumBytes) return true;
+      resultByPath.set(path, { path });
+      return false;
+    });
+    const batches: string[][] = [];
+    let batch: string[] = [];
+    let batchBytes = 0;
+    for (const path of eligiblePaths) {
+      const expectedBytes = Math.min(
+        sizes?.get(path) ?? maximumBytes,
+        maximumBytes,
+      );
+      if (
+        batch.length > 0 &&
+        (batch.length >= GITHUB_GRAPHQL_BATCH_MAXIMUM_FILES ||
+          batchBytes + expectedBytes > GITHUB_GRAPHQL_BATCH_MAXIMUM_BYTES)
+      ) {
+        batches.push(batch);
+        batch = [];
+        batchBytes = 0;
+      }
+      batch.push(path);
+      batchBytes += expectedBytes;
+    }
+    if (batch.length > 0) batches.push(batch);
+
+    for (const batchPaths of batches) {
+      const variableDeclarations = batchPaths
+        .map((_path, index) => `$expression${index}: String!`)
+        .join(", ");
+      const selections = batchPaths
+        .map(
+          (_path, index) =>
+            `file${index}: object(expression: $expression${index}) { ... on Blob { byteSize isBinary isTruncated text } }`,
+        )
+        .join("\n");
+      const variables = Object.fromEntries([
+        ["owner", owner],
+        ["name", name],
+        ...batchPaths.map(
+          (path, index) => [`expression${index}`, `${ref}:${path}`] as const,
+        ),
+      ]);
+      const response = await providerFetch<GitHubRepositoryFilesResponse>(
+        this.name,
+        this.graphqlUrl(),
+        {
+          method: "POST",
+          headers: {
+            ...this.headers,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query: `query RepositoryFiles($owner: String!, $name: String!, ${variableDeclarations}) { repository(owner: $owner, name: $name) { ${selections} } }`,
+            variables,
+          }),
+        },
+      );
+      if (response.errors?.length) {
+        throw new ProviderError(
+          this.name,
+          response.errors[0]?.message.slice(0, 300) ??
+            "GitHub could not load repository files",
+        );
+      }
+      if (!response.data?.repository) {
+        throw new ProviderError(
+          this.name,
+          "GitHub repository was unavailable while loading files",
+        );
+      }
+      const fallbackPaths: string[] = [];
+      for (const [index, path] of batchPaths.entries()) {
+        const blob = response.data.repository[`file${index}`];
+        if (!blob || blob.byteSize > maximumBytes) {
+          resultByPath.set(path, { path });
+        } else if (blob.isBinary) {
+          resultByPath.set(path, { path, isBinary: true });
+        } else if (!blob.isTruncated && blob.text !== null) {
+          resultByPath.set(path, { path, content: blob.text });
+        } else {
+          fallbackPaths.push(path);
+        }
+      }
+      const fallbacks = await mapWithConcurrency(
+        fallbackPaths,
+        4,
+        async (path): Promise<RepositoryFileContent> => ({
+          path,
+          content: await this.getFileContent(
+            repositoryExternalId,
+            path,
+            ref,
+            maximumBytes,
+          ),
+        }),
+      );
+      for (const fallback of fallbacks) {
+        resultByPath.set(fallback.path, fallback);
+      }
+    }
+    return paths.map((path) => resultByPath.get(path) ?? { path });
   }
 
   /** Publishes an inline review comment to the code provider. */
