@@ -19,6 +19,7 @@ import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
   ConceptMoveDialog,
+  conceptFileCardsInReadingOrder,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
   nextAnchorableLine,
@@ -28,9 +29,12 @@ import {
   PullRequestDetailsDialog,
   REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
+  ReviewConceptFileCardPreview,
   ReviewConceptMemberPreview,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
+  reviewCardMemberForLine,
+  reviewCardRanges,
   rememberAiConversationVisibility,
   reviewShortcuts,
   SideBySideUnitDiff,
@@ -451,6 +455,136 @@ describe("ReviewConceptMemberPreview", () => {
       expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
     },
   );
+});
+
+describe("same-file concept cards", () => {
+  const units = [
+    {
+      id: "configuration",
+      path: "src/preview.ts",
+      name: "configuration",
+      changedLineCount: 1,
+      changeType: "added",
+      previousSource: null,
+      source: "const configuration = true;",
+      startLine: 2,
+      endLine: 2,
+      language: "typescript",
+      kind: "constant",
+      status: "pending",
+    },
+    {
+      id: "other-file",
+      path: "src/other.ts",
+      name: "other",
+      changedLineCount: 1,
+      changeType: "added",
+      previousSource: null,
+      source: "export const other = true;",
+      startLine: 1,
+      endLine: 1,
+      language: "typescript",
+      kind: "constant",
+      status: "pending",
+    },
+    {
+      id: "main",
+      path: "src/preview.ts",
+      name: "main",
+      changedLineCount: 1,
+      changeType: "added",
+      previousSource: null,
+      source: "const main = true;",
+      startLine: 5,
+      endLine: 5,
+      language: "typescript",
+      kind: "constant",
+      status: "pending",
+    },
+  ] as const;
+
+  it("keeps one card per file without disturbing first-seen reading order", () => {
+    const cards = conceptFileCardsInReadingOrder(units);
+
+    expect(cards.map(({ path }) => path)).toEqual([
+      "src/preview.ts",
+      "src/other.ts",
+    ]);
+    expect(cards[0]?.members.map(({ id }) => id)).toEqual([
+      "configuration",
+      "main",
+    ]);
+  });
+
+  it("keeps the gap visible but outside both atomic review ranges", () => {
+    const sameFile = [units[0], units[2]] as never;
+
+    expect(reviewCardRanges(sameFile)).toEqual([
+      { startLine: 2, endLine: 2 },
+      { startLine: 5, endLine: 5 },
+    ]);
+    expect(reviewCardMemberForLine(sameFile, 3)).toBeUndefined();
+    expect(reviewCardMemberForLine(sameFile, 5)?.id).toBe("main");
+  });
+
+  it("maps modified members to their shifted base-side lines", () => {
+    const member = {
+      ...units[0],
+      changeType: "modified",
+      previousSource: "const configuration = false;",
+      previousStartByte: 12,
+      startLine: 3,
+      endLine: 3,
+    } as never;
+
+    expect(
+      reviewCardRanges(
+        [member],
+        "previous",
+        "// removed\nconst configuration = false;",
+      ),
+    ).toEqual([{ startLine: 2, endLine: 2 }]);
+  });
+
+  it("renders one card, dims intervening context, and routes comments to its owner", async () => {
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={[units[0], units[2]] as never}
+        index={0}
+        count={2}
+        fileSource={[
+          "// setup",
+          "const configuration = true;",
+          "const contextA = true;",
+          "const contextB = true;",
+          "const main = true;",
+        ].join("\n")}
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+
+    expect(screen.getByRole("article")).toHaveTextContent(
+      "Reviewing 2 individual units in this card",
+    );
+    expect(screen.getByRole("article")).toHaveTextContent(
+      "const contextA = true;",
+    );
+    expect(
+      screen.getByText("const contextA = true;").closest("div"),
+    ).toHaveClass("opacity-45");
+    expect(
+      screen.queryByRole("button", {
+        name: "Comment on line 3 of configuration",
+      }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith("main", 5);
+  });
 });
 
 describe("conceptMembersInReadingOrder", () => {

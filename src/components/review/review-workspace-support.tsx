@@ -63,6 +63,9 @@ import {
   focusedRowRegions,
   focusedRowSpan,
   sideBySideDiff,
+  sourceByteOffsetLine,
+  sourceEndLine,
+  sourceStartLine,
 } from "~/lib/side-by-side-diff";
 import {
   isPeekableToken,
@@ -123,6 +126,262 @@ export function conceptMembersInReadingOrder<Member extends { status: string }>(
     (left, right) =>
       Number(left.status === "signed_off") -
       Number(right.status === "signed_off"),
+  );
+}
+
+/** Groups one concept's atomic members into file-sized reading cards. */
+export function conceptFileCardsInReadingOrder<Member extends { path: string }>(
+  members: readonly Member[],
+) {
+  const cards: Array<{ path: string; members: Member[] }> = [];
+  const cardByPath = new Map<string, (typeof cards)[number]>();
+  for (const member of members) {
+    const existing = cardByPath.get(member.path);
+    if (existing) {
+      existing.members.push(member);
+      continue;
+    }
+    const card = { path: member.path, members: [member] };
+    cards.push(card);
+    cardByPath.set(member.path, card);
+  }
+  return cards;
+}
+
+/** Merges the disjoint source ranges reviewed by every unit in one file card. */
+export function reviewCardRanges(
+  members: readonly ReviewUnit[],
+  side: "current" | "previous" = "current",
+  previousFileSource?: string | null,
+) {
+  const ranges = members
+    .flatMap((member) => {
+      const related = relatedReviewRanges(member, side);
+      if (related) return related;
+      if (side === "previous") {
+        if (!member.previousSource && member.changeType === "added") return [];
+        const startLine =
+          member.changeType === "deleted"
+            ? member.startLine
+            : member.previousSource && previousFileSource
+              ? sourceByteOffsetLine(
+                  previousFileSource,
+                  member.previousStartByte,
+                  sourceStartLine(
+                    previousFileSource,
+                    member.previousSource,
+                    member.startLine,
+                  ),
+                )
+              : member.startLine;
+        return [
+          {
+            startLine,
+            endLine: member.previousSource
+              ? sourceEndLine(member.previousSource, startLine)
+              : startLine,
+          },
+        ];
+      }
+      return member.changeType === "deleted"
+        ? []
+        : [{ startLine: member.startLine, endLine: member.endLine }];
+    })
+    .sort(
+      (left, right) =>
+        left.startLine - right.startLine || left.endLine - right.endLine,
+    );
+  const merged: Array<{ startLine: number; endLine: number }> = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range.startLine <= previous.endLine + 1) {
+      previous.endLine = Math.max(previous.endLine, range.endLine);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+/** Finds the atomic unit that owns a line shown inside a file card. */
+export function reviewCardMemberForLine(
+  members: readonly ReviewUnit[],
+  line: number,
+  side: "current" | "previous" = "current",
+) {
+  return members.find((member) => {
+    const ranges = reviewCardRanges([member], side);
+    return ranges.some(
+      ({ startLine, endLine }) => line >= startLine && line <= endLine,
+    );
+  });
+}
+
+/** Renders one file-card identity while preserving the atomic ledger beneath it. */
+export function ReviewConceptFileCardHeader({
+  members,
+  index,
+  count,
+  selected,
+  actions,
+  onSelect,
+}: {
+  members: readonly ReviewUnit[];
+  index: number;
+  count: number;
+  selected: boolean;
+  actions?: ReactNode;
+  onSelect?: () => void;
+}) {
+  const first = members[0];
+  if (!first) return null;
+  const outstanding = members.filter(
+    ({ status }) => status !== "signed_off",
+  ).length;
+  const changedLines = members.reduce(
+    (total, member) => total + member.changedLineCount,
+    0,
+  );
+  const content = (
+    <>
+      <span className="min-w-0">
+        <span className="text-cloud block truncate font-mono text-[10px]">
+          {first.path}
+        </span>
+        <span className="text-fog mt-0.5 block truncate text-[9px]">
+          Reviewing {members.length} individual{" "}
+          {members.length === 1 ? "unit" : "units"} in this card ·{" "}
+          {changedLines} changed lines
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-2 text-[9px]">
+        {actions}
+        <span className="text-fog">
+          Card {index + 1}/{count}
+        </span>
+        {outstanding === 0 && (
+          <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
+            <Check className="size-2.5" aria-hidden />
+            Reviewed
+          </span>
+        )}
+        {selected && (
+          <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+            {outstanding > 0 ? `${outstanding} remaining` : "Selected"}
+          </span>
+        )}
+      </span>
+    </>
+  );
+  return (
+    <div
+      className={cn(
+        "flex items-stretch border-b",
+        selected
+          ? "bg-cyan/[.05] border-cyan/20"
+          : outstanding === 0
+            ? "border-addition/25"
+            : "border-line",
+      )}
+    >
+      {selected ? (
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left">
+          {content}
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-label={`Select review card for ${first.path}`}
+          onClick={onSelect}
+          className="hover:bg-surface-subtle flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left transition"
+        >
+          {content}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Shows every same-file member as one continuous card with dimmed gaps. */
+export function ReviewConceptFileCardPreview({
+  members,
+  index,
+  count,
+  fileSource,
+  onSelect,
+  onCommentLine,
+}: {
+  members: readonly ReviewUnit[];
+  index: number;
+  count: number;
+  fileSource: string;
+  onSelect: () => void;
+  onCommentLine?: (unitId: string, line: number) => void;
+}) {
+  const ranges = reviewCardRanges(members);
+  const startLine = ranges.at(0)?.startLine ?? 1;
+  const endLine = ranges.at(-1)?.endLine ?? startLine;
+  const source = fileSource
+    ? fileSource
+        .split("\n")
+        .slice(startLine - 1, endLine)
+        .join("\n")
+    : members.map(({ source }) => source).join("\n");
+  const lines = useHighlightedSource(source, members[0]?.language ?? "text");
+  return (
+    <article className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30">
+      <ReviewConceptFileCardHeader
+        members={members}
+        index={index}
+        count={count}
+        selected={false}
+        onSelect={onSelect}
+      />
+      <div className="overflow-x-auto py-2">
+        {lines.map((line, lineIndex) => {
+          const lineNumber = startLine + lineIndex;
+          const owner = reviewCardMemberForLine(members, lineNumber);
+          return (
+            <div
+              key={`${members[0]?.id}-${lineNumber}`}
+              className={cn(
+                "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
+                owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+              )}
+            >
+              {owner && onCommentLine ? (
+                <button
+                  type="button"
+                  aria-label={`Comment on line ${lineNumber} of ${owner.name}`}
+                  onClick={() => onCommentLine(owner.id, lineNumber)}
+                  className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                >
+                  <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span>{lineNumber}</span>
+                </button>
+              ) : (
+                <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                  {lineNumber}
+                </span>
+              )}
+              <pre className="syntax-code overflow-visible text-cloud/80">
+                {line.tokens.length
+                  ? line.tokens.map((token, tokenIndex) => (
+                      <span
+                        key={`${tokenIndex}-${token.text.length}`}
+                        className={token.className || undefined}
+                      >
+                        {token.text}
+                      </span>
+                    ))
+                  : " "}
+              </pre>
+            </div>
+          );
+        })}
+      </div>
+    </article>
   );
 }
 
