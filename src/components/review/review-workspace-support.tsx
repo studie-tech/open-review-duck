@@ -148,6 +148,17 @@ export function conceptFileCardsInReadingOrder<Member extends { path: string }>(
   return cards;
 }
 
+/** Chooses the member a file card should open for the next review action. */
+export function actionableReviewCardMember<Member extends { status: string }>(
+  members: readonly Member[],
+) {
+  return (
+    members.find(
+      ({ status }) => status !== "signed_off" && status !== "waiting",
+    ) ?? members[0]
+  );
+}
+
 /** Merges the disjoint source ranges reviewed by every unit in one file card. */
 export function reviewCardRanges(
   members: readonly ReviewUnit[],
@@ -236,8 +247,9 @@ export function ReviewConceptFileCardHeader({
   const first = members[0];
   if (!first) return null;
   const outstanding = members.filter(
-    ({ status }) => status !== "signed_off",
+    ({ status }) => status !== "signed_off" && status !== "waiting",
   ).length;
+  const fullyReviewed = members.every(({ status }) => status === "signed_off");
   const changedLines = members.reduce(
     (total, member) => total + member.changedLineCount,
     0,
@@ -259,7 +271,7 @@ export function ReviewConceptFileCardHeader({
         <span className="text-fog">
           Card {index + 1}/{count}
         </span>
-        {outstanding === 0 && (
+        {fullyReviewed && (
           <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
             <Check className="size-2.5" aria-hidden />
             Reviewed
@@ -267,7 +279,11 @@ export function ReviewConceptFileCardHeader({
         )}
         {selected && (
           <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
-            {outstanding > 0 ? `${outstanding} remaining` : "Selected"}
+            {outstanding > 0
+              ? `${outstanding} remaining`
+              : fullyReviewed
+                ? "Selected"
+                : "Waiting"}
           </span>
         )}
       </span>
@@ -279,7 +295,7 @@ export function ReviewConceptFileCardHeader({
         "flex items-stretch border-b",
         selected
           ? "bg-cyan/[.05] border-cyan/20"
-          : outstanding === 0
+          : fullyReviewed
             ? "border-addition/25"
             : "border-line",
       )}
@@ -298,6 +314,63 @@ export function ReviewConceptFileCardHeader({
           {content}
         </button>
       )}
+    </div>
+  );
+}
+
+/** Preserves atomic line numbers when a full file is not available yet. */
+function ReviewConceptFileCardFallbackMember({
+  member,
+  onCommentLine,
+}: {
+  member: ReviewUnit;
+  onCommentLine?: (unitId: string, line: number) => void;
+}) {
+  const lines = useHighlightedSource(member.source, member.language);
+  return (
+    <div className="border-b border-line/60 last:border-b-0">
+      {lines.map((line, lineIndex) => {
+        const lineNumber = member.startLine + lineIndex;
+        const owner = reviewCardMemberForLine([member], lineNumber);
+        return (
+          <div
+            key={`${member.id}-${lineNumber}`}
+            className={cn(
+              "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+              !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
+              owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+            )}
+          >
+            {owner && onCommentLine ? (
+              <button
+                type="button"
+                aria-label={`Comment on line ${lineNumber} of ${member.name}`}
+                onClick={() => onCommentLine(member.id, lineNumber)}
+                className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+              >
+                <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                <span>{lineNumber}</span>
+              </button>
+            ) : (
+              <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                {lineNumber}
+              </span>
+            )}
+            <pre className="syntax-code overflow-visible text-cloud/80">
+              {line.tokens.length
+                ? line.tokens.map((token, tokenIndex) => (
+                    <span
+                      key={`${tokenIndex}-${token.text.length}`}
+                      className={token.className || undefined}
+                    >
+                      {token.text}
+                    </span>
+                  ))
+                : " "}
+            </pre>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -322,12 +395,14 @@ export function ReviewConceptFileCardPreview({
   const startLine = ranges.at(0)?.startLine ?? 1;
   const endLine = ranges.at(-1)?.endLine ?? startLine;
   const source = fileSource
-    ? fileSource
-        .split("\n")
-        .slice(startLine - 1, endLine)
-        .join("\n")
-    : members.map(({ source }) => source).join("\n");
+    .split("\n")
+    .slice(startLine - 1, endLine)
+    .join("\n");
   const lines = useHighlightedSource(source, members[0]?.language ?? "text");
+  const memberRanges = members.map((member) => ({
+    member,
+    ranges: reviewCardRanges([member]),
+  }));
   return (
     <article className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30">
       <ReviewConceptFileCardHeader
@@ -338,48 +413,62 @@ export function ReviewConceptFileCardPreview({
         onSelect={onSelect}
       />
       <div className="overflow-x-auto py-2">
-        {lines.map((line, lineIndex) => {
-          const lineNumber = startLine + lineIndex;
-          const owner = reviewCardMemberForLine(members, lineNumber);
-          return (
-            <div
-              key={`${members[0]?.id}-${lineNumber}`}
-              className={cn(
-                "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
-                !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
-              )}
-            >
-              {owner && onCommentLine ? (
-                <button
-                  type="button"
-                  aria-label={`Comment on line ${lineNumber} of ${owner.name}`}
-                  onClick={() => onCommentLine(owner.id, lineNumber)}
-                  className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+        {fileSource
+          ? lines.map((line, lineIndex) => {
+              const lineNumber = startLine + lineIndex;
+              const owner = memberRanges.find(({ ranges: ownedRanges }) =>
+                ownedRanges.some(
+                  ({ startLine: from, endLine: to }) =>
+                    lineNumber >= from && lineNumber <= to,
+                ),
+              )?.member;
+              return (
+                <div
+                  key={`${members[0]?.id}-${lineNumber}`}
+                  className={cn(
+                    "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                    !owner &&
+                      "bg-surface-subtle/15 opacity-45 hover:opacity-75",
+                    owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+                  )}
                 >
-                  <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                  <span>{lineNumber}</span>
-                </button>
-              ) : (
-                <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-                  {lineNumber}
-                </span>
-              )}
-              <pre className="syntax-code overflow-visible text-cloud/80">
-                {line.tokens.length
-                  ? line.tokens.map((token, tokenIndex) => (
-                      <span
-                        key={`${tokenIndex}-${token.text.length}`}
-                        className={token.className || undefined}
-                      >
-                        {token.text}
-                      </span>
-                    ))
-                  : " "}
-              </pre>
-            </div>
-          );
-        })}
+                  {owner && onCommentLine ? (
+                    <button
+                      type="button"
+                      aria-label={`Comment on line ${lineNumber} of ${owner.name}`}
+                      onClick={() => onCommentLine(owner.id, lineNumber)}
+                      className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                    >
+                      <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                      <span>{lineNumber}</span>
+                    </button>
+                  ) : (
+                    <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                      {lineNumber}
+                    </span>
+                  )}
+                  <pre className="syntax-code overflow-visible text-cloud/80">
+                    {line.tokens.length
+                      ? line.tokens.map((token, tokenIndex) => (
+                          <span
+                            key={`${tokenIndex}-${token.text.length}`}
+                            className={token.className || undefined}
+                          >
+                            {token.text}
+                          </span>
+                        ))
+                      : " "}
+                  </pre>
+                </div>
+              );
+            })
+          : members.map((member) => (
+              <ReviewConceptFileCardFallbackMember
+                key={member.id}
+                member={member}
+                onCommentLine={onCommentLine}
+              />
+            ))}
       </div>
     </article>
   );

@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
+  actionableReviewCardMember,
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
   ConceptMoveDialog,
@@ -29,6 +30,7 @@ import {
   PullRequestDetailsDialog,
   REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
+  ReviewConceptFileCardHeader,
   ReviewConceptFileCardPreview,
   ReviewConceptMemberPreview,
   ReviewRevisionLoadedNotice,
@@ -516,6 +518,16 @@ describe("same-file concept cards", () => {
     ]);
   });
 
+  it("opens the first actionable member in a partially reviewed card", () => {
+    expect(
+      actionableReviewCardMember([
+        { id: "done", status: "signed_off" },
+        { id: "held", status: "waiting" },
+        { id: "next", status: "pending" },
+      ])?.id,
+    ).toBe("next");
+  });
+
   it("keeps the gap visible but outside both atomic review ranges", () => {
     const sameFile = [units[0], units[2]] as never;
 
@@ -584,6 +596,53 @@ describe("same-file concept cards", () => {
       screen.getByRole("button", { name: "Comment on line 5 of main" }),
     );
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
+  });
+
+  it("keeps member line numbers accurate without hydrated file context", async () => {
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={[units[0], units[2]] as never}
+        index={0}
+        count={1}
+        fileSource=""
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Comment on line 2 of configuration",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Comment on line 3 of configuration",
+      }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith("main", 5);
+  });
+
+  it("excludes waiting members from the card action count", () => {
+    render(
+      <ReviewConceptFileCardHeader
+        members={[units[0], { ...units[2], status: "waiting" }] as never}
+        index={0}
+        count={1}
+        selected
+      />,
+    );
+
+    expect(screen.getByText("1 remaining")).toBeInTheDocument();
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
   });
 });
 

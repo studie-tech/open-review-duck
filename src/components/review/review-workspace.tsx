@@ -851,6 +851,7 @@ interface LiveAiQuestion {
 
 import { reviewSessionMachine } from "./review-session-machine";
 import {
+  actionableReviewCardMember,
   AskAiLineButton,
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
@@ -1273,12 +1274,22 @@ export function ReviewWorkspace({
     () => conceptMembersInReadingOrder(activeConceptProgress?.members ?? []),
     [activeConceptProgress],
   );
-  const activeConceptFileCards = useMemo(
-    () => conceptFileCardsInReadingOrder(activeConceptMembers),
-    [activeConceptMembers],
-  );
+  const activeConceptFileCards = useMemo(() => {
+    const cards = conceptFileCardsInReadingOrder(activeConceptMembers);
+    if (
+      activeUnit &&
+      !cards.some(({ members }) =>
+        members.some(({ id }) => id === activeUnit.id),
+      )
+    ) {
+      return [{ path: activeUnit.path, members: [activeUnit] }, ...cards];
+    }
+    return cards;
+  }, [activeConceptMembers, activeUnit]);
   const activeFileCard = activeUnit
-    ? activeConceptFileCards.find(({ path }) => path === activeUnit.path)
+    ? activeConceptFileCards.find(({ members }) =>
+        members.some(({ id }) => id === activeUnit.id),
+      )
     : undefined;
   const activeFileCardMembers = activeFileCard?.members ?? [];
   const activeConceptCardIndex = activeFileCard
@@ -1780,11 +1791,9 @@ export function ReviewWorkspace({
     : contextAvailable && cardEndLine
       ? cardEndLine + Math.min(contextAfter, availableAfter)
       : (activeUnit?.endLine ?? 1);
-  const contextVisible =
-    activeFileCardMembers.length > 1 ||
-    fullFileVisible ||
-    contextBefore > 0 ||
-    contextAfter > 0;
+  const contextRevealed =
+    fullFileVisible || contextBefore > 0 || contextAfter > 0;
+  const contextVisible = activeFileCardMembers.length > 1 || contextRevealed;
   const changedCurrentLines = useMemo(() => {
     const changedLines = new Set<number>();
     if (
@@ -2001,10 +2010,7 @@ export function ReviewWorkspace({
   const conceptFileCardPreviews = useMemo(
     () =>
       activeConceptFileCards.map((card, cardIndex) => {
-        const firstActionable =
-          card.members.find(
-            ({ status }) => status !== "signed_off" && status !== "waiting",
-          ) ?? card.members[0];
+        const firstActionable = actionableReviewCardMember(card.members);
         const fileContext = fileContexts.find(({ path }) => path === card.path);
         return (
           <ReviewConceptFileCardPreview
@@ -2046,7 +2052,7 @@ export function ReviewWorkspace({
   /** Selects an adjacent atomic member inside the current review concept. */
   function navigateConceptCard(direction: -1 | 1) {
     const card = activeConceptFileCards[activeConceptCardIndex + direction];
-    const member = card?.members[0];
+    const member = card ? actionableReviewCardMember(card.members) : undefined;
     if (!member) return;
     const index = unitIndexById.get(member.id) ?? -1;
     if (index >= 0) selectUnit(index);
@@ -2063,7 +2069,7 @@ export function ReviewWorkspace({
   /** Shows or hides source context surrounding the active review unit. */
   function toggleContext() {
     if (!contextAvailable) return;
-    if (contextVisible) {
+    if (contextRevealed) {
       setContextBefore(0);
       setContextAfter(0);
       codeScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
@@ -4249,7 +4255,7 @@ export function ReviewWorkspace({
   /** Opens the provider comment composer on the line the reviewer is reading. */
   function openCentredInlineComment() {
     if (!activeUnit || activeUnit.kind === "binary") return;
-    openInlineComment(
+    commentOnCardLine(
       closestReviewLine(
         centredReviewLine(),
         primaryReviewRanges,
@@ -5744,8 +5750,8 @@ export function ReviewWorkspace({
     },
     {
       id: "toggle-context",
-      label: contextVisible ? "Hide surrounding context" : "Show context",
-      description: contextVisible
+      label: contextRevealed ? "Hide surrounding context" : "Show context",
+      description: contextRevealed
         ? "Return to the focused review unit"
         : "Reveal nearby lines without expanding the review scope",
       group: "Review actions",
@@ -5958,7 +5964,7 @@ export function ReviewWorkspace({
             primaryReviewEnd,
           )
         ) {
-          setSelectedLine(pickedLine);
+          commentOnCardLine(pickedLine);
         }
         setKeyboardLine(undefined);
       }
@@ -5968,6 +5974,7 @@ export function ReviewWorkspace({
     return () => document.removeEventListener("keydown", onLinePickerKeyDown);
   }, [
     activeUnit,
+    commentOnCardLine,
     keyboardLine,
     primaryReviewEnd,
     primaryReviewRanges,
