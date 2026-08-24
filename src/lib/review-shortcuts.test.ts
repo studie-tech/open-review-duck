@@ -35,6 +35,13 @@ describe("review shortcuts", () => {
     expect(readerShortcuts.search).toEqual(reviewShortcuts.search);
     expect(readerShortcuts.scrollUp).toEqual(reviewShortcuts.scrollUp);
     expect(readerShortcuts.scrollDown).toEqual(reviewShortcuts.scrollDown);
+    expect(readerShortcuts.context).toEqual(reviewShortcuts.context);
+    expect(readerShortcuts.revealContextAbove).toEqual(
+      reviewShortcuts.revealContextAbove,
+    );
+    expect(readerShortcuts.revealContextBelow).toEqual(
+      reviewShortcuts.revealContextBelow,
+    );
     expect(readerShortcuts.togglePathPanel).toEqual(
       reviewShortcuts.togglePathPanel,
     );

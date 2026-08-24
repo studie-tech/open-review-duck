@@ -16,7 +16,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
+  ShieldCheck,
   Undo2,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -24,6 +26,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -42,12 +45,27 @@ import {
   prioritizePrivateReviewSources,
 } from "~/lib/private-source-client";
 import { readerShortcuts } from "~/lib/review-shortcuts";
+import { sourceEndLine } from "~/lib/side-by-side-diff";
+import { createSignOffQueue, signOffQueueReducer } from "~/lib/sign-off-queue";
 import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
 type Monitor = RouterOutputs["repoReviews"]["list"][number];
+type RuleSeverity = "critical" | "high" | "medium" | "low";
+const CONTEXT_PAGE_LINES = 20;
+
+/** Starts a file-scoped compliance rule beside the code that inspired it. */
+function newRuleForm(path: string) {
+  return {
+    title: "",
+    instruction: "",
+    pathGlob: path,
+    scope: "file" as "file" | "repository",
+    severity: "medium" as RuleSeverity,
+  };
+}
 
 /** Finds the old revision's first line when a symbol moved between snapshots. */
 function previousStartLine(unit: Workspace["units"][number] | undefined) {
@@ -67,6 +85,7 @@ export function RepositoryReader({
   monitor: Monitor;
 }) {
   const [units, setUnits] = useState(initialData.units);
+  const [fileContexts, setFileContexts] = useState(initialData.fileContexts);
   const [activeId, setActiveId] = useState(
     initialData.units.find(({ status }) => status !== "signed_off")?.id ??
       initialData.units[0]?.id,
@@ -74,11 +93,26 @@ export function RepositoryReader({
   const [search, setSearch] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [previousUnitId, setPreviousUnitId] = useState<string>();
+  const [contextBefore, setContextBefore] = useState(0);
+  const [contextAfter, setContextAfter] = useState(0);
+  const [ruleSelection, setRuleSelection] = useState<{
+    startLine: number;
+    endLine: number;
+  }>();
+  const [ruleForm, setRuleForm] = useState(() =>
+    newRuleForm(initialData.units[0]?.path ?? "**/*"),
+  );
+  const [signOffQueue, dispatchSignOffQueue] = useReducer(
+    signOffQueueReducer,
+    undefined,
+    createSignOffQueue,
+  );
   const [sourceLoading, setSourceLoading] = useState(
     initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
+  const ruleInstructionRef = useRef<HTMLTextAreaElement>(null);
   const activeIndex = Math.max(
     0,
     units.findIndex(({ id }) => id === activeId),
@@ -106,6 +140,10 @@ export function RepositoryReader({
         activePath: initialData.units.find(({ id }) => id === firstPending)
           ?.path,
       }),
+      fileContexts: prioritizePrivateReviewSources(initialData.fileContexts, {
+        activePath: initialData.units.find(({ id }) => id === firstPending)
+          ?.path,
+      }),
     };
   }, [initialData.snapshot?.id]);
 
@@ -115,13 +153,23 @@ export function RepositoryReader({
     const controller = new AbortController();
     const cache = new Map<string, Promise<Uint8Array>>();
     const hydratedById = new Map<string, Workspace["units"][number]>();
+    const hydratedContextByPath = new Map<
+      string,
+      Workspace["fileContexts"][number]
+    >();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     /** Applies all source files hydrated in the same event-loop turn at once. */
     const flushHydrated = () => {
       flushTimer = undefined;
-      if (!live || hydratedById.size === 0) return;
+      if (
+        !live ||
+        (hydratedById.size === 0 && hydratedContextByPath.size === 0)
+      )
+        return;
       const hydrated = new Map(hydratedById);
+      const hydratedContexts = new Map(hydratedContextByPath);
       hydratedById.clear();
+      hydratedContextByPath.clear();
       setUnits((current) =>
         current.map((unit) => {
           const replacement = hydrated.get(unit.id);
@@ -135,24 +183,42 @@ export function RepositoryReader({
             : unit;
         }),
       );
+      setFileContexts((current) =>
+        current.map((context) => hydratedContexts.get(context.path) ?? context),
+      );
     };
     setSourceLoading(true);
-    void hydratePrivateReviewSources(
-      hydrationPlan.units,
-      hydrationPlan.snapshotId,
-      cache,
-      6,
-      controller.signal,
-      (_index, hydrated) => {
-        if (!live) return;
-        hydratedById.set(hydrated.id, hydrated);
-        flushTimer ??= setTimeout(flushHydrated, 0);
-      },
-    )
-      .then(({ failures }) => {
+    void Promise.all([
+      hydratePrivateReviewSources(
+        hydrationPlan.units,
+        hydrationPlan.snapshotId,
+        cache,
+        6,
+        controller.signal,
+        (_index, hydrated) => {
+          if (!live) return;
+          hydratedById.set(hydrated.id, hydrated);
+          flushTimer ??= setTimeout(flushHydrated, 0);
+        },
+      ),
+      hydratePrivateReviewSources(
+        hydrationPlan.fileContexts,
+        hydrationPlan.snapshotId,
+        cache,
+        2,
+        controller.signal,
+        (_index, hydrated) => {
+          if (!live) return;
+          hydratedContextByPath.set(hydrated.path, hydrated);
+          flushTimer ??= setTimeout(flushHydrated, 0);
+        },
+      ),
+    ])
+      .then((results) => {
         if (!live) return;
         if (flushTimer !== undefined) clearTimeout(flushTimer);
         flushHydrated();
+        const failures = results.flatMap((result) => result.failures);
         if (failures.length > 0) {
           toast.error(
             `${failures.length} source file${failures.length === 1 ? "" : "s"} could not be loaded`,
@@ -210,13 +276,32 @@ export function RepositoryReader({
       if (!unit) return;
       setActiveId(unit.id);
       setPreviousUnitId(undefined);
+      setContextBefore(0);
+      setContextAfter(0);
+      setRuleSelection(undefined);
+      setRuleForm(newRuleForm(unit.path));
       codeScrollRef.current?.scrollTo?.({ top: 0 });
     },
     [],
   );
 
+  const utils = api.useUtils();
+  const addRule = api.repoReviews.addRule.useMutation({
+    onSuccess: () => {
+      setRuleSelection(undefined);
+      setRuleForm(newRuleForm(active?.path ?? "**/*"));
+      toast.success("Compliance rule added");
+      void utils.repoReviews.rules.invalidate({ monitorId: monitor.id });
+    },
+    onError: (error) =>
+      toast.error("Could not save compliance rule", {
+        description: error.message,
+      }),
+  });
+
   const signOff = api.review.signOff.useMutation({
     onMutate: ({ unitId }) => {
+      dispatchSignOffQueue({ type: "enqueue", unitId });
       const previousStatus = units.find(({ id }) => id === unitId)?.status;
       const current = units.findIndex(({ id }) => id === unitId);
       const ordered = [
@@ -238,9 +323,6 @@ export function RepositoryReader({
       if (next) selectUnit(next);
       return { previousStatus };
     },
-    onSuccess: () => {
-      toast.success("Marked as read");
-    },
     onError: (error, { unitId }, context) => {
       const previousStatus = context?.previousStatus;
       if (previousStatus) {
@@ -253,6 +335,9 @@ export function RepositoryReader({
       toast.error("Could not save reading progress", {
         description: error.message,
       });
+    },
+    onSettled: (_data, _error, { unitId }) => {
+      dispatchSignOffQueue({ type: "settle", unitId });
     },
   });
   const unreview = api.review.unreview.useMutation({
@@ -325,14 +410,139 @@ export function RepositoryReader({
     requestAnimationFrame(() => searchInputRef.current?.focus());
   }, []);
 
-  const showPrevious = previousUnitId === activeId;
+  const showPrevious = Boolean(active && previousUnitId === activeId);
   const togglePreviousSource = useCallback(() => {
     if (!active || active.previousSource === null) return;
     setPreviousUnitId(showPrevious ? undefined : active.id);
+    setContextBefore(0);
+    setContextAfter(0);
+    setRuleSelection(undefined);
   }, [active, showPrevious]);
 
+  const activeFileContext = active
+    ? fileContexts.find(({ path }) => path === active.path)
+    : undefined;
+  const unitStartLine = showPrevious
+    ? previousStartLine(active)
+    : (active?.startLine ?? 1);
+  const unitEndLine = showPrevious
+    ? sourceEndLine(active?.previousSource ?? "", unitStartLine)
+    : (active?.endLine ?? unitStartLine);
+  const fullFileSource = showPrevious
+    ? activeFileContext?.previousSource
+    : activeFileContext?.source;
+  const fullFileLines = useMemo(
+    () => fullFileSource?.split("\n") ?? [],
+    [fullFileSource],
+  );
+  const fullFileAvailable = Boolean(
+    active &&
+      fullFileSource &&
+      unitStartLine > 0 &&
+      fullFileLines.length >= unitEndLine,
+  );
+  const availableBefore = fullFileAvailable ? unitStartLine - 1 : 0;
+  const availableAfter = fullFileAvailable
+    ? Math.max(0, fullFileLines.length - unitEndLine)
+    : 0;
+  const contextAvailable = availableBefore > 0 || availableAfter > 0;
+  const contextVisible = contextBefore > 0 || contextAfter > 0;
+
+  /** Keeps the focused unit stationary while inserting context before it. */
+  const preserveFocusedLine = useCallback(
+    (update: () => void) => {
+      const pane = codeScrollRef.current;
+      const selector = `[data-source-line="${unitStartLine}"]`;
+      const previousTop = pane
+        ?.querySelector<HTMLElement>(selector)
+        ?.getBoundingClientRect().top;
+      update();
+      if (!pane || previousTop === undefined) return;
+      window.requestAnimationFrame(() => {
+        const nextTop = pane
+          .querySelector<HTMLElement>(selector)
+          ?.getBoundingClientRect().top;
+        if (nextTop !== undefined) pane.scrollTop += nextTop - previousTop;
+      });
+    },
+    [unitStartLine],
+  );
+
+  /** Reveals preceding source without moving the unit already in view. */
+  const revealContextAbove = useCallback(() => {
+    preserveFocusedLine(() =>
+      setContextBefore((current) =>
+        Math.min(current + CONTEXT_PAGE_LINES, availableBefore),
+      ),
+    );
+  }, [availableBefore, preserveFocusedLine]);
+
+  /** Reveals the next page of source following the reviewed unit. */
+  const revealContextBelow = useCallback(() => {
+    setContextAfter((current) =>
+      Math.min(current + CONTEXT_PAGE_LINES, availableAfter),
+    );
+  }, [availableAfter]);
+
+  /** Shows an initial page on both sides, or returns to the focused unit. */
+  const toggleContext = useCallback(() => {
+    if (!contextAvailable) return;
+    if (contextVisible) {
+      setContextBefore(0);
+      setContextAfter(0);
+      setRuleSelection(undefined);
+      codeScrollRef.current?.scrollTo?.({ top: 0, behavior: "auto" });
+      return;
+    }
+    preserveFocusedLine(() => {
+      setContextBefore(Math.min(CONTEXT_PAGE_LINES, availableBefore));
+      setContextAfter(Math.min(CONTEXT_PAGE_LINES, availableAfter));
+    });
+  }, [
+    availableAfter,
+    availableBefore,
+    contextAvailable,
+    contextVisible,
+    preserveFocusedLine,
+  ]);
+
+  /** Opens a one-line rule anchor or extends the current anchor with Shift. */
+  const selectRuleLine = useCallback(
+    (line: number, extend: boolean) => {
+      setRuleSelection((current) => {
+        if (!extend || !current) return { startLine: line, endLine: line };
+        return {
+          startLine: Math.min(current.startLine, line),
+          endLine: Math.max(current.endLine, line),
+        };
+      });
+      if (active) {
+        setRuleForm((current) =>
+          current.pathGlob === active.path ? current : newRuleForm(active.path),
+        );
+      }
+      window.requestAnimationFrame(() => ruleInstructionRef.current?.focus());
+    },
+    [active],
+  );
+
+  /** Saves the compliance rule being drafted beside the selected source. */
+  const saveRule = useCallback(() => {
+    if (
+      !ruleForm.title.trim() ||
+      !ruleForm.instruction.trim() ||
+      !ruleForm.pathGlob.trim() ||
+      addRule.isPending
+    ) {
+      return;
+    }
+    addRule.mutate({ monitorId: monitor.id, ...ruleForm });
+  }, [addRule, monitor.id, ruleForm]);
+
   const canSignOff = Boolean(active) && active?.status !== "signed_off";
-  const canUnreview = active?.status === "signed_off" && !signOff.isPending;
+  const activeSignOffPending = active ? signOffQueue.ids.has(active.id) : false;
+  const canUnreview = active?.status === "signed_off" && !activeSignOffPending;
+  const signOffQueueProgress = `${signOffQueue.completed}/${signOffQueue.total}`;
   const runSignOff = useCallback(() => {
     if (!active || !canSignOff) return;
     signOffStart({ unitId: active.id, durationSeconds: 0 });
@@ -415,6 +625,38 @@ export function RepositoryReader({
         onSelect: () => scrollCode(-1),
       },
       {
+        id: "reader-reveal-context-below",
+        label: "Show more lines below",
+        description: "Reveal the source that follows the reviewed unit",
+        group: "Reader navigation",
+        icon: <ChevronDown className="size-4" />,
+        shortcut: readerShortcuts.revealContextBelow,
+        disabled: !contextAvailable || contextAfter >= availableAfter,
+        onSelect: revealContextBelow,
+      },
+      {
+        id: "reader-reveal-context-above",
+        label: "Show more lines above",
+        description: "Reveal the source that precedes the reviewed unit",
+        group: "Reader navigation",
+        icon: <ChevronUp className="size-4" />,
+        shortcut: readerShortcuts.revealContextAbove,
+        disabled: !contextAvailable || contextBefore >= availableBefore,
+        onSelect: revealContextAbove,
+      },
+      {
+        id: "reader-toggle-context",
+        label: contextVisible ? "Hide surrounding context" : "Show context",
+        description: contextVisible
+          ? "Return to the focused repository unit"
+          : "Reveal nearby lines without expanding the review scope",
+        group: "Reader navigation",
+        icon: <FileCode2 className="size-4" />,
+        shortcut: readerShortcuts.context,
+        disabled: !contextAvailable,
+        onSelect: toggleContext,
+      },
+      {
         id: "reader-toggle-previous-source",
         label: showPrevious
           ? "Show current revision"
@@ -446,7 +688,7 @@ export function RepositoryReader({
       },
       {
         id: "reader-sign-off",
-        label: "Mark read & continue",
+        label: "Sign off",
         description: active
           ? `Record ${active.name} as read and open the next unread unit`
           : "Record this unit as read",
@@ -471,9 +713,17 @@ export function RepositoryReader({
     [
       active,
       activeIndex,
+      availableAfter,
+      availableBefore,
       canSignOff,
       canUnreview,
+      contextAfter,
+      contextAvailable,
+      contextBefore,
+      contextVisible,
       focusSearch,
+      revealContextAbove,
+      revealContextBelow,
       resumeQueue,
       runSignOff,
       runUnreview,
@@ -483,18 +733,25 @@ export function RepositoryReader({
       signed,
       stepFile,
       togglePreviousSource,
+      toggleContext,
       units,
     ],
   );
   usePageCommandCenter(commands);
 
   const language = knownLanguage(active?.language ?? "text");
-  const displayedSource = showPrevious
-    ? (active?.previousSource ?? active?.source)
-    : active?.source;
-  const displayedStartLine = showPrevious
-    ? previousStartLine(active)
-    : (active?.startLine ?? 1);
+  const displayedStartLine = contextVisible
+    ? unitStartLine - Math.min(contextBefore, availableBefore)
+    : unitStartLine;
+  const displayedEndLine = contextVisible
+    ? unitEndLine + Math.min(contextAfter, availableAfter)
+    : unitEndLine;
+  const displayedSource =
+    contextVisible && fullFileAvailable
+      ? fullFileLines.slice(displayedStartLine - 1, displayedEndLine).join("\n")
+      : showPrevious
+        ? (active?.previousSource ?? active?.source)
+        : active?.source;
   const highlightedLines = useHighlightedSource(
     displayedSource ?? "",
     language ?? "text",
@@ -512,13 +769,14 @@ export function RepositoryReader({
         <Button
           size="icon"
           variant="ghost"
+          className="w-auto px-2.5"
           aria-label={sidebarOpen ? "Hide review path" : "Show review path"}
           onClick={() => setSidebarOpen((value) => !value)}
         >
           {sidebarOpen ? (
-            <PanelLeftClose className="size-4" />
+            <PanelLeftClose className="size-4 shrink-0" />
           ) : (
-            <PanelLeftOpen className="size-4" />
+            <PanelLeftOpen className="size-4 shrink-0" />
           )}
           <ShortcutHint
             shortcut={readerShortcuts.togglePathPanel}
@@ -681,6 +939,21 @@ export function RepositoryReader({
                     Changed since read
                   </span>
                 )}
+                {contextAvailable && (
+                  <Button
+                    size="sm"
+                    variant={contextVisible ? "secondary" : "ghost"}
+                    aria-pressed={contextVisible}
+                    onClick={toggleContext}
+                  >
+                    <FileCode2 className="size-3.5" />
+                    {contextVisible ? "Hide context" : "Show context"}
+                    <ShortcutHint
+                      shortcut={readerShortcuts.context}
+                      className="max-sm:hidden"
+                    />
+                  </Button>
+                )}
                 {active.previousSource !== null && (
                   <Button
                     size="sm"
@@ -707,10 +980,215 @@ export function RepositoryReader({
                     verified source…
                   </div>
                 ) : (
-                  <HighlightedSourceLines
-                    lines={highlightedLines}
-                    startLine={displayedStartLine}
-                  />
+                  <>
+                    {contextBefore < availableBefore && (
+                      <div className="flex items-center gap-3 px-4 pt-3 font-sans">
+                        <span className="h-px flex-1 bg-line" />
+                        <button
+                          type="button"
+                          onClick={revealContextAbove}
+                          className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                        >
+                          <ChevronUp className="size-3" />
+                          Show{" "}
+                          {Math.min(
+                            CONTEXT_PAGE_LINES,
+                            availableBefore - contextBefore,
+                          )}{" "}
+                          {contextBefore > 0 ? "more " : ""}lines above
+                          <ShortcutHint
+                            shortcut={readerShortcuts.revealContextAbove}
+                            className="ml-1"
+                          />
+                        </button>
+                        <span className="h-px flex-1 bg-line" />
+                      </div>
+                    )}
+                    <HighlightedSourceLines
+                      lines={highlightedLines}
+                      startLine={displayedStartLine}
+                      focusRange={{
+                        startLine: unitStartLine,
+                        endLine: unitEndLine,
+                      }}
+                      selectedRange={ruleSelection}
+                      onSelectLine={selectRuleLine}
+                      renderAfterLine={(lineNumber) =>
+                        ruleSelection?.endLine === lineNumber ? (
+                          <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-4 font-sans shadow-xl">
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div>
+                                <p className="text-cloud flex items-center gap-2 text-xs font-semibold">
+                                  <ShieldCheck className="text-cyan size-3.5" />
+                                  Create compliance rule
+                                </p>
+                                <p className="text-fog mt-1 font-mono text-[9px]">
+                                  {active.path} · lines{" "}
+                                  {ruleSelection.startLine}
+                                  {ruleSelection.endLine !==
+                                    ruleSelection.startLine &&
+                                    `–${ruleSelection.endLine}`}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                aria-label="Close compliance rule editor"
+                                className="text-fog hover:bg-surface-hover hover:text-cloud rounded-lg p-1.5 transition"
+                                onClick={() => setRuleSelection(undefined)}
+                              >
+                                <X className="size-3.5" />
+                              </button>
+                            </div>
+                            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                              <label className="text-mist text-[10px] font-medium">
+                                <span className="mb-1.5 block">Rule name</span>
+                                <input
+                                  aria-label="Rule name"
+                                  value={ruleForm.title}
+                                  onChange={(event) =>
+                                    setRuleForm({
+                                      ...ruleForm,
+                                      title: event.target.value,
+                                    })
+                                  }
+                                  placeholder="Validate authorization at boundaries"
+                                  className="form-input"
+                                />
+                              </label>
+                              <label className="text-mist text-[10px] font-medium">
+                                <span className="mb-1.5 block">Applies to</span>
+                                <input
+                                  aria-label="Rule path glob"
+                                  value={ruleForm.pathGlob}
+                                  onChange={(event) =>
+                                    setRuleForm({
+                                      ...ruleForm,
+                                      pathGlob: event.target.value,
+                                    })
+                                  }
+                                  className="form-input font-mono"
+                                />
+                              </label>
+                            </div>
+                            <label className="text-mist mt-3 block text-[10px] font-medium">
+                              <span className="mb-1.5 block">Instruction</span>
+                              <textarea
+                                ref={ruleInstructionRef}
+                                aria-label="Rule instruction"
+                                value={ruleForm.instruction}
+                                onChange={(event) =>
+                                  setRuleForm({
+                                    ...ruleForm,
+                                    instruction: event.target.value,
+                                  })
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    setRuleSelection(undefined);
+                                  } else if (
+                                    event.key === "Enter" &&
+                                    (event.metaKey || event.ctrlKey)
+                                  ) {
+                                    event.preventDefault();
+                                    saveRule();
+                                  }
+                                }}
+                                placeholder="Describe the convention that compliance checks should enforce…"
+                                rows={3}
+                                className="form-input h-auto resize-y py-3"
+                              />
+                            </label>
+                            <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+                              <div className="flex gap-3">
+                                <label className="text-mist text-[10px] font-medium">
+                                  <span className="mb-1.5 block">Scope</span>
+                                  <select
+                                    aria-label="Rule scope"
+                                    value={ruleForm.scope}
+                                    onChange={(event) =>
+                                      setRuleForm({
+                                        ...ruleForm,
+                                        scope: event.target
+                                          .value as typeof ruleForm.scope,
+                                      })
+                                    }
+                                    className="form-input w-auto"
+                                  >
+                                    <option value="file">Per file</option>
+                                    <option value="repository">
+                                      Repository-wide
+                                    </option>
+                                  </select>
+                                </label>
+                                <label className="text-mist text-[10px] font-medium">
+                                  <span className="mb-1.5 block">Severity</span>
+                                  <select
+                                    aria-label="Rule severity"
+                                    value={ruleForm.severity}
+                                    onChange={(event) =>
+                                      setRuleForm({
+                                        ...ruleForm,
+                                        severity: event.target
+                                          .value as RuleSeverity,
+                                      })
+                                    }
+                                    className="form-input w-auto"
+                                  >
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="critical">Critical</option>
+                                  </select>
+                                </label>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-fog hidden text-[9px] sm:inline">
+                                  Shift-click another line to extend · ⌘ Enter
+                                  to save
+                                </span>
+                                <Button
+                                  size="sm"
+                                  loading={addRule.isPending}
+                                  disabled={
+                                    !ruleForm.title.trim() ||
+                                    !ruleForm.instruction.trim() ||
+                                    !ruleForm.pathGlob.trim()
+                                  }
+                                  onClick={saveRule}
+                                >
+                                  Add rule
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null
+                      }
+                    />
+                    {contextAfter < availableAfter && (
+                      <div className="flex items-center gap-3 px-4 pb-3 font-sans">
+                        <span className="h-px flex-1 bg-line" />
+                        <button
+                          type="button"
+                          onClick={revealContextBelow}
+                          className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                        >
+                          <ChevronDown className="size-3" />
+                          Show{" "}
+                          {Math.min(
+                            CONTEXT_PAGE_LINES,
+                            availableAfter - contextAfter,
+                          )}{" "}
+                          {contextAfter > 0 ? "more " : ""}lines below
+                          <ShortcutHint
+                            shortcut={readerShortcuts.revealContextBelow}
+                            className="ml-1"
+                          />
+                        </button>
+                        <span className="h-px flex-1 bg-line" />
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
               <footer className="bg-panel border-line flex h-16 shrink-0 items-center justify-between gap-3 border-t px-4">
@@ -726,45 +1204,61 @@ export function RepositoryReader({
                     className="max-md:hidden"
                   />
                 </Button>
-                {active.status === "signed_off" ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    loading={unreview.isPending}
-                    disabled={!canUnreview}
-                    onClick={runUnreview}
+                {signOffQueue.ids.size > 0 && (
+                  <span
+                    role="status"
+                    aria-label={`Saving reviews, ${signOffQueueProgress}`}
+                    className="border-line-strong bg-surface text-mist ml-auto flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 text-[10px] shadow-[0_8px_24px_var(--app-shadow)] sm:h-10 sm:px-3"
                   >
-                    <Undo2 className="size-4" /> Mark unread
-                    <ShortcutHint
-                      shortcut={readerShortcuts.undoSignOff}
-                      className="max-sm:hidden"
-                    />
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    loading={signOff.isPending}
-                    onClick={runSignOff}
-                  >
-                    <Check className="size-4" /> Mark read &amp; continue
-                    <ShortcutHint
-                      shortcut={readerShortcuts.signOff}
-                      className="max-sm:hidden"
-                    />
-                  </Button>
+                    <LoaderCircle className="size-3 animate-spin" />
+                    <span className="hidden sm:inline">Saving</span>
+                    <span className="font-mono text-cloud">
+                      {signOffQueueProgress}
+                    </span>
+                  </span>
                 )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={activeIndex >= units.length - 1}
-                  onClick={() => selectUnit(units[activeIndex + 1])}
-                >
-                  Next <ChevronRight className="size-4" />
-                  <ShortcutHint
-                    shortcut={readerShortcuts.nextUnit}
-                    className="max-md:hidden"
-                  />
-                </Button>
+                <div className="flex items-center gap-3">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={activeIndex >= units.length - 1}
+                    onClick={() => selectUnit(units[activeIndex + 1])}
+                  >
+                    Next <ChevronRight className="size-4" />
+                    <ShortcutHint
+                      shortcut={readerShortcuts.nextUnit}
+                      className="max-md:hidden"
+                    />
+                  </Button>
+                  {active.status === "signed_off" ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={unreview.isPending}
+                      disabled={!canUnreview}
+                      onClick={runUnreview}
+                    >
+                      <Undo2 className="size-4" /> Mark unread
+                      <ShortcutHint
+                        shortcut={readerShortcuts.undoSignOff}
+                        className="max-sm:hidden"
+                      />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      loading={activeSignOffPending}
+                      onClick={runSignOff}
+                    >
+                      <Check className="size-4" /> Sign off
+                      <ShortcutHint
+                        shortcut={readerShortcuts.signOff}
+                        className="max-sm:hidden"
+                      />
+                      <ChevronRight className="size-3.5" />
+                    </Button>
+                  )}
+                </div>
               </footer>
             </>
           ) : (

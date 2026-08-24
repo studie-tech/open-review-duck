@@ -20,6 +20,7 @@ import { PageCommandCenterProvider } from "~/components/page-command-center";
 
 const navigateSpy = vi.hoisted(() => vi.fn());
 const mutationSpies = vi.hoisted(() => ({
+  addRuleMutate: vi.fn(),
   signOffMutate: vi.fn(),
   signOffOptions: vi.fn(),
   signOffIsPending: vi.fn(() => false),
@@ -32,6 +33,17 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("~/trpc/react", () => ({
   api: {
+    useUtils: () => ({
+      repoReviews: { rules: { invalidate: vi.fn() } },
+    }),
+    repoReviews: {
+      addRule: {
+        useMutation: () => ({
+          mutate: mutationSpies.addRuleMutate,
+          isPending: false,
+        }),
+      },
+    },
     review: {
       signOff: {
         useMutation: (options: unknown) => {
@@ -101,6 +113,7 @@ type ReaderData = ComponentProps<typeof RepositoryReader>["initialData"];
 function makeData(units: ReturnType<typeof makeUnit>[]): ReaderData {
   return {
     units,
+    fileContexts: [],
     sourceDelivery: "embedded",
     snapshot: null,
   } as unknown as ReaderData;
@@ -160,7 +173,7 @@ describe("RepositoryReader", () => {
       </ShellHarness>,
     );
     expect(document.querySelector(".fixed.inset-0")).not.toBeNull();
-    expect(screen.getByRole("button", { name: /mark read/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /sign off/i })).toBeVisible();
     expect(screen.getByRole("button", { name: /previous/i })).toBeVisible();
     expect(screen.getByRole("button", { name: /next/i })).toBeVisible();
     expect(
@@ -194,6 +207,45 @@ describe("RepositoryReader", () => {
     ).toBe(true);
   });
 
+  it("creates a compliance rule from a selected source range", () => {
+    const unit = makeUnit({ path: "src/policy.ts", startLine: 10 });
+    render(
+      <ShellHarness>
+        <RepositoryReader
+          initialData={makeData([unit])}
+          monitor={monitor as never}
+        />
+      </ShellHarness>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Create compliance rule from line 10",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Create compliance rule from line 12",
+      }),
+      { shiftKey: true },
+    );
+    expect(screen.getByText(/lines 10–12/i)).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Rule name"), {
+      target: { value: "Authorize protected operations" },
+    });
+    fireEvent.change(screen.getByLabelText("Rule instruction"), {
+      target: { value: "Require an authorization check before mutations." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(mutationSpies.addRuleMutate).toHaveBeenCalledWith({
+      monitorId: monitor.id,
+      title: "Authorize protected operations",
+      instruction: "Require an authorization check before mutations.",
+      pathGlob: "src/policy.ts",
+      scope: "file",
+      severity: "medium",
+    });
+  });
+
   it("steps between units with the next-unit stroke and jumps whole files", () => {
     render(
       <ShellHarness>
@@ -220,6 +272,45 @@ describe("RepositoryReader", () => {
     expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
   });
 
+  it("reveals surrounding file context with the PR review shortcuts", () => {
+    const unit = makeUnit({
+      path: "src/context.ts",
+      source: "focus three\nfocus four",
+      startLine: 3,
+      endLine: 4,
+    });
+    const data = makeData([unit]);
+    data.fileContexts = [
+      {
+        ...unit,
+        id: "file-context-1",
+        kind: "file",
+        source:
+          "above one\nabove two\nfocus three\nfocus four\nbelow five\nbelow six",
+        startLine: 1,
+        endLine: 6,
+      },
+    ] as ReaderData["fileContexts"];
+    render(
+      <ShellHarness>
+        <RepositoryReader initialData={data} monitor={monitor as never} />
+      </ShellHarness>,
+    );
+    expect(screen.queryByText("above one")).toBeNull();
+    expect(screen.queryByText("below six")).toBeNull();
+
+    fireEvent.keyDown(document, { key: "c" });
+    expect(screen.getByText("above one")).toBeVisible();
+    expect(screen.getByText("below six")).toBeVisible();
+    expect(screen.getByRole("button", { name: /hide context/i })).toBeVisible();
+
+    fireEvent.keyDown(document, { key: "c" });
+    expect(screen.queryByText("above one")).toBeNull();
+    fireEvent.keyDown(document, { key: "ArrowDown", shiftKey: true });
+    expect(screen.queryByText("above one")).toBeNull();
+    expect(screen.getByText("below six")).toBeVisible();
+  });
+
   it("marks the active unit read and advances optimistically", () => {
     const first = makeUnit();
     const { container } = render(
@@ -243,10 +334,10 @@ describe("RepositoryReader", () => {
     });
     expect(container.querySelector("[aria-current='true']")).not.toBeNull();
     expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /mark read/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /sign off/i })).toBeEnabled();
   });
 
-  it("does not wait for sign-off success before advancing", () => {
+  it("shows background save progress without waiting before advancing", () => {
     const first = makeUnit();
     render(
       <ShellHarness>
@@ -259,10 +350,10 @@ describe("RepositoryReader", () => {
     const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as
       | {
           onMutate: (variables: { unitId: string }) => unknown;
-          onSuccess: (
+          onSettled: (
             result: unknown,
+            error: unknown,
             variables: { unitId: string },
-            context: unknown,
           ) => void;
         }
       | undefined;
@@ -271,23 +362,67 @@ describe("RepositoryReader", () => {
       options.onMutate({ unitId: first.id });
     });
     expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("status", { name: /saving reviews, 0\/1/i }),
+    ).toBeVisible();
     act(() => {
-      options.onSuccess(undefined, { unitId: first.id }, undefined);
+      options.onSettled(undefined, undefined, { unitId: first.id });
     });
     expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("status", { name: /saving reviews/i }),
+    ).toBeNull();
   });
 
-  it("prevents marking a unit unread while a sign-off is pending", () => {
-    mutationSpies.signOffIsPending.mockReturnValue(true);
-    const registrations: CommandCenterItem[][] = [];
+  it("expands save progress when several sign-offs are queued", () => {
+    const first = makeUnit();
+    const second = makeUnit();
     render(
-      <ShellHarness onRegister={(commands) => registrations.push(commands)}>
+      <ShellHarness>
         <RepositoryReader
-          initialData={makeData([makeUnit({ status: "signed_off" })])}
+          initialData={makeData([first, second, makeUnit()])}
           monitor={monitor as never}
         />
       </ShellHarness>,
     );
+    const firstOptions = mutationSpies.signOffOptions.mock.calls.at(
+      -1,
+    )?.[0] as {
+      onMutate: (variables: { unitId: string }) => unknown;
+    };
+    act(() => {
+      firstOptions.onMutate({ unitId: first.id });
+    });
+    const secondOptions = mutationSpies.signOffOptions.mock.calls.at(
+      -1,
+    )?.[0] as {
+      onMutate: (variables: { unitId: string }) => unknown;
+    };
+    act(() => {
+      secondOptions.onMutate({ unitId: second.id });
+    });
+    expect(
+      screen.getByRole("status", { name: /saving reviews, 0\/2/i }),
+    ).toBeVisible();
+  });
+
+  it("prevents marking a unit unread while a sign-off is pending", () => {
+    const unit = makeUnit({ status: "signed_off" });
+    const registrations: CommandCenterItem[][] = [];
+    render(
+      <ShellHarness onRegister={(commands) => registrations.push(commands)}>
+        <RepositoryReader
+          initialData={makeData([unit])}
+          monitor={monitor as never}
+        />
+      </ShellHarness>,
+    );
+    const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as {
+      onMutate: (variables: { unitId: string }) => unknown;
+    };
+    act(() => {
+      options.onMutate({ unitId: unit.id });
+    });
     expect(screen.getByRole("button", { name: /mark unread/i })).toBeDisabled();
     const command = registrations
       .at(-1)

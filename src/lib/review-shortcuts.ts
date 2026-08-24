@@ -75,6 +75,9 @@ export const cockpitShortcuts = {
 export const readerShortcuts = {
   scrollDown: [{ key: "ArrowDown" }],
   scrollUp: [{ key: "ArrowUp" }],
+  revealContextAbove: [{ key: "ArrowUp", shift: true }],
+  revealContextBelow: [{ key: "ArrowDown", shift: true }],
+  context: [{ key: "c" }],
   nextUnit: [{ key: "ArrowDown", mod: true }],
   previousUnit: [{ key: "ArrowUp", mod: true }],
   nextFile: [{ key: "ArrowRight" }],
