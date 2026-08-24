@@ -85,7 +85,10 @@ export function RepositoryReader({
   monitor: Monitor;
 }) {
   const [units, setUnits] = useState(initialData.units);
-  const [fileContexts, setFileContexts] = useState(initialData.fileContexts);
+  const [hydratedFileContext, setHydratedFileContext] = useState<{
+    snapshotId: string;
+    context: Workspace["fileContexts"][number];
+  }>();
   const [activeId, setActiveId] = useState(
     initialData.units.find(({ status }) => status !== "signed_off")?.id ??
       initialData.units[0]?.id,
@@ -140,10 +143,7 @@ export function RepositoryReader({
         activePath: initialData.units.find(({ id }) => id === firstPending)
           ?.path,
       }),
-      fileContexts: prioritizePrivateReviewSources(initialData.fileContexts, {
-        activePath: initialData.units.find(({ id }) => id === firstPending)
-          ?.path,
-      }),
+      fileContexts: initialData.fileContexts,
     };
   }, [initialData.snapshot?.id]);
 
@@ -153,23 +153,13 @@ export function RepositoryReader({
     const controller = new AbortController();
     const cache = new Map<string, Promise<Uint8Array>>();
     const hydratedById = new Map<string, Workspace["units"][number]>();
-    const hydratedContextByPath = new Map<
-      string,
-      Workspace["fileContexts"][number]
-    >();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     /** Applies all source files hydrated in the same event-loop turn at once. */
     const flushHydrated = () => {
       flushTimer = undefined;
-      if (
-        !live ||
-        (hydratedById.size === 0 && hydratedContextByPath.size === 0)
-      )
-        return;
+      if (!live || hydratedById.size === 0) return;
       const hydrated = new Map(hydratedById);
-      const hydratedContexts = new Map(hydratedContextByPath);
       hydratedById.clear();
-      hydratedContextByPath.clear();
       setUnits((current) =>
         current.map((unit) => {
           const replacement = hydrated.get(unit.id);
@@ -183,45 +173,27 @@ export function RepositoryReader({
             : unit;
         }),
       );
-      setFileContexts((current) =>
-        current.map((context) => hydratedContexts.get(context.path) ?? context),
-      );
     };
     setSourceLoading(true);
-    void Promise.all([
-      hydratePrivateReviewSources(
-        hydrationPlan.units,
-        hydrationPlan.snapshotId,
-        cache,
-        6,
-        controller.signal,
-        (_index, hydrated) => {
-          if (!live) return;
-          hydratedById.set(hydrated.id, hydrated);
-          flushTimer ??= setTimeout(flushHydrated, 0);
-        },
-      ),
-      hydratePrivateReviewSources(
-        hydrationPlan.fileContexts,
-        hydrationPlan.snapshotId,
-        cache,
-        2,
-        controller.signal,
-        (_index, hydrated) => {
-          if (!live) return;
-          hydratedContextByPath.set(hydrated.path, hydrated);
-          flushTimer ??= setTimeout(flushHydrated, 0);
-        },
-      ),
-    ])
-      .then((results) => {
+    void hydratePrivateReviewSources(
+      hydrationPlan.units,
+      hydrationPlan.snapshotId,
+      cache,
+      6,
+      controller.signal,
+      (_index, hydrated) => {
+        if (!live) return;
+        hydratedById.set(hydrated.id, hydrated);
+        flushTimer ??= setTimeout(flushHydrated, 0);
+      },
+    )
+      .then((result) => {
         if (!live) return;
         if (flushTimer !== undefined) clearTimeout(flushTimer);
         flushHydrated();
-        const failures = results.flatMap((result) => result.failures);
-        if (failures.length > 0) {
+        if (result.failures.length > 0) {
           toast.error(
-            `${failures.length} source file${failures.length === 1 ? "" : "s"} could not be loaded`,
+            `${result.failures.length} source file${result.failures.length === 1 ? "" : "s"} could not be loaded`,
           );
         }
       })
@@ -242,6 +214,54 @@ export function RepositoryReader({
       cache.clear();
     };
   }, [hydrationPlan]);
+
+  // Full-file context can be much larger than the focused review units. Load
+  // only the active path and replace it on navigation so the reader never
+  // accumulates every repository file in browser memory.
+  useEffect(() => {
+    const snapshotId = hydrationPlan.snapshotId;
+    if (!snapshotId || !active?.path) return;
+    const context = hydrationPlan.fileContexts.find(
+      ({ path }) => path === active.path,
+    );
+    if (!context) {
+      setHydratedFileContext(undefined);
+      return;
+    }
+    let live = true;
+    const controller = new AbortController();
+    setHydratedFileContext(undefined);
+    void hydratePrivateReviewSources(
+      [context],
+      snapshotId,
+      new Map<string, Promise<Uint8Array>>(),
+      1,
+      controller.signal,
+    )
+      .then((result) => {
+        if (!live) return;
+        const hydrated = result.units[0];
+        if (hydrated && result.successfulIndexes.includes(0)) {
+          setHydratedFileContext({
+            snapshotId,
+            context: hydrated,
+          });
+        } else if (result.failures.length > 0) {
+          toast.error("Surrounding file context could not be loaded");
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!live || controller.signal.aborted) return;
+        toast.error("Surrounding file context could not be loaded", {
+          description:
+            cause instanceof Error ? cause.message : "Please try again.",
+        });
+      });
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, [active?.path, hydrationPlan]);
 
   const paths = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -420,7 +440,12 @@ export function RepositoryReader({
   }, [active, showPrevious]);
 
   const activeFileContext = active
-    ? fileContexts.find(({ path }) => path === active.path)
+    ? hydrationPlan.snapshotId
+      ? hydratedFileContext?.snapshotId === hydrationPlan.snapshotId &&
+        hydratedFileContext.context.path === active.path
+        ? hydratedFileContext.context
+        : undefined
+      : hydrationPlan.fileContexts.find(({ path }) => path === active.path)
     : undefined;
   const unitStartLine = showPrevious
     ? previousStartLine(active)
@@ -509,6 +534,7 @@ export function RepositoryReader({
   /** Opens a one-line rule anchor or extends the current anchor with Shift. */
   const selectRuleLine = useCallback(
     (line: number, extend: boolean) => {
+      const opening = !extend || !ruleSelection;
       setRuleSelection((current) => {
         if (!extend || !current) return { startLine: line, endLine: line };
         return {
@@ -516,14 +542,14 @@ export function RepositoryReader({
           endLine: Math.max(current.endLine, line),
         };
       });
-      if (active) {
+      if (active && opening) {
         setRuleForm((current) =>
           current.pathGlob === active.path ? current : newRuleForm(active.path),
         );
       }
       window.requestAnimationFrame(() => ruleInstructionRef.current?.focus());
     },
-    [active],
+    [active, ruleSelection],
   );
 
   /** Saves the compliance rule being drafted beside the selected source. */

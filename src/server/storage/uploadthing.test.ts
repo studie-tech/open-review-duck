@@ -152,4 +152,28 @@ describe("UploadThing source storage", () => {
     expect(mocks.uploadFiles).toHaveBeenCalledTimes(3);
     expect(mocks.deleteFiles).toHaveBeenCalledTimes(3);
   });
+
+  it("redacts signed URLs embedded in provider error messages", async () => {
+    mocks.uploadFiles.mockResolvedValue({
+      data: null,
+      error: {
+        code: "UPLOAD_FAILED",
+        message:
+          "Upload failed at https://signed.example.test/object?token=secret",
+      },
+    });
+    const store = new UploadThingSourceObjectStore("token", "identity-key");
+
+    const failure = await store
+      .put({
+        bytes: new Uint8Array([1]),
+        digest: "a".repeat(64),
+        workspaceId: "workspace-one",
+      })
+      .catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("[redacted URL]");
+    expect((failure as Error).message).not.toContain("signed.example.test");
+    expect((failure as Error).message).not.toContain("token=secret");
+  });
 });
