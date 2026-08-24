@@ -89,12 +89,19 @@ async function executeRepositoryBranchSync(
     .set({
       status: "running",
       progress: REPOSITORY_SYNC_PROGRESS.fetching,
+      error: null,
       startedAt: new Date(),
+      completedAt: null,
     })
     .where(eq(repositoryBranchSyncRuns.id, run.id));
   await db
     .update(workflowRuns)
-    .set({ status: "running", startedAt: new Date() })
+    .set({
+      status: "running",
+      error: null,
+      startedAt: new Date(),
+      completedAt: null,
+    })
     .where(eq(workflowRuns.id, workflow.id));
   try {
     const result = await syncRepositoryBranch(db, run.monitorId, {
@@ -111,12 +118,13 @@ async function executeRepositoryBranchSync(
       .set({
         status: "completed",
         progress: REPOSITORY_SYNC_PROGRESS.completed,
+        error: null,
         completedAt: new Date(),
       })
       .where(eq(repositoryBranchSyncRuns.id, run.id));
     await db
       .update(workflowRuns)
-      .set({ status: "completed", completedAt: new Date() })
+      .set({ status: "completed", error: null, completedAt: new Date() })
       .where(eq(workflowRuns.id, workflow.id));
     return { ...result, syncId };
   } catch (cause) {

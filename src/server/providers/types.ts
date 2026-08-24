@@ -51,6 +51,13 @@ export interface ChangedFilesOptions {
   maximumSourceBytes?: number;
 }
 
+/** One exact-revision source returned by a provider's bulk content API. */
+export interface RepositoryFileContent {
+  path: string;
+  content?: string;
+  isBinary?: boolean;
+}
+
 interface ProviderReviewComment {
   externalId: string;
   body: string;
@@ -163,6 +170,18 @@ export interface PullRequestProvider {
     ref: string,
     maximumBytes?: number,
   ): Promise<string | undefined>;
+  /**
+   * Fetches several exact-revision sources in one provider operation.
+   *
+   * Providers without a safe bulk API can omit this and use the single-file
+   * fallback above.
+   */
+  getFileContents?(
+    repositoryExternalId: string,
+    paths: readonly string[],
+    ref: string,
+    maximumBytes?: number,
+  ): Promise<RepositoryFileContent[]>;
   /** Lists and normalizes inline review conversations from the provider. */
   listInlineCommentThreads(
     repositoryExternalId: string,

@@ -646,6 +646,134 @@ describe("provider normalization", () => {
     );
   });
 
+  it("loads repository sources in size-bounded GitHub GraphQL batches", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.includes("/git/trees/")) {
+          return jsonResponse({
+            truncated: false,
+            tree: [
+              { path: "src/one.ts", type: "blob", size: 18 },
+              { path: "src/two.ts", type: "blob", size: 18 },
+              { path: "assets/logo.dat", type: "blob", size: 12 },
+            ],
+          });
+        }
+        if (url.endsWith("/repositories/42")) {
+          return jsonResponse({
+            id: 42,
+            name: "review-duck",
+            full_name: "acme/review-duck",
+            private: true,
+            html_url: "https://github.com/acme/review-duck",
+            default_branch: "main",
+          });
+        }
+        if (url.endsWith("/graphql")) {
+          const body = JSON.parse(String(init?.body));
+          expect(body.variables).toMatchObject({
+            owner: "acme",
+            name: "review-duck",
+            expression0: "head-sha:src/one.ts",
+            expression1: "head-sha:src/two.ts",
+            expression2: "head-sha:assets/logo.dat",
+          });
+          return jsonResponse({
+            data: {
+              repository: {
+                file0: {
+                  byteSize: 18,
+                  isBinary: false,
+                  isTruncated: false,
+                  text: "export const one=1",
+                },
+                file1: {
+                  byteSize: 18,
+                  isBinary: false,
+                  isTruncated: false,
+                  text: "export const two=2",
+                },
+                file2: {
+                  byteSize: 12,
+                  isBinary: true,
+                  isTruncated: false,
+                  text: null,
+                },
+              },
+            },
+          });
+        }
+        throw new Error(`Unexpected GitHub request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+    const paths = await provider.listRepositoryFiles("42", "head-sha");
+
+    await expect(
+      provider.getFileContents("42", paths, "head-sha", 150_000),
+    ).resolves.toEqual([
+      { path: "src/one.ts", content: "export const one=1" },
+      { path: "src/two.ts", content: "export const two=2" },
+      { path: "assets/logo.dat", isBinary: true },
+    ]);
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        requestUrl(input).endsWith("/graphql"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        requestUrl(input).includes("/contents/"),
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to the raw endpoint for a truncated GitHub blob", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review-duck",
+          full_name: "acme/review-duck",
+          private: true,
+          html_url: "https://github.com/acme/review-duck",
+          default_branch: "main",
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        return jsonResponse({
+          data: {
+            repository: {
+              file0: {
+                byteSize: 120_000,
+                isBinary: false,
+                isTruncated: true,
+                text: "partial",
+              },
+            },
+          },
+        });
+      }
+      if (url.includes("/contents/")) {
+        return new Response("complete source");
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new GitHubProvider("token").getFileContents(
+        "42",
+        ["src/large.ts"],
+        "head-sha",
+        150_000,
+      ),
+    ).resolves.toEqual([{ path: "src/large.ts", content: "complete source" }]);
+  });
+
   it("keeps GitHub base content for precise first-revision comparison", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);

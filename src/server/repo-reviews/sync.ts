@@ -18,6 +18,7 @@ import {
   sourceBlobs,
 } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { REPOSITORY_SYNC_PROGRESS } from "~/lib/repository-sync-progress";
 import {
   clusterReviewConcepts,
   validateConceptPartition,
@@ -66,15 +67,21 @@ const CONCEPT_MEMBER_INSERT_BATCH_SIZE = 1_000;
 const CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
 const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 
-/** Progress values shared with the cockpit's durable synchronization display. */
-export const REPOSITORY_SYNC_PROGRESS = {
-  fetching: 10,
-  downloading: 28,
-  analyzing: 55,
-  storing: 72,
-  saving: 88,
-  completed: 100,
-} as const;
+export { REPOSITORY_SYNC_PROGRESS } from "~/lib/repository-sync-progress";
+
+const REPOSITORY_FILE_READ_BATCH_SIZE = 4;
+const REPOSITORY_BULK_READ_BATCH_SIZE = 50;
+
+/** Maps completed work into a bounded durable progress interval. */
+function progressWithin(
+  start: number,
+  end: number,
+  completed: number,
+  total: number,
+) {
+  if (total <= 0) return end;
+  return Math.min(end, start + Math.floor(((end - start) * completed) / total));
+}
 
 /** Counts known file changes without inventing diffs for unavailable sources. */
 export function repositoryChangedFileCount(files: readonly SourceFile[]) {
@@ -193,7 +200,11 @@ export async function downloadRepositoryFiles(
   let currentBytes = 0;
   let exhausted = false;
   const current: SourceFile[] = [];
-  for (let offset = 0; offset < orderedPaths.length; offset += 4) {
+  let lastDownloadProgress: number = REPOSITORY_SYNC_PROGRESS.downloading;
+  const fetchBatchSize = provider.getFileContents
+    ? REPOSITORY_BULK_READ_BATCH_SIZE
+    : REPOSITORY_FILE_READ_BATCH_SIZE;
+  for (let offset = 0; offset < orderedPaths.length; offset += fetchBatchSize) {
     if (
       exhausted ||
       currentBytes >= REPOSITORY_SOURCE_BUDGET_BYTES ||
@@ -213,9 +224,24 @@ export async function downloadRepositoryFiles(
       );
       break;
     }
+    const batchPaths = orderedPaths.slice(offset, offset + fetchBatchSize);
+    const readablePaths = batchPaths.filter(
+      (path) => !isLikelyBinaryFile(path),
+    );
+    const bulkContents = provider.getFileContents
+      ? await provider.getFileContents(
+          input.repositoryExternalId,
+          readablePaths,
+          input.ref,
+          MAX_REPOSITORY_FILE_BYTES,
+        )
+      : undefined;
+    const bulkContentByPath = new Map(
+      bulkContents?.map((file) => [file.path, file]),
+    );
     const downloaded = await mapWithLimit(
-      orderedPaths.slice(offset, offset + 4),
-      4,
+      batchPaths,
+      REPOSITORY_FILE_READ_BATCH_SIZE,
       async (path): Promise<SourceFile> => {
         const prior = previous.get(path);
         if (isLikelyBinaryFile(path)) {
@@ -228,12 +254,25 @@ export async function downloadRepositoryFiles(
             reviewWholeFile: true,
           };
         }
-        const content = await provider.getFileContent(
-          input.repositoryExternalId,
-          path,
-          input.ref,
-          MAX_REPOSITORY_FILE_BYTES,
-        );
+        const bulkContent = bulkContentByPath.get(path);
+        if (bulkContent?.isBinary) {
+          return {
+            path,
+            content: "",
+            isBinary: true,
+            binaryHash: `${input.ref}:${path}`,
+            changeType: prior ? "modified" : "added",
+            reviewWholeFile: true,
+          };
+        }
+        const content = provider.getFileContents
+          ? bulkContent?.content
+          : await provider.getFileContent(
+              input.repositoryExternalId,
+              path,
+              input.ref,
+              MAX_REPOSITORY_FILE_BYTES,
+            );
         if (content === undefined) {
           return {
             path,
@@ -301,6 +340,16 @@ export async function downloadRepositoryFiles(
       currentBytes += fileCurrentBytes;
       usedBytes += bytes;
       current.push(file);
+    }
+    const nextDownloadProgress = progressWithin(
+      REPOSITORY_SYNC_PROGRESS.downloading,
+      REPOSITORY_SYNC_PROGRESS.analyzing - 1,
+      Math.min(offset + batchPaths.length, orderedPaths.length),
+      orderedPaths.length,
+    );
+    if (nextDownloadProgress > lastDownloadProgress) {
+      lastDownloadProgress = nextDownloadProgress;
+      await input.onProgress?.(nextDownloadProgress);
     }
   }
   const deleted = [...previous.values()].flatMap((file): SourceFile[] => {
@@ -451,6 +500,8 @@ export async function syncRepositoryBranch(
     };
   }
 
+  await options?.onProgress?.(REPOSITORY_SYNC_PROGRESS.listing);
+
   const files = await downloadRepositoryFiles(
     db,
     {
@@ -494,6 +545,9 @@ export async function syncRepositoryBranch(
     })),
   };
   await options?.onProgress?.(REPOSITORY_SYNC_PROGRESS.storing);
+  let storedFileCount = 0;
+  let lastStorageProgress: number = REPOSITORY_SYNC_PROGRESS.storing;
+  let storageProgressWrites = Promise.resolve();
   const storedFiles = await mapWithLimit(files, 4, async (file) => {
     const [currentBlob, previousBlob] = await Promise.all([
       persistSourceBlob(db, {
@@ -507,6 +561,20 @@ export async function syncRepositoryBranch(
             bytes: Buffer.from(file.previousContent),
           }),
     ]);
+    storedFileCount += 1;
+    const nextStorageProgress = progressWithin(
+      REPOSITORY_SYNC_PROGRESS.storing,
+      REPOSITORY_SYNC_PROGRESS.saving - 1,
+      storedFileCount,
+      files.length,
+    );
+    if (nextStorageProgress > lastStorageProgress) {
+      lastStorageProgress = nextStorageProgress;
+      storageProgressWrites = storageProgressWrites.then(() =>
+        options?.onProgress?.(nextStorageProgress),
+      );
+      await storageProgressWrites;
+    }
     return { file, currentBlob, previousBlob };
   });
   const previousUnits = previousSnapshot

@@ -1,8 +1,77 @@
 import "server-only";
 
 import { createHmac } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { UTApi, UTFile } from "uploadthing/server";
 import type { PutSourceObject, SourceObjectStore, StoredObject } from "./types";
+
+const SOURCE_UPLOAD_ATTEMPTS = 3;
+const SOURCE_UPLOAD_RETRY_MILLISECONDS = 250;
+
+/** Finds a bounded HTTP status without retaining a provider response body. */
+function uploadFailureStatus(
+  value: unknown,
+  depth = 0,
+  visited = new Set<object>(),
+): number | undefined {
+  if (!value || typeof value !== "object" || depth > 3 || visited.has(value)) {
+    return undefined;
+  }
+  visited.add(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ["status", "statusCode"]) {
+    const status = record[key];
+    if (
+      typeof status === "number" &&
+      Number.isInteger(status) &&
+      status >= 400 &&
+      status <= 599
+    ) {
+      return status;
+    }
+  }
+  for (const key of ["response", "cause", "error", "data"]) {
+    const status = uploadFailureStatus(record[key], depth + 1, visited);
+    if (status !== undefined) return status;
+  }
+  return undefined;
+}
+
+/** Retains actionable UploadThing context without persisting signed URLs. */
+function uploadFailureMessage(cause: unknown) {
+  const record =
+    cause && typeof cause === "object"
+      ? (cause as Record<string, unknown>)
+      : undefined;
+  const message =
+    (typeof record?.message === "string" && record.message.trim()) ||
+    (cause instanceof Error && cause.message.trim()) ||
+    "unknown error";
+  const code =
+    typeof record?.code === "string" && /^[A-Z0-9_]{1,64}$/.test(record.code)
+      ? record.code
+      : undefined;
+  const status = uploadFailureStatus(cause);
+  const context = [code, status ? `HTTP ${status}` : undefined].filter(Boolean);
+  return `UploadThing source upload failed: ${message.slice(0, 160)}${context.length ? ` (${context.join(", ")})` : ""}`;
+}
+
+/** Formats a bounded cleanup failure without leaking provider request data. */
+function cleanupFailureMessage(cause: unknown) {
+  const record =
+    cause && typeof cause === "object"
+      ? (cause as Record<string, unknown>)
+      : undefined;
+  const code =
+    typeof record?.code === "string" && /^[A-Z0-9_]{1,64}$/.test(record.code)
+      ? record.code
+      : undefined;
+  const status = uploadFailureStatus(cause);
+  return (
+    [code, status ? `HTTP ${status}` : undefined].filter(Boolean).join(", ") ||
+    "provider cleanup request failed"
+  );
+}
 
 /** Stores private SaaS source objects in the configured UploadThing application. */
 export class UploadThingSourceObjectStore implements SourceObjectStore {
@@ -33,24 +102,47 @@ export class UploadThingSourceObjectStore implements SourceObjectStore {
   /** Uploads one opaque private object with a tenant-bound custom identifier. */
   async put(input: PutSourceObject): Promise<StoredObject> {
     const customId = this.customId(input);
-    const file = new UTFile([Buffer.from(input.bytes)], `${input.digest}.bin`, {
-      customId,
-      type: "application/octet-stream",
-    });
-    const uploaded = await this.api.uploadFiles(file, {
-      acl: "private",
-      contentDisposition: "inline",
-    });
-    if (uploaded.error || !uploaded.data) {
-      throw new Error(
-        `UploadThing source upload failed: ${uploaded.error?.message ?? "unknown error"}`,
-      );
+    let lastFailure = "UploadThing source upload failed: unknown error";
+    for (let attempt = 1; attempt <= SOURCE_UPLOAD_ATTEMPTS; attempt++) {
+      try {
+        const file = new UTFile(
+          [Buffer.from(input.bytes)],
+          `${input.digest}.bin`,
+          {
+            customId,
+            type: "application/octet-stream",
+          },
+        );
+        const uploaded = await this.api.uploadFiles(file, {
+          acl: "private",
+          contentDisposition: "inline",
+        });
+        if (!uploaded.error && uploaded.data) {
+          return {
+            customId,
+            objectKey: uploaded.data.key,
+            storage: this.kind,
+          };
+        }
+        lastFailure = uploadFailureMessage(uploaded.error);
+      } catch (cause) {
+        lastFailure = uploadFailureMessage(cause);
+      }
+
+      // The ingest request may have committed before its response was lost.
+      // Removing the deterministic identity makes the next attempt a genuine
+      // retry instead of a permanent custom-ID conflict. The database upload
+      // lease guarantees that no ready row can name this object concurrently.
+      try {
+        await this.deleteByCustomId(customId);
+      } catch (cause) {
+        lastFailure = `${lastFailure}; custom-ID cleanup failed: ${cleanupFailureMessage(cause)}`;
+      }
+      if (attempt < SOURCE_UPLOAD_ATTEMPTS) {
+        await delay(SOURCE_UPLOAD_RETRY_MILLISECONDS * 2 ** (attempt - 1));
+      }
     }
-    return {
-      customId,
-      objectKey: uploaded.data.key,
-      storage: this.kind,
-    };
+    throw new Error(lastFailure);
   }
 
   /** Reads one private object through a five-minute server URL. */
