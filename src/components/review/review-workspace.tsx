@@ -2969,6 +2969,7 @@ export function ReviewWorkspace({
       return {
         paused,
         unitIndex,
+        startedAt,
         pathSearch,
         queueLimit,
         searchLimit,
@@ -3002,7 +3003,7 @@ export function ReviewWorkspace({
         setSelectedLine(rollback.selectedLine);
         setFeedback(rollback.feedback);
         setShowDiff(rollback.showDiff);
-        setStartedAt(Date.now());
+        setStartedAt(rollback.startedAt);
       }
       toast.error(error.message);
     },
