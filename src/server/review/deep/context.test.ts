@@ -263,9 +263,7 @@ describe("deep review repository context", () => {
 
   it("still honors ignore rules that already existed on the base revision", async () => {
     mocks.listRepositoryFiles.mockResolvedValue([".gitignore", "src/auth.ts"]);
-    mocks.getFileContent.mockImplementation(async (_repo, path: string) =>
-      path === ".gitignore" ? "src/**\n" : "export const ok = 1;\n",
-    );
+    mocks.getFileContent.mockResolvedValue("src/**\n");
     const { database } = fakeDatabase([scopeRow(), []]);
     const context = await createDeepReviewContext(database, {
       job: fakeJob(),
