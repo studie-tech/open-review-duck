@@ -37,7 +37,6 @@ export const env = createEnv({
         error: "OPENROUTER_MODEL_ALLOWLIST must contain one model slug",
       })
       .optional(),
-    BIG_PICKLE_DISCLOSURE_VERSION: z.string().min(1).default("2026-07-29"),
     GITHUB_APP_ID: z
       .string()
       .regex(/^[1-9]\d{0,19}$/)
@@ -190,7 +189,6 @@ export const env = createEnv({
     UPLOADTHING_TOKEN: process.env.UPLOADTHING_TOKEN,
     OPENROUTER_MANAGEMENT_KEY: process.env.OPENROUTER_MANAGEMENT_KEY,
     OPENROUTER_MODEL_ALLOWLIST: process.env.OPENROUTER_MODEL_ALLOWLIST,
-    BIG_PICKLE_DISCLOSURE_VERSION: process.env.BIG_PICKLE_DISCLOSURE_VERSION,
     GITHUB_APP_ID: process.env.GITHUB_APP_ID,
     GITHUB_APP_SLUG: process.env.GITHUB_APP_SLUG,
     GITHUB_APP_CLIENT_ID: process.env.GITHUB_APP_CLIENT_ID,

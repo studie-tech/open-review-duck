@@ -690,7 +690,6 @@ export const repoReviewsRouter = createTRPCRouter({
         const message = cause instanceof Error ? cause.message : "";
         const safe = new Set([
           "Deep review requires a paid plan",
-          "Accept the Big Pickle data disclosure before using AI",
           "Monthly AI token limit reached",
           "Workspace monthly AI budget is exhausted",
           "Configure a local AI provider before using AI",

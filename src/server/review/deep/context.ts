@@ -13,8 +13,8 @@ import {
   sourceBlobs,
 } from "@/drizzle/schema";
 import {
-  bigPickleIgnoreMatcher,
-  bigPickleSourceDecision,
+  aiIgnoreMatcher,
+  sourcePolicyDecision,
 } from "~/server/ai/source-policy";
 import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
@@ -371,7 +371,7 @@ async function buildDeepReviewContext(
     return hydratedUnits;
   };
 
-  /** Loads the repository's ignore rules once for the free-tier source policy. */
+  /** Loads the repository's ignore rules once for the source policy. */
   const ignoreMatcher = () => {
     ignored ??= (async () => {
       const candidates = (await listFiles())
@@ -391,7 +391,7 @@ async function buildDeepReviewContext(
           }),
         )
       ).filter((file) => file !== undefined);
-      return bigPickleIgnoreMatcher(files);
+      return aiIgnoreMatcher(files);
     })();
     return ignored;
   };
@@ -426,15 +426,10 @@ async function buildDeepReviewContext(
         }));
     },
     async sourceDecision(path, source) {
-      // Deep review runs on a local appliance's free tier by default, where the
-      // single-agent loop already refuses protected paths and detected secrets.
-      // A new prompt path that skipped the check would leak what today's path
-      // withholds.
-      if (job.provider !== "opencode") return { allowed: true };
       if ((await ignoreMatcher())(path)) {
         return { allowed: false, reason: "ignored" };
       }
-      const decision = bigPickleSourceDecision(path, source);
+      const decision = sourcePolicyDecision(path, source);
       return decision.allowed
         ? { allowed: true }
         : { allowed: false, reason: decision.reason };

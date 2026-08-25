@@ -5,8 +5,8 @@ import {
   DEEP_REVIEW_NO_PLAN_SENTINEL,
   DEEP_REVIEW_PLAN_SYSTEM_PROMPT,
   DEEP_REVIEW_REFUTE_SYSTEM_PROMPT,
-  DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT,
   DEEP_REVIEW_RELOCATE_SYSTEM_PROMPT,
+  DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT,
   DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
   DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
   dedupeUserPrompt,
@@ -124,6 +124,17 @@ describe("scoutUserPrompt", () => {
   it("renders the sentinel when no pre-scan plan was produced", () => {
     expect(scoutUserPrompt(scoutInput())).toContain(
       DEEP_REVIEW_NO_PLAN_SENTINEL,
+    );
+  });
+
+  it("uses a stored user-prompt template when one is supplied", () => {
+    const prompt = scoutUserPrompt(scoutInput(), {
+      scoutUser: "Custom scout {{file_under_review}}",
+    });
+    expect(prompt).toContain("Custom scout");
+    expect(prompt).toContain('path="src/auth/token.ts"');
+    expect(prompt).not.toContain(
+      "Review the file above against the review checklist",
     );
   });
 

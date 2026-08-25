@@ -16,8 +16,13 @@ import {
   pullRequests,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import type { AiPromptKey } from "~/config/ai-prompt-catalog";
 import { explanationChangedLineRanges } from "~/server/ai/change-scope";
 import { resolveAiModel } from "~/server/ai/models";
+import {
+  deepReviewPromptBodies,
+  loadAiPromptBodies,
+} from "~/server/ai/prompt-store";
 import type { TokenUsage } from "~/server/ai/service";
 import {
   boundedTurnOutput,
@@ -44,12 +49,6 @@ import {
 import { sanitizeReason } from "./redaction";
 import {
   DEEP_REVIEW_PLAN_MAX_CHECKPOINTS,
-  DEEP_REVIEW_PLAN_SYSTEM_PROMPT,
-  DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT,
-  DEEP_REVIEW_REPOSITORY_SCOUT_SYSTEM_PROMPT,
-  DEEP_REVIEW_REPOSITORY_SURVEY_SYSTEM_PROMPT,
-  DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
-  DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
   type DeepReviewLineRange,
   type DeepReviewPlanCheckpoint,
   planUserPrompt,
@@ -203,6 +202,7 @@ interface AgentTurnInput {
   turnIndex: number;
   maxTurns: number;
   repository: DeepReviewContext;
+  prompts: Record<AiPromptKey, string>;
   /** The run's token cap is spent; this file still has a transcript to close. */
   forceClose?: boolean;
 }
@@ -614,9 +614,6 @@ export async function executeReviewSurveyTurn(
  * extractor: the transcript is already the evidence, and `report_finding`
  * is already the persistence path.
  */
-const FINAL_TURN_PROMPT =
-  "This is your final turn for this file; no further investigation is possible. Report every defect you have already established with report_finding, quoting the exact existing code for each, then call finish_file. If you found nothing you can support with evidence, call finish_file with no findings.";
-
 /**
  * Narrows a tool set to the calls that can end a file's review.
  *
@@ -741,6 +738,7 @@ async function executeDeepReviewTurn(
   }
 
   try {
+    const prompts = await loadAiPromptBodies(db);
     const turn: AgentTurnInput = {
       job,
       parent,
@@ -749,6 +747,7 @@ async function executeDeepReviewTurn(
       turnIndex: input.turnIndex,
       maxTurns,
       repository: input.context ?? (await createDeepReviewContext(db, { job })),
+      prompts,
       forceClose,
     };
     return await runAgentTurn(
@@ -872,7 +871,13 @@ async function runAgentTurn(
         model: resolved.model,
         system: agent.systemPrompt,
         messages: finalTurn
-          ? [...messages, { role: "user" as const, content: FINAL_TURN_PROMPT }]
+          ? [
+              ...messages,
+              {
+                role: "user" as const,
+                content: input.prompts["deep_review.final_turn"],
+              },
+            ]
           : messages,
         tools,
         stopWhen: stepCountIs(1),
@@ -932,8 +937,8 @@ function fileScoutAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
   return {
     systemPrompt:
       input.parent.reviewScope === "repository_snapshot"
-        ? DEEP_REVIEW_REPOSITORY_SCOUT_SYSTEM_PROMPT
-        : DEEP_REVIEW_SCOUT_SYSTEM_PROMPT,
+        ? input.prompts["deep_review.scout.system_repository"]
+        : input.prompts["deep_review.scout.system"],
     operation: "ai.deep-review-file-turn",
     buildPrompt: () => buildScoutPrompt(db, input),
     buildTools: (tools) =>
@@ -959,8 +964,8 @@ function surveyAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
   return {
     systemPrompt:
       input.parent.reviewScope === "repository_snapshot"
-        ? DEEP_REVIEW_REPOSITORY_SURVEY_SYSTEM_PROMPT
-        : DEEP_REVIEW_SURVEY_SYSTEM_PROMPT,
+        ? input.prompts["deep_review.survey.system_repository"]
+        : input.prompts["deep_review.survey.system"],
     operation: "ai.deep-review-survey-turn",
     buildPrompt: async () => {
       const promptInput = await deepReviewSurveyPromptInput(db, {
@@ -981,17 +986,20 @@ function surveyAgent(db: Database, input: AgentTurnInput): DeepReviewAgent {
       );
       return {
         role: "user",
-        content: surveyUserPrompt({
-          ...promptInput,
-          reviewScope:
-            input.parent.reviewScope === "repository_snapshot"
-              ? "repository_snapshot"
-              : "pull_request",
-          reviewChecklist:
-            input.parent.reviewPurpose === "compliance"
-              ? repositoryRulebookText(repositoryRules)
-              : undefined,
-        }),
+        content: surveyUserPrompt(
+          {
+            ...promptInput,
+            reviewScope:
+              input.parent.reviewScope === "repository_snapshot"
+                ? "repository_snapshot"
+                : "pull_request",
+            reviewChecklist:
+              input.parent.reviewPurpose === "compliance"
+                ? repositoryRulebookText(repositoryRules)
+                : undefined,
+          },
+          deepReviewPromptBodies(input.prompts),
+        ),
       };
     },
     buildTools: (tools) =>
@@ -1075,6 +1083,9 @@ async function validateReviewedFile(db: Database, input: AgentTurnInput) {
     // set — not the whole revision tree — is what makes a citation verifiable.
     snapshotPaths: repository.changedFiles().map((file) => file.path),
     model: deepReviewValidationModel(db, job),
+    promptBodies: deepReviewPromptBodies(input.prompts),
+    relocateSystemPrompt: input.prompts["deep_review.relocate.system"],
+    refuteSystemPrompt: input.prompts["deep_review.refute.system"],
   });
 }
 
@@ -1138,7 +1149,10 @@ async function buildScoutPrompt(
       : undefined;
   return {
     role: "user",
-    content: scoutUserPrompt({ ...promptInput, planCheckpoints }),
+    content: scoutUserPrompt(
+      { ...promptInput, planCheckpoints },
+      deepReviewPromptBodies(input.prompts),
+    ),
   };
 }
 
@@ -1158,8 +1172,8 @@ async function resolvePlanCheckpoints(
   try {
     const planSystemPrompt =
       parent.reviewScope === "repository_snapshot"
-        ? DEEP_REVIEW_REPOSITORY_PLAN_SYSTEM_PROMPT
-        : DEEP_REVIEW_PLAN_SYSTEM_PROMPT;
+        ? input.prompts["deep_review.plan.system_repository"]
+        : input.prompts["deep_review.plan.system"];
     const resolved = await resolveAiModel(db, {
       workspaceId: job.workspaceId,
       provider: job.provider ?? "",
@@ -1183,7 +1197,10 @@ async function resolvePlanCheckpoints(
         generateText({
           model: resolved.model,
           system: planSystemPrompt,
-          prompt: planUserPrompt(promptInput),
+          prompt: planUserPrompt(
+            promptInput,
+            deepReviewPromptBodies(input.prompts),
+          ),
           maxRetries: 0,
           maxOutputTokens: Math.min(
             PLAN_MAX_OUTPUT_TOKENS,

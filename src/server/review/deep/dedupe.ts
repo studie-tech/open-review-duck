@@ -7,6 +7,10 @@ import { z } from "zod";
 import { aiJobs, aiReviewFindings, aiReviewItems } from "@/drizzle/schema";
 import { env } from "~/env";
 import { resolveAiModel } from "~/server/ai/models";
+import {
+  deepReviewPromptBodies,
+  loadAiPromptBodies,
+} from "~/server/ai/prompt-store";
 import type { TokenUsage } from "~/server/ai/service";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
@@ -16,7 +20,6 @@ import type { FindingCategory, FindingSeverity } from "./findings";
 import { sanitizeReason } from "./redaction";
 import {
   DEEP_REVIEW_DEDUPE_MAX_GROUP_SIZE,
-  DEEP_REVIEW_DEDUPE_SYSTEM_PROMPT,
   type DedupePromptFinding,
   dedupeUserPrompt,
 } from "./review-prompts";
@@ -451,16 +454,20 @@ async function clusterDeepReviewFindings(
       provider: input.job.provider ?? "",
       model: input.job.model ?? "",
     });
+    const prompts = await loadAiPromptBodies(db);
     const result = await observeOperation(
       "ai.deep-review-dedupe",
       "ai.model",
       () =>
         generateText({
           model: resolved.model,
-          system: DEEP_REVIEW_DEDUPE_SYSTEM_PROMPT,
-          prompt: dedupeUserPrompt({
-            findings: input.findings.map(promptFinding),
-          }),
+          system: prompts["deep_review.dedupe.system"],
+          prompt: dedupeUserPrompt(
+            {
+              findings: input.findings.map(promptFinding),
+            },
+            deepReviewPromptBodies(prompts),
+          ),
           maxRetries: 0,
           maxOutputTokens: MAX_DEDUPE_OUTPUT_TOKENS,
           timeout: DEDUPE_TIMEOUT_MS,

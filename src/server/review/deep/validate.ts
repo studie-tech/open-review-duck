@@ -31,6 +31,7 @@ import {
 import {
   DEEP_REVIEW_REFUTE_SYSTEM_PROMPT,
   DEEP_REVIEW_RELOCATE_SYSTEM_PROMPT,
+  type DeepReviewPromptBodies,
   refuteUserPrompt,
   relocateUserPrompt,
 } from "./review-prompts";
@@ -113,6 +114,9 @@ export interface ValidateFileFindingsInput {
   /** Absent disables relocation and refutation; both then fail open. */
   model?: DeepReviewValidationModel;
   relocationBudget?: DeepReviewRelocationBudget;
+  promptBodies?: DeepReviewPromptBodies;
+  relocateSystemPrompt?: string;
+  refuteSystemPrompt?: string;
 }
 
 interface DeepReviewValidatedFinding {
@@ -532,12 +536,15 @@ async function relocateFinding(
   if (!input.model || !source) return null;
   try {
     const text = await input.model.generate({
-      system: DEEP_REVIEW_RELOCATE_SYSTEM_PROMPT,
-      prompt: relocateUserPrompt({
-        existingCode: content.existingCode,
-        findingBody: findingText(content),
-        changedSource: source,
-      }),
+      system: input.relocateSystemPrompt ?? DEEP_REVIEW_RELOCATE_SYSTEM_PROMPT,
+      prompt: relocateUserPrompt(
+        {
+          existingCode: content.existingCode,
+          findingBody: findingText(content),
+          changedSource: source,
+        },
+        input.promptBodies,
+      ),
       maxOutputTokens: MAX_RELOCATE_OUTPUT_TOKENS,
     });
     const code = extractCodeBlock(text);
@@ -609,17 +616,20 @@ async function refuteFindings(
   let votes: RefuteVote[] | null = null;
   try {
     const text = await input.model.generate({
-      system: DEEP_REVIEW_REFUTE_SYSTEM_PROMPT,
-      prompt: refuteUserPrompt({
-        path: input.item.path,
-        findings: batch.map((entry) => ({
-          id: entry.id,
-          content: entry.content,
-          existingCode: entry.existingCode,
-        })),
-        currentSource: input.currentSource,
-        previousSource: input.previousSource,
-      }),
+      system: input.refuteSystemPrompt ?? DEEP_REVIEW_REFUTE_SYSTEM_PROMPT,
+      prompt: refuteUserPrompt(
+        {
+          path: input.item.path,
+          findings: batch.map((entry) => ({
+            id: entry.id,
+            content: entry.content,
+            existingCode: entry.existingCode,
+          })),
+          currentSource: input.currentSource,
+          previousSource: input.previousSource,
+        },
+        input.promptBodies,
+      ),
       maxOutputTokens: MAX_REFUTE_OUTPUT_TOKENS,
     });
     votes = parseRefuteVotes(text);

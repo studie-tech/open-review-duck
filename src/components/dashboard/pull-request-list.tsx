@@ -201,7 +201,7 @@ export function PullRequestList({
                     }
                   />
                 </span>
-                <span className="min-w-0">
+                <span className={cn("min-w-0", !compact && "sm:flex-1")}>
                   <span className="flex min-w-0 items-center gap-2">
                     <Badge>{providerLabel[pullRequest.provider]}</Badge>
                     <span className="text-fog truncate text-xs">
@@ -222,11 +222,11 @@ export function PullRequestList({
                 </span>
                 <span
                   className={cn(
-                    "col-start-2 min-w-0",
-                    !compact && "sm:col-auto sm:w-40 sm:shrink-0",
+                    "col-start-2 flex min-w-0 flex-col items-end text-right",
+                    !compact && "sm:col-auto sm:ml-auto sm:shrink-0",
                   )}
                 >
-                  <span className="text-mist flex items-center gap-2 text-[10px]">
+                  <span className="text-mist flex items-center justify-end gap-2 text-[10px]">
                     <span className="min-w-0 truncate">
                       {progressLabel(pullRequest, kind)}
                     </span>
@@ -243,7 +243,7 @@ export function PullRequestList({
                   )}
                   {(kind === "reviewed" ||
                     (kind === "active" && pullRequest.signedUnits > 0)) && (
-                    <span className="bg-surface-subtle mt-2 block h-1.5 overflow-hidden rounded-full">
+                    <span className="bg-surface-subtle mt-2 block h-1.5 w-28 overflow-hidden rounded-full">
                       <span
                         className={cn(
                           "block h-full rounded-full",

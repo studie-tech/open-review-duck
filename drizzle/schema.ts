@@ -198,6 +198,7 @@ export const users = createTable("user", {
   email: varchar({ length: 320 }),
   displayName: varchar({ length: 120 }),
   imageUrl: text(),
+  isAdmin: boolean().notNull().default(false),
   currentStreak: integer().notNull().default(0),
   longestStreak: integer().notNull().default(0),
   experiencePoints: integer().notNull().default(0),
@@ -942,18 +943,27 @@ export const signOffs = createTable(
   ],
 );
 
+export const aiPrompts = createTable("ai_prompt", {
+  key: varchar({ length: 128 }).primaryKey(),
+  body: text().notNull(),
+  updatedByUserId: text().references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp({ withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
 export const aiPreferences = createTable("ai_preference", {
   id: uuid().primaryKey().defaultRandom(),
   workspaceId: uuid()
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" })
     .unique(),
-  selectedModel: varchar({ length: 255 }).notNull().default("big-pickle"),
+  selectedModel: varchar({ length: 255 }).notNull().default(""),
   mode: aiModeEnum().notNull().default("on_demand"),
   reviewPullRequests: boolean().notNull().default(false),
   maxReviewTokens: integer(),
-  freeProviderDisclosureVersion: varchar({ length: 64 }),
-  freeProviderDisclosureAcceptedAt: timestamp({ withTimezone: true }),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp({ withTimezone: true })
     .notNull()

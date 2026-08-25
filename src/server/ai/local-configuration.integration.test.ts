@@ -94,21 +94,6 @@ describe("local AI configuration persistence", () => {
     expect(switchedSecret?.headers).toEqual({});
   });
 
-  it("rejects keyless OpenCode configuration at the server boundary", async () => {
-    await expect(
-      caller.ai.saveConfiguration({
-        ...baseInput,
-        provider: "opencode",
-        model: "big-pickle",
-        apiKey: undefined,
-        headers: {},
-      }),
-    ).rejects.toMatchObject({
-      code: "BAD_REQUEST",
-      message: "OpenCode Zen requires your own API key",
-    });
-  });
-
   it("returns setup state for an unreadable encrypted configuration", async () => {
     const current = await db.query.localAiConfigurations.findFirst({
       where: eq(

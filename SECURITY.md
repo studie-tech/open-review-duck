@@ -51,8 +51,8 @@ follow redirects. The local target may explicitly allow loopback and private
 network providers, while cloud-metadata and link-local targets remain blocked.
 AI tools are read-only
 and job-scoped, with no shell, arbitrary filesystem, general network, or
-credential access. Repository content is untrusted prompt input. Big Pickle
-filters protected paths and high-confidence secrets before transmission.
+credential access. Repository content is untrusted prompt input. Protected
+paths and high-confidence secrets are filtered before transmission.
 OpenRouter requests require Zero Data Retention and fail closed.
 
 Sentry sends no default PII. Source, prompts, output, credentials, OAuth data,

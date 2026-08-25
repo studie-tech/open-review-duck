@@ -213,27 +213,19 @@ describe("deep review repository context", () => {
     expect(await context.readFile("src/absent.ts", 1_000)).toBeUndefined();
   });
 
-  it("applies the free-tier source policy only on the free provider", async () => {
-    const paid = fakeDatabase([scopeRow(), [changedFileRow()]]);
-    const paidContext = await createDeepReviewContext(paid.database, {
+  it("applies the source policy to every provider", async () => {
+    const { database } = fakeDatabase([scopeRow(), [changedFileRow()]]);
+    const context = await createDeepReviewContext(database, {
       job: fakeJob(),
     });
-    expect(
-      await paidContext.sourceDecision("src/secrets/token.ts", ""),
-    ).toEqual({ allowed: true });
-
-    clearDeepReviewContexts();
-    const free = fakeDatabase([scopeRow(), [changedFileRow()]]);
-    const freeContext = await createDeepReviewContext(free.database, {
-      job: fakeJob({ provider: "opencode" }),
+    expect(await context.sourceDecision("src/secrets/token.ts", "")).toEqual({
+      allowed: false,
+      reason: "protected_path",
     });
     expect(
-      await freeContext.sourceDecision("src/secrets/token.ts", ""),
-    ).toEqual({ allowed: false, reason: "protected_path" });
-    expect(
-      await freeContext.sourceDecision("src/a.ts", "AKIA0123456789ABCDEF"),
+      await context.sourceDecision("src/a.ts", "AKIA0123456789ABCDEF"),
     ).toEqual({ allowed: false, reason: "secret_detected" });
-    expect(await freeContext.sourceDecision("src/a.ts", "current")).toEqual({
+    expect(await context.sourceDecision("src/a.ts", "current")).toEqual({
       allowed: true,
     });
   });

@@ -87,6 +87,33 @@ describe("priority inbox", () => {
     ).toEqual([target]);
   });
 
+  it("can hide draft pull requests while keeping other filters", () => {
+    const draft = item({
+      id: "draft",
+      state: "draft",
+      title: "Draft settlement webhook",
+    });
+    const open = item({ id: "open", title: "Retry settlement webhooks" });
+
+    expect(
+      filterPriorityInbox([draft, open], {
+        view: "all",
+        provider: "all",
+        repository: "all",
+        search: "settlement",
+        includeDrafts: false,
+      }),
+    ).toEqual([open]);
+    expect(
+      filterPriorityInbox([draft, open], {
+        view: "all",
+        provider: "all",
+        repository: "all",
+        search: "settlement",
+      }),
+    ).toEqual([draft, open]);
+  });
+
   it("keeps same-named repositories distinct across providers", () => {
     const github = item({ id: "github" });
     const gitlab = item({ id: "gitlab", provider: "gitlab" });

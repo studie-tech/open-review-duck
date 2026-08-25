@@ -37,9 +37,7 @@ request bodies, cookies, and authorization headers are prohibited.
 
 The local appliance sends no telemetry and performs no network request during
 startup or ordinary non-AI use. All state remains in the `/data` volume.
-Optional provider or AI credentials are encrypted there. Big Pickle requires a
-user-supplied OpenCode Zen API key and contacts OpenCode only after the provider
-is configured and its disclosure is accepted. Other locally configured
+Optional provider or AI credentials are encrypted there. Locally configured
 providers are contacted only after explicit selection.
 
 The first local start prints a 15-minute owner link. Once an active owner

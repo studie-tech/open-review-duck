@@ -94,6 +94,7 @@ export function prioritizeInbox<T extends PriorityInboxItem>(
 export function filterPriorityInbox<T extends PriorityInboxItem>(
   pullRequests: readonly T[],
   filters: {
+    includeDrafts?: boolean;
     provider: "all" | PriorityInboxItem["provider"];
     repository: "all" | string;
     search: string;
@@ -107,6 +108,9 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
     .map((term) => term.replace(/^[#!]/u, ""))
     .filter(Boolean);
   return pullRequests.filter((pullRequest) => {
+    if (filters.includeDrafts === false && pullRequest.state === "draft") {
+      return false;
+    }
     if (
       filters.view !== "all" &&
       priorityInboxGroup(pullRequest).id !== filters.view
