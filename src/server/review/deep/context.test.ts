@@ -230,6 +230,54 @@ describe("deep review repository context", () => {
     });
   });
 
+  it("does not let a pull request's new ignore rules hide reviewed files", async () => {
+    mocks.listRepositoryFiles.mockResolvedValue([".gitignore", "src/auth.ts"]);
+    const { database } = fakeDatabase([
+      scopeRow(),
+      [
+        changedFileRow({
+          file: {
+            id: "ignore-1",
+            path: ".gitignore",
+            previousPath: null,
+            language: "ignore",
+            changeType: "modified",
+            additions: 1,
+            deletions: 1,
+            isBinary: false,
+          },
+          currentBlob: { id: "ig-cur", digest: "c1", text: "src/**\n" },
+          previousBlob: { id: "ig-prev", digest: "p1", text: "docs/\n" },
+        }),
+      ],
+    ]);
+    const context = await createDeepReviewContext(database, {
+      job: fakeJob(),
+    });
+    expect(
+      await context.sourceDecision("src/auth.ts", "export const ok = 1;"),
+    ).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("still honors ignore rules that already existed on the base revision", async () => {
+    mocks.listRepositoryFiles.mockResolvedValue([".gitignore", "src/auth.ts"]);
+    mocks.getFileContent.mockImplementation(async (_repo, path: string) =>
+      path === ".gitignore" ? "src/**\n" : "export const ok = 1;\n",
+    );
+    const { database } = fakeDatabase([scopeRow(), []]);
+    const context = await createDeepReviewContext(database, {
+      job: fakeJob(),
+    });
+    expect(
+      await context.sourceDecision("src/auth.ts", "export const ok = 1;"),
+    ).toEqual({
+      allowed: false,
+      reason: "ignored",
+    });
+  });
+
   it("hydrates the snapshot's units once for every searching child", async () => {
     const { database, findMany } = fakeDatabase(
       [scopeRow(), [changedFileRow()]],

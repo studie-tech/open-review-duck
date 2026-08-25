@@ -695,7 +695,7 @@ export const DEEP_REVIEW_DEDUPE_USER_PROMPT = `{{findings}}
 Partition every finding id above into groups, as the JSON object described in your instructions.`;
 
 export const DEEP_REVIEW_FINAL_TURN_PROMPT =
-  "This is your final turn for this file; no further investigation is possible. Report every defect you have already established with report_finding, quoting the exact existing code for each, then call finish_file. If you found nothing you can support with evidence, call finish_file with no findings.";
+  "This is your final turn; no further investigation is possible. Report every defect you have already established with the available report tool, quoting the exact existing code for each, then call the matching finish tool. If you found nothing you can support with evidence, call the finish tool with no findings.";
 
 /** Builds the clustering message for the whole run's surviving findings. */
 export function dedupeUserPrompt(

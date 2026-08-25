@@ -44,6 +44,32 @@ export function sourcePolicyDecision(path: string, source: string) {
   return { allowed: true as const };
 }
 
+/** Returns whether a path is a repository or nested AI ignore file. */
+export function isAiIgnoreFilePath(path: string) {
+  const normalized = path.replaceAll("\\", "/");
+  return (
+    normalized === ".gitignore" ||
+    normalized === ".openreviewignore" ||
+    normalized.endsWith("/.gitignore") ||
+    normalized.endsWith("/.openreviewignore")
+  );
+}
+
+/**
+ * Ignore rules for a pull-request review come from the base revision.
+ *
+ * A revision that adds or widens `.gitignore` / `.openreviewignore` must not
+ * hide its own changed files from the assistant.
+ */
+export function reviewIgnoreFileSource(input: {
+  changed: boolean;
+  current?: string;
+  previous?: string;
+}) {
+  if (input.changed) return input.previous;
+  return input.current;
+}
+
 /** Builds a conservative matcher for repository and nested AI ignore files. */
 export function aiIgnoreMatcher(
   files: Array<{ path: string; source: string }>,
