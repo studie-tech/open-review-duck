@@ -139,13 +139,6 @@ Local installations can use Ollama, a local OpenAI-compatible server, or a
 supported provider with your own key. Those settings and credentials remain
 encrypted on the local volume.
 
-Big Pickle is also available through your own OpenCode Zen API key and is free
-for a limited time. Before the first request, ReviewDuck explains that selected
-source and prompts are sent to OpenCode's US infrastructure and may be used for
-model improvement. It stays off until you accept that disclosure. If the free
-model becomes unavailable, ReviewDuck does not select a paid model in its
-place.
-
 ## Back up and upgrade
 
 The appliance provides a small set of administration commands. Run them in a

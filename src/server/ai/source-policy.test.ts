@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  bigPickleIgnoreMatcher,
-  bigPickleSourceDecision,
-} from "./source-policy";
+import { aiIgnoreMatcher, sourcePolicyDecision } from "./source-policy";
 
-describe("Big Pickle source policy", () => {
+describe("source policy", () => {
   it("blocks secret-bearing and credential paths", () => {
-    expect(bigPickleSourceDecision(".env", "SAFE=value").allowed).toBe(false);
+    expect(sourcePolicyDecision(".env", "SAFE=value").allowed).toBe(false);
     expect(
-      bigPickleSourceDecision(
+      sourcePolicyDecision(
         "src/config.ts",
         'apiKey = "sk-proj-abcdefghijklmnopqrstuvwxyz"',
       ).allowed,
@@ -17,7 +14,7 @@ describe("Big Pickle source policy", () => {
 
   it("allows ordinary reviewed source", () => {
     expect(
-      bigPickleSourceDecision(
+      sourcePolicyDecision(
         "src/review.ts",
         "export function review() { return true; }",
       ),
@@ -25,7 +22,7 @@ describe("Big Pickle source policy", () => {
   });
 
   it("honors root and nested repository AI ignore policies", () => {
-    const ignored = bigPickleIgnoreMatcher([
+    const ignored = aiIgnoreMatcher([
       { path: ".gitignore", source: "generated/\n*.pem\n" },
       {
         path: "packages/private/.openreviewignore",

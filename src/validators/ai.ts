@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AI_PROMPT_KEYS } from "~/config/ai-prompt-catalog";
 import { MAX_REVIEW_TOKEN_CAP } from "~/lib/token-usage";
 
 const aiProviderSchema = z
@@ -152,4 +153,13 @@ export const aiResultSchema = z.object({
       }),
     )
     .max(100),
+});
+
+export const saveAiPromptSchema = z.object({
+  key: z.enum(AI_PROMPT_KEYS),
+  body: z.string().trim().min(1).max(100_000),
+});
+
+export const restoreAiPromptSchema = z.object({
+  key: z.enum(AI_PROMPT_KEYS),
 });

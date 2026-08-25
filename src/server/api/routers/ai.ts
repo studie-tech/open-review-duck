@@ -7,6 +7,7 @@ import {
   aiPreferences,
   localAiConfigurations,
   reviewSnapshots,
+  users,
   workflowRuns,
   workspaceMembers,
 } from "@/drizzle/schema";
@@ -20,6 +21,8 @@ import {
   managedAiPlanUsage,
   managedSaasModel,
 } from "~/server/ai/plan";
+import { defaultAiPromptBody } from "~/server/ai/prompt-defaults";
+import { listAiPrompts, saveAiPrompt } from "~/server/ai/prompt-store";
 import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
   CURRENT_AI_AGENT_VERSION,
@@ -45,7 +48,9 @@ import {
 import {
   aiJobLookupSchema,
   deleteAiQuestionThreadSchema,
+  restoreAiPromptSchema,
   saveAiConfigurationSchema,
+  saveAiPromptSchema,
   startAiJobSchema,
   testAiConfigurationSchema,
 } from "~/validators/ai";
@@ -75,7 +80,6 @@ const safeAiStartMessages = new Set([
   // "could not start" reply and the caller would never learn it needs a plan.
   DEEP_REVIEW_UNENTITLED_MESSAGE,
   "Pull request not found",
-  "Accept the Big Pickle data disclosure before using AI",
   "The managed SaaS model is not configured",
   "No review snapshot found",
   "No review context found",
@@ -86,6 +90,24 @@ const safeAiStartMessages = new Set([
   "Configure a local AI provider before using AI",
   "Too many requests. Wait a moment and try again.",
 ]);
+
+/** Requires the platform admin flag. Workspace admin is not enough. */
+async function requirePromptAdministrator(
+  db: Parameters<typeof ensurePersonalWorkspace>[0],
+  userId: string,
+) {
+  await ensurePersonalWorkspace(db, userId);
+  const user = await db.query.users.findFirst({
+    columns: { isAdmin: true },
+    where: eq(users.id, userId),
+  });
+  if (!user?.isAdmin) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Prompt administration requires an admin account",
+    });
+  }
+}
 
 /** Converts expected policy failures into safe user-facing messages. */
 function aiStartErrorMessage(cause: unknown) {
@@ -111,9 +133,14 @@ export const aiRouter = createTRPCRouter({
       ? await readLocalAiSecret(workspace.id, localConfiguration)
       : undefined;
     const managedModel = local
-      ? (preference?.selectedModel ?? "big-pickle")
+      ? (preference?.selectedModel ?? "")
       : managedSaasModel();
+    const user = await ctx.db.query.users.findFirst({
+      columns: { isAdmin: true },
+      where: eq(users.id, ctx.auth.userId),
+    });
     return {
+      canEditPrompts: Boolean(user?.isAdmin),
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
@@ -126,10 +153,6 @@ export const aiRouter = createTRPCRouter({
       ),
       managedModel,
       managedModels: [managedModel],
-      disclosure: {
-        accepted: Boolean(preference?.freeProviderDisclosureAcceptedAt),
-        version: env.BIG_PICKLE_DISCLOSURE_VERSION,
-      },
       configuration: local
         ? localConfiguration && localSecret
           ? {
@@ -153,6 +176,35 @@ export const aiRouter = createTRPCRouter({
       tier,
     });
   }),
+
+  prompts: protectedProcedure.query(async ({ ctx }) => {
+    await requirePromptAdministrator(ctx.db, ctx.auth.userId);
+    return listAiPrompts(ctx.db);
+  }),
+
+  savePrompt: protectedProcedure
+    .input(saveAiPromptSchema)
+    .mutation(async ({ ctx, input }) => {
+      await requirePromptAdministrator(ctx.db, ctx.auth.userId);
+      await saveAiPrompt(ctx.db, {
+        key: input.key,
+        body: input.body,
+        userId: ctx.auth.userId,
+      });
+      return { ok: true as const };
+    }),
+
+  restorePrompt: protectedProcedure
+    .input(restoreAiPromptSchema)
+    .mutation(async ({ ctx, input }) => {
+      await requirePromptAdministrator(ctx.db, ctx.auth.userId);
+      await saveAiPrompt(ctx.db, {
+        key: input.key,
+        body: defaultAiPromptBody(input.key),
+        userId: ctx.auth.userId,
+      });
+      return { ok: true as const };
+    }),
 
   testConfiguration: protectedProcedure
     .input(testAiConfigurationSchema)
@@ -196,12 +248,6 @@ export const aiRouter = createTRPCRouter({
           },
           previousSecret,
         );
-        if (input.provider === "opencode" && !apiKey) {
-          return {
-            ok: false as const,
-            error: "OpenCode Zen requires your own API key",
-          };
-        }
         await assertSafeRemoteUrl(input.baseUrl, env.ALLOW_PRIVATE_AI_HOSTS);
         const startedAt = performance.now();
         const response = await safeRemoteFetch(
@@ -301,12 +347,6 @@ export const aiRouter = createTRPCRouter({
           },
           previousSecret,
         );
-        if (input.provider === "opencode" && !credentials.apiKey) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "OpenCode Zen requires your own API key",
-          });
-        }
         const encryptedConfiguration = await sealVaultSecret(
           {
             workspaceId: workspace.id,
@@ -357,87 +397,6 @@ export const aiRouter = createTRPCRouter({
         });
       return { ok: true as const };
     }),
-
-  acceptBigPickleDisclosure: protectedProcedure.mutation(async ({ ctx }) => {
-    if (!isLocalDeployment()) {
-      throw new TRPCError({ code: "NOT_FOUND" });
-    }
-    const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-    await ctx.db
-      .insert(aiPreferences)
-      .values({
-        workspaceId: workspace.id,
-        freeProviderDisclosureVersion: env.BIG_PICKLE_DISCLOSURE_VERSION,
-        freeProviderDisclosureAcceptedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: aiPreferences.workspaceId,
-        set: {
-          freeProviderDisclosureVersion: env.BIG_PICKLE_DISCLOSURE_VERSION,
-          freeProviderDisclosureAcceptedAt: new Date(),
-        },
-      });
-    return { accepted: true };
-  }),
-
-  revokeBigPickleDisclosure: protectedProcedure.mutation(async ({ ctx }) => {
-    if (!isLocalDeployment()) {
-      throw new TRPCError({ code: "NOT_FOUND" });
-    }
-    const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-    const activeJobs = await ctx.db.query.aiJobs.findMany({
-      columns: { id: true, workflowRunId: true },
-      where: and(
-        eq(aiJobs.workspaceId, workspace.id),
-        eq(aiJobs.provider, "opencode"),
-        inArray(aiJobs.status, [
-          "queued",
-          "running",
-          "waiting_for_provider",
-          "streaming",
-        ]),
-      ),
-    });
-    await ctx.db
-      .update(aiPreferences)
-      .set({
-        freeProviderDisclosureAcceptedAt: null,
-        freeProviderDisclosureVersion: null,
-      })
-      .where(eq(aiPreferences.workspaceId, workspace.id));
-    await ctx.db
-      .update(aiJobs)
-      .set({
-        status: "cancelled",
-        completionReason: "cancelled",
-        cancelledAt: new Date(),
-        completedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(aiJobs.workspaceId, workspace.id),
-          eq(aiJobs.provider, "opencode"),
-          inArray(aiJobs.status, [
-            "queued",
-            "running",
-            "waiting_for_provider",
-            "streaming",
-          ]),
-        ),
-      );
-    for (const job of activeJobs) {
-      if (job.workflowRunId) {
-        const workflow = await ctx.db.query.workflowRuns.findFirst({
-          where: eq(workflowRuns.id, job.workflowRunId),
-        });
-        if (workflow) {
-          await cancelWorkflowRun(ctx.db, workflow.providerRunId);
-        }
-      }
-      await settleAiJobQuota(ctx.db, job.id);
-    }
-    return { accepted: false };
-  }),
 
   start: protectedProcedure
     .input(startAiJobSchema)

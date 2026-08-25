@@ -30,6 +30,7 @@ describe("dashboardFilters", () => {
             provider: "gitlab",
             repository: "gitlab:payments/api",
             search: "sonia",
+            showDrafts: false,
           }),
         }),
       ),
@@ -37,7 +38,22 @@ describe("dashboardFilters", () => {
       provider: "gitlab",
       repository: "gitlab:payments/api",
       search: "sonia",
+      showDrafts: false,
     });
+  });
+
+  it("keeps drafts visible when older stored filters omit the toggle", () => {
+    expect(
+      dashboardFilters(
+        memoryStorage({
+          [DASHBOARD_FILTERS_STORAGE_KEY]: JSON.stringify({
+            provider: "github",
+            repository: "all",
+            search: "",
+          }),
+        }),
+      ).showDrafts,
+    ).toBe(true);
   });
 
   it("falls back when stored JSON is invalid or unknown", () => {
@@ -67,11 +83,13 @@ describe("rememberDashboardFilters", () => {
       provider: "github",
       repository: "github:acme/web",
       search: "inventory",
+      showDrafts: false,
     });
     expect(dashboardFilters(storage)).toEqual({
       provider: "github",
       repository: "github:acme/web",
       search: "inventory",
+      showDrafts: false,
     });
   });
 });

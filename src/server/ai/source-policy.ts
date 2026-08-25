@@ -25,8 +25,8 @@ const secretPatterns = [
   /(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*["'][^"'\n]{12,}["']/i,
 ];
 
-/** Returns whether source may be transmitted through the free Big Pickle tier. */
-export function bigPickleSourceDecision(path: string, source: string) {
+/** Returns whether source may be sent to a model provider. */
+export function sourcePolicyDecision(path: string, source: string) {
   const normalized = path.replaceAll("\\", "/");
   const parts = normalized.split("/");
   if (
@@ -45,7 +45,7 @@ export function bigPickleSourceDecision(path: string, source: string) {
 }
 
 /** Builds a conservative matcher for repository and nested AI ignore files. */
-export function bigPickleIgnoreMatcher(
+export function aiIgnoreMatcher(
   files: Array<{ path: string; source: string }>,
 ) {
   const matchers = files.map((file) => {

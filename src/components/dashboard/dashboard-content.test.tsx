@@ -362,6 +362,7 @@ describe("PullRequestsContent", () => {
       provider: "gitlab",
       repository: "gitlab:payments/api",
       search: "sonia",
+      showDrafts: true,
     });
 
     view.unmount();
@@ -381,5 +382,45 @@ describe("PullRequestsContent", () => {
     expect(
       screen.queryByText("Inventory improvements"),
     ).not.toBeInTheDocument();
+  });
+
+  it("hides draft pull requests from the inbox when the drafts switch is off", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    render(
+      <PullRequestsContent
+        initialPullRequests={[
+          pullRequest({
+            id: "open",
+            title: "Inventory improvements",
+          }),
+          pullRequest({
+            id: "draft",
+            number: 1393,
+            title: "Draft contribution flow",
+            state: "draft",
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Inventory improvements")).toBeVisible();
+    expect(screen.getByText("Draft contribution flow")).toBeVisible();
+    expect(screen.getByText("Draft · Ready to start")).toBeVisible();
+    const draftsSwitch = screen.getByRole("switch", {
+      name: "Show draft pull requests",
+    });
+    expect(draftsSwitch).toHaveAttribute("aria-checked", "true");
+
+    await user.click(draftsSwitch);
+    expect(draftsSwitch).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Inventory improvements")).toBeVisible();
+    expect(
+      screen.queryByText("Draft contribution flow"),
+    ).not.toBeInTheDocument();
+    expect(dashboardFilters(localStorage).showDrafts).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Ready to start, 1" }),
+    ).toBeVisible();
   });
 });

@@ -8,6 +8,7 @@ export interface DashboardFilters {
   provider: DashboardProviderFilter;
   repository: string;
   search: string;
+  showDrafts: boolean;
 }
 
 const providers = new Set<DashboardProviderFilter>([
@@ -21,6 +22,7 @@ export const defaultDashboardFilters: DashboardFilters = {
   provider: "all",
   repository: "all",
   search: "",
+  showDrafts: true,
 };
 
 /** Returns whether a stored provider value is one the inbox can apply. */
@@ -43,6 +45,7 @@ export function dashboardFilters(storage: Pick<Storage, "getItem">) {
           ? parsed.repository
           : "all",
       search: typeof parsed.search === "string" ? parsed.search : "",
+      showDrafts: parsed.showDrafts !== false,
     } satisfies DashboardFilters;
   } catch {
     return defaultDashboardFilters;

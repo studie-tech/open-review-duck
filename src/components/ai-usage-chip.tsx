@@ -20,9 +20,7 @@ function localAiLabel(
     return ["Setup", "Connect your preferred model provider"];
   }
   if (configuration.configuration.useManagedModels) {
-    return configuration.configuration.provider === "opencode"
-      ? ["Free", "Managed Big Pickle with privacy controls"]
-      : ["Subscriber", "Managed ZDR model with quota guardrails"];
+    return ["Subscriber", "Managed ZDR model with quota guardrails"];
   }
   return ["Connected", "Using your local AI configuration"];
 }

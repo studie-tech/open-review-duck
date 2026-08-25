@@ -118,7 +118,7 @@ async function jobScope(
     ? "free"
     : (input.planTier ?? (subscribed ? "pro" : "free"));
   const selectedModel = local
-    ? (preference?.selectedModel ?? "big-pickle")
+    ? (preference?.selectedModel ?? "")
     : managedSaasModel();
   let provider: string;
   if (local) {
@@ -128,12 +128,6 @@ async function jobScope(
     provider = localConfiguration.provider;
   } else {
     provider = "openrouter";
-  }
-  if (
-    provider === "opencode" &&
-    !preference?.freeProviderDisclosureAcceptedAt
-  ) {
-    throw new Error("Accept the Big Pickle data disclosure before using AI");
   }
   return {
     model: selectedModel,

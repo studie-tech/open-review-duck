@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
+import { AiPromptEditor } from "~/components/settings/ai-prompt-editor";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -116,10 +117,10 @@ export function SaasAiSettings({
         )}
       </div>
 
-      <div className="mt-8 grid items-start gap-4 lg:grid-cols-2">
+      <div className="mt-8 grid gap-4 lg:grid-cols-2 lg:items-stretch">
         <section
           aria-labelledby="ai-plan-usage-heading"
-          className="bg-surface/70 min-w-0 rounded-2xl border border-line p-5 sm:p-6"
+          className="bg-surface/70 flex h-full min-w-0 flex-col rounded-2xl border border-line p-5 sm:p-6"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -150,7 +151,7 @@ export function SaasAiSettings({
               </Badge>
             </div>
           </div>
-          <div className="mt-5 flex flex-col gap-5">
+          <div className="mt-5 flex flex-1 flex-col justify-center gap-5">
             <p className="text-2xl font-semibold tracking-tight sm:text-3xl">
               <span className="tabular-nums">
                 {usage.usedTokens.toLocaleString("en-US")}
@@ -193,7 +194,7 @@ export function SaasAiSettings({
 
         <section
           aria-labelledby="ai-preferences-heading"
-          className="bg-surface/70 overflow-hidden rounded-2xl border border-line"
+          className="bg-surface/70 flex h-full flex-col overflow-hidden rounded-2xl border border-line"
         >
           <div className="border-b border-line px-5 py-5 sm:px-6">
             <h2 id="ai-preferences-heading" className="text-base font-medium">
@@ -205,7 +206,7 @@ export function SaasAiSettings({
             </p>
           </div>
 
-          <div className="divide-y divide-line">
+          <div className="flex-1 divide-y divide-line">
             <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
               <label htmlFor="ai-assistance-timing" className="min-w-0">
                 <span className="text-cloud block text-sm font-medium">
@@ -336,6 +337,8 @@ export function SaasAiSettings({
           </div>
         </section>
       </div>
+
+      {initialConfiguration.canEditPrompts && <AiPromptEditor />}
 
       {!usage.subscribed && (
         <section

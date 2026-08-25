@@ -56,10 +56,6 @@ export async function resolveAiModel(
       },
     };
   }
-  if (input.provider === "opencode") {
-    if (isLocalDeployment()) return resolveLocalModel(db, input);
-    throw new Error("SaaS model provider is not allowed");
-  }
   if (!isLocalDeployment()) {
     throw new Error("SaaS model provider is not allowed");
   }
@@ -79,9 +75,6 @@ async function resolveLocalModel(
   }
   const configuration = await readLocalAiSecret(input.workspaceId, row);
   if (!configuration) throw new Error("Local AI configuration is unreadable");
-  if (row.provider === "opencode" && !configuration.apiKey) {
-    throw new Error("OpenCode Zen requires your own API key");
-  }
   const provider = createOpenAICompatible({
     name: row.provider,
     apiKey: configuration.apiKey ?? "local",

@@ -64,11 +64,12 @@ afterEach(() => {
 });
 
 describe("SaasAiSettings", () => {
-  it("shows usage and Clerk billing without model or disclosure controls", async () => {
+  it("shows usage and Clerk billing without a model picker", async () => {
     const user = userEvent.setup();
     render(
       <SaasAiSettings
         initialConfiguration={{
+          canEditPrompts: false,
           mode: "on_demand",
           managedModel: "provider/model",
           managedModels: ["provider/model"],
@@ -83,7 +84,6 @@ describe("SaasAiSettings", () => {
             hasApiKey: false,
             hasHeaders: false,
           },
-          disclosure: { accepted: false, version: "test" },
         }}
         initialPlanUsage={{
           tier: "free",
@@ -110,8 +110,18 @@ describe("SaasAiSettings", () => {
     expect(
       screen.getByRole("heading", { name: "Assistant preferences" }),
     ).toBeVisible();
+    expect(
+      screen
+        .getByRole("heading", { name: "Monthly token usage" })
+        .closest("section"),
+    ).toHaveClass("h-full");
+    expect(
+      screen
+        .getByRole("heading", { name: "Assistant preferences" })
+        .closest("section"),
+    ).toHaveClass("h-full");
     expect(screen.queryByText("Managed model")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Big Pickle/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Model prompts")).not.toBeInTheDocument();
     expect(screen.getByText("Tokens per review")).toBeVisible();
     expect(screen.getByRole("checkbox")).toBeDisabled();
     expect(
@@ -147,6 +157,7 @@ describe("SaasAiSettings", () => {
     render(
       <SaasAiSettings
         initialConfiguration={{
+          canEditPrompts: false,
           mode: "automatic",
           managedModel: "provider/model",
           managedModels: ["provider/model"],
@@ -161,7 +172,6 @@ describe("SaasAiSettings", () => {
             hasApiKey: false,
             hasHeaders: false,
           },
-          disclosure: { accepted: false, version: "test" },
         }}
         initialPlanUsage={{
           tier: "pro",

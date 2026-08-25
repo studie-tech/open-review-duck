@@ -41,7 +41,7 @@ const MAX_READ_FILE_BYTES = 1_000_000;
  * Frames repository text so model instructions cannot be confused with source.
  *
  * The single-agent loop keeps this private, and the framing has to be identical
- * on both paths or the free-tier prompt injection defence differs by job kind.
+ * on both paths or the prompt-injection defence differs by job kind.
  */
 function untrustedFileSource(path: string, source: string) {
   /** Escapes text without changing its reviewer-visible content. */
@@ -255,9 +255,8 @@ function renderHunks(hunks: readonly DiffHunk[]): string {
 /**
  * Builds the read-only tool set one file scout runs with.
  *
- * Every tool that returns repository text applies the free-tier source policy
- * and the untrusted-data framing, because a deep review on a local appliance
- * reaches the same free provider the single-agent loop already guards.
+ * Every tool that returns repository text applies the source policy and the
+ * untrusted-data framing.
  */
 export function deepReviewFileTools(context: DeepReviewFileToolContext) {
   const { db, job, item, repository } = context;
@@ -417,7 +416,7 @@ export function deepReviewFileTools(context: DeepReviewFileToolContext) {
             );
             if (!decision.allowed) {
               return {
-                error: "File is protected by the free-model source policy",
+                error: "File is protected by the source policy",
               };
             }
             const hunks = diffHunks(previous, current?.source);
@@ -519,7 +518,7 @@ export function deepReviewFileTools(context: DeepReviewFileToolContext) {
             );
             if (!decision.allowed) {
               return {
-                error: "File is protected by the free-model source policy",
+                error: "File is protected by the source policy",
               };
             }
             const lines = file.source.match(/[^\n]*(?:\n|$)/g) ?? [];

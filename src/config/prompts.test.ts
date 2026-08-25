@@ -148,6 +148,21 @@ describe("ReviewDuck agent prompts", () => {
     );
   });
 
+  it("substitutes stored instruction bodies when they are supplied", () => {
+    const prompt = reviewDuckAgentPrompt(
+      { jobKind: "explain", pullRequest },
+      {
+        shared: "STORED_SHARED_RULES",
+        unitTask: "STORED_UNIT_TASK",
+        submit: "STORED_SUBMIT",
+      },
+    );
+    expect(prompt).toContain("STORED_SHARED_RULES");
+    expect(prompt).toContain("STORED_UNIT_TASK");
+    expect(prompt).toContain("STORED_SUBMIT");
+    expect(prompt).not.toContain("evidence-driven assistant");
+  });
+
   it("uses a read-only dispatch prompt", () => {
     expect(REVIEWDUCK_AGENT_RUN_PROMPT).toContain("do not modify");
     expect(REVIEWDUCK_AGENT_RUN_PROMPT).toContain("submit");

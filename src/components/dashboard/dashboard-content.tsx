@@ -84,6 +84,7 @@ export function PullRequestsContent({
   >("all");
   const [repositoryFilter, setRepositoryFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showDrafts, setShowDrafts] = useState(true);
   const [filtersReady, setFiltersReady] = useState(false);
   const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
     refetchOnMount: "always",
@@ -191,8 +192,9 @@ export function PullRequestsContent({
         provider: providerFilter,
         repository: repositoryFilter,
         search: searchQuery,
+        includeDrafts: showDrafts,
       }),
-    [providerFilter, repositoryFilter, searchQuery, sourceItems],
+    [providerFilter, repositoryFilter, searchQuery, showDrafts, sourceItems],
   );
   const visibleItems = useMemo(
     () =>
@@ -213,6 +215,7 @@ export function PullRequestsContent({
       provider: providerFilter,
       repository: repositoryFilter,
       search: searchQuery,
+      includeDrafts: showDrafts,
     });
   const workCounts = {
     all: applySharedFilters(prioritizedNeedsReview, "all").length,
@@ -256,6 +259,7 @@ export function PullRequestsContent({
     setProviderFilter(stored.provider);
     setRepositoryFilter(stored.repository);
     setSearchQuery(stored.search);
+    setShowDrafts(stored.showDrafts);
     setFiltersReady(true);
   }, []);
   useEffect(() => {
@@ -264,8 +268,9 @@ export function PullRequestsContent({
       provider: providerFilter,
       repository: repositoryFilter,
       search: searchQuery,
+      showDrafts,
     });
-  }, [filtersReady, providerFilter, repositoryFilter, searchQuery]);
+  }, [filtersReady, providerFilter, repositoryFilter, searchQuery, showDrafts]);
   useEffect(() => {
     if (
       repositoryFilter !== "all" &&
@@ -286,6 +291,10 @@ export function PullRequestsContent({
     : needsReview.length > 0;
   const listKind = isHistoryView(workView) ? workView : "active";
   const [sectionTitle, sectionDetail] = workCopy[workView];
+  const sourceHasDrafts = sourceItems.some(
+    (pullRequest) => pullRequest.state === "draft",
+  );
+  const draftsHidden = !showDrafts && sourceHasDrafts;
 
   /** Resets My work to the full inbox and clears search filters. */
   function clearFilters() {
@@ -504,6 +513,41 @@ export function PullRequestsContent({
                         </option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showDrafts}
+                      aria-label="Show draft pull requests"
+                      title={
+                        showDrafts
+                          ? "Hide draft pull requests"
+                          : "Show draft pull requests"
+                      }
+                      onClick={() => setShowDrafts((current) => !current)}
+                      className="bg-ink/35 flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-xl border border-line px-3 text-xs outline-none transition hover:border-line-strong focus-visible:border-line-strong"
+                    >
+                      <span className="text-mist pointer-events-none">
+                        Drafts
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "pointer-events-none relative block h-6 w-10 rounded-full border transition",
+                          showDrafts
+                            ? "border-lime bg-lime"
+                            : "border-line bg-surface-subtle",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition",
+                            showDrafts
+                              ? "translate-x-4 bg-accent-foreground"
+                              : "bg-cloud",
+                          )}
+                        />
+                      </span>
+                    </button>
                     {filtersActive && (
                       <button
                         type="button"
@@ -529,21 +573,35 @@ export function PullRequestsContent({
                             : workView === "reviewed"
                               ? "Nothing awaiting merge"
                               : "Nothing removed from your queue"
-                          : "No pull requests match"}
+                          : draftsHidden
+                            ? "Draft pull requests are hidden"
+                            : "No pull requests match"}
                       </h3>
                       <p className="text-mist mt-1 text-xs">
                         {sourceItems.length === 0
                           ? "This history stays here so you can return to it later."
-                          : "Try another repository, provider, or search."}
+                          : draftsHidden
+                            ? "Turn on Drafts to include them in this list."
+                            : "Try another repository, provider, or search."}
                       </p>
-                      {filtersActive && (
+                      {draftsHidden ? (
                         <button
                           type="button"
-                          onClick={clearFilters}
+                          onClick={() => setShowDrafts(true)}
                           className="text-lime mt-4 text-xs font-medium hover:underline"
                         >
-                          Clear filters
+                          Show drafts
                         </button>
+                      ) : (
+                        filtersActive && (
+                          <button
+                            type="button"
+                            onClick={clearFilters}
+                            className="text-lime mt-4 text-xs font-medium hover:underline"
+                          >
+                            Clear filters
+                          </button>
+                        )
                       )}
                     </div>
                   </div>

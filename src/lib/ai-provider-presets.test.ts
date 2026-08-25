@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   aiProviderPresets,
-  localDefaultAiPreset,
   matchingAiProviderPreset,
 } from "./ai-provider-presets";
 
 describe("AI provider presets", () => {
-  it("uses Big Pickle through OpenCode's compatible endpoint for local setup", () => {
-    expect(localDefaultAiPreset).toMatchObject({
-      provider: "opencode",
-      model: "big-pickle",
+  it("lists OpenCode Zen as an ordinary compatible endpoint", () => {
+    expect(aiProviderPresets.opencode).toEqual({
+      label: "OpenCode Zen",
       baseUrl: "https://opencode.ai/zen/v1",
     });
   });

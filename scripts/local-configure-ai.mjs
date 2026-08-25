@@ -80,8 +80,8 @@ try {
   );
   await client.query(
     `insert into open_review_duck_ai_preference
-       ("workspaceId", mode, "selectedModel", "reviewPullRequests", "freeProviderDisclosureAcceptedAt", "createdAt", "updatedAt")
-     values ($1, 'on_demand', $2, true, now(), now(), now())
+       ("workspaceId", mode, "selectedModel", "reviewPullRequests", "createdAt", "updatedAt")
+     values ($1, 'on_demand', $2, true, now(), now())
      on conflict ("workspaceId") do update
        set mode = 'on_demand',
            "selectedModel" = excluded."selectedModel",

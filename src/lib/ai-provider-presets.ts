@@ -1,14 +1,12 @@
 export interface AiProviderPresetDefinition {
   label: string;
   baseUrl: string;
-  defaultModel?: string;
 }
 
 export const aiProviderPresets = {
   opencode: {
     label: "OpenCode Zen",
     baseUrl: "https://opencode.ai/zen/v1",
-    defaultModel: "big-pickle",
   },
   openai: {
     label: "OpenAI",
@@ -29,12 +27,6 @@ export const aiProviderPresets = {
 } as const satisfies Record<string, AiProviderPresetDefinition>;
 
 export type AiProviderPreset = keyof typeof aiProviderPresets;
-
-export const localDefaultAiPreset = {
-  provider: "opencode",
-  model: "big-pickle",
-  ...aiProviderPresets.opencode,
-} as const;
 
 /** Finds the known preset matching a stored provider identifier. */
 export function matchingAiProviderPreset(provider: string): AiProviderPreset {

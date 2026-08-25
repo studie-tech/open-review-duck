@@ -434,7 +434,7 @@ describe("file scout source tools", () => {
     ).toEqual({ limit: "source_bytes" });
   });
 
-  it("refuses a protected path on the free tier in every reading tool", async () => {
+  it("refuses a protected path in every reading tool", async () => {
     const { context } = fakeToolContext();
     const tools = deepReviewFileTools(context);
 
@@ -445,7 +445,7 @@ describe("file scout source tools", () => {
         { path: "src/secrets/token.ts", startLine: 1, endLine: 2 },
         "call-9",
       ),
-    ).toEqual({ error: "File is protected by the free-model source policy" });
+    ).toEqual({ error: "File is protected by the source policy" });
     expect(await callTool(tools, "list_files", {}, "call-10")).toEqual([
       { path: "src/a.ts", changedSymbols: [expect.anything()] },
     ]);

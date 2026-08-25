@@ -1,3 +1,4 @@
+import { renderAiPromptTemplate } from "~/config/ai-prompt-template";
 import { escapePromptXml } from "~/config/prompts";
 
 /**
@@ -253,28 +254,57 @@ function planCheckpointBlock(
   return ["<review-plan>", ...rows, "</review-plan>"].join("\n");
 }
 
+export const DEEP_REVIEW_CHANGE_PR_DELETED =
+  "This file is deleted by the pull request. There is no current revision. Review the removal itself: what the rest of the codebase still expects from the removed code, and which guarantee disappears with it. Quote existing_code from the previous revision.";
+export const DEEP_REVIEW_CHANGE_PR_ADDED =
+  "This file is added by the pull request. Every line is new, so every line is in scope.";
+export const DEEP_REVIEW_CHANGE_PR_RENAMED =
+  "This file is renamed by the pull request. Review the move as one change: compare the previous revision at the old path with the current revision, and treat edits made during the move as the changed code.";
+export const DEEP_REVIEW_CHANGE_PR_MODIFIED =
+  "This file is modified by the pull request. Review the changed lines; use the unchanged code and the previous revision as context only.";
+export const DEEP_REVIEW_CHANGE_REPO_DELETED =
+  "This file was removed since the preceding monitored revision. Review whether the repository still depends on the removed behavior. Quote existing_code from the previous revision.";
+export const DEEP_REVIEW_CHANGE_REPO_CURRENT =
+  "This is the current monitored repository revision. The entire current file is in scope, including code unchanged since the preceding revision.";
+
+export interface DeepReviewPromptBodies {
+  changePrDeleted?: string;
+  changePrAdded?: string;
+  changePrRenamed?: string;
+  changePrModified?: string;
+  changeRepoDeleted?: string;
+  changeRepoCurrent?: string;
+  scoutUser?: string;
+  planUser?: string;
+  relocateUser?: string;
+  refuteUser?: string;
+  surveyUser?: string;
+  dedupeUser?: string;
+}
+
 /** Describes what a change type means so the scout reviews the right direction. */
 function changeTypeGuidance(
   changeType: string,
   reviewScope: ScoutPromptInput["reviewScope"] = "pull_request",
+  bodies: DeepReviewPromptBodies = {},
 ) {
   if (reviewScope === "repository_snapshot") {
     if (changeType.trim().toLowerCase() === "deleted") {
-      return "This file was removed since the preceding monitored revision. Review whether the repository still depends on the removed behavior. Quote existing_code from the previous revision.";
+      return bodies.changeRepoDeleted ?? DEEP_REVIEW_CHANGE_REPO_DELETED;
     }
-    return "This is the current monitored repository revision. The entire current file is in scope, including code unchanged since the preceding revision.";
+    return bodies.changeRepoCurrent ?? DEEP_REVIEW_CHANGE_REPO_CURRENT;
   }
   const normalized = changeType.trim().toLowerCase();
   if (normalized === "deleted") {
-    return "This file is deleted by the pull request. There is no current revision. Review the removal itself: what the rest of the codebase still expects from the removed code, and which guarantee disappears with it. Quote existing_code from the previous revision.";
+    return bodies.changePrDeleted ?? DEEP_REVIEW_CHANGE_PR_DELETED;
   }
   if (normalized === "added") {
-    return "This file is added by the pull request. Every line is new, so every line is in scope.";
+    return bodies.changePrAdded ?? DEEP_REVIEW_CHANGE_PR_ADDED;
   }
   if (normalized === "renamed") {
-    return "This file is renamed by the pull request. Review the move as one change: compare the previous revision at the old path with the current revision, and treat edits made during the move as the changed code.";
+    return bodies.changePrRenamed ?? DEEP_REVIEW_CHANGE_PR_RENAMED;
   }
-  return "This file is modified by the pull request. Review the changed lines; use the unchanged code and the previous revision as context only.";
+  return bodies.changePrModified ?? DEEP_REVIEW_CHANGE_PR_MODIFIED;
 }
 
 export const DEEP_REVIEW_SCOUT_SYSTEM_PROMPT = `You are ReviewDuck's read-only code reviewer. You review exactly one file of one pull request.
@@ -308,21 +338,62 @@ report_finding contract:
 - title is one short sentence. body states the triggering input or violated rule and the concrete impact. Do not paste a patch into the body.
 - Pick the severity and category that fit the impact or configured rule severity you can demonstrate.`;
 
+export const DEEP_REVIEW_SCOUT_USER_PROMPT = `{{pull_request}}
+
+{{file_under_review}}
+
+{{change_type_guidance}}
+
+{{changed_ranges}}
+
+{{unit_manifest}}
+
+{{review_checklist}}
+
+{{review_plan}}
+
+{{current_revision}}
+
+{{previous_revision}}
+
+Review the file above against the review checklist. Follow the review plan when one is present, but do not stop there: it ranks risk, it does not bound the review.
+
+Use the tools to resolve anything the inlined revisions do not settle, then report every defensible finding with report_finding and call finish_file when the file is done.`;
+
 /** Builds the per-file reviewer message for one selected file. */
-export function scoutUserPrompt(input: ScoutPromptInput) {
-  return [
-    pullRequestBlock(input.pullRequest),
-    `<file-under-review${attribute("path", input.path)}${attribute("change-type", input.changeType)} />`,
-    changeTypeGuidance(input.changeType, input.reviewScope),
-    changedRangesBlock(input.changedRanges),
-    unitManifestBlock(input.unitManifest),
-    untrustedPayload("review-checklist", input.rulebookText),
-    planCheckpointBlock(input.planCheckpoints),
-    revisionBlock(input.path, "current", input.currentSource),
-    revisionBlock(input.path, "previous", input.previousSource),
-    "Review the file above against the review checklist. Follow the review plan when one is present, but do not stop there: it ranks risk, it does not bound the review.",
-    "Use the tools to resolve anything the inlined revisions do not settle, then report every defensible finding with report_finding and call finish_file when the file is done.",
-  ].join("\n\n");
+export function scoutUserPrompt(
+  input: ScoutPromptInput,
+  bodies: DeepReviewPromptBodies = {},
+) {
+  return renderAiPromptTemplate(
+    bodies.scoutUser ?? DEEP_REVIEW_SCOUT_USER_PROMPT,
+    {
+      pull_request: pullRequestBlock(input.pullRequest),
+      file_under_review: `<file-under-review${attribute("path", input.path)}${attribute("change-type", input.changeType)} />`,
+      change_type_guidance: changeTypeGuidance(
+        input.changeType,
+        input.reviewScope,
+        bodies,
+      ),
+      changed_ranges: changedRangesBlock(input.changedRanges),
+      unit_manifest: unitManifestBlock(input.unitManifest),
+      review_checklist: untrustedPayload(
+        "review-checklist",
+        input.rulebookText,
+      ),
+      review_plan: planCheckpointBlock(input.planCheckpoints),
+      current_revision: revisionBlock(
+        input.path,
+        "current",
+        input.currentSource,
+      ),
+      previous_revision: revisionBlock(
+        input.path,
+        "previous",
+        input.previousSource,
+      ),
+    },
+  );
 }
 
 export const DEEP_REVIEW_PLAN_SYSTEM_PROMPT = `You are ReviewDuck's code-review planner. You do not review code; you decide where a reviewer should look first in one large changed file.
@@ -355,39 +426,91 @@ Rules:
 - Do not assert that a defect or rule violation exists. You are ranking where to look.
 - If nothing in the file warrants prioritizing, return {"checkpoints":[]}.`;
 
+export const DEEP_REVIEW_PLAN_USER_PROMPT = `{{pull_request}}
+
+{{file_under_review}}
+
+{{change_type_guidance}}
+
+{{changed_ranges}}
+
+{{unit_manifest}}
+
+{{review_checklist}}
+
+{{current_revision}}
+
+{{previous_revision}}
+
+Produce the review plan for this file as the JSON object described in your instructions.`;
+
 /** Builds the pre-scan planning message for one large changed file. */
-export function planUserPrompt(input: PlanPromptInput) {
-  return [
-    pullRequestBlock(input.pullRequest),
-    `<file-under-review${attribute("path", input.path)}${attribute("change-type", input.changeType)} />`,
-    changeTypeGuidance(input.changeType, input.reviewScope),
-    changedRangesBlock(input.changedRanges),
-    unitManifestBlock(input.unitManifest),
-    untrustedPayload("review-checklist", input.rulebookText),
-    revisionBlock(input.path, "current", input.currentSource),
-    revisionBlock(input.path, "previous", input.previousSource),
-    "Produce the review plan for this file as the JSON object described in your instructions.",
-  ].join("\n\n");
+export function planUserPrompt(
+  input: PlanPromptInput,
+  bodies: DeepReviewPromptBodies = {},
+) {
+  return renderAiPromptTemplate(
+    bodies.planUser ?? DEEP_REVIEW_PLAN_USER_PROMPT,
+    {
+      pull_request: pullRequestBlock(input.pullRequest),
+      file_under_review: `<file-under-review${attribute("path", input.path)}${attribute("change-type", input.changeType)} />`,
+      change_type_guidance: changeTypeGuidance(
+        input.changeType,
+        input.reviewScope,
+        bodies,
+      ),
+      changed_ranges: changedRangesBlock(input.changedRanges),
+      unit_manifest: unitManifestBlock(input.unitManifest),
+      review_checklist: untrustedPayload(
+        "review-checklist",
+        input.rulebookText,
+      ),
+      current_revision: revisionBlock(
+        input.path,
+        "current",
+        input.currentSource,
+      ),
+      previous_revision: revisionBlock(
+        input.path,
+        "previous",
+        input.previousSource,
+      ),
+    },
+  );
 }
 
 export const DEEP_REVIEW_RELOCATE_SYSTEM_PROMPT = `You are ReviewDuck's code locator. Given one file and one review finding, your only task is to extract the exact snippet of that file the finding is about.
 ${UNTRUSTED_DATA_RULE}
 You do not judge the finding, you do not rewrite it, and you do not comment on it. You copy lines.`;
 
+export const DEEP_REVIEW_RELOCATE_USER_PROMPT = `A review finding was reported with a snippet that does not appear verbatim in the file. Find the minimal contiguous run of lines in the file that the finding targets.
+
+Rules:
+1. Copy the lines VERBATIM from the file: do not rewrite, reformat, re-indent, or add anything.
+2. Strip any leading diff marker (\`+\`, \`-\`, or a space) from each line before you output it.
+3. Include only the lines the finding is directly about. No surrounding context.
+4. If several disjoint places would fit, pick the single most relevant one.
+5. Output ONLY one fenced code block. No explanation, no commentary, no line numbers.
+
+{{changed_source}}
+
+{{failed_snippet}}
+
+{{finding}}`;
+
 /** Builds the single re-extraction message for a finding that failed to anchor. */
-export function relocateUserPrompt(input: RelocatePromptInput) {
-  return [
-    "A review finding was reported with a snippet that does not appear verbatim in the file. Find the minimal contiguous run of lines in the file that the finding targets.",
-    "Rules:",
-    "1. Copy the lines VERBATIM from the file: do not rewrite, reformat, re-indent, or add anything.",
-    "2. Strip any leading diff marker (`+`, `-`, or a space) from each line before you output it.",
-    "3. Include only the lines the finding is directly about. No surrounding context.",
-    "4. If several disjoint places would fit, pick the single most relevant one.",
-    "5. Output ONLY one fenced code block. No explanation, no commentary, no line numbers.",
-    untrustedPayload("untrusted-file", input.changedSource),
-    untrustedPayload("failed-snippet", input.existingCode),
-    untrustedText("finding", input.findingBody),
-  ].join("\n\n");
+export function relocateUserPrompt(
+  input: RelocatePromptInput,
+  bodies: DeepReviewPromptBodies = {},
+) {
+  return renderAiPromptTemplate(
+    bodies.relocateUser ?? DEEP_REVIEW_RELOCATE_USER_PROMPT,
+    {
+      changed_source: untrustedPayload("untrusted-file", input.changedSource),
+      failed_snippet: untrustedPayload("failed-snippet", input.existingCode),
+      finding: untrustedText("finding", input.findingBody),
+    },
+  );
 }
 
 export const DEEP_REVIEW_REFUTE_SYSTEM_PROMPT = `You are a fact-checker for code-review findings. You decide which findings the supplied source proves wrong.
@@ -405,8 +528,21 @@ Rules:
 - refutation cites what the code does instead. "Looks fine", "seems correct", and "no issue found" are not refutations.
 - "not_refuted" is the expected answer for most findings.`;
 
+export const DEEP_REVIEW_REFUTE_USER_PROMPT = `{{file_under_review}}
+
+{{current_revision}}
+
+{{previous_revision}}
+
+{{findings}}
+
+Return one vote for every finding id above, as the JSON object described in your instructions.`;
+
 /** Builds the batched refutation message for one file's anchored findings. */
-export function refuteUserPrompt(input: RefutePromptInput) {
+export function refuteUserPrompt(
+  input: RefutePromptInput,
+  bodies: DeepReviewPromptBodies = {},
+) {
   const findings = input.findings.map((finding) =>
     [
       `  <finding${attribute("id", finding.id)}>`,
@@ -415,15 +551,27 @@ export function refuteUserPrompt(input: RefutePromptInput) {
       "  </finding>",
     ].join("\n"),
   );
-  return [
-    `<file-under-review${attribute("path", input.path)} />`,
-    revisionBlock(input.path, "current", input.currentSource),
-    revisionBlock(input.path, "previous", input.previousSource),
-    // The payload is the reviewer's own text about attacker-controlled code, so
-    // it is framed as untrusted for the same reason the file body is.
-    ["<untrusted-findings>", ...findings, "</untrusted-findings>"].join("\n"),
-    "Return one vote for every finding id above, as the JSON object described in your instructions.",
-  ].join("\n\n");
+  return renderAiPromptTemplate(
+    bodies.refuteUser ?? DEEP_REVIEW_REFUTE_USER_PROMPT,
+    {
+      file_under_review: `<file-under-review${attribute("path", input.path)} />`,
+      current_revision: revisionBlock(
+        input.path,
+        "current",
+        input.currentSource,
+      ),
+      previous_revision: revisionBlock(
+        input.path,
+        "previous",
+        input.previousSource,
+      ),
+      findings: [
+        "<untrusted-findings>",
+        ...findings,
+        "</untrusted-findings>",
+      ].join("\n"),
+    },
+  );
 }
 
 export const DEEP_REVIEW_SURVEY_SYSTEM_PROMPT = `You are ReviewDuck's cross-file reviewer. One agent has already reviewed each changed file on its own. You review what none of them could see: how the changed files fit together.
@@ -452,8 +600,25 @@ report_survey_finding contract:
 - Never report line numbers. Each location is placed by matching the exact snippet.
 - title names the concrete repository-wide violation. body explains which sides disagree or which explicit rule is violated and the practical impact.`;
 
+export const DEEP_REVIEW_SURVEY_USER_PROMPT = `{{pull_request}}
+
+{{review_checklist}}
+
+{{changed_files}}
+
+{{units}}
+
+{{dependencies}}
+
+{{file_findings}}
+
+{{closing_instruction}}`;
+
 /** Builds the whole-pull-request message for the cross-file survey agent. */
-export function surveyUserPrompt(input: SurveyPromptInput) {
+export function surveyUserPrompt(
+  input: SurveyPromptInput,
+  bodies: DeepReviewPromptBodies = {},
+) {
   const files = input.files.map(
     (file) =>
       `  <file${attribute("path", file.path)}${attribute("change-type", file.changeType)} changed-lines="${file.changedLineCount}" />`,
@@ -474,32 +639,40 @@ export function surveyUserPrompt(input: SurveyPromptInput) {
     (finding) =>
       `  <file-finding${attribute("path", finding.path)}${attribute("severity", finding.severity)}>${escapePromptXml(finding.title)}</file-finding>`,
   );
-  return [
-    pullRequestBlock(input.pullRequest),
-    input.reviewChecklist
-      ? untrustedPayload("review-checklist", input.reviewChecklist)
-      : "<review-checklist>(use the standard defect checklist)</review-checklist>",
-    files.length > 0
-      ? ["<changed-files>", ...files, "</changed-files>"].join("\n")
-      : "<changed-files>(no reviewable files)</changed-files>",
-    units.length > 0
-      ? ["<units>", ...units, "</units>"].join("\n")
-      : "<units>(no indexed units)</units>",
-    dependencies.length > 0
-      ? ["<dependencies>", ...dependencies, "</dependencies>"].join("\n")
-      : "<dependencies>(no indexed dependencies between changed units)</dependencies>",
-    findings.length > 0
-      ? [
-          "The per-file reviewers already reported the following. Do not repeat them; use them to decide where the seams are.",
-          "<untrusted-file-findings>",
-          ...findings,
-          "</untrusted-file-findings>",
-        ].join("\n")
-      : "The per-file reviewers reported nothing. That is not evidence the pull request is correct at its seams.",
-    input.reviewScope === "repository_snapshot"
-      ? "Read the files you need with the tools, then report every defensible repository-wide finding with report_survey_finding and call finish_survey when the snapshot is covered."
-      : "Read the files you need with the tools, then report every cross-file finding with report_survey_finding and call finish_survey when the pull request is covered.",
-  ].join("\n\n");
+  return renderAiPromptTemplate(
+    bodies.surveyUser ?? DEEP_REVIEW_SURVEY_USER_PROMPT,
+    {
+      pull_request: pullRequestBlock(input.pullRequest),
+      review_checklist: input.reviewChecklist
+        ? untrustedPayload("review-checklist", input.reviewChecklist)
+        : "<review-checklist>(use the standard defect checklist)</review-checklist>",
+      changed_files:
+        files.length > 0
+          ? ["<changed-files>", ...files, "</changed-files>"].join("\n")
+          : "<changed-files>(no reviewable files)</changed-files>",
+      units:
+        units.length > 0
+          ? ["<units>", ...units, "</units>"].join("\n")
+          : "<units>(no indexed units)</units>",
+      dependencies:
+        dependencies.length > 0
+          ? ["<dependencies>", ...dependencies, "</dependencies>"].join("\n")
+          : "<dependencies>(no indexed dependencies between changed units)</dependencies>",
+      file_findings:
+        findings.length > 0
+          ? [
+              "The per-file reviewers already reported the following. Do not repeat them; use them to decide where the seams are.",
+              "<untrusted-file-findings>",
+              ...findings,
+              "</untrusted-file-findings>",
+            ].join("\n")
+          : "The per-file reviewers reported nothing. That is not evidence the pull request is correct at its seams.",
+      closing_instruction:
+        input.reviewScope === "repository_snapshot"
+          ? "Read the files you need with the tools, then report every defensible repository-wide finding with report_survey_finding and call finish_survey when the snapshot is covered."
+          : "Read the files you need with the tools, then report every cross-file finding with report_survey_finding and call finish_survey when the pull request is covered.",
+    },
+  );
 }
 
 export const DEEP_REVIEW_DEDUPE_SYSTEM_PROMPT = `You are ReviewDuck's finding deduplicator. Several reviewers looked at one pull request and some of them reported the same defect in different words. You group the duplicates.
@@ -517,8 +690,18 @@ Rules:
 - title and body describe the merged defect and may only refine the canonical member's own wording. Do not introduce a claim no member made.
 - A single-member group repeats its own id in memberIds and keeps its own title and body.`;
 
+export const DEEP_REVIEW_DEDUPE_USER_PROMPT = `{{findings}}
+
+Partition every finding id above into groups, as the JSON object described in your instructions.`;
+
+export const DEEP_REVIEW_FINAL_TURN_PROMPT =
+  "This is your final turn for this file; no further investigation is possible. Report every defect you have already established with report_finding, quoting the exact existing code for each, then call finish_file. If you found nothing you can support with evidence, call finish_file with no findings.";
+
 /** Builds the clustering message for the whole run's surviving findings. */
-export function dedupeUserPrompt(input: DedupePromptInput) {
+export function dedupeUserPrompt(
+  input: DedupePromptInput,
+  bodies: DeepReviewPromptBodies = {},
+) {
   const findings = input.findings.map((finding) => {
     const location =
       typeof finding.startLine === "number"
@@ -534,15 +717,15 @@ export function dedupeUserPrompt(input: DedupePromptInput) {
       "  </finding>",
     ].join("\n");
   });
-  return [
-    // Wrapped as untrusted for the same reason the refuter's payload is: a
-    // crafted source comment reaches this call through a finding body, and a
-    // collapse to one group would suppress every real finding in the run.
-    findings.length > 0
-      ? ["<untrusted-findings>", ...findings, "</untrusted-findings>"].join(
-          "\n",
-        )
-      : "<untrusted-findings>(no findings)</untrusted-findings>",
-    "Partition every finding id above into groups, as the JSON object described in your instructions.",
-  ].join("\n\n");
+  return renderAiPromptTemplate(
+    bodies.dedupeUser ?? DEEP_REVIEW_DEDUPE_USER_PROMPT,
+    {
+      findings:
+        findings.length > 0
+          ? ["<untrusted-findings>", ...findings, "</untrusted-findings>"].join(
+              "\n",
+            )
+          : "<untrusted-findings>(no findings)</untrusted-findings>",
+    },
+  );
 }

@@ -9,7 +9,7 @@ import {
   snapshotFiles,
   sourceBlobs,
 } from "@/drizzle/schema";
-import { bigPickleSourceDecision } from "~/server/ai/source-policy";
+import { sourcePolicyDecision } from "~/server/ai/source-policy";
 import type { db as database } from "~/server/db";
 import { applicableRepositoryRules } from "~/server/repo-reviews/rules";
 import { readSourceText } from "~/server/storage/source-blobs";
@@ -330,10 +330,10 @@ async function loadPlanFiles(reader: Reader, snapshotId: string) {
 /**
  * Returns the source-policy waiver for one selected file, or null.
  *
- * Applied to every provider rather than only the free tier: sealing is the
- * last point at which a file can be refused before a child job exists for it,
- * and a detected secret should not be dispatched anywhere. The scout's read
- * tools re-apply the same decision, so this is the outer of two gates.
+ * Sealing is the last point at which a file can be refused before a child job
+ * exists for it, and a detected secret should not be dispatched anywhere. The
+ * scout's read tools re-apply the same decision, so this is the outer of two
+ * gates.
  */
 async function sourcePolicyReason(
   file: PlanFile,
@@ -349,7 +349,7 @@ async function sourcePolicyReason(
       return "no_source";
     }
   }
-  const decision = bigPickleSourceDecision(file.candidate.path, source);
+  const decision = sourcePolicyDecision(file.candidate.path, source);
   return decision.allowed ? null : decision.reason;
 }
 

@@ -43,6 +43,20 @@
       "when": 1787508000000,
       "tag": "0005_repository_review_job_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787641715942,
+      "tag": "0006_drop_ai_disclosure",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787643326838,
+      "tag": "0007_ai_prompts_and_admin",
+      "breakpoints": true
     }
   ]
 }

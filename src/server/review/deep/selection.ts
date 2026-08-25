@@ -2,7 +2,7 @@
  * Why a changed file is not reviewed.
  *
  * `protected_path` and `secret_detected` are never returned by this module:
- * they are decided by `bigPickleSourceDecision` in `src/server/ai/source-policy.ts`,
+ * they are decided by `sourcePolicyDecision` in `src/server/ai/source-policy.ts`,
  * which needs the hydrated source text, and are applied by the caller while
  * sealing the plan. They live in this union so every waived item carries one
  * reason vocabulary.
@@ -186,7 +186,7 @@ const GENERATED_PATH_PATTERNS: readonly string[] = [
 ];
 
 // `node_modules` and `vendor` are absent here because they are absent from the
-// ported corpus; the caller's `bigPickleSourceDecision` already refuses both as
+// ported corpus; the caller's `sourcePolicyDecision` already refuses both as
 // `protected_path`.
 const VENDORED_PATH_PATTERNS: readonly string[] = [
   "**/oh_modules/**",
