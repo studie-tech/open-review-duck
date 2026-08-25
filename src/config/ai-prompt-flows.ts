@@ -196,7 +196,7 @@ export const AI_PROMPT_FLOWS: readonly AiPromptFlow[] = [
           {
             key: "deep_review.final_turn",
             label: "Final turn",
-            note: "Appended when no further scout turns remain",
+            note: "Appended when no further scout or survey turns remain",
           },
         ],
       },

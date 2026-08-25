@@ -98,6 +98,7 @@ function createFakeDb(state: FakeState = {}) {
       },
       aiPreferences: { findFirst: async () => undefined },
       localAiConfigurations: { findFirst: async () => undefined },
+      users: { findFirst: async () => undefined },
       workflowRuns: { findFirst: async () => undefined },
     },
     update: () => ({

@@ -443,7 +443,7 @@ export function LocalAiSettings({
               ))}
             </select>
           </label>
-          {preset === "custom" ? (
+          {preset === "custom" && (
             <label className="grid gap-2">
               <span className="text-cloud text-sm font-medium">
                 Provider ID
@@ -455,28 +455,16 @@ export function LocalAiSettings({
                 className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 font-mono text-sm outline-none"
               />
             </label>
-          ) : (
-            <label htmlFor="ai-provider-model" className="grid gap-2">
-              <span className="text-cloud text-sm font-medium">Model</span>
-              <input
-                id="ai-provider-model"
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-                className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 font-mono text-sm outline-none"
-              />
-            </label>
           )}
-          {preset === "custom" && (
-            <label htmlFor="ai-provider-model" className="grid gap-2">
-              <span className="text-cloud text-sm font-medium">Model</span>
-              <input
-                id="ai-provider-model"
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-                className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 font-mono text-sm outline-none"
-              />
-            </label>
-          )}
+          <label htmlFor="ai-provider-model" className="grid gap-2">
+            <span className="text-cloud text-sm font-medium">Model</span>
+            <input
+              id="ai-provider-model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 font-mono text-sm outline-none"
+            />
+          </label>
           <label className="grid gap-2">
             <span className="text-cloud text-sm font-medium">Base URL</span>
             <input

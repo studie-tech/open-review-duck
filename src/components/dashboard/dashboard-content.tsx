@@ -291,10 +291,23 @@ export function PullRequestsContent({
     : needsReview.length > 0;
   const listKind = isHistoryView(workView) ? workView : "active";
   const [sectionTitle, sectionDetail] = workCopy[workView];
-  const sourceHasDrafts = sourceItems.some(
-    (pullRequest) => pullRequest.state === "draft",
-  );
-  const draftsHidden = !showDrafts && sourceHasDrafts;
+  const filterScopeItems = useMemo(() => {
+    const matching = filterPriorityInbox(sourceItems, {
+      view: "all",
+      provider: providerFilter,
+      repository: repositoryFilter,
+      search: searchQuery,
+      includeDrafts: true,
+    });
+    return isHistoryView(workView) || workView === "all"
+      ? matching
+      : matching.filter(
+          (pullRequest) => priorityInboxGroup(pullRequest).id === workView,
+        );
+  }, [providerFilter, repositoryFilter, searchQuery, sourceItems, workView]);
+  const draftsHidden =
+    !showDrafts &&
+    filterScopeItems.some((pullRequest) => pullRequest.state === "draft");
 
   /** Resets My work to the full inbox and clears search filters. */
   function clearFilters() {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { aiIgnoreMatcher, sourcePolicyDecision } from "./source-policy";
+import {
+  aiIgnoreMatcher,
+  isAiIgnoreFilePath,
+  reviewIgnoreFileSource,
+  sourcePolicyDecision,
+} from "./source-policy";
 
 describe("source policy", () => {
   it("blocks secret-bearing and credential paths", () => {
@@ -34,5 +39,34 @@ describe("source policy", () => {
     expect(ignored("packages/private/fixtures/data.ts")).toBe(true);
     expect(ignored("packages/private/internal.ts")).toBe(true);
     expect(ignored("packages/public/internal.ts")).toBe(false);
+  });
+
+  it("recognizes root and nested ignore files", () => {
+    expect(isAiIgnoreFilePath(".gitignore")).toBe(true);
+    expect(isAiIgnoreFilePath(".openreviewignore")).toBe(true);
+    expect(isAiIgnoreFilePath("packages/private/.gitignore")).toBe(true);
+    expect(isAiIgnoreFilePath("src/auth.ts")).toBe(false);
+  });
+
+  it("keeps only the base revision of a changed ignore file", () => {
+    expect(
+      reviewIgnoreFileSource({
+        changed: true,
+        current: "src/**\n",
+        previous: "docs/\n",
+      }),
+    ).toBe("docs/\n");
+    expect(
+      reviewIgnoreFileSource({
+        changed: true,
+        current: "src/**\n",
+      }),
+    ).toBeUndefined();
+    expect(
+      reviewIgnoreFileSource({
+        changed: false,
+        current: "generated/\n",
+      }),
+    ).toBe("generated/\n");
   });
 });

@@ -14,6 +14,8 @@ import {
 } from "@/drizzle/schema";
 import {
   aiIgnoreMatcher,
+  isAiIgnoreFilePath,
+  reviewIgnoreFileSource,
   sourcePolicyDecision,
 } from "~/server/ai/source-policy";
 import type { db as database } from "~/server/db";
@@ -375,17 +377,24 @@ async function buildDeepReviewContext(
   const ignoreMatcher = () => {
     ignored ??= (async () => {
       const candidates = (await listFiles())
-        .filter(
-          (path) =>
-            path === ".gitignore" ||
-            path === ".openreviewignore" ||
-            path.endsWith("/.gitignore") ||
-            path.endsWith("/.openreviewignore"),
-        )
+        .filter(isAiIgnoreFilePath)
         .slice(0, IGNORE_FILE_LIMIT);
       const files = (
         await Promise.all(
           candidates.map(async (path) => {
+            const changed = changedByPath.get(path);
+            if (changed) {
+              const previous = await readPreviousSource(path);
+              const source = reviewIgnoreFileSource({
+                changed: true,
+                previous:
+                  previous !== undefined &&
+                  Buffer.byteLength(previous) <= IGNORE_FILE_BYTES
+                    ? previous
+                    : undefined,
+              });
+              return source !== undefined ? { path, source } : undefined;
+            }
             const file = await readFile(path, IGNORE_FILE_BYTES);
             return file ? { path, source: file.source } : undefined;
           }),

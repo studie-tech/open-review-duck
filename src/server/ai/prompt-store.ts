@@ -30,12 +30,15 @@ export async function ensureAiPrompts(db: Database) {
     const present = new Set(stored.map((row) => row.key));
     const missing = AI_PROMPT_KEYS.filter((key) => !present.has(key));
     if (missing.length === 0) return;
-    await db.insert(aiPrompts).values(
-      missing.map((key) => ({
-        key,
-        body: defaultAiPromptBody(key),
-      })),
-    );
+    await db
+      .insert(aiPrompts)
+      .values(
+        missing.map((key) => ({
+          key,
+          body: defaultAiPromptBody(key),
+        })),
+      )
+      .onConflictDoNothing({ target: aiPrompts.key });
   })().finally(() => {
     seedLocks.delete(db);
   });

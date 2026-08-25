@@ -423,4 +423,47 @@ describe("PullRequestsContent", () => {
       screen.getByRole("button", { name: "Ready to start, 1" }),
     ).toBeVisible();
   });
+
+  it("only claims drafts are hidden when the filtered view still has them", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    render(
+      <PullRequestsContent
+        initialPullRequests={[
+          pullRequest({
+            id: "open",
+            title: "Inventory improvements",
+            provider: "gitlab",
+            repositoryOwner: "payments",
+            repositoryName: "api",
+          }),
+          pullRequest({
+            id: "draft",
+            number: 1393,
+            title: "Draft contribution flow",
+            state: "draft",
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("switch", { name: "Show draft pull requests" }),
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by provider" }),
+      "gitlab",
+    );
+    expect(screen.getByText("Inventory improvements")).toBeVisible();
+    expect(
+      screen.queryByText("Draft pull requests are hidden"),
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by provider" }),
+      "github",
+    );
+    expect(screen.getByText("Draft pull requests are hidden")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show drafts" })).toBeVisible();
+  });
 });

@@ -26,7 +26,7 @@ export async function ensurePersonalWorkspace(db: Database, userId: string) {
   if (membership) {
     // Existing local owners predate the admin column, so promote them here
     // rather than only on insert. SaaS stays false unless set by hand.
-    if (local) {
+    if (local && membership.role === "owner") {
       await db
         .update(users)
         .set({ isAdmin: true })

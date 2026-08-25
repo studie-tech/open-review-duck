@@ -154,9 +154,9 @@ export const AI_PROMPT_CATALOG: Record<AiPromptKey, AiPromptDefinition> = {
   },
   "deep_review.final_turn": {
     key: "deep_review.final_turn",
-    title: "Scout final turn",
+    title: "Final turn",
     description:
-      "User message appended on the last scout turn. Shared by pull-request and repository reviews.",
+      "User message appended on the last scout or survey turn. Shared by pull-request and repository reviews.",
     group: "Deep review",
     placeholders: [],
   },

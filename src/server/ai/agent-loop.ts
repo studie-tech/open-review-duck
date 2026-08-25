@@ -16,11 +16,11 @@ import {
   reviewUnits,
 } from "@/drizzle/schema";
 import { reviewDuckAgentPrompt } from "~/config/prompts";
+import { env } from "~/env";
 import {
   explainPromptBodies,
   loadAiPromptBodies,
 } from "~/server/ai/prompt-store";
-import { env } from "~/env";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
@@ -326,24 +326,9 @@ export async function executeAiTurn(
     : undefined;
   const repositoryContext = await createAiRepositoryContext(db, job);
   const repositoryPaths = await repositoryContext.listFiles();
-  const ignoreFiles = (
-    await Promise.all(
-      repositoryPaths
-        .filter(
-          (path) =>
-            path === ".gitignore" ||
-            path === ".openreviewignore" ||
-            path.endsWith("/.gitignore") ||
-            path.endsWith("/.openreviewignore"),
-        )
-        .slice(0, 100)
-        .map(async (path) => {
-          const file = await repositoryContext.readFile(path, 256_000);
-          return file ? { path, source: file.source } : undefined;
-        }),
-    )
-  ).filter((file) => file !== undefined);
-  const ignoredByRepository = aiIgnoreMatcher(ignoreFiles);
+  const ignoredByRepository = aiIgnoreMatcher(
+    await repositoryContext.loadIgnoreFiles(),
+  );
   const units = storedUnits.filter(
     (unit) =>
       !ignoredByRepository(unit.path) &&
