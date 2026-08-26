@@ -6978,7 +6978,7 @@ export function ReviewWorkspace({
               updateCodeOverview();
             }}
             {...peekHandlers}
-            className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-[11px] leading-5 [overflow-anchor:none]"
+            className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-xs leading-[21px] font-medium [overflow-anchor:none]"
           >
             <div aria-hidden="true" className="h-5" />
             {keyboardLine !== undefined && (
@@ -7262,12 +7262,12 @@ export function ReviewWorkspace({
                             return (
                               <div
                                 key={`${activeUnit.id}-previous-${previousIndex}`}
-                                className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/[.07] px-4 hover:bg-red-400/[.1]"
+                                className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
                               >
                                 <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
                                   {previousLineNumber}
                                 </span>
-                                <pre className="syntax-code overflow-visible text-cloud/80 line-through opacity-80">
+                                <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
                                   {line.tokens.length
                                     ? line.tokens.map((token, tokenIndex) => (
                                         <span
@@ -7292,7 +7292,7 @@ export function ReviewWorkspace({
                               isUnitLine &&
                               "border-l-cyan/35 bg-cyan/[.012]",
                             isChangedLine &&
-                              "border-l-addition/45 bg-addition/[.075] hover:bg-addition/[.105]",
+                              "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
                             isContextLine &&
                               "bg-surface-subtle/15 opacity-55 hover:opacity-80",
                             coveringExplanations.length > 0 &&
@@ -7314,8 +7314,7 @@ export function ReviewWorkspace({
                             <span
                               className={cn(
                                 "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
-                                isChangedLine &&
-                                  "bg-addition/[.11] text-addition",
+                                isChangedLine && "bg-addition/20 text-addition",
                               )}
                             >
                               <AskAiLineButton
@@ -7347,7 +7346,7 @@ export function ReviewWorkspace({
                               {lineNumber}
                             </span>
                           )}
-                          <pre className="syntax-code overflow-visible text-cloud/80">
+                          <pre className="syntax-code overflow-visible text-cloud">
                             {line.tokens.length
                               ? line.tokens.map((token, tokenIndex) => {
                                   const importReference = importReferences.find(
@@ -8272,7 +8271,7 @@ export function ReviewWorkspace({
                     : "Read-only source context from the pull request revision. This file is outside the changed review path."}
                 </p>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto bg-code py-4 font-mono text-[11px] leading-5">
+              <div className="min-h-0 flex-1 overflow-auto bg-code py-4 font-mono text-xs leading-[21px] font-medium">
                 {importPreviewLines.map((line, index) => (
                   <div
                     key={`${importPreview.path}-${index}`}
@@ -8292,7 +8291,7 @@ export function ReviewWorkspace({
                     <span className="pr-3 text-right text-fog select-none">
                       {importPreview.startLine + index}
                     </span>
-                    <pre className="syntax-code pr-6 text-cloud/80">
+                    <pre className="syntax-code pr-6 text-cloud">
                       {line.tokens.length
                         ? line.tokens.map((token, tokenIndex) => (
                             <span

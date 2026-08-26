@@ -298,7 +298,7 @@ export function SymbolPeekCard({
             <span className="text-fog pr-2 text-right font-mono text-[10px] select-none">
               {definition.startLine + index}
             </span>
-            <pre className="syntax-code overflow-visible text-[11px] text-cloud/85">
+            <pre className="syntax-code overflow-visible text-xs font-medium text-cloud">
               {line.tokens.length
                 ? line.tokens.map((token, tokenIndex) => (
                     <span

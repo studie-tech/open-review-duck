@@ -356,7 +356,7 @@ function ReviewConceptFileCardFallbackMember({
                 {lineNumber}
               </span>
             )}
-            <pre className="syntax-code overflow-visible text-cloud/80">
+            <pre className="syntax-code overflow-visible text-cloud">
               {line.tokens.length
                 ? line.tokens.map((token, tokenIndex) => (
                     <span
@@ -447,7 +447,7 @@ export function ReviewConceptFileCardPreview({
                       {lineNumber}
                     </span>
                   )}
-                  <pre className="syntax-code overflow-visible text-cloud/80">
+                  <pre className="syntax-code overflow-visible text-cloud">
                     {line.tokens.length
                       ? line.tokens.map((token, tokenIndex) => (
                           <span
@@ -754,7 +754,7 @@ function ReviewConceptMemberSource({
                 {lineNumber}
               </span>
             )}
-            <pre className="syntax-code overflow-visible text-cloud/80">
+            <pre className="syntax-code overflow-visible text-cloud">
               {line.tokens.length
                 ? line.tokens.map((token, tokenIndex) => (
                     <span
@@ -1091,7 +1091,7 @@ export function ReviewConceptMemberPreview({
         // A read member stays legible but stops competing for attention, so
         // the eye lands on what is left to review.
         reviewedMember(unit)
-          ? "border-addition/30 bg-addition/[.04]"
+          ? "border-addition/30 bg-addition/10"
           : "border-line bg-surface/30",
       )}
     >
@@ -1876,7 +1876,7 @@ function HighlightedDiffLine({
   lineNumber?: number;
 }) {
   return (
-    <pre className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+    <pre className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
       <HighlightedDiffTokens line={line} lineNumber={lineNumber} />
     </pre>
   );
@@ -2523,10 +2523,10 @@ export const SideBySideUnitDiff = forwardRef<
                     // four-digit line number without crowding any of them.
                     "grid w-full grid-cols-[82px_minmax(0,1fr)] text-left",
                     row.kind === "added"
-                      ? "bg-addition/[.085]"
+                      ? "bg-addition/15"
                       : "bg-surface-subtle/20",
                     interactive &&
-                      "cursor-pointer transition select-text hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                      "cursor-pointer transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                     highlightsReviewLine(findingLine, reviewLine) &&
                       FINDING_LINE_HIGHLIGHT,
                     highlightsReviewLine(selectedLine, reviewLine) &&
@@ -2551,7 +2551,7 @@ export const SideBySideUnitDiff = forwardRef<
                     )}
                     {lineNumber}
                   </span>
-                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                     <HighlightedDiffTokens
                       line={line}
                       lineNumber={lineNumber}
@@ -2713,7 +2713,7 @@ export const SideBySideUnitDiff = forwardRef<
                   title="Comment on this deleted pull-request line"
                   onClick={(event) => selectReviewLine(event, reviewLine)}
                   className={cn(
-                    "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] bg-red-400/[.07] text-left transition select-text hover:bg-red-400/[.12] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                     findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                     selectedLine === reviewLine && "bg-violet/[.055]",
                     keyboardLine === reviewLine &&
@@ -2749,7 +2749,7 @@ export const SideBySideUnitDiff = forwardRef<
                     className={cn(
                       "min-w-0 border-r border-line",
                       (row.kind === "deleted" || row.kind === "modified") &&
-                        "bg-red-400/[.07]",
+                        "bg-red-400/15",
                     )}
                   >
                     <HighlightedDiffLine line={previousLine} />
@@ -2763,7 +2763,7 @@ export const SideBySideUnitDiff = forwardRef<
                   className={cn(
                     "col-span-2 grid min-w-0 grid-cols-[42px_minmax(0,1fr)] text-fog",
                     (row.kind === "added" || row.kind === "modified") &&
-                      "bg-addition/[.085]",
+                      "bg-addition/15",
                   )}
                 >
                   <span
@@ -2775,7 +2775,7 @@ export const SideBySideUnitDiff = forwardRef<
                   >
                     {currentLineNumber}
                   </span>
-                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                     <HighlightedDiffTokens
                       line={currentLine}
                       lineNumber={currentLineNumber}
@@ -2791,7 +2791,7 @@ export const SideBySideUnitDiff = forwardRef<
                   className={cn(
                     "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                     (row.kind === "added" || row.kind === "modified") &&
-                      "bg-addition/[.085] hover:bg-addition/[.13]",
+                      "bg-addition/15 hover:bg-addition/22",
                     findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                     selectedLine === reviewLine && "bg-violet/[.055]",
                     keyboardLine === reviewLine &&
@@ -2816,7 +2816,7 @@ export const SideBySideUnitDiff = forwardRef<
                     />
                     {currentLineNumber}
                   </span>
-                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                     <HighlightedDiffTokens
                       line={currentLine}
                       lineNumber={currentLineNumber}
@@ -2875,7 +2875,7 @@ export const SideBySideUnitDiff = forwardRef<
                         />
                         {currentLineNumber}
                       </span>
-                      <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                      <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                         <HighlightedDiffTokens
                           line={currentLine}
                           lineNumber={currentLineNumber}
@@ -2887,7 +2887,7 @@ export const SideBySideUnitDiff = forwardRef<
                       <span className="text-fog border-r border-line/60 px-2 text-right select-none">
                         {currentLineNumber}
                       </span>
-                      <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                      <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                         <HighlightedDiffTokens
                           line={currentLine}
                           lineNumber={currentLineNumber}
@@ -2906,7 +2906,7 @@ export const SideBySideUnitDiff = forwardRef<
                         title="Comment on this deleted pull-request line"
                         onClick={(event) => selectReviewLine(event, reviewLine)}
                         className={cn(
-                          "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/[.07] text-left transition select-text hover:bg-red-400/[.12] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                          "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                           findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                           selectedLine === reviewLine && "bg-violet/[.055]",
                           keyboardLine === reviewLine &&
@@ -2931,7 +2931,7 @@ export const SideBySideUnitDiff = forwardRef<
                         <HighlightedDiffLine line={previousLine} />
                       </button>
                     ) : (
-                      <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/[.07]">
+                      <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15">
                         <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
                           {previousLineNumber}
                         </span>
@@ -2949,7 +2949,7 @@ export const SideBySideUnitDiff = forwardRef<
                         title="Comment on this pull-request line"
                         onClick={(event) => selectReviewLine(event, reviewLine)}
                         className={cn(
-                          "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/[.085] text-left transition select-text hover:bg-addition/[.13] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                          "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                           findingLine === reviewLine && FINDING_LINE_HIGHLIGHT,
                           selectedLine === reviewLine && "bg-violet/[.055]",
                           keyboardLine === reviewLine &&
@@ -2971,7 +2971,7 @@ export const SideBySideUnitDiff = forwardRef<
                           />
                           +
                         </span>
-                        <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                        <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                           <HighlightedDiffTokens
                             line={currentLine}
                             lineNumber={currentLineNumber}
@@ -2979,14 +2979,14 @@ export const SideBySideUnitDiff = forwardRef<
                         </span>
                       </button>
                     ) : (
-                      <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/[.085]">
+                      <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15">
                         <span className="px-2 text-right text-addition select-none">
                           {currentLineNumber}
                         </span>
                         <span className="border-x border-line/60 px-2 text-center text-addition select-none">
                           +
                         </span>
-                        <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud/80 select-text">
+                        <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                           <HighlightedDiffTokens
                             line={currentLine}
                             lineNumber={currentLineNumber}
@@ -3859,9 +3859,9 @@ function ImportContextStatement({
             className={cn(
               "group grid grid-cols-[55px_1fr] border-l-2 px-4",
               tone === "added" &&
-                "border-l-addition/45 bg-addition/[.075] hover:bg-addition/[.105]",
+                "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
               tone === "deleted" &&
-                "border-l-red-400/45 bg-red-400/[.07] hover:bg-red-400/[.1]",
+                "border-l-red-400/45 bg-red-400/15 hover:bg-red-400/20",
               tone === "context" &&
                 "border-transparent bg-surface-subtle/15 hover:bg-surface-subtle",
             )}
@@ -3879,7 +3879,7 @@ function ImportContextStatement({
             </span>
             <pre
               className={cn(
-                "syntax-code overflow-visible text-cloud/80",
+                "syntax-code overflow-visible text-cloud",
                 tone === "deleted" && "line-through opacity-80",
               )}
             >
