@@ -35,6 +35,14 @@ const queryState = vi.hoisted(() => ({
   dashboardInvalidate: vi.fn(),
   removeMutate: vi.fn(),
   restoreMutate: vi.fn(),
+  syncMutate: vi.fn(),
+  unimported: {
+    pullRequests: [] as Array<Record<string, unknown>>,
+    errors: [] as Array<Record<string, unknown>>,
+    manualRepositoryCount: 0,
+  },
+  unimportedRefetch: vi.fn(),
+  unimportedInvalidate: vi.fn(),
 }));
 
 vi.mock("~/trpc/react", () => ({
@@ -45,8 +53,26 @@ vi.mock("~/trpc/react", () => ({
           setData: queryState.dashboardSetData,
           invalidate: queryState.dashboardInvalidate,
         },
+        activeSyncs: { invalidate: vi.fn() },
+      },
+      provider: {
+        listUnimportedPullRequests: {
+          invalidate: queryState.unimportedInvalidate,
+        },
+        listOpenPullRequests: { invalidate: vi.fn() },
       },
     })),
+    provider: {
+      listUnimportedPullRequests: {
+        useQuery: vi.fn(() => ({
+          data: queryState.unimported,
+          error: undefined,
+          isError: false,
+          isLoading: false,
+          refetch: queryState.unimportedRefetch,
+        })),
+      },
+    },
     review: {
       removeFromQueue: {
         useMutation: vi.fn(() => ({ mutate: queryState.removeMutate })),
@@ -70,6 +96,12 @@ vi.mock("~/trpc/react", () => ({
         useQuery: vi.fn((_input, options) => ({
           data: options.initialData,
           refetch: queryState.dashboardRefetch,
+        })),
+      },
+      sync: {
+        useMutation: vi.fn(() => ({
+          mutate: queryState.syncMutate,
+          isPending: false,
         })),
       },
     },
@@ -101,6 +133,14 @@ afterEach(() => {
   queryState.dashboardInvalidate.mockReset();
   queryState.removeMutate.mockReset();
   queryState.restoreMutate.mockReset();
+  queryState.syncMutate.mockReset();
+  queryState.unimportedRefetch.mockReset();
+  queryState.unimportedInvalidate.mockReset();
+  queryState.unimported = {
+    pullRequests: [],
+    errors: [],
+    manualRepositoryCount: 0,
+  };
 });
 
 describe("PullRequestsContent", () => {
@@ -465,5 +505,101 @@ describe("PullRequestsContent", () => {
     );
     expect(screen.getByText("Draft pull requests are hidden")).toBeVisible();
     expect(screen.getByRole("button", { name: "Show drafts" })).toBeVisible();
+  });
+
+  it("lists un-imported pull requests from manual repositories and can prepare them", async () => {
+    queryState.activeSyncs = [];
+    queryState.unimported = {
+      manualRepositoryCount: 1,
+      errors: [],
+      pullRequests: [
+        {
+          additions: 4,
+          authorAvatarUrl: null,
+          authorLogin: "mira",
+          deletions: 1,
+          externalId: "pr-77",
+          number: 77,
+          provider: "github",
+          repositoryId: "repository-manual",
+          repositoryName: "platform",
+          repositoryOwner: "acme",
+          sourceBranch: "metrics",
+          state: "open",
+          targetBranch: "main",
+          title: "Add usage metrics",
+          webUrl: "https://example.com/pull/77",
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    render(
+      <PullRequestsContent
+        initialPullRequests={[
+          pullRequest({ id: "ready", title: "Inventory improvements" }),
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Un-imported, 1" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Un-imported PRs" }),
+    ).toBeVisible();
+    expect(screen.getByText("Add usage metrics")).toBeVisible();
+    expect(screen.getByText("Not in your queue")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Add for review" }));
+    expect(queryState.syncMutate).toHaveBeenCalledWith({
+      repositoryId: "repository-manual",
+      number: 77,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Un-imported, 1" }));
+    expect(
+      screen.getByRole("heading", { name: "Un-imported PRs" }),
+    ).toBeVisible();
+    expect(screen.getByText("Add usage metrics")).toBeVisible();
+    expect(
+      screen.queryByText("Inventory improvements"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the drafts switch available for un-imported pull requests", async () => {
+    queryState.activeSyncs = [];
+    queryState.unimported = {
+      manualRepositoryCount: 1,
+      errors: [],
+      pullRequests: [
+        {
+          additions: 2,
+          authorAvatarUrl: null,
+          authorLogin: "mira",
+          deletions: 0,
+          externalId: "pr-78",
+          number: 78,
+          provider: "github",
+          repositoryId: "repository-manual",
+          repositoryName: "platform",
+          repositoryOwner: "acme",
+          sourceBranch: "draft-metrics",
+          state: "draft",
+          targetBranch: "main",
+          title: "Draft usage metrics",
+          webUrl: "https://example.com/pull/78",
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    render(<PullRequestsContent initialPullRequests={[]} />);
+
+    expect(screen.getByText("Draft usage metrics")).toBeVisible();
+    const draftsSwitch = screen.getByRole("switch", {
+      name: "Show draft pull requests",
+    });
+    await user.click(draftsSwitch);
+    expect(screen.queryByText("Draft usage metrics")).not.toBeInTheDocument();
+    expect(screen.getByText("Draft pull requests are hidden")).toBeVisible();
   });
 });

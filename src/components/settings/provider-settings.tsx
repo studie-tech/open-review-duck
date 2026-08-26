@@ -136,6 +136,7 @@ export function ProviderSettings({
       void Promise.all([
         invalidateProviderState(),
         utils.provider.listOpenPullRequests.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
       ]);
@@ -168,6 +169,7 @@ export function ProviderSettings({
       void Promise.all([
         invalidateProviderState(),
         utils.provider.listOpenPullRequests.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
       ]);
@@ -192,6 +194,7 @@ export function ProviderSettings({
       void Promise.all([
         utils.provider.listImportedRepositories.invalidate(),
         utils.provider.listOpenPullRequests.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
       ]);
@@ -237,7 +240,10 @@ export function ProviderSettings({
             : repository,
         ),
       );
-      void utils.provider.listImportedRepositories.invalidate();
+      void Promise.all([
+        utils.provider.listImportedRepositories.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
+      ]);
       toast.success("Pull-request intake updated");
       if (result.reviewIntakeMode !== "manual") {
         reconcileIntake.mutate({ repositoryId: result.id });
@@ -320,6 +326,7 @@ export function ProviderSettings({
     void Promise.all([
       utils.provider.listImportedRepositories.invalidate(),
       utils.provider.listOpenPullRequests.invalidate(),
+      utils.provider.listUnimportedPullRequests.invalidate(),
     ]);
     router.refresh();
     toast.success("Repository added");

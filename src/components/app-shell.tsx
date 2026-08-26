@@ -205,6 +205,7 @@ export function AppShell({
         utils.review.dashboard.invalidate(),
         utils.provider.listImportedRepositories.invalidate(),
         utils.provider.listOpenPullRequests.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
       ]);
     },
   });
