@@ -114,6 +114,7 @@ export function ProviderSettings({
       utils.provider.listConnections.invalidate(),
       utils.provider.listImportedRepositories.invalidate(),
       utils.provider.listAvailableRepositories.invalidate(),
+      utils.provider.listUnimportedPullRequests.invalidate(),
       utils.workspace.guidance.invalidate(),
     ]);
   }

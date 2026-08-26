@@ -394,12 +394,15 @@ export function PullRequestsContent({
     searchQuery.trim().length > 0;
   const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
-  const hasWorkNav = hasImportedWork || hasManualRepositories;
+  const hasUnimportedQueryError = unimportedPullRequests.isError;
+  const hasWorkNav =
+    hasImportedWork || hasManualRepositories || hasUnimportedQueryError;
   const showCatchUpEmpty =
     !isHistoryView(workView) &&
     workView !== "unimported" &&
     needsReview.length === 0 &&
-    !(workView === "all" && availableUnimported.length > 0);
+    !(workView === "all" && availableUnimported.length > 0) &&
+    !hasUnimportedQueryError;
   const showListFilters = isHistoryView(workView)
     ? sourceItems.length > 0 || filtersActive
     : workView === "unimported"
@@ -758,7 +761,10 @@ export function PullRequestsContent({
                     onShowDrafts={() => setShowDrafts(true)}
                   />
                 ) : visibleItems.length === 0 &&
-                  !(workView === "all" && availableUnimported.length > 0) ? (
+                  !(
+                    workView === "all" &&
+                    (availableUnimported.length > 0 || hasUnimportedQueryError)
+                  ) ? (
                   <div className="bg-surface/45 grid min-h-56 place-items-center rounded-2xl border border-dashed border-line-strong p-6 text-center">
                     <div>
                       <Search className="text-fog mx-auto size-5" />
