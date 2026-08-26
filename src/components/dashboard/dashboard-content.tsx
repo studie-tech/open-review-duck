@@ -1,6 +1,15 @@
 "use client";
 
-import { CheckCheck, GitPullRequest, Plus, Search, X } from "lucide-react";
+import {
+  CheckCheck,
+  CircleAlert,
+  GitPullRequest,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -9,6 +18,7 @@ import {
   DashboardSyncPanel,
 } from "~/components/dashboard/dashboard-panels";
 import { PullRequestList } from "~/components/dashboard/pull-request-list";
+import { UnimportedPullRequestList } from "~/components/dashboard/unimported-pull-request-list";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import {
@@ -29,11 +39,22 @@ import {
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
 import { partitionReviewQueue } from "~/lib/review-queue";
+import {
+  filterUnimportedPullRequests,
+  type UnimportedPullRequest,
+  unimportedPullRequestKey,
+  unimportedRepositoryKey,
+} from "~/lib/unimported-pull-requests";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type DashboardPullRequests = RouterOutputs["review"]["dashboard"];
-type WorkView = PriorityInboxView | "reviewed" | "closed" | "removed";
+type WorkView =
+  | PriorityInboxView
+  | "reviewed"
+  | "closed"
+  | "removed"
+  | "unimported";
 
 const providerLabel = {
   github: "GitHub",
@@ -60,6 +81,10 @@ const workCopy = {
   removed: [
     "Removed from my queue",
     "Hidden until restored or a new revision arrives.",
+  ],
+  unimported: [
+    "Un-imported PRs",
+    "Open changes from repositories you prepare by hand.",
   ],
 } satisfies Record<WorkView, readonly [string, string]>;
 
@@ -102,6 +127,13 @@ export function PullRequestsContent({
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
+  const unimportedPullRequests =
+    api.provider.listUnimportedPullRequests.useQuery(undefined, {
+      staleTime: 30_000,
+      retry: false,
+      refetchOnWindowFocus: false,
+    });
+  const [pendingUnimportedKey, setPendingUnimportedKey] = useState<string>();
   const hadActiveSync = useRef(false);
   const reviews = pullRequests.data ?? initialPullRequests;
   const synchronizing = activeSyncs.data ?? [];
@@ -160,15 +192,46 @@ export function PullRequestsContent({
     },
     onSettled: () => setPendingPullRequestId(undefined),
   });
+  const prepareReview = api.review.sync.useMutation({
+    onMutate: (input) =>
+      setPendingUnimportedKey(
+        unimportedPullRequestKey({
+          repositoryId: input.repositoryId,
+          number: input.number,
+        }),
+      ),
+    onSuccess: (result) => {
+      void Promise.all([
+        utils.review.activeSyncs.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
+        utils.provider.listOpenPullRequests.invalidate(),
+      ]);
+      toast.success("Review synchronization queued", {
+        description: `Durable sync ${result.syncId.slice(0, 8)} is running in the background.`,
+      });
+    },
+    onError: (error) =>
+      toast.error("Could not prepare review", {
+        description: error.message,
+      }),
+    onSettled: () => setPendingUnimportedKey(undefined),
+  });
 
   useEffect(() => {
     const hasActiveSync = synchronizing.length > 0;
     if (hadActiveSync.current && !hasActiveSync) {
       void pullRequests.refetch();
       void recentSyncFailures.refetch();
+      void unimportedPullRequests.refetch();
     }
     hadActiveSync.current = hasActiveSync;
-  }, [pullRequests, recentSyncFailures, synchronizing.length]);
+  }, [
+    pullRequests,
+    recentSyncFailures,
+    synchronizing.length,
+    unimportedPullRequests,
+  ]);
 
   const { needsReview, reviewed, closed, removed } = useMemo(
     () => partitionReviewQueue(reviews),
@@ -177,6 +240,24 @@ export function PullRequestsContent({
   const prioritizedNeedsReview = useMemo(
     () => prioritizeInbox(needsReview),
     [needsReview],
+  );
+  const unimportedSource = unimportedPullRequests.data?.pullRequests ?? [];
+  const syncingUnimportedKeys = useMemo(
+    () =>
+      new Set(
+        synchronizing.map(
+          (sync) => `${sync.repositoryId}:${sync.pullRequestNumber}`,
+        ),
+      ),
+    [synchronizing],
+  );
+  const availableUnimported = useMemo(
+    () =>
+      unimportedSource.filter(
+        (pullRequest) =>
+          !syncingUnimportedKeys.has(unimportedPullRequestKey(pullRequest)),
+      ),
+    [syncingUnimportedKeys, unimportedSource],
   );
   const sourceItems = isHistoryView(workView)
     ? workView === "reviewed"
@@ -205,6 +286,22 @@ export function PullRequestsContent({
           ),
     [scopedItems, workView],
   );
+  const visibleUnimported = useMemo(
+    () =>
+      filterUnimportedPullRequests(availableUnimported, {
+        includeDrafts: showDrafts,
+        provider: providerFilter,
+        repository: repositoryFilter,
+        search: searchQuery,
+      }),
+    [
+      availableUnimported,
+      providerFilter,
+      repositoryFilter,
+      searchQuery,
+      showDrafts,
+    ],
+  );
   /** Applies the current provider, repository, and search filters to one list. */
   const applySharedFilters = (
     items: DashboardPullRequests,
@@ -226,10 +323,15 @@ export function PullRequestsContent({
     reviewed: applySharedFilters(reviewed, "all").length,
     closed: applySharedFilters(closed, "all").length,
     removed: applySharedFilters(removed, "all").length,
+    unimported: visibleUnimported.length,
   };
+  const hasManualRepositories =
+    (unimportedPullRequests.data?.manualRepositoryCount ?? 0) > 0;
   const repositorySource = isHistoryView(workView)
     ? sourceItems
-    : prioritizedNeedsReview;
+    : workView === "unimported"
+      ? availableUnimported
+      : [...prioritizedNeedsReview, ...availableUnimported];
   const repositories = useMemo(
     () =>
       [
@@ -240,14 +342,20 @@ export function PullRequestsContent({
                 providerFilter === "all" ||
                 pullRequest.provider === providerFilter,
             )
-            .map((pullRequest) => [
-              priorityInboxRepositoryKey(pullRequest),
-              {
-                key: priorityInboxRepositoryKey(pullRequest),
-                label: `${pullRequest.repositoryOwner}/${pullRequest.repositoryName}`,
-                provider: pullRequest.provider,
-              },
-            ]),
+            .map((pullRequest) => {
+              const key =
+                "repositoryId" in pullRequest
+                  ? unimportedRepositoryKey(pullRequest)
+                  : priorityInboxRepositoryKey(pullRequest);
+              return [
+                key,
+                {
+                  key,
+                  label: `${pullRequest.repositoryOwner}/${pullRequest.repositoryName}`,
+                  provider: pullRequest.provider,
+                },
+              ] as const;
+            }),
         ).values(),
       ].sort((left, right) =>
         comparePriorityInboxText(left.label, right.label),
@@ -284,14 +392,34 @@ export function PullRequestsContent({
     providerFilter !== "all" ||
     repositoryFilter !== "all" ||
     searchQuery.trim().length > 0;
-  const hasWorkNav =
+  const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
+  const hasWorkNav = hasImportedWork || hasManualRepositories;
+  const showCatchUpEmpty =
+    !isHistoryView(workView) &&
+    workView !== "unimported" &&
+    needsReview.length === 0 &&
+    !(workView === "all" && availableUnimported.length > 0);
   const showListFilters = isHistoryView(workView)
     ? sourceItems.length > 0 || filtersActive
-    : needsReview.length > 0;
+    : workView === "unimported"
+      ? hasManualRepositories || filtersActive
+      : needsReview.length > 0 || availableUnimported.length > 0;
   const listKind = isHistoryView(workView) ? workView : "active";
   const [sectionTitle, sectionDetail] = workCopy[workView];
+  const listedCount =
+    workView === "unimported" ? visibleUnimported.length : visibleItems.length;
+  const listedTotal =
+    workView === "unimported" ? availableUnimported.length : sourceItems.length;
   const filterScopeItems = useMemo(() => {
+    if (workView === "unimported") {
+      return filterUnimportedPullRequests(availableUnimported, {
+        includeDrafts: true,
+        provider: providerFilter,
+        repository: repositoryFilter,
+        search: searchQuery,
+      });
+    }
     const matching = filterPriorityInbox(sourceItems, {
       view: "all",
       provider: providerFilter,
@@ -304,10 +432,26 @@ export function PullRequestsContent({
       : matching.filter(
           (pullRequest) => priorityInboxGroup(pullRequest).id === workView,
         );
-  }, [providerFilter, repositoryFilter, searchQuery, sourceItems, workView]);
+  }, [
+    availableUnimported,
+    providerFilter,
+    repositoryFilter,
+    searchQuery,
+    sourceItems,
+    workView,
+  ]);
   const draftsHidden =
     !showDrafts &&
-    filterScopeItems.some((pullRequest) => pullRequest.state === "draft");
+    (workView === "unimported"
+      ? filterScopeItems.some((pullRequest) => pullRequest.state === "draft")
+      : filterScopeItems.some((pullRequest) => pullRequest.state === "draft") ||
+        (workView === "all" &&
+          filterUnimportedPullRequests(availableUnimported, {
+            includeDrafts: true,
+            provider: providerFilter,
+            repository: repositoryFilter,
+            search: searchQuery,
+          }).some((pullRequest) => pullRequest.state === "draft")));
 
   /** Resets My work to the full inbox and clears search filters. */
   function clearFilters() {
@@ -329,7 +473,8 @@ export function PullRequestsContent({
           </h1>
           <p className="text-mist mt-2 max-w-xl text-sm leading-6">
             Continue an active review first, then pick up the next prepared
-            change across every repository and provider.
+            change — or add an un-imported pull request from a manual
+            repository.
           </p>
         </div>
         <Button asChild>
@@ -383,40 +528,56 @@ export function PullRequestsContent({
                     onSelect={() => setWorkView(view)}
                   />
                 ))}
-              </nav>
-              <p className="text-fog mt-2 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[.1em] uppercase">
-                History
-              </p>
-              <nav
-                className="grid grid-cols-1 gap-0.5"
-                aria-label="Review history"
-              >
-                {(reviewed.length > 0 || workView === "reviewed") && (
+                {(hasManualRepositories || unimportedPullRequests.isError) && (
                   <WorkTab
-                    label="Reviewed"
-                    count={workCounts.reviewed}
-                    dot="bg-lime"
-                    selected={workView === "reviewed"}
-                    onSelect={() => setWorkView("reviewed")}
-                  />
-                )}
-                <WorkTab
-                  label="Closed history"
-                  count={workCounts.closed}
-                  dot="bg-cyan"
-                  selected={workView === "closed"}
-                  onSelect={() => setWorkView("closed")}
-                />
-                {(removed.length > 0 || workView === "removed") && (
-                  <WorkTab
-                    label="Removed"
-                    count={workCounts.removed}
-                    dot="bg-fog"
-                    selected={workView === "removed"}
-                    onSelect={() => setWorkView("removed")}
+                    label="Un-imported"
+                    count={workCounts.unimported}
+                    dot="bg-coral"
+                    selected={workView === "unimported"}
+                    onSelect={() => setWorkView("unimported")}
                   />
                 )}
               </nav>
+              {(hasImportedWork ||
+                workView === "reviewed" ||
+                workView === "closed" ||
+                workView === "removed") && (
+                <>
+                  <p className="text-fog mt-2 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[.1em] uppercase">
+                    History
+                  </p>
+                  <nav
+                    className="grid grid-cols-1 gap-0.5"
+                    aria-label="Review history"
+                  >
+                    {(reviewed.length > 0 || workView === "reviewed") && (
+                      <WorkTab
+                        label="Reviewed"
+                        count={workCounts.reviewed}
+                        dot="bg-lime"
+                        selected={workView === "reviewed"}
+                        onSelect={() => setWorkView("reviewed")}
+                      />
+                    )}
+                    <WorkTab
+                      label="Closed history"
+                      count={workCounts.closed}
+                      dot="bg-cyan"
+                      selected={workView === "closed"}
+                      onSelect={() => setWorkView("closed")}
+                    />
+                    {(removed.length > 0 || workView === "removed") && (
+                      <WorkTab
+                        label="Removed"
+                        count={workCounts.removed}
+                        dot="bg-fog"
+                        selected={workView === "removed"}
+                        onSelect={() => setWorkView("removed")}
+                      />
+                    )}
+                  </nav>
+                </>
+              )}
             </aside>
           )}
 
@@ -430,12 +591,12 @@ export function PullRequestsContent({
                 aria-live="polite"
                 className="text-fog text-xs tabular-nums"
               >
-                {visibleItems.length === sourceItems.length
-                  ? `${sourceItems.length} pull requests`
-                  : `${visibleItems.length} of ${sourceItems.length} pull requests`}
+                {listedCount === listedTotal
+                  ? `${listedTotal} pull requests`
+                  : `${listedCount} of ${listedTotal} pull requests`}
               </span>
             </div>
-            {!isHistoryView(workView) && needsReview.length === 0 ? (
+            {showCatchUpEmpty ? (
               <div className="bg-surface/55 grid min-h-80 place-items-center rounded-3xl border border-dashed border-line-strong p-8 text-center">
                 <div>
                   <span className="text-lime mx-auto grid size-12 place-items-center rounded-2xl bg-lime/10">
@@ -545,7 +706,7 @@ export function PullRequestsContent({
                       <span
                         aria-hidden="true"
                         className={cn(
-                          "pointer-events-none relative block h-6 w-10 rounded-full border transition",
+                          "pointer-events-none relative block h-5 w-9 rounded-full border transition",
                           showDrafts
                             ? "border-lime bg-lime"
                             : "border-line bg-surface-subtle",
@@ -553,10 +714,10 @@ export function PullRequestsContent({
                       >
                         <span
                           className={cn(
-                            "absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition",
+                            "absolute top-1/2 size-3.5 -translate-y-1/2 rounded-full shadow-sm transition-[left]",
                             showDrafts
-                              ? "translate-x-4 bg-accent-foreground"
-                              : "bg-cloud",
+                              ? "left-[1.125rem] bg-accent-foreground"
+                              : "left-0.5 bg-cloud",
                           )}
                         />
                       </span>
@@ -575,7 +736,29 @@ export function PullRequestsContent({
                   </div>
                 )}
 
-                {visibleItems.length === 0 ? (
+                {workView === "unimported" ? (
+                  <UnimportedInboxSection
+                    errors={unimportedPullRequests.data?.errors ?? []}
+                    isError={unimportedPullRequests.isError}
+                    isLoading={unimportedPullRequests.isLoading}
+                    errorMessage={unimportedPullRequests.error?.message}
+                    onPrepare={(pullRequest) =>
+                      prepareReview.mutate({
+                        repositoryId: pullRequest.repositoryId,
+                        number: pullRequest.number,
+                      })
+                    }
+                    onRetry={() => void unimportedPullRequests.refetch()}
+                    pendingKey={pendingUnimportedKey}
+                    pullRequests={visibleUnimported}
+                    totalCount={availableUnimported.length}
+                    draftsHidden={draftsHidden}
+                    filtersActive={filtersActive}
+                    onClearFilters={clearFilters}
+                    onShowDrafts={() => setShowDrafts(true)}
+                  />
+                ) : visibleItems.length === 0 &&
+                  !(workView === "all" && availableUnimported.length > 0) ? (
                   <div className="bg-surface/45 grid min-h-56 place-items-center rounded-2xl border border-dashed border-line-strong p-6 text-center">
                     <div>
                       <Search className="text-fog mx-auto size-5" />
@@ -619,28 +802,59 @@ export function PullRequestsContent({
                     </div>
                   </div>
                 ) : (
-                  <PullRequestList
-                    pullRequests={visibleItems}
-                    kind={listKind}
-                    showPriorityGroups={!isHistoryView(workView)}
-                    pendingPullRequestId={pendingPullRequestId}
-                    onRemove={
-                      listKind === "active" || listKind === "reviewed"
-                        ? (pullRequest) =>
-                            removeFromQueue.mutate({
-                              pullRequestId: pullRequest.id,
+                  <div className="space-y-6">
+                    {visibleItems.length > 0 && (
+                      <PullRequestList
+                        pullRequests={visibleItems}
+                        kind={listKind}
+                        showPriorityGroups={!isHistoryView(workView)}
+                        pendingPullRequestId={pendingPullRequestId}
+                        onRemove={
+                          listKind === "active" || listKind === "reviewed"
+                            ? (pullRequest) =>
+                                removeFromQueue.mutate({
+                                  pullRequestId: pullRequest.id,
+                                })
+                            : undefined
+                        }
+                        onRestore={
+                          listKind === "removed"
+                            ? (pullRequest) =>
+                                restoreToQueue.mutate({
+                                  pullRequestId: pullRequest.id,
+                                })
+                            : undefined
+                        }
+                      />
+                    )}
+                    {workView === "all" &&
+                      (availableUnimported.length > 0 ||
+                        unimportedPullRequests.isError ||
+                        (unimportedPullRequests.data?.errors.length ?? 0) >
+                          0) && (
+                        <UnimportedInboxSection
+                          errors={unimportedPullRequests.data?.errors ?? []}
+                          isError={unimportedPullRequests.isError}
+                          isLoading={unimportedPullRequests.isLoading}
+                          errorMessage={unimportedPullRequests.error?.message}
+                          heading
+                          onPrepare={(pullRequest) =>
+                            prepareReview.mutate({
+                              repositoryId: pullRequest.repositoryId,
+                              number: pullRequest.number,
                             })
-                        : undefined
-                    }
-                    onRestore={
-                      listKind === "removed"
-                        ? (pullRequest) =>
-                            restoreToQueue.mutate({
-                              pullRequestId: pullRequest.id,
-                            })
-                        : undefined
-                    }
-                  />
+                          }
+                          onRetry={() => void unimportedPullRequests.refetch()}
+                          pendingKey={pendingUnimportedKey}
+                          pullRequests={visibleUnimported}
+                          totalCount={availableUnimported.length}
+                          draftsHidden={draftsHidden}
+                          filtersActive={filtersActive}
+                          onClearFilters={clearFilters}
+                          onShowDrafts={() => setShowDrafts(true)}
+                        />
+                      )}
+                  </div>
                 )}
               </>
             )}
@@ -648,6 +862,154 @@ export function PullRequestsContent({
         </div>
       </section>
     </PageContainer>
+  );
+}
+
+/** Renders un-imported pull requests with prepare actions and load errors. */
+function UnimportedInboxSection({
+  draftsHidden,
+  errorMessage,
+  errors,
+  filtersActive,
+  heading = false,
+  isError,
+  isLoading,
+  onClearFilters,
+  onPrepare,
+  onRetry,
+  onShowDrafts,
+  pendingKey,
+  pullRequests,
+  totalCount,
+}: {
+  draftsHidden: boolean;
+  errorMessage?: string;
+  errors: Array<{
+    message: string;
+    repositoryId: string;
+    repositoryName: string;
+    repositoryOwner: string;
+  }>;
+  filtersActive: boolean;
+  heading?: boolean;
+  isError: boolean;
+  isLoading: boolean;
+  onClearFilters: () => void;
+  onPrepare: (pullRequest: UnimportedPullRequest) => void;
+  onRetry: () => void;
+  onShowDrafts: () => void;
+  pendingKey?: string;
+  pullRequests: UnimportedPullRequest[];
+  totalCount: number;
+}) {
+  return (
+    <div className="space-y-3">
+      {heading && (
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-base font-medium">Un-imported PRs</h3>
+            <p className="text-mist mt-1 text-xs">
+              Open changes from repositories you prepare by hand.
+            </p>
+          </div>
+          <span className="text-fog text-xs tabular-nums">
+            {pullRequests.length === totalCount
+              ? `${totalCount} pull requests`
+              : `${pullRequests.length} of ${totalCount} pull requests`}
+          </span>
+        </div>
+      )}
+      {isError && (
+        <div
+          role="alert"
+          className="border-coral/25 bg-coral/[.055] flex items-start gap-3 rounded-xl border px-4 py-3"
+        >
+          <CircleAlert className="text-coral mt-0.5 size-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium">
+              Un-imported pull requests could not be loaded
+            </p>
+            <p className="text-mist mt-1 text-[11px] leading-5">
+              {errorMessage ??
+                "The provider could not list open pull requests."}
+            </p>
+          </div>
+          <Button size="sm" variant="secondary" onClick={onRetry}>
+            <RefreshCw className="size-3.5" />
+            Retry
+          </Button>
+        </div>
+      )}
+      {errors.map((error) => (
+        <div
+          key={error.repositoryId}
+          role="alert"
+          className="border-coral/25 bg-coral/[.055] flex items-start gap-3 rounded-xl border px-4 py-3"
+        >
+          <CircleAlert className="text-coral mt-0.5 size-4 shrink-0" />
+          <div>
+            <p className="text-xs font-medium">
+              {error.repositoryOwner}/{error.repositoryName} could not be
+              checked
+            </p>
+            <p className="text-mist mt-1 text-[11px] leading-5">
+              {error.message}
+            </p>
+          </div>
+        </div>
+      ))}
+      {isLoading ? (
+        <div className="bg-surface/45 grid min-h-40 place-items-center rounded-2xl border border-dashed border-line-strong">
+          <Loader2 className="text-cyan size-4 animate-spin" />
+        </div>
+      ) : pullRequests.length === 0 ? (
+        <div className="bg-surface/45 grid min-h-40 place-items-center rounded-2xl border border-dashed border-line-strong p-6 text-center">
+          <div>
+            <GitPullRequest className="text-fog mx-auto size-5" />
+            <h3 className="mt-3 text-sm font-medium">
+              {totalCount === 0
+                ? "No un-imported pull requests"
+                : draftsHidden
+                  ? "Draft pull requests are hidden"
+                  : "No pull requests match"}
+            </h3>
+            <p className="text-mist mt-1 text-xs">
+              {totalCount === 0
+                ? "Every open pull request from your manual repositories is already in the inbox."
+                : draftsHidden
+                  ? "Turn on Drafts to include them in this list."
+                  : "Try another repository, provider, or search."}
+            </p>
+            {draftsHidden ? (
+              <button
+                type="button"
+                onClick={onShowDrafts}
+                className="text-lime mt-4 text-xs font-medium hover:underline"
+              >
+                Show drafts
+              </button>
+            ) : (
+              filtersActive &&
+              totalCount > 0 && (
+                <button
+                  type="button"
+                  onClick={onClearFilters}
+                  className="text-lime mt-4 text-xs font-medium hover:underline"
+                >
+                  Clear filters
+                </button>
+              )
+            )}
+          </div>
+        </div>
+      ) : (
+        <UnimportedPullRequestList
+          onPrepare={onPrepare}
+          pendingKey={pendingKey}
+          pullRequests={pullRequests}
+        />
+      )}
+    </div>
   );
 }
 

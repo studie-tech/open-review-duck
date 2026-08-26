@@ -84,6 +84,8 @@ export function RepositoryDetail({
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
+        utils.provider.listUnimportedPullRequests.invalidate(),
+        utils.provider.listOpenPullRequests.invalidate(),
       ]);
       toast.success("Review synchronization queued", {
         description: `Durable sync ${result.syncId.slice(0, 8)} is running in the background.`,
