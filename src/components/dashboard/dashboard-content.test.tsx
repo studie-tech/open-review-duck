@@ -41,6 +41,7 @@ const queryState = vi.hoisted(() => ({
     errors: [] as Array<Record<string, unknown>>,
     manualRepositoryCount: 0,
   },
+  unimportedError: undefined as { message: string } | undefined,
   unimportedRefetch: vi.fn(),
   unimportedInvalidate: vi.fn(),
 }));
@@ -66,8 +67,8 @@ vi.mock("~/trpc/react", () => ({
       listUnimportedPullRequests: {
         useQuery: vi.fn(() => ({
           data: queryState.unimported,
-          error: undefined,
-          isError: false,
+          error: queryState.unimportedError,
+          isError: Boolean(queryState.unimportedError),
           isLoading: false,
           refetch: queryState.unimportedRefetch,
         })),
@@ -141,6 +142,7 @@ afterEach(() => {
     errors: [],
     manualRepositoryCount: 0,
   };
+  queryState.unimportedError = undefined;
 });
 
 describe("PullRequestsContent", () => {
@@ -601,5 +603,30 @@ describe("PullRequestsContent", () => {
     await user.click(draftsSwitch);
     expect(screen.queryByText("Draft usage metrics")).not.toBeInTheDocument();
     expect(screen.getByText("Draft pull requests are hidden")).toBeVisible();
+  });
+
+  it("keeps the un-imported retry path when the provider query fails alone", async () => {
+    queryState.activeSyncs = [];
+    queryState.unimportedError = {
+      message: "GitHub rate limited the open pull request list.",
+    };
+    const user = userEvent.setup();
+    render(<PullRequestsContent initialPullRequests={[]} />);
+
+    expect(
+      screen.getByText("Un-imported pull requests could not be loaded"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("GitHub rate limited the open pull request list."),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Connect your first repository" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(queryState.unimportedRefetch).toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Un-imported, 0" }));
+    expect(
+      screen.getByRole("heading", { name: "Un-imported PRs" }),
+    ).toBeVisible();
   });
 });
