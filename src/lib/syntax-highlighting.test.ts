@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { treeSitterLanguageFixtures } from "~/test/tree-sitter-language-fixtures";
+import { isPeekableToken } from "./symbol-peek";
 import {
   highlightSource,
   isInterpolationContext,
+  isKeywordContext,
   isStringContext,
 } from "./syntax-highlighting";
 
@@ -24,6 +26,15 @@ describe("interpolation context", () => {
     expect(isStringContext("template_chars")).toBe(true);
     expect(isStringContext("template_declaration")).toBe(false);
     expect(isStringContext("template_parameter_list")).toBe(false);
+  });
+
+  it("treats reserved-word leaves as keywords, not argument wrappers", () => {
+    expect(isKeywordContext("keyword")).toBe(true);
+    expect(isKeywordContext("async_keyword")).toBe(true);
+    expect(isKeywordContext("keyword_create")).toBe(true);
+    expect(isKeywordContext("keyword_argument")).toBe(false);
+    expect(isKeywordContext("keyword_parameter")).toBe(false);
+    expect(isKeywordContext("call")).toBe(false);
   });
 });
 
@@ -160,6 +171,33 @@ describe("highlightSource", () => {
         expect.objectContaining({ className: "tok-string2" }),
       ]),
     );
+  });
+
+  it("keeps Python keyword-argument values peekable", async () => {
+    const lines = await highlightSource(
+      [
+        "from sdk.batch.metrics import PROMETHEUS_SINK_ENABLED, MetricsConfig",
+        "",
+        "def load_metrics_config():",
+        "    return MetricsConfig(",
+        "        prometheus_enabled=PROMETHEUS_SINK_ENABLED,",
+        "    )",
+      ].join("\n"),
+      "python",
+    );
+    const tokens = lines.flatMap((line) => line.tokens);
+    const constants = tokens.filter(
+      (token) => token.text === "PROMETHEUS_SINK_ENABLED",
+    );
+    const importedTypes = tokens.filter(
+      (token) => token.text === "MetricsConfig",
+    );
+
+    expect(constants.length).toBeGreaterThan(1);
+    for (const token of [...constants, ...importedTypes]) {
+      expect(token.className).not.toBe("tok-keyword");
+      expect(isPeekableToken(token)).toBe(true);
+    }
   });
 
   it("provides grammar-backed highlighting for every supported language", async () => {

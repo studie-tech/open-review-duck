@@ -210,6 +210,22 @@ export function isInterpolationContext(type: string) {
 }
 
 /**
+ * Reports a Tree-sitter reserved-word node, including SQL `keyword_create`.
+ *
+ * A bare "keyword" substring would also paint Python `keyword_argument`
+ * values — imported constants used as `name=VALUE` — as keywords, which
+ * both colours them wrong and drops them from definition hover.
+ */
+export function isKeywordContext(type: string) {
+  if (type.includes("argument") || type.includes("parameter")) return false;
+  return (
+    type === "keyword" ||
+    type.startsWith("keyword_") ||
+    type.endsWith("_keyword")
+  );
+}
+
+/**
  * Reports a Tree-sitter node that is itself string or template text.
  *
  * A bare "template" match would also paint C++ template parameters as
@@ -237,7 +253,7 @@ function tokenClass(node: SyntaxNode, source: string) {
     // identifiers, calls, and nested quotes.
     if (isInterpolationContext(type)) break;
     if (type.startsWith("preproc")) return "tok-meta";
-    if (type.includes("keyword")) return "tok-keyword";
+    if (isKeywordContext(type)) return "tok-keyword";
     if (isStringContext(type)) {
       return types.some((ancestor) => ancestor.includes("formatted_string")) ||
         /^f["']/i.test(value)

@@ -3,6 +3,9 @@ import {
   definitionIsWhereTheNameWasRead,
   isPeekableToken,
   peekPlacement,
+  SYMBOL_PEEK_ATTRIBUTE,
+  SYMBOL_PEEK_LINE_ATTRIBUTE,
+  symbolPeekAttributes,
 } from "./symbol-peek";
 
 describe("a definition worth showing", () => {
@@ -62,6 +65,8 @@ describe("peekable tokens", () => {
     ["tok-variableName", "retries"],
     ["", "helper"],
     ["tok-variableName tok-local", "scoped"],
+    ["tok-keyword", "PROMETHEUS_SINK_ENABLED"],
+    ["tok-typeName", "MetricsConfig"],
   ])("looks up a %s token named %s", (className, text) => {
     expect(isPeekableToken({ className, text })).toBe(true);
   });
@@ -82,6 +87,14 @@ describe("peekable tokens", () => {
 
   it("treats a keyword as a keyword whatever its casing", () => {
     expect(isPeekableToken({ className: "", text: "Class" })).toBe(false);
+  });
+
+  it("names a lookup from the imported binding, not the token class", () => {
+    expect(symbolPeekAttributes("PROMETHEUS_SINK_ENABLED", 165)).toEqual({
+      [SYMBOL_PEEK_ATTRIBUTE]: "PROMETHEUS_SINK_ENABLED",
+      [SYMBOL_PEEK_LINE_ATTRIBUTE]: 165,
+    });
+    expect(symbolPeekAttributes("sdk.batch.metrics")).toBeUndefined();
   });
 });
 

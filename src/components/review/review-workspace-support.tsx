@@ -67,11 +67,7 @@ import {
   sourceEndLine,
   sourceStartLine,
 } from "~/lib/side-by-side-diff";
-import {
-  isPeekableToken,
-  SYMBOL_PEEK_ATTRIBUTE,
-  SYMBOL_PEEK_LINE_ATTRIBUTE,
-} from "~/lib/symbol-peek";
+import { isPeekableToken, symbolPeekAttributes } from "~/lib/symbol-peek";
 import {
   type HighlightedLine,
   useHighlightedSource,
@@ -1890,10 +1886,7 @@ function HighlightedDiffTokens({
         isPeekableToken(token) ? (
           <span
             key={`${index}-${token.text.length}`}
-            {...{
-              [SYMBOL_PEEK_ATTRIBUTE]: token.text,
-              [SYMBOL_PEEK_LINE_ATTRIBUTE]: lineNumber,
-            }}
+            {...symbolPeekAttributes(token.text, lineNumber)}
             className={cn(
               "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
               token.className,
@@ -3940,6 +3933,9 @@ function ImportContextStatement({
                       return (
                         <span
                           key={`${tokenIndex}-${token.text.length}`}
+                          {...(isPeekableToken(token)
+                            ? symbolPeekAttributes(token.text, lineNumber)
+                            : undefined)}
                           className={cn(
                             token.className,
                             tone === "context" &&
@@ -3965,6 +3961,7 @@ function ImportContextStatement({
                         }
                         disabled={resolvingImport === resolutionKey}
                         onClick={() => onFollow(reference)}
+                        {...symbolPeekAttributes(reference.local, lineNumber)}
                         className={cn(
                           "decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
                           token.className,
