@@ -32,7 +32,15 @@ export const SYMBOL_PEEK_ATTRIBUTE = "data-review-symbol";
 export const SYMBOL_PEEK_LINE_ATTRIBUTE = "data-review-symbol-line";
 
 const IDENTIFIER = new RegExp(SYMBOL_PATTERN);
-const NAMED_CLASSES = new Set(["tok-function", "tok-typeName", ""]);
+const NON_NAME_PREFIXES = [
+  "tok-string",
+  "tok-comment",
+  "tok-number",
+  "tok-operator",
+  "tok-meta",
+  "tok-bool",
+  "tok-atom",
+];
 
 /**
  * Decides whether a highlighted token names something worth looking up.
@@ -41,6 +49,10 @@ const NAMED_CLASSES = new Set(["tok-function", "tok-typeName", ""]);
  * numbers, operators and the language's own keywords are excluded before a
  * single lookup is issued. Unclassified tokens stay eligible because the
  * lexical fallback highlighter leaves plain identifiers unclassed.
+ *
+ * The token's text is the authority for reserved words: a Tree-sitter class
+ * of `tok-keyword` used to be inherited by Python `keyword_argument` values,
+ * and imported constants written as `name=VALUE` must still open a definition.
  */
 export function isPeekableToken(
   token: Pick<SyntaxToken, "className" | "text">,
@@ -49,10 +61,18 @@ export function isPeekableToken(
   if (!IDENTIFIER.test(text)) return false;
   const lower = text.toLowerCase();
   if (keywords.has(lower) || builtinTypes.has(lower)) return false;
-  const className = token.className;
-  return (
-    NAMED_CLASSES.has(className) || className.startsWith("tok-variableName")
+  return !NON_NAME_PREFIXES.some((prefix) =>
+    token.className.startsWith(prefix),
   );
+}
+
+/** Attributes the pointer uses to name one token for a definition lookup. */
+export function symbolPeekAttributes(symbol: string, line?: number) {
+  if (!IDENTIFIER.test(symbol)) return undefined;
+  return {
+    [SYMBOL_PEEK_ATTRIBUTE]: symbol,
+    [SYMBOL_PEEK_LINE_ATTRIBUTE]: line,
+  };
 }
 
 /**
