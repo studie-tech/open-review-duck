@@ -28,7 +28,12 @@ export function HighlightedSourceLines({
   renderAfterLine?: (line: number) => ReactNode;
 }) {
   return (
-    <div className={cn("py-4 font-mono text-[12px] leading-6", className)}>
+    <div
+      className={cn(
+        "py-4 font-mono text-xs leading-[21px] font-medium",
+        className,
+      )}
+    >
       {lines.map((line, index) => {
         const lineNumber = startLine + index;
         const selected = Boolean(
@@ -76,7 +81,7 @@ export function HighlightedSourceLines({
                   {lineNumber}
                 </span>
               )}
-              <code className="syntax-code px-4 whitespace-pre text-cloud/80">
+              <code className="syntax-code px-4 whitespace-pre text-cloud">
                 {line.tokens.length
                   ? line.tokens.map((token, tokenIndex) => (
                       <span

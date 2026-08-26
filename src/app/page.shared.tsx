@@ -137,7 +137,7 @@ function ReviewPreview() {
             ].map((line, index) => (
               <div
                 key={line}
-                className="grid grid-cols-[36px_1fr] px-3 text-cloud/80"
+                className="grid grid-cols-[36px_1fr] px-3 text-cloud"
               >
                 <span className="text-fog text-right">{18 + index}</span>
                 <code className="pl-3">{line}</code>
@@ -160,7 +160,7 @@ function ReviewPreview() {
                 Cap the computed delay to keep recovery time predictable.
               </p>
             </div>
-            <div className="bg-surface-hover grid grid-cols-[36px_1fr] px-3 text-cloud/80">
+            <div className="bg-surface-hover grid grid-cols-[36px_1fr] px-3 text-cloud">
               <span className="text-lime text-right">＋26</span>
               <code className="pl-3"> await sleep(2 ** attempt * 100);</code>
             </div>

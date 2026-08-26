@@ -73,10 +73,10 @@
   --app-surface: #171d1a;
   --app-surface-subtle: #1c231f;
   --app-surface-hover: #252e29;
-  --app-code: #0d1210;
-  --app-text: #f0eee8;
+  --app-code: #080c0a;
+  --app-text: #f5f3ec;
   --app-text-muted: #aab4ae;
-  --app-text-subtle: #78847d;
+  --app-text-subtle: #8b9890;
   --app-border: #303a34;
   --app-border-strong: #46524b;
   --app-accent: #f47759;
@@ -90,20 +90,20 @@
   --app-selection: rgba(244, 119, 89, 0.24);
   --brand-pane-back: #2d7182;
   --brand-pane-front: #f47759;
-  --brand-duck: #f0eee8;
+  --brand-duck: #f5f3ec;
   --brand-ink: #0b0f0d;
-  --syntax-atom: #e9b56d;
-  --syntax-comment: #7f8d85;
-  --syntax-definition: #70c4d8;
+  --syntax-atom: #f3c36a;
+  --syntax-comment: #8b9890;
+  --syntax-definition: #5ed4ee;
   --syntax-invalid: #ff8a80;
-  --syntax-keyword: #f58ca7;
-  --syntax-meta: #e7c27e;
-  --syntax-operator: #f09b7e;
-  --syntax-property: #9dc6e5;
-  --syntax-string: #8fcf9e;
-  --syntax-string-special: #d8a0db;
-  --syntax-type: #c3a6ef;
-  --syntax-variable: #c8d6df;
+  --syntax-keyword: #ff8aa8;
+  --syntax-meta: #f0d08a;
+  --syntax-operator: #ffb199;
+  --syntax-property: #8fd0f5;
+  --syntax-string: #6ee09a;
+  --syntax-string-special: #e6b0e8;
+  --syntax-type: #d2b4ff;
+  --syntax-variable: #d5e2ea;
 }
 
 * {
@@ -162,7 +162,7 @@ button:not(:disabled),
 }
 .syntax-code .tok-keyword {
   color: var(--syntax-keyword);
-  font-weight: 550;
+  font-weight: 600;
 }
 .syntax-code :is(.tok-atom, .tok-bool, .tok-number) {
   color: var(--syntax-atom);
@@ -190,7 +190,6 @@ button:not(:disabled),
 }
 .syntax-code .tok-comment {
   color: var(--syntax-comment);
-  font-style: italic;
 }
 .syntax-code :is(.tok-meta, .tok-macroName) {
   color: var(--syntax-meta);
