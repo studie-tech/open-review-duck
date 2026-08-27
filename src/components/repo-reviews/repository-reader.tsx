@@ -26,7 +26,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
 } from "react";
@@ -37,6 +36,12 @@ import {
 } from "~/components/command-center";
 import { usePageCommandCenter } from "~/components/page-command-center";
 import { HighlightedSourceLines } from "~/components/review/highlighted-source-lines";
+import { ReviewFilesPanel } from "~/components/review/review-files-panel";
+import {
+  ReviewFileCardHeader,
+  ReviewFileUnitMarker,
+  reviewCardRanges,
+} from "~/components/review/review-workspace-support";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
@@ -44,11 +49,9 @@ import {
   hydratePrivateReviewSources,
   prioritizePrivateReviewSources,
 } from "~/lib/private-source-client";
+import { type ReviewFileEntry, reviewFileEntries } from "~/lib/review-files";
 import { readerShortcuts } from "~/lib/review-shortcuts";
-import { sourceEndLine } from "~/lib/side-by-side-diff";
-import { createSignOffQueue, signOffQueueReducer } from "~/lib/sign-off-queue";
 import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
-import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
@@ -65,15 +68,6 @@ function newRuleForm(path: string) {
     scope: "file" as "file" | "repository",
     severity: "medium" as RuleSeverity,
   };
-}
-
-/** Finds the old revision's first line when a symbol moved between snapshots. */
-function previousStartLine(unit: Workspace["units"][number] | undefined) {
-  const starts =
-    unit?.relatedRanges
-      ?.map(({ previousStartLine }) => previousStartLine)
-      .filter((line): line is number => line !== undefined) ?? [];
-  return starts.length > 0 ? Math.min(...starts) : (unit?.startLine ?? 1);
 }
 
 /** Focused repository reader: path, source, and one clear completion action. */
@@ -105,14 +99,10 @@ export function RepositoryReader({
   const [ruleForm, setRuleForm] = useState(() =>
     newRuleForm(initialData.units[0]?.path ?? "**/*"),
   );
-  const [signOffQueue, dispatchSignOffQueue] = useReducer(
-    signOffQueueReducer,
-    undefined,
-    createSignOffQueue,
-  );
   const [sourceLoading, setSourceLoading] = useState(
     initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
   );
+  const [pendingFileId, setPendingFileId] = useState<string>();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
   const ruleInstructionRef = useRef<HTMLTextAreaElement>(null);
@@ -263,21 +253,42 @@ export function RepositoryReader({
     };
   }, [active?.path, hydrationPlan]);
 
-  const paths = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const grouped = new Map<string, typeof units>();
-    for (const unit of units) {
-      if (
-        query &&
-        !unit.path.toLowerCase().includes(query) &&
-        !unit.name.toLowerCase().includes(query)
-      ) {
-        continue;
-      }
-      grouped.set(unit.path, [...(grouped.get(unit.path) ?? []), unit]);
-    }
-    return [...grouped.entries()];
-  }, [search, units]);
+  const fileManifest = useMemo(
+    () =>
+      initialData.files ?? [
+        ...new Map(
+          units.map((unit) => [
+            unit.path,
+            {
+              id: unit.snapshotFileId ?? unit.id,
+              path: unit.path,
+              previousPath: null,
+              changeType: unit.changeType,
+              additions: 0,
+              deletions: 0,
+              isBinary: unit.kind === "binary",
+              skipReason: null,
+            },
+          ]),
+        ).values(),
+      ],
+    [initialData.files, units],
+  );
+  const reviewFiles = useMemo(
+    () => reviewFileEntries(fileManifest, units),
+    [fileManifest, units],
+  );
+  const activeFile = active
+    ? reviewFiles.find(({ path }) => path === active.path)
+    : undefined;
+  const activeFileUnits = useMemo(
+    () =>
+      activeFile ? units.filter(({ path }) => path === activeFile.path) : [],
+    [activeFile, units],
+  );
+  const activeFileIndex = activeFile
+    ? reviewFiles.findIndex(({ id }) => id === activeFile.id)
+    : -1;
   const pending = useMemo(
     () => units.filter(({ status }) => status !== "signed_off"),
     [units],
@@ -305,6 +316,25 @@ export function RepositoryReader({
     [],
   );
 
+  /** Opens one file once, choosing an actionable atomic member as its anchor. */
+  const selectFile = useCallback(
+    (file: ReviewFileEntry | undefined) => {
+      if (!file) return;
+      const members = units.filter(({ path }) => path === file.path);
+      const member =
+        members.find(
+          ({ status }) => status !== "signed_off" && status !== "waiting",
+        ) ?? members[0];
+      if (!member) {
+        toast.info("This file has no semantic review units");
+        return;
+      }
+      selectUnit(member);
+      if (window.innerWidth < 768) setSidebarOpen(false);
+    },
+    [selectUnit, units],
+  );
+
   const utils = api.useUtils();
   const addRule = api.repoReviews.addRule.useMutation({
     onSuccess: () => {
@@ -319,74 +349,83 @@ export function RepositoryReader({
       }),
   });
 
-  const signOff = api.review.signOff.useMutation({
-    onMutate: ({ unitId }) => {
-      dispatchSignOffQueue({ type: "enqueue", unitId });
-      const previousStatus = units.find(({ id }) => id === unitId)?.status;
-      const current = units.findIndex(({ id }) => id === unitId);
-      const ordered = [
-        ...units.slice(current + 1),
-        ...units.slice(0, Math.max(current, 0)),
-      ];
-      const next = ordered.find(
-        ({ id, status }) => id !== unitId && status !== "signed_off",
-      );
+  const signOffFile = api.review.signOffFile.useMutation({
+    onSuccess: ({ snapshotFileId, signedUnitIds }) => {
+      const signedIds = new Set(signedUnitIds);
       setUnits((current) =>
         current.map((unit) =>
-          unit.id === unitId
-            ? { ...unit, status: "signed_off" as const }
+          signedIds.has(unit.id)
+            ? {
+                ...unit,
+                status: "signed_off" as const,
+                changedSinceSignOff: false,
+                signOffOrigin: "current" as const,
+              }
             : unit,
         ),
       );
-      // Reading should never wait on persistence. The failed unit is restored
-      // to the queue by onError, while the reader can keep moving forward.
-      if (next) selectUnit(next);
-      return { previousStatus };
+      setPendingFileId((current) =>
+        current === snapshotFileId ? undefined : current,
+      );
+      toast.success("File reviewed", {
+        description: `${signedUnitIds.length} ${signedUnitIds.length === 1 ? "unit" : "units"} signed off together.`,
+      });
     },
-    onError: (error, { unitId }, context) => {
-      const previousStatus = context?.previousStatus;
-      if (previousStatus) {
-        setUnits((current) =>
-          current.map((unit) =>
-            unit.id === unitId ? { ...unit, status: previousStatus } : unit,
-          ),
-        );
-      }
-      toast.error("Could not save reading progress", {
+    onError: (error) => {
+      setPendingFileId(undefined);
+      toast.error("Could not save file progress", {
         description: error.message,
       });
     },
-    onSettled: (_data, _error, { unitId }) => {
-      dispatchSignOffQueue({ type: "settle", unitId });
-    },
   });
-  const unreview = api.review.unreview.useMutation({
-    onMutate: ({ unitId }) => {
-      const previousStatus = units.find(({ id }) => id === unitId)?.status;
+  const unreviewFile = api.review.unreviewFile.useMutation({
+    onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
+      const unreviewedIds = new Set(unreviewedUnitIds);
       setUnits((current) =>
         current.map((unit) =>
-          unit.id === unitId ? { ...unit, status: "pending" as const } : unit,
+          unreviewedIds.has(unit.id)
+            ? {
+                ...unit,
+                status:
+                  unit.revisionState === "updated"
+                    ? ("changed" as const)
+                    : ("pending" as const),
+                signOffOrigin: "none" as const,
+              }
+            : unit,
         ),
       );
-      return { previousStatus };
+      setPendingFileId((current) =>
+        current === snapshotFileId ? undefined : current,
+      );
+      toast.success("File returned to review");
     },
-    onError: (error, { unitId }, context) => {
-      const previousStatus = context?.previousStatus;
-      if (previousStatus) {
-        setUnits((current) =>
-          current.map((unit) =>
-            unit.id === unitId ? { ...unit, status: previousStatus } : unit,
-          ),
-        );
-      }
-      toast.error("Could not restore unit", { description: error.message });
+    onError: (error) => {
+      setPendingFileId(undefined);
+      toast.error("Could not return file to review", {
+        description: error.message,
+      });
     },
   });
+  const signOffFileStart = signOffFile.mutate;
+  const unreviewFileStart = unreviewFile.mutate;
 
-  // The mutation result object is rebuilt on every render, so the callbacks
-  // and command registrations below may only depend on its stable members.
-  const signOffStart = signOff.mutate;
-  const unreviewStart = unreview.mutate;
+  /** Applies or reverses the file-sized decision shown in both sidebar and footer. */
+  const toggleReviewFile = useCallback(
+    (file: ReviewFileEntry) => {
+      if (pendingFileId || file.totalUnits === 0) return;
+      setPendingFileId(file.id);
+      if (file.state === "reviewed") {
+        unreviewFileStart({ snapshotFileId: file.id });
+      } else {
+        signOffFileStart({
+          snapshotFileId: file.id,
+          durationSeconds: 0,
+        });
+      }
+    },
+    [pendingFileId, signOffFileStart, unreviewFileStart],
+  );
 
   /** Advances to the next unread unit, wrapping once past the end. */
   const resumeQueue = useCallback(() => {
@@ -404,17 +443,10 @@ export function RepositoryReader({
   /** Steps to the first unit of the neighbouring file that has readable units. */
   const stepFile = useCallback(
     (direction: -1 | 1) => {
-      if (!active) return;
-      let index = activeIndex + direction;
-      while (index >= 0 && index < units.length) {
-        if (units[index]?.path !== active.path) {
-          selectUnit(units[index]);
-          return;
-        }
-        index += direction;
-      }
+      if (activeFileIndex < 0) return;
+      selectFile(reviewFiles[activeFileIndex + direction]);
     },
-    [active, activeIndex, selectUnit, units],
+    [activeFileIndex, reviewFiles, selectFile],
   );
 
   /** Scrolls the source pane by most of a viewport without leaving it. */
@@ -432,12 +464,16 @@ export function RepositoryReader({
 
   const showPrevious = Boolean(active && previousUnitId === activeId);
   const togglePreviousSource = useCallback(() => {
-    if (!active || active.previousSource === null) return;
+    if (
+      !active ||
+      !activeFileUnits.some(({ previousSource }) => previousSource !== null)
+    )
+      return;
     setPreviousUnitId(showPrevious ? undefined : active.id);
     setContextBefore(0);
     setContextAfter(0);
     setRuleSelection(undefined);
-  }, [active, showPrevious]);
+  }, [active, activeFileUnits, showPrevious]);
 
   const activeFileContext = active
     ? hydrationPlan.snapshotId
@@ -447,15 +483,21 @@ export function RepositoryReader({
         : undefined
       : hydrationPlan.fileContexts.find(({ path }) => path === active.path)
     : undefined;
-  const unitStartLine = showPrevious
-    ? previousStartLine(active)
-    : (active?.startLine ?? 1);
-  const unitEndLine = showPrevious
-    ? sourceEndLine(active?.previousSource ?? "", unitStartLine)
-    : (active?.endLine ?? unitStartLine);
   const fullFileSource = showPrevious
     ? activeFileContext?.previousSource
     : activeFileContext?.source;
+  const fileFocusRanges = useMemo(
+    () =>
+      reviewCardRanges(
+        activeFileUnits,
+        showPrevious ? "previous" : "current",
+        activeFileContext?.previousSource,
+      ),
+    [activeFileContext?.previousSource, activeFileUnits, showPrevious],
+  );
+  const unitStartLine = fileFocusRanges[0]?.startLine ?? active?.startLine ?? 1;
+  const unitEndLine =
+    fileFocusRanges.at(-1)?.endLine ?? active?.endLine ?? unitStartLine;
   const fullFileLines = useMemo(
     () => fullFileSource?.split("\n") ?? [],
     [fullFileSource],
@@ -565,58 +607,45 @@ export function RepositoryReader({
     addRule.mutate({ monitorId: monitor.id, ...ruleForm });
   }, [addRule, monitor.id, ruleForm]);
 
-  const canSignOff = Boolean(active) && active?.status !== "signed_off";
-  const activeSignOffPending = active ? signOffQueue.ids.has(active.id) : false;
-  const canUnreview = active?.status === "signed_off" && !activeSignOffPending;
-  const signOffQueueProgress = `${signOffQueue.completed}/${signOffQueue.total}`;
+  const activeSignOffPending = pendingFileId === activeFile?.id;
+  const canSignOff = Boolean(
+    activeFile &&
+      activeFile.state !== "reviewed" &&
+      activeFile.totalUnits > 0 &&
+      activeFile.waitingUnits === 0 &&
+      !pendingFileId,
+  );
+  const canUnreview = Boolean(
+    activeFile && activeFile.state === "reviewed" && !pendingFileId,
+  );
   const runSignOff = useCallback(() => {
-    if (!active || !canSignOff) return;
-    signOffStart({ unitId: active.id, durationSeconds: 0 });
-  }, [active, canSignOff, signOffStart]);
+    if (!activeFile || !canSignOff) return;
+    toggleReviewFile(activeFile);
+  }, [activeFile, canSignOff, toggleReviewFile]);
   const runUnreview = useCallback(() => {
-    if (!active || !canUnreview) return;
-    unreviewStart({ unitId: active.id });
-  }, [active, canUnreview, unreviewStart]);
+    if (!activeFile || !canUnreview) return;
+    toggleReviewFile(activeFile);
+  }, [activeFile, canUnreview, toggleReviewFile]);
   const commands = useMemo<CommandCenterItem[]>(
     () => [
       {
-        id: "reader-next-unit",
-        label: "Select next unit",
-        description: "Step to the next symbol in the reading path",
+        id: "reader-next-file",
+        label: "Open next file",
+        description: "Step to the next file in the reading path",
         group: "Reader navigation",
         icon: <ChevronDown className="size-4" />,
         shortcut: readerShortcuts.nextUnit,
-        disabled: activeIndex >= units.length - 1,
-        onSelect: () => selectUnit(units[activeIndex + 1]),
-      },
-      {
-        id: "reader-previous-unit",
-        label: "Select previous unit",
-        description: "Step back to the previous symbol in the reading path",
-        group: "Reader navigation",
-        icon: <ChevronUp className="size-4" />,
-        shortcut: readerShortcuts.previousUnit,
-        disabled: activeIndex <= 0,
-        onSelect: () => selectUnit(units[activeIndex - 1]),
-      },
-      {
-        id: "reader-next-file",
-        label: "Open next file",
-        description: "Jump to the first symbol of the following file",
-        group: "Reader navigation",
-        icon: <ChevronRight className="size-4" />,
-        shortcut: readerShortcuts.nextFile,
-        disabled: activeIndex >= units.length - 1,
+        disabled: activeFileIndex >= reviewFiles.length - 1,
         onSelect: () => stepFile(1),
       },
       {
         id: "reader-previous-file",
         label: "Open previous file",
-        description: "Jump to the first symbol of the preceding file",
+        description: "Step back to the previous file in the reading path",
         group: "Reader navigation",
-        icon: <ChevronLeft className="size-4" />,
-        shortcut: readerShortcuts.previousFile,
-        disabled: activeIndex <= 0,
+        icon: <ChevronUp className="size-4" />,
+        shortcut: readerShortcuts.previousUnit,
+        disabled: activeFileIndex <= 0,
         onSelect: () => stepFile(-1),
       },
       {
@@ -691,7 +720,11 @@ export function RepositoryReader({
         group: "Reader navigation",
         icon: <History className="size-4" />,
         shortcut: readerShortcuts.togglePreviousSource,
-        disabled: !active || active.previousSource === null,
+        disabled:
+          !active ||
+          !activeFileUnits.some(
+            ({ previousSource }) => previousSource !== null,
+          ),
         onSelect: togglePreviousSource,
       },
       {
@@ -714,10 +747,10 @@ export function RepositoryReader({
       },
       {
         id: "reader-sign-off",
-        label: "Sign off",
-        description: active
-          ? `Record ${active.name} as read and open the next unread unit`
-          : "Record this unit as read",
+        label: "Sign off file",
+        description: activeFile
+          ? `Record all ${activeFile.totalUnits - activeFile.reviewedUnits} outstanding units in ${activeFile.path}`
+          : "Record every unit in this file as read",
         group: "Reader actions",
         icon: <Check className="size-4" />,
         shortcut: readerShortcuts.signOff,
@@ -727,8 +760,8 @@ export function RepositoryReader({
       },
       {
         id: "reader-mark-unread",
-        label: "Mark unread",
-        description: "Return this unit to the reading queue",
+        label: "Return file to review",
+        description: "Return every unit in this file to the reading queue",
         group: "Reader actions",
         icon: <Undo2 className="size-4" />,
         shortcut: readerShortcuts.undoSignOff,
@@ -738,7 +771,9 @@ export function RepositoryReader({
     ],
     [
       active,
-      activeIndex,
+      activeFile,
+      activeFileIndex,
+      activeFileUnits,
       availableAfter,
       availableBefore,
       canSignOff,
@@ -754,13 +789,13 @@ export function RepositoryReader({
       runSignOff,
       runUnreview,
       scrollCode,
-      selectUnit,
       showPrevious,
       signed,
       stepFile,
       togglePreviousSource,
       toggleContext,
       units,
+      reviewFiles.length,
     ],
   );
   usePageCommandCenter(commands);
@@ -772,12 +807,11 @@ export function RepositoryReader({
   const displayedEndLine = contextVisible
     ? unitEndLine + Math.min(contextAfter, availableAfter)
     : unitEndLine;
-  const displayedSource =
-    contextVisible && fullFileAvailable
-      ? fullFileLines.slice(displayedStartLine - 1, displayedEndLine).join("\n")
-      : showPrevious
-        ? (active?.previousSource ?? active?.source)
-        : active?.source;
+  const displayedSource = fullFileAvailable
+    ? fullFileLines.slice(displayedStartLine - 1, displayedEndLine).join("\n")
+    : showPrevious
+      ? activeFileUnits.map(({ previousSource }) => previousSource).join("\n")
+      : activeFileUnits.map(({ source }) => source).join("\n");
   const highlightedLines = useHighlightedSource(
     displayedSource ?? "",
     language ?? "text",
@@ -827,7 +861,7 @@ export function RepositoryReader({
           className="text-mist hover:text-cloud hover:bg-surface-hover hidden items-center gap-2 rounded-xl border border-line bg-surface/75 px-3 text-xs transition sm:flex"
         >
           <Search className="size-3.5" />
-          Find file or symbol
+          Find a file
           <ShortcutHint shortcut={readerShortcuts.search} />
         </button>
         <div className="hidden w-44 sm:block">
@@ -848,7 +882,7 @@ export function RepositoryReader({
 
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && (
-          <aside className="bg-panel border-line w-[320px] shrink-0 overflow-y-auto border-r max-md:absolute max-md:inset-y-16 max-md:left-0 max-md:z-20 max-md:shadow-2xl">
+          <aside className="bg-panel border-line flex w-[320px] shrink-0 flex-col overflow-hidden border-r max-md:absolute max-md:inset-y-16 max-md:left-0 max-md:z-20 max-md:shadow-2xl">
             <div className="bg-panel border-line sticky top-0 z-10 border-b p-3">
               <label className="relative block">
                 <Search className="text-mist absolute top-1/2 left-3 size-4 -translate-y-1/2" />
@@ -863,8 +897,8 @@ export function RepositoryReader({
                       event.currentTarget.blur();
                     }
                   }}
-                  placeholder="Find file or symbol"
-                  aria-label="Find file or symbol"
+                  placeholder="Find a file"
+                  aria-label="Find a file"
                   className="border-line bg-surface text-cloud focus:border-lime/50 h-10 w-full rounded-xl border pr-3 pl-9 text-xs outline-none"
                 />
               </label>
@@ -876,74 +910,16 @@ export function RepositoryReader({
                 </div>
               )}
             </div>
-            <div className="p-2">
-              {paths.length === 0 && (
-                <div
-                  className="border-line mx-2 mt-4 rounded-xl border border-dashed px-4 py-6 text-center"
-                  aria-live="polite"
-                >
-                  <Search className="text-fog mx-auto size-5" />
-                  <p className="text-cloud mt-3 text-xs font-medium">
-                    {search.trim()
-                      ? `No files or symbols match “${search.trim()}”.`
-                      : "No reviewable symbols are available in this snapshot."}
-                  </p>
-                  {search.trim() && (
-                    <button
-                      type="button"
-                      className="text-lime hover:text-lime-bright mt-3 text-xs font-medium"
-                      onClick={() => setSearch("")}
-                    >
-                      Clear search
-                    </button>
-                  )}
-                </div>
-              )}
-              {paths.map(([path, pathUnits]) => (
-                <div key={path} className="mb-2">
-                  <div className="text-mist flex items-center gap-2 px-2 py-2 text-[11px] font-medium">
-                    <FileCode2 className="size-3.5 shrink-0" />
-                    <span className="truncate">{path}</span>
-                  </div>
-                  {pathUnits.map((unit) => (
-                    <button
-                      key={unit.id}
-                      type="button"
-                      aria-current={active?.id === unit.id ? "true" : undefined}
-                      onClick={() => {
-                        selectUnit(unit);
-                        if (window.innerWidth < 768) setSidebarOpen(false);
-                      }}
-                      className={cn(
-                        "flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left transition",
-                        active?.id === unit.id
-                          ? "bg-lime/9 text-cloud"
-                          : "text-mist hover:bg-surface-hover hover:text-cloud",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "mt-1 size-2 shrink-0 rounded-full",
-                          unit.status === "signed_off"
-                            ? "bg-lime"
-                            : unit.changedSinceSignOff
-                              ? "bg-amber-400"
-                              : "border-line-strong border",
-                        )}
-                      />
-                      <span className="min-w-0">
-                        <span className="block truncate text-xs font-medium">
-                          {unit.name}
-                        </span>
-                        <span className="text-fog mt-0.5 block text-[10px]">
-                          {unit.kind} · lines {unit.startLine}-{unit.endLine}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </div>
+            <ReviewFilesPanel
+              files={reviewFiles}
+              search={search}
+              selectedPath={activeFile?.path}
+              pendingFileId={pendingFileId}
+              treeLabel="Repository files"
+              emptyLabel="No repository files match this view."
+              onSelect={selectFile}
+              onToggle={toggleReviewFile}
+            />
           </aside>
         )}
 
@@ -956,13 +932,21 @@ export function RepositoryReader({
                     {active.path}
                   </div>
                   <div className="text-mist mt-0.5 truncate text-[11px]">
-                    {active.kind} · {active.name} · Unit {activeIndex + 1}/
-                    {units.length}
+                    {activeFileUnits.length} review{" "}
+                    {activeFileUnits.length === 1 ? "unit" : "units"} ·{" "}
+                    {activeFile?.reviewedUnits ?? 0}/
+                    {activeFile?.totalUnits ?? 0} reviewed · File{" "}
+                    {activeFileIndex + 1}/{reviewFiles.length}
                   </div>
                 </div>
-                {active.changedSinceSignOff && (
+                {(activeFile?.updatedUnits ?? 0) > 0 && (
                   <span className="border-amber-400/25 bg-amber-400/8 text-amber-300 rounded-lg border px-2 py-1 text-[10px] font-semibold">
-                    Changed since read
+                    {activeFile?.updatedUnits} updated
+                  </span>
+                )}
+                {(activeFile?.newUnits ?? 0) > 0 && (
+                  <span className="border-cyan/25 bg-cyan/8 text-cyan rounded-lg border px-2 py-1 text-[10px] font-semibold">
+                    {activeFile?.newUnits} new
                   </span>
                 )}
                 {contextAvailable && (
@@ -980,7 +964,9 @@ export function RepositoryReader({
                     />
                   </Button>
                 )}
-                {active.previousSource !== null && (
+                {activeFileUnits.some(
+                  ({ previousSource }) => previousSource !== null,
+                ) && (
                   <Button
                     size="sm"
                     variant={showPrevious ? "secondary" : "ghost"}
@@ -1007,6 +993,12 @@ export function RepositoryReader({
                   </div>
                 ) : (
                   <>
+                    <ReviewFileCardHeader
+                      members={activeFileUnits}
+                      index={0}
+                      count={1}
+                      selected
+                    />
                     {contextBefore < availableBefore && (
                       <div className="flex items-center gap-3 px-4 pt-3 font-sans">
                         <span className="h-px flex-1 bg-line" />
@@ -1033,163 +1025,186 @@ export function RepositoryReader({
                     <HighlightedSourceLines
                       lines={highlightedLines}
                       startLine={displayedStartLine}
-                      focusRange={{
-                        startLine: unitStartLine,
-                        endLine: unitEndLine,
-                      }}
+                      focusRanges={fileFocusRanges}
                       selectedRange={ruleSelection}
                       onSelectLine={selectRuleLine}
-                      renderAfterLine={(lineNumber) =>
-                        ruleSelection?.endLine === lineNumber ? (
-                          <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-4 font-sans shadow-xl">
-                            <div className="flex min-w-0 items-start justify-between gap-3">
-                              <div>
-                                <p className="text-cloud flex items-center gap-2 text-xs font-semibold">
-                                  <ShieldCheck className="text-cyan size-3.5" />
-                                  Create compliance rule
-                                </p>
-                                <p className="text-fog mt-1 font-mono text-[9px]">
-                                  {active.path} · lines{" "}
-                                  {ruleSelection.startLine}
-                                  {ruleSelection.endLine !==
-                                    ruleSelection.startLine &&
-                                    `–${ruleSelection.endLine}`}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                aria-label="Close compliance rule editor"
-                                className="text-fog hover:bg-surface-hover hover:text-cloud rounded-lg p-1.5 transition"
-                                onClick={() => setRuleSelection(undefined)}
-                              >
-                                <X className="size-3.5" />
-                              </button>
-                            </div>
-                            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                              <label className="text-mist text-[10px] font-medium">
-                                <span className="mb-1.5 block">Rule name</span>
-                                <input
-                                  aria-label="Rule name"
-                                  value={ruleForm.title}
-                                  onChange={(event) =>
-                                    setRuleForm({
-                                      ...ruleForm,
-                                      title: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Validate authorization at boundaries"
-                                  className="form-input"
-                                />
-                              </label>
-                              <label className="text-mist text-[10px] font-medium">
-                                <span className="mb-1.5 block">Applies to</span>
-                                <input
-                                  aria-label="Rule path glob"
-                                  value={ruleForm.pathGlob}
-                                  onChange={(event) =>
-                                    setRuleForm({
-                                      ...ruleForm,
-                                      pathGlob: event.target.value,
-                                    })
-                                  }
-                                  className="form-input font-mono"
-                                />
-                              </label>
-                            </div>
-                            <label className="text-mist mt-3 block text-[10px] font-medium">
-                              <span className="mb-1.5 block">Instruction</span>
-                              <textarea
-                                ref={ruleInstructionRef}
-                                aria-label="Rule instruction"
-                                value={ruleForm.instruction}
-                                onChange={(event) =>
-                                  setRuleForm({
-                                    ...ruleForm,
-                                    instruction: event.target.value,
-                                  })
-                                }
-                                onKeyDown={(event) => {
-                                  if (event.key === "Escape") {
-                                    event.preventDefault();
-                                    setRuleSelection(undefined);
-                                  } else if (
-                                    event.key === "Enter" &&
-                                    (event.metaKey || event.ctrlKey)
-                                  ) {
-                                    event.preventDefault();
-                                    saveRule();
-                                  }
-                                }}
-                                placeholder="Describe the convention that compliance checks should enforce…"
-                                rows={3}
-                                className="form-input h-auto resize-y py-3"
+                      renderAfterLine={(lineNumber) => (
+                        <>
+                          {activeFileUnits
+                            .filter((member) =>
+                              reviewCardRanges(
+                                [member],
+                                showPrevious ? "previous" : "current",
+                                activeFileContext?.previousSource,
+                              ).some(
+                                ({ startLine }) => startLine === lineNumber,
+                              ),
+                            )
+                            .map((member) => (
+                              <ReviewFileUnitMarker
+                                key={member.id}
+                                member={member}
                               />
-                            </label>
-                            <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
-                              <div className="flex gap-3">
+                            ))}
+                          {ruleSelection?.endLine === lineNumber ? (
+                            <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-4 font-sans shadow-xl">
+                              <div className="flex min-w-0 items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-cloud flex items-center gap-2 text-xs font-semibold">
+                                    <ShieldCheck className="text-cyan size-3.5" />
+                                    Create compliance rule
+                                  </p>
+                                  <p className="text-fog mt-1 font-mono text-[9px]">
+                                    {active.path} · lines{" "}
+                                    {ruleSelection.startLine}
+                                    {ruleSelection.endLine !==
+                                      ruleSelection.startLine &&
+                                      `–${ruleSelection.endLine}`}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  aria-label="Close compliance rule editor"
+                                  className="text-fog hover:bg-surface-hover hover:text-cloud rounded-lg p-1.5 transition"
+                                  onClick={() => setRuleSelection(undefined)}
+                                >
+                                  <X className="size-3.5" />
+                                </button>
+                              </div>
+                              <div className="mt-4 grid gap-3 lg:grid-cols-2">
                                 <label className="text-mist text-[10px] font-medium">
-                                  <span className="mb-1.5 block">Scope</span>
-                                  <select
-                                    aria-label="Rule scope"
-                                    value={ruleForm.scope}
+                                  <span className="mb-1.5 block">
+                                    Rule name
+                                  </span>
+                                  <input
+                                    aria-label="Rule name"
+                                    value={ruleForm.title}
                                     onChange={(event) =>
                                       setRuleForm({
                                         ...ruleForm,
-                                        scope: event.target
-                                          .value as typeof ruleForm.scope,
+                                        title: event.target.value,
                                       })
                                     }
-                                    className="form-input w-auto"
-                                  >
-                                    <option value="file">Per file</option>
-                                    <option value="repository">
-                                      Repository-wide
-                                    </option>
-                                  </select>
+                                    placeholder="Validate authorization at boundaries"
+                                    className="form-input"
+                                  />
                                 </label>
                                 <label className="text-mist text-[10px] font-medium">
-                                  <span className="mb-1.5 block">Severity</span>
-                                  <select
-                                    aria-label="Rule severity"
-                                    value={ruleForm.severity}
+                                  <span className="mb-1.5 block">
+                                    Applies to
+                                  </span>
+                                  <input
+                                    aria-label="Rule path glob"
+                                    value={ruleForm.pathGlob}
                                     onChange={(event) =>
                                       setRuleForm({
                                         ...ruleForm,
-                                        severity: event.target
-                                          .value as RuleSeverity,
+                                        pathGlob: event.target.value,
                                       })
                                     }
-                                    className="form-input w-auto"
-                                  >
-                                    <option value="low">Low</option>
-                                    <option value="medium">Medium</option>
-                                    <option value="high">High</option>
-                                    <option value="critical">Critical</option>
-                                  </select>
+                                    className="form-input font-mono"
+                                  />
                                 </label>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-fog hidden text-[9px] sm:inline">
-                                  Shift-click another line to extend · ⌘ Enter
-                                  to save
+                              <label className="text-mist mt-3 block text-[10px] font-medium">
+                                <span className="mb-1.5 block">
+                                  Instruction
                                 </span>
-                                <Button
-                                  size="sm"
-                                  loading={addRule.isPending}
-                                  disabled={
-                                    !ruleForm.title.trim() ||
-                                    !ruleForm.instruction.trim() ||
-                                    !ruleForm.pathGlob.trim()
+                                <textarea
+                                  ref={ruleInstructionRef}
+                                  aria-label="Rule instruction"
+                                  value={ruleForm.instruction}
+                                  onChange={(event) =>
+                                    setRuleForm({
+                                      ...ruleForm,
+                                      instruction: event.target.value,
+                                    })
                                   }
-                                  onClick={saveRule}
-                                >
-                                  Add rule
-                                </Button>
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      setRuleSelection(undefined);
+                                    } else if (
+                                      event.key === "Enter" &&
+                                      (event.metaKey || event.ctrlKey)
+                                    ) {
+                                      event.preventDefault();
+                                      saveRule();
+                                    }
+                                  }}
+                                  placeholder="Describe the convention that compliance checks should enforce…"
+                                  rows={3}
+                                  className="form-input h-auto resize-y py-3"
+                                />
+                              </label>
+                              <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+                                <div className="flex gap-3">
+                                  <label className="text-mist text-[10px] font-medium">
+                                    <span className="mb-1.5 block">Scope</span>
+                                    <select
+                                      aria-label="Rule scope"
+                                      value={ruleForm.scope}
+                                      onChange={(event) =>
+                                        setRuleForm({
+                                          ...ruleForm,
+                                          scope: event.target
+                                            .value as typeof ruleForm.scope,
+                                        })
+                                      }
+                                      className="form-input w-auto"
+                                    >
+                                      <option value="file">Per file</option>
+                                      <option value="repository">
+                                        Repository-wide
+                                      </option>
+                                    </select>
+                                  </label>
+                                  <label className="text-mist text-[10px] font-medium">
+                                    <span className="mb-1.5 block">
+                                      Severity
+                                    </span>
+                                    <select
+                                      aria-label="Rule severity"
+                                      value={ruleForm.severity}
+                                      onChange={(event) =>
+                                        setRuleForm({
+                                          ...ruleForm,
+                                          severity: event.target
+                                            .value as RuleSeverity,
+                                        })
+                                      }
+                                      className="form-input w-auto"
+                                    >
+                                      <option value="low">Low</option>
+                                      <option value="medium">Medium</option>
+                                      <option value="high">High</option>
+                                      <option value="critical">Critical</option>
+                                    </select>
+                                  </label>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-fog hidden text-[9px] sm:inline">
+                                    Shift-click another line to extend · ⌘ Enter
+                                    to save
+                                  </span>
+                                  <Button
+                                    size="sm"
+                                    loading={addRule.isPending}
+                                    disabled={
+                                      !ruleForm.title.trim() ||
+                                      !ruleForm.instruction.trim() ||
+                                      !ruleForm.pathGlob.trim()
+                                    }
+                                    onClick={saveRule}
+                                  >
+                                    Add rule
+                                  </Button>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ) : null
-                      }
+                          ) : null}
+                        </>
+                      )}
                     />
                     {contextAfter < availableAfter && (
                       <div className="flex items-center gap-3 px-4 pb-3 font-sans">
@@ -1221,50 +1236,37 @@ export function RepositoryReader({
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={activeIndex <= 0}
-                  onClick={() => selectUnit(units[activeIndex - 1])}
+                  disabled={activeFileIndex <= 0}
+                  onClick={() => stepFile(-1)}
                 >
-                  <ChevronLeft className="size-4" /> Previous
+                  <ChevronLeft className="size-4" /> Previous file
                   <ShortcutHint
                     shortcut={readerShortcuts.previousUnit}
                     className="max-md:hidden"
                   />
                 </Button>
-                {signOffQueue.ids.size > 0 && (
-                  <span
-                    role="status"
-                    aria-label={`Saving reviews, ${signOffQueueProgress}`}
-                    className="border-line-strong bg-surface text-mist ml-auto flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 text-[10px] shadow-[0_8px_24px_var(--app-shadow)] sm:h-10 sm:px-3"
-                  >
-                    <LoaderCircle className="size-3 animate-spin" />
-                    <span className="hidden sm:inline">Saving</span>
-                    <span className="font-mono text-cloud">
-                      {signOffQueueProgress}
-                    </span>
-                  </span>
-                )}
                 <div className="flex items-center gap-3">
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={activeIndex >= units.length - 1}
-                    onClick={() => selectUnit(units[activeIndex + 1])}
+                    disabled={activeFileIndex >= reviewFiles.length - 1}
+                    onClick={() => stepFile(1)}
                   >
-                    Next <ChevronRight className="size-4" />
+                    Next file <ChevronRight className="size-4" />
                     <ShortcutHint
                       shortcut={readerShortcuts.nextUnit}
                       className="max-md:hidden"
                     />
                   </Button>
-                  {active.status === "signed_off" ? (
+                  {activeFile?.state === "reviewed" ? (
                     <Button
                       size="sm"
                       variant="secondary"
-                      loading={unreview.isPending}
+                      loading={unreviewFile.isPending}
                       disabled={!canUnreview}
                       onClick={runUnreview}
                     >
-                      <Undo2 className="size-4" /> Mark unread
+                      <Undo2 className="size-4" /> Return file
                       <ShortcutHint
                         shortcut={readerShortcuts.undoSignOff}
                         className="max-sm:hidden"
@@ -1276,7 +1278,10 @@ export function RepositoryReader({
                       loading={activeSignOffPending}
                       onClick={runSignOff}
                     >
-                      <Check className="size-4" /> Sign off
+                      <Check className="size-4" /> Sign off file (
+                      {(activeFile?.totalUnits ?? 0) -
+                        (activeFile?.reviewedUnits ?? 0)}
+                      )
                       <ShortcutHint
                         shortcut={readerShortcuts.signOff}
                         className="max-sm:hidden"

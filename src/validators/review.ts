@@ -53,6 +53,17 @@ export const signOffConceptSchema = z.object({
   durationSeconds: z.number().int().min(0).max(86_400),
 });
 
+export const reviewFileActionSchema = z.object({
+  snapshotFileId: z.string().uuid(),
+  sessionId: z.string().uuid().optional(),
+  durationSeconds: z.number().int().min(0).max(86_400),
+});
+
+export const unreviewFileSchema = reviewFileActionSchema.pick({
+  snapshotFileId: true,
+  sessionId: true,
+});
+
 export const unreviewConceptSchema = signOffConceptSchema.pick({
   conceptId: true,
   layoutId: true,

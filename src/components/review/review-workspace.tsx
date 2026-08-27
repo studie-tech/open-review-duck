@@ -81,6 +81,13 @@ import {
   prioritizePrivateReviewSources,
 } from "~/lib/private-source-client";
 import {
+  type ReviewFileEntry,
+  type ReviewMode,
+  rememberReviewMode,
+  reviewFileEntries,
+  storedReviewMode,
+} from "~/lib/review-files";
+import {
   buildReviewHierarchy,
   deepReviewFindingTarget,
   deletedFileSignOffUnits,
@@ -139,6 +146,8 @@ import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
 import { ProviderCommentBody } from "./provider-comment-body";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
+import { ReviewFilesPanel } from "./review-files-panel";
+import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   overviewMarksFromDiffRows,
   overviewRangeFromDiffRows,
@@ -851,8 +860,8 @@ interface LiveAiQuestion {
 
 import { reviewSessionMachine } from "./review-session-machine";
 import {
-  actionableReviewCardMember,
   AskAiLineButton,
+  actionableReviewCardMember,
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
   ConceptMoveDialog,
@@ -871,17 +880,18 @@ import {
   PullRequestDetailsDialog,
   providerLabel,
   ReviewCodeViewSwitch,
-  ReviewConceptFileCardHeader,
   ReviewConceptFileCardPreview,
+  ReviewFileCardHeader,
+  ReviewFileUnitMarker,
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewRevisionLoadedNotice,
   ReviewScopeMarker,
   ReviewUnitViewOptions,
-  reviewCardMemberForLine,
-  reviewCardRanges,
   relatedReviewRanges,
   rememberAiConversationVisibility,
+  reviewCardMemberForLine,
+  reviewCardRanges,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
@@ -1081,6 +1091,9 @@ export function ReviewWorkspace({
     };
   }, [initialData.sourceDelivery, sourceHydrationInput, sourceSnapshotId]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("path");
+  const [completedBrowsing, setCompletedBrowsing] = useState(false);
+  const [pendingFileId, setPendingFileId] = useState<string>();
   const [showDiff, setShowDiff] = useState(true);
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
@@ -1124,6 +1137,9 @@ export function ReviewWorkspace({
   const [splitConceptDialogOpen, setSplitConceptDialogOpen] = useState(false);
   const [pullRequestDetailsOpen, setPullRequestDetailsOpen] = useState(false);
   const [moveMemberDialogOpen, setMoveMemberDialogOpen] = useState(false);
+  useEffect(() => {
+    setReviewMode(storedReviewMode(window.localStorage));
+  }, []);
   // Empty means every severity, so the four chips start as a legend rather
   // than as four filters the reviewer must switch on before seeing anything.
   const [findingSeverityFilter, setFindingSeverityFilter] = useState(
@@ -1205,6 +1221,13 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
+  useEffect(() => {
+    if (reviewMode !== "files" || !activeUnitId) return;
+    setFullFileUnitIds((current) => {
+      if (current.has(activeUnitId)) return current;
+      return new Set(current).add(activeUnitId);
+    });
+  }, [activeUnitId, reviewMode]);
   const restoredPositionSnapshotId = useRef<string | undefined>(undefined);
   useEffect(() => {
     const snapshotId = initialData.snapshot?.id;
@@ -1291,7 +1314,13 @@ export function ReviewWorkspace({
         members.some(({ id }) => id === activeUnit.id),
       )
     : undefined;
-  const activeFileCardMembers = activeFileCard?.members ?? [];
+  const activeFileCardMembers = useMemo(
+    () =>
+      reviewMode === "files" && activeUnit
+        ? units.filter(({ path }) => path === activeUnit.path)
+        : (activeFileCard?.members ?? []),
+    [activeFileCard?.members, activeUnit, reviewMode, units],
+  );
   const activeConceptCardIndex = activeFileCard
     ? activeConceptFileCards.indexOf(activeFileCard)
     : -1;
@@ -1489,6 +1518,21 @@ export function ReviewWorkspace({
   const signedCount = units.filter(
     (unit) => unit.status === "signed_off",
   ).length;
+  const reviewFiles = useMemo(
+    () => reviewFileEntries(initialData.files, units),
+    [initialData.files, units],
+  );
+  const reviewedFileCount = reviewFiles.filter(
+    ({ state }) => state === "reviewed",
+  ).length;
+  const activeReviewFile = activeUnit
+    ? reviewFiles.find(({ path }) => path === activeUnit.path)
+    : undefined;
+  const activeFileOutstandingUnits = activeReviewFile
+    ? activeReviewFile.totalUnits -
+      activeReviewFile.reviewedUnits -
+      activeReviewFile.waitingUnits
+    : 0;
   const conceptProgress = useMemo(
     () =>
       initialData.concepts.map((concept) => ({
@@ -1584,6 +1628,7 @@ export function ReviewWorkspace({
       setCompletionOpen(true);
     } else if (!reviewComplete) {
       setCompletionOpen(false);
+      setCompletedBrowsing(false);
     }
     previousReviewComplete.current = reviewComplete;
   }, [reviewComplete]);
@@ -1957,6 +2002,49 @@ export function ReviewWorkspace({
     },
     [units],
   );
+  /** Opens a complete file while retaining atomic ownership for interactions. */
+  const selectReviewFile = useCallback(
+    (file: ReviewFileEntry) => {
+      const member =
+        file.units.find(
+          ({ status }) => status !== "signed_off" && status !== "waiting",
+        ) ?? file.units[0];
+      if (!member) {
+        toast.info("This file has no semantic review units", {
+          description:
+            file.skipReason ??
+            (file.isBinary
+              ? "Binary content is shown in the changed-file tree only."
+              : "It does not contribute to semantic review completion."),
+        });
+        return;
+      }
+      const index = units.findIndex(({ id }) => id === member.id);
+      if (index < 0) return;
+      setCompletedBrowsing(false);
+      selectUnit(index);
+      setFullFileUnitIds((current) => new Set(current).add(member.id));
+    },
+    [selectUnit, units],
+  );
+
+  /** Applies or reverses one file-sized semantic review decision. */
+  function toggleReviewFile(file: ReviewFileEntry) {
+    if (pendingFileId || file.totalUnits === 0) return;
+    setPendingFileId(file.id);
+    if (file.state === "reviewed") {
+      unreviewFile.mutate({
+        snapshotFileId: file.id,
+        sessionId,
+      });
+      return;
+    }
+    signOffFile.mutate({
+      snapshotFileId: file.id,
+      sessionId,
+      durationSeconds: Math.round((Date.now() - startedAt) / 1000),
+    });
+  }
   /**
    * Opens the composer on a line a reviewer picked in another member's card.
    *
@@ -2236,6 +2324,78 @@ export function ReviewWorkspace({
   ]);
   const signOff = api.review.signOff.useMutation();
   const signOffBatch = api.review.signOffBatch.useMutation();
+  const signOffFile = api.review.signOffFile.useMutation({
+    onSuccess: ({ snapshotFileId, signedUnitIds }) => {
+      const signed = new Set(signedUnitIds);
+      setUnits((current) =>
+        current.map((unit) =>
+          signed.has(unit.id)
+            ? {
+                ...unit,
+                status: "signed_off" as const,
+                changedSinceSignOff: false,
+                signOffOrigin: "current" as const,
+              }
+            : unit,
+        ),
+      );
+      setPendingFileId((current) =>
+        current === snapshotFileId ? undefined : current,
+      );
+      void Promise.all([
+        utils.workspace.guidance.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+      ]);
+      toast.success(
+        `${signedUnitIds.length} ${signedUnitIds.length === 1 ? "unit" : "units"} signed off`,
+        { description: "This file is fully reviewed at the current revision." },
+      );
+    },
+    onError: (error) => {
+      setPendingFileId(undefined);
+      toast.error("File sign-off was not saved", {
+        description: error.message,
+      });
+    },
+  });
+  const unreviewFile = api.review.unreviewFile.useMutation({
+    onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
+      const unreviewed = new Set(unreviewedUnitIds);
+      setUnits((current) =>
+        current.map((unit) =>
+          unreviewed.has(unit.id)
+            ? {
+                ...unit,
+                status:
+                  unit.revisionState === "updated"
+                    ? ("changed" as const)
+                    : ("pending" as const),
+                signOffOrigin: "none" as const,
+              }
+            : unit,
+        ),
+      );
+      setPendingFileId((current) =>
+        current === snapshotFileId ? undefined : current,
+      );
+      setCompletedBrowsing(false);
+      void Promise.all([
+        utils.workspace.guidance.invalidate(),
+        utils.review.dashboard.invalidate(),
+        utils.review.gamification.invalidate(),
+      ]);
+      toast.success("File returned to review", {
+        description: `${unreviewedUnitIds.length} ${unreviewedUnitIds.length === 1 ? "unit is" : "units are"} back in the review path.`,
+      });
+    },
+    onError: (error) => {
+      setPendingFileId(undefined);
+      toast.error("File could not be returned to review", {
+        description: error.message,
+      });
+    },
+  });
 
   /** Applies several sign-offs immediately while retaining rollback state. */
   function optimisticallyQueueSignOffs(
@@ -3329,6 +3489,12 @@ export function ReviewWorkspace({
   /** Renders every review artifact attached to one source line in either code view. */
   function renderReviewLineDetails(lineNumber: number) {
     if (!activeUnit) return null;
+    const fileUnitsStartingHere =
+      reviewMode === "files"
+        ? activeFileCardMembers.filter(
+            (member) => member.startLine === lineNumber,
+          )
+        : [];
     const endingExplanations = explanationAnnotations.filter(
       (annotation) =>
         lineNumber >= annotation.line &&
@@ -3420,6 +3586,9 @@ export function ReviewWorkspace({
 
     return (
       <>
+        {fileUnitsStartingHere.map((member) => (
+          <ReviewFileUnitMarker key={member.id} member={member} />
+        ))}
         {endingExplanations.map((annotation) => {
           const annotationIndex = explanationAnnotations.indexOf(annotation);
           const endLine = annotation.endLine ?? annotation.line;
@@ -4010,6 +4179,21 @@ export function ReviewWorkspace({
   const openNextReview = useCallback(() => {
     if (nextReview) navigate(`/review/${nextReview.id}`);
   }, [nextReview, navigate]);
+  /** Changes only the workspace projection and preserves the review ledger. */
+  function changeReviewMode(mode: ReviewMode) {
+    setReviewMode(mode);
+    rememberReviewMode(window.localStorage, mode);
+    if (mode === "path") setCompletedBrowsing(false);
+  }
+
+  /** Leaves the modal at a neutral completed-review browsing surface. */
+  function browseCompletedReview() {
+    changeReviewMode("files");
+    setCompletionOpen(false);
+    setCompletedBrowsing(true);
+    setPathPanelCollapsed(false);
+    sendReviewSession({ type: "REVIEW_BROWSED" });
+  }
   useEffect(() => {
     if (!completionVisible && !waitingCompletionVisible) return;
 
@@ -4017,13 +4201,20 @@ export function ReviewWorkspace({
     function dismissEndState(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (completionVisible) setCompletionOpen(false);
+      if (completionVisible) {
+        setReviewMode("files");
+        rememberReviewMode(window.localStorage, "files");
+        setCompletionOpen(false);
+        setCompletedBrowsing(true);
+        setPathPanelCollapsed(false);
+        sendReviewSession({ type: "REVIEW_BROWSED" });
+      }
       if (waitingCompletionVisible) setWaitingCompletionOpen(false);
     }
 
     document.addEventListener("keydown", dismissEndState);
     return () => document.removeEventListener("keydown", dismissEndState);
-  }, [completionVisible, waitingCompletionVisible]);
+  }, [completionVisible, sendReviewSession, waitingCompletionVisible]);
   const canUseAi =
     aiConfiguration.data?.mode !== "off" &&
     !explanationRunning &&
@@ -4062,6 +4253,7 @@ export function ReviewWorkspace({
     undoSignOff.isPending ||
     undoConcept.isPending ||
     awaitPending ||
+    !!pendingFileId ||
     resetReview.isPending;
   // One unit needs only its own source; the concept needs every member's,
   // because it records all of them at once.
@@ -4079,6 +4271,13 @@ export function ReviewWorkspace({
     conceptActionAvailable &&
     activeConceptSourcesAvailable &&
     activeConceptProgress?.status !== "signed_off";
+  const canSignOffActiveFile =
+    reviewMode === "files" &&
+    !!activeReviewFile &&
+    activeReviewFile.totalUnits > 0 &&
+    activeFileOutstandingUnits > 0 &&
+    activeReviewFile.waitingUnits === 0 &&
+    !reviewActionBlocked;
   const canUsePrimaryAction =
     activeWaitStatus === "signed_off" || activeWaitStatus === "waiting"
       ? !!activeUnit &&
@@ -4092,9 +4291,11 @@ export function ReviewWorkspace({
         // review that is only waiting belongs to the caught-up state instead
         // of a no-op button.
         hasNextActionableUnit
-      : cardActionAvailable
-        ? canSignOffCard
-        : canSignOffUnit;
+      : reviewMode === "files"
+        ? canSignOffActiveFile
+        : cardActionAvailable
+          ? canSignOffCard
+          : canSignOffUnit;
   const primaryIsContinue =
     activeWaitStatus === "signed_off" || activeWaitStatus === "waiting";
   // The scope the plain key commits to, named the same way wherever it is
@@ -4103,14 +4304,19 @@ export function ReviewWorkspace({
     ? filteredReviewActive
       ? "Next match"
       : "Continue"
-    : cardActionAvailable
-      ? `Sign off card (${outstandingCardMembers.length})`
-      : "Sign off";
-  const primaryActionLabel = activeConceptSignOffPending
-    ? "Saving concept…"
-    : activeSignOffPending
-      ? `Saving ${signOffQueueProgress}…`
-      : primaryScopeLabel;
+    : reviewMode === "files" && activeReviewFile
+      ? `Sign off file (${activeFileOutstandingUnits})`
+      : cardActionAvailable
+        ? `Sign off card (${outstandingCardMembers.length})`
+        : "Sign off";
+  const primaryActionLabel =
+    reviewMode === "files" && pendingFileId === activeReviewFile?.id
+      ? "Saving file…"
+      : activeConceptSignOffPending
+        ? "Saving concept…"
+        : activeSignOffPending
+          ? `Saving ${signOffQueueProgress}…`
+          : primaryScopeLabel;
   const canAwaitResponse =
     !!activeUnit &&
     hasLiveConversation &&
@@ -4643,6 +4849,10 @@ export function ReviewWorkspace({
     if (!activeUnit || !canUsePrimaryAction) return;
     if (activeWaitStatus === "signed_off" || activeWaitStatus === "waiting") {
       continueReview();
+      return;
+    }
+    if (reviewMode === "files" && activeReviewFile) {
+      toggleReviewFile(activeReviewFile);
       return;
     }
     if (cardActionAvailable) {
@@ -6299,7 +6509,7 @@ export function ReviewWorkspace({
         {pathPanelOpen && (
           <button
             type="button"
-            aria-label="Close review path"
+            aria-label={`Close ${reviewMode === "path" ? "review path" : "changed files"}`}
             onClick={() => setPathPanelOpen(false)}
             className="fixed top-16 right-0 bottom-0 left-0 z-30 bg-black/55 backdrop-blur-[2px] 2xl:hidden"
           />
@@ -6314,7 +6524,7 @@ export function ReviewWorkspace({
         )}
         <aside
           id="review-path-panel"
-          aria-label="Review path"
+          aria-label={reviewMode === "path" ? "Review path" : "Changed files"}
           className={cn(
             "min-h-0 flex-col overflow-hidden border-r border-line bg-panel",
             pathPanelOpen
@@ -6326,16 +6536,22 @@ export function ReviewWorkspace({
           )}
         >
           <div className="shrink-0 border-b border-line px-4 py-4">
-            <div className="flex items-center justify-between">
+            <ReviewModeSwitch mode={reviewMode} onChange={changeReviewMode} />
+            <div className="mt-4 flex items-center justify-between">
               <span className="text-fog text-[10px] font-semibold tracking-[.16em] uppercase">
-                Review concepts
+                {reviewMode === "path" ? "Review concepts" : "Changed files"}
               </span>
-              <Badge>{initialData.concepts.length} concepts</Badge>
+              <Badge>
+                {reviewMode === "path"
+                  ? `${initialData.concepts.length} concepts`
+                  : `${reviewFiles.length} files`}
+              </Badge>
             </div>
             <div className="mt-3 flex items-center gap-2 text-[9px]">
               <span className="text-cloud">
-                {initialData.concepts.length - signedConceptCount} concepts
-                remaining
+                {reviewMode === "path"
+                  ? `${initialData.concepts.length - signedConceptCount} concepts remaining`
+                  : `${reviewedFileCount}/${reviewFiles.filter(({ totalUnits }) => totalUnits > 0).length} files reviewed`}
               </span>
               <span aria-hidden="true" className="text-line-strong">
                 ·
@@ -6367,8 +6583,16 @@ export function ReviewWorkspace({
                     event.currentTarget.blur();
                   }
                 }}
-                aria-label="Filter review path"
-                placeholder="Find a symbol or file"
+                aria-label={
+                  reviewMode === "path"
+                    ? "Filter review path"
+                    : "Filter changed files"
+                }
+                placeholder={
+                  reviewMode === "path"
+                    ? "Find a symbol or file"
+                    : "Find a file"
+                }
                 className="bg-surface text-cloud focus:border-cyan/45 h-9 w-full rounded-lg border border-line px-3 pr-9 text-xs outline-none"
               />
               <ShortcutHint
@@ -6377,285 +6601,304 @@ export function ReviewWorkspace({
               />
             </div>
           </div>
-          {!pathSearch.trim() && (
-            <section className="shrink-0 border-b border-line px-3 py-3">
-              <button
-                type="button"
-                aria-expanded={reviewedExpanded}
-                aria-controls="reviewed-units"
-                disabled={pathSections.reviewed.length === 0}
-                onClick={() => {
-                  setReviewedExpanded((current) => !current);
-                  setReviewedLimit(INITIAL_PATH_ITEMS);
-                }}
-                className="hover:bg-surface-subtle flex w-full items-center justify-between rounded-lg px-2 py-1 text-left transition disabled:cursor-default disabled:hover:bg-transparent"
-              >
-                <span className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
-                  Reviewed
-                </span>
-                <span className="flex items-center gap-2">
-                  <span className="text-fog text-[9px]">
-                    {pathSections.reviewed.length}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      "text-fog size-3.5 transition-transform",
-                      reviewedExpanded && "rotate-180",
-                    )}
-                  />
-                </span>
-              </button>
-              {reviewedExpanded && (
-                <div
-                  id="reviewed-units"
-                  className="mt-2 max-h-[32vh] space-y-1 overflow-y-auto"
-                >
-                  {pathSections.reviewed
-                    .slice(0, reviewedLimit)
-                    .map((entry) => (
-                      <ReviewPathUnit
-                        key={entry.unit.id}
-                        entry={entry}
-                        active={false}
-                        onSelect={selectConceptPath}
-                      />
-                    ))}
-                  {pathSections.reviewed.length > reviewedLimit && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setReviewedLimit((current) =>
-                          Math.min(
-                            current + PATH_PAGE_SIZE,
-                            pathSections.reviewed.length,
-                          ),
-                        )
-                      }
-                      className="text-cyan hover:bg-cyan/[.06] w-full rounded-lg px-3 py-2 text-[10px] transition"
-                    >
-                      Show{" "}
-                      {Math.min(
-                        PATH_PAGE_SIZE,
-                        pathSections.reviewed.length - reviewedLimit,
-                      )}{" "}
-                      more reviewed
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-          {!pathSearch.trim() && pathSections.waiting.length > 0 && (
-            <section className="shrink-0 border-b border-line px-3 py-3">
-              <button
-                type="button"
-                aria-expanded={waitingExpanded}
-                aria-controls="waiting-units"
-                onClick={() => {
-                  setWaitingExpanded((current) => !current);
-                  setWaitingLimit(INITIAL_PATH_ITEMS);
-                }}
-                className="hover:bg-surface-subtle flex w-full items-center justify-between rounded-lg px-2 py-1 text-left transition"
-              >
-                <span className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
-                  Waiting for response
-                </span>
-                <span className="flex items-center gap-2">
-                  <span className="text-cyan text-[9px]">
-                    {pathSections.waiting.length}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      "text-fog size-3.5 transition-transform",
-                      waitingExpanded && "rotate-180",
-                    )}
-                  />
-                </span>
-              </button>
-              {waitingExpanded && (
-                <div
-                  id="waiting-units"
-                  className="mt-2 max-h-[28vh] space-y-1 overflow-y-auto"
-                >
-                  {pathSections.waiting.slice(0, waitingLimit).map((entry) => (
-                    <ReviewPathUnit
-                      key={entry.unit.id}
-                      entry={entry}
-                      active={false}
-                      onSelect={selectConceptPath}
-                    />
-                  ))}
-                  {pathSections.waiting.length > waitingLimit && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setWaitingLimit((current) =>
-                          Math.min(
-                            current + PATH_PAGE_SIZE,
-                            pathSections.waiting.length,
-                          ),
-                        )
-                      }
-                      className="text-cyan hover:bg-cyan/[.06] w-full whitespace-nowrap rounded-lg px-3 py-2 text-[10px] transition"
-                    >
-                      Show{" "}
-                      {Math.min(
-                        PATH_PAGE_SIZE,
-                        pathSections.waiting.length - waitingLimit,
-                      )}{" "}
-                      more
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-          <div className="shrink-0 border-b border-line px-3 py-3">
-            <div className="mb-1 flex items-center justify-between px-2">
-              <span className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
-                Current
-              </span>
-              <span
-                className="text-fog text-[9px]"
-                title={`Canonical concept position ${activeConceptPathIndex + 1} of ${conceptPathUnits.length}`}
-              >
-                {activeConceptPathIndex + 1}
-              </span>
-            </div>
-            {pathSections.current && (
-              <ReviewPathUnit
-                entry={pathSections.current}
-                active
-                onSelect={selectConceptPath}
-              />
-            )}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {pathSearch.trim() ? (
-              <section aria-labelledby="search-results-heading">
-                <div className="mb-2 flex items-center justify-between px-2">
-                  <h2
-                    id="search-results-heading"
-                    className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase"
-                  >
-                    Matches
-                  </h2>
-                  <span className="text-fog text-[9px]">
-                    {searchResults.length}
-                  </span>
-                </div>
-                {searchResults.length ? (
-                  <div className="space-y-1">
-                    {searchResults.slice(0, searchLimit).map((entry) => (
-                      <ReviewPathUnit
-                        key={entry.unit.id}
-                        entry={entry}
-                        active={false}
-                        onSelect={selectUnit}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-mist rounded-xl border border-dashed border-line px-3 py-4 text-center text-[10px] leading-4">
-                    No other units match your search.
-                  </p>
-                )}
-                {searchResults.length > searchLimit && (
+          {reviewMode === "path" ? (
+            <>
+              {!pathSearch.trim() && (
+                <section className="shrink-0 border-b border-line px-3 py-3">
                   <button
                     type="button"
-                    onClick={() =>
-                      setSearchLimit((current) =>
-                        Math.min(
-                          current + PATH_PAGE_SIZE,
-                          searchResults.length,
-                        ),
-                      )
-                    }
-                    className="text-cyan hover:bg-cyan/[.06] mt-2 w-full rounded-lg px-3 py-2 text-[10px] transition"
+                    aria-expanded={reviewedExpanded}
+                    aria-controls="reviewed-units"
+                    disabled={pathSections.reviewed.length === 0}
+                    onClick={() => {
+                      setReviewedExpanded((current) => !current);
+                      setReviewedLimit(INITIAL_PATH_ITEMS);
+                    }}
+                    className="hover:bg-surface-subtle flex w-full items-center justify-between rounded-lg px-2 py-1 text-left transition disabled:cursor-default disabled:hover:bg-transparent"
                   >
-                    Show{" "}
-                    {Math.min(
-                      PATH_PAGE_SIZE,
-                      searchResults.length - searchLimit,
-                    )}{" "}
-                    more matches
+                    <span className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
+                      Reviewed
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-fog text-[9px]">
+                        {pathSections.reviewed.length}
+                      </span>
+                      <ChevronDown
+                        className={cn(
+                          "text-fog size-3.5 transition-transform",
+                          reviewedExpanded && "rotate-180",
+                        )}
+                      />
+                    </span>
                   </button>
-                )}
-              </section>
-            ) : (
-              <section aria-labelledby="up-next-heading">
-                <div className="mb-2 flex items-center justify-between px-2">
-                  <h2
-                    id="up-next-heading"
-                    className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase"
+                  {reviewedExpanded && (
+                    <div
+                      id="reviewed-units"
+                      className="mt-2 max-h-[32vh] space-y-1 overflow-y-auto"
+                    >
+                      {pathSections.reviewed
+                        .slice(0, reviewedLimit)
+                        .map((entry) => (
+                          <ReviewPathUnit
+                            key={entry.unit.id}
+                            entry={entry}
+                            active={false}
+                            onSelect={selectConceptPath}
+                          />
+                        ))}
+                      {pathSections.reviewed.length > reviewedLimit && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setReviewedLimit((current) =>
+                              Math.min(
+                                current + PATH_PAGE_SIZE,
+                                pathSections.reviewed.length,
+                              ),
+                            )
+                          }
+                          className="text-cyan hover:bg-cyan/[.06] w-full rounded-lg px-3 py-2 text-[10px] transition"
+                        >
+                          Show{" "}
+                          {Math.min(
+                            PATH_PAGE_SIZE,
+                            pathSections.reviewed.length - reviewedLimit,
+                          )}{" "}
+                          more reviewed
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+              {!pathSearch.trim() && pathSections.waiting.length > 0 && (
+                <section className="shrink-0 border-b border-line px-3 py-3">
+                  <button
+                    type="button"
+                    aria-expanded={waitingExpanded}
+                    aria-controls="waiting-units"
+                    onClick={() => {
+                      setWaitingExpanded((current) => !current);
+                      setWaitingLimit(INITIAL_PATH_ITEMS);
+                    }}
+                    className="hover:bg-surface-subtle flex w-full items-center justify-between rounded-lg px-2 py-1 text-left transition"
                   >
-                    Up next
-                  </h2>
-                  <span className="text-fog text-[9px]">
-                    {pathSections.upcoming.length}
+                    <span className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
+                      Waiting for response
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-cyan text-[9px]">
+                        {pathSections.waiting.length}
+                      </span>
+                      <ChevronDown
+                        className={cn(
+                          "text-fog size-3.5 transition-transform",
+                          waitingExpanded && "rotate-180",
+                        )}
+                      />
+                    </span>
+                  </button>
+                  {waitingExpanded && (
+                    <div
+                      id="waiting-units"
+                      className="mt-2 max-h-[28vh] space-y-1 overflow-y-auto"
+                    >
+                      {pathSections.waiting
+                        .slice(0, waitingLimit)
+                        .map((entry) => (
+                          <ReviewPathUnit
+                            key={entry.unit.id}
+                            entry={entry}
+                            active={false}
+                            onSelect={selectConceptPath}
+                          />
+                        ))}
+                      {pathSections.waiting.length > waitingLimit && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setWaitingLimit((current) =>
+                              Math.min(
+                                current + PATH_PAGE_SIZE,
+                                pathSections.waiting.length,
+                              ),
+                            )
+                          }
+                          className="text-cyan hover:bg-cyan/[.06] w-full whitespace-nowrap rounded-lg px-3 py-2 text-[10px] transition"
+                        >
+                          Show{" "}
+                          {Math.min(
+                            PATH_PAGE_SIZE,
+                            pathSections.waiting.length - waitingLimit,
+                          )}{" "}
+                          more
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+              <div className="shrink-0 border-b border-line px-3 py-3">
+                <div className="mb-1 flex items-center justify-between px-2">
+                  <span className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
+                    Current
+                  </span>
+                  <span
+                    className="text-fog text-[9px]"
+                    title={`Canonical concept position ${activeConceptPathIndex + 1} of ${conceptPathUnits.length}`}
+                  >
+                    {activeConceptPathIndex + 1}
                   </span>
                 </div>
-                {pathSections.upcoming.length ? (
-                  <div className="space-y-1">
-                    {pathSections.upcoming.slice(0, queueLimit).map((entry) => (
-                      <ReviewPathUnit
-                        key={entry.unit.id}
-                        entry={entry}
-                        active={false}
-                        onSelect={selectConceptPath}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-mist rounded-xl border border-dashed border-line px-3 py-4 text-center text-[10px]">
-                    No concepts left in the queue.
-                  </p>
+                {pathSections.current && (
+                  <ReviewPathUnit
+                    entry={pathSections.current}
+                    active
+                    onSelect={selectConceptPath}
+                  />
                 )}
-                <div className="mt-2 flex items-center gap-1">
-                  {pathSections.upcoming.length > queueLimit && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setQueueLimit((current) =>
-                          Math.min(
-                            current + PATH_PAGE_SIZE,
-                            pathSections.upcoming.length,
-                          ),
-                        )
-                      }
-                      className="text-cyan hover:bg-cyan/[.06] flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-[10px] transition"
-                    >
-                      Show{" "}
-                      {Math.min(
-                        PATH_PAGE_SIZE,
-                        pathSections.upcoming.length - queueLimit,
-                      )}{" "}
-                      more
-                    </button>
-                  )}
-                  {queueLimit > INITIAL_PATH_ITEMS && (
-                    <button
-                      type="button"
-                      onClick={() => setQueueLimit(INITIAL_PATH_ITEMS)}
-                      className="text-mist hover:bg-surface-subtle shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-[10px] transition"
-                    >
-                      Show less
-                    </button>
-                  )}
-                </div>
-              </section>
-            )}
-          </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {pathSearch.trim() ? (
+                  <section aria-labelledby="search-results-heading">
+                    <div className="mb-2 flex items-center justify-between px-2">
+                      <h2
+                        id="search-results-heading"
+                        className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase"
+                      >
+                        Matches
+                      </h2>
+                      <span className="text-fog text-[9px]">
+                        {searchResults.length}
+                      </span>
+                    </div>
+                    {searchResults.length ? (
+                      <div className="space-y-1">
+                        {searchResults.slice(0, searchLimit).map((entry) => (
+                          <ReviewPathUnit
+                            key={entry.unit.id}
+                            entry={entry}
+                            active={false}
+                            onSelect={selectUnit}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-mist rounded-xl border border-dashed border-line px-3 py-4 text-center text-[10px] leading-4">
+                        No other units match your search.
+                      </p>
+                    )}
+                    {searchResults.length > searchLimit && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSearchLimit((current) =>
+                            Math.min(
+                              current + PATH_PAGE_SIZE,
+                              searchResults.length,
+                            ),
+                          )
+                        }
+                        className="text-cyan hover:bg-cyan/[.06] mt-2 w-full rounded-lg px-3 py-2 text-[10px] transition"
+                      >
+                        Show{" "}
+                        {Math.min(
+                          PATH_PAGE_SIZE,
+                          searchResults.length - searchLimit,
+                        )}{" "}
+                        more matches
+                      </button>
+                    )}
+                  </section>
+                ) : (
+                  <section aria-labelledby="up-next-heading">
+                    <div className="mb-2 flex items-center justify-between px-2">
+                      <h2
+                        id="up-next-heading"
+                        className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase"
+                      >
+                        Up next
+                      </h2>
+                      <span className="text-fog text-[9px]">
+                        {pathSections.upcoming.length}
+                      </span>
+                    </div>
+                    {pathSections.upcoming.length ? (
+                      <div className="space-y-1">
+                        {pathSections.upcoming
+                          .slice(0, queueLimit)
+                          .map((entry) => (
+                            <ReviewPathUnit
+                              key={entry.unit.id}
+                              entry={entry}
+                              active={false}
+                              onSelect={selectConceptPath}
+                            />
+                          ))}
+                      </div>
+                    ) : (
+                      <p className="text-mist rounded-xl border border-dashed border-line px-3 py-4 text-center text-[10px]">
+                        No concepts left in the queue.
+                      </p>
+                    )}
+                    <div className="mt-2 flex items-center gap-1">
+                      {pathSections.upcoming.length > queueLimit && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setQueueLimit((current) =>
+                              Math.min(
+                                current + PATH_PAGE_SIZE,
+                                pathSections.upcoming.length,
+                              ),
+                            )
+                          }
+                          className="text-cyan hover:bg-cyan/[.06] flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-[10px] transition"
+                        >
+                          Show{" "}
+                          {Math.min(
+                            PATH_PAGE_SIZE,
+                            pathSections.upcoming.length - queueLimit,
+                          )}{" "}
+                          more
+                        </button>
+                      )}
+                      {queueLimit > INITIAL_PATH_ITEMS && (
+                        <button
+                          type="button"
+                          onClick={() => setQueueLimit(INITIAL_PATH_ITEMS)}
+                          className="text-mist hover:bg-surface-subtle shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-[10px] transition"
+                        >
+                          Show less
+                        </button>
+                      )}
+                    </div>
+                  </section>
+                )}
+              </div>
+            </>
+          ) : (
+            <ReviewFilesPanel
+              files={reviewFiles}
+              search={pathSearch}
+              selectedPath={completedBrowsing ? undefined : activeUnit.path}
+              pendingFileId={pendingFileId}
+              onSelect={selectReviewFile}
+              onToggle={toggleReviewFile}
+            />
+          )}
           <div className="shrink-0 border-t border-line p-3">
             <button
               type="button"
-              aria-label="Hide review path"
-              title="Hide review path"
+              aria-label={`Hide ${reviewMode === "path" ? "review path" : "changed files"}`}
+              title={`Hide ${reviewMode === "path" ? "review path" : "changed files"}`}
               onClick={hidePathPanel}
               className="text-mist hover:bg-surface-subtle hover:text-cloud flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[10px] transition"
             >
               <PanelLeftClose className="size-3.5" />
-              <span>Hide review path</span>
+              <span>
+                Hide {reviewMode === "path" ? "review path" : "changed files"}
+              </span>
               <ShortcutHint
                 shortcut={reviewShortcuts.togglePathPanel}
                 className="ml-auto"
@@ -6712,9 +6955,46 @@ export function ReviewWorkspace({
               }
               queueLoading={reviewQueue.isLoading}
               onDashboard={openPullRequests}
-              onDismiss={() => setCompletionOpen(false)}
+              onDismiss={browseCompletedReview}
               onNextReview={openNextReview}
             />
+          )}
+          {completedBrowsing && !completionVisible && (
+            <section className="bg-ink absolute inset-0 z-30 grid place-items-center overflow-y-auto p-6 font-sans">
+              <div className="w-full max-w-xl rounded-3xl border border-lime/20 bg-panel p-8 text-center shadow-[0_24px_90px_var(--app-shadow)] sm:p-10">
+                <span className="border-lime/25 bg-lime/10 text-lime mx-auto grid size-14 place-items-center rounded-2xl border">
+                  <CheckCheck className="size-7" />
+                </span>
+                <p className="text-lime mt-6 text-[10px] font-semibold tracking-[.16em] uppercase">
+                  Completed review
+                </p>
+                <h1 className="font-editorial mt-2 text-3xl text-cloud">
+                  All files reviewed.
+                </h1>
+                <p className="text-mist mx-auto mt-3 max-w-md text-sm leading-6">
+                  Every semantic review unit is signed off at this revision.
+                  Select a file from the tree to inspect the completed review.
+                </p>
+                <div className="mt-7 grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-line bg-surface/50 px-4 py-3">
+                    <span className="text-fog block text-[9px] uppercase">
+                      Files
+                    </span>
+                    <span className="mt-1 block font-mono text-lg text-cloud">
+                      {completedFileCount}
+                    </span>
+                  </div>
+                  <div className="rounded-xl border border-line bg-surface/50 px-4 py-3">
+                    <span className="text-fog block text-[9px] uppercase">
+                      Units
+                    </span>
+                    <span className="mt-1 block font-mono text-lg text-cloud">
+                      {signedCount}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </section>
           )}
           <div
             className={cn(
@@ -6726,10 +7006,10 @@ export function ReviewWorkspace({
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-3 py-3 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4 lg:px-7">
               <button
                 type="button"
-                aria-label="Show review path"
+                aria-label={`Show ${reviewMode === "path" ? "review path" : "changed files"}`}
                 aria-controls="review-path-panel"
                 aria-expanded={pathPanelOpen}
-                title="Show review path"
+                title={`Show ${reviewMode === "path" ? "review path" : "changed files"}`}
                 onClick={showPathPanel}
                 className={cn(
                   "text-mist hover:text-cyan h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-cyan/25 hover:bg-cyan/[.05]",
@@ -6738,7 +7018,7 @@ export function ReviewWorkspace({
               >
                 <PanelLeftOpen className="size-3.5" />
                 <span className="hidden text-[10px] sm:inline">
-                  Review path
+                  {reviewMode === "path" ? "Review path" : "Files"}
                 </span>
                 <ShortcutHint
                   shortcut={reviewShortcuts.togglePathPanel}
@@ -6751,7 +7031,9 @@ export function ReviewWorkspace({
                     className="truncate text-sm font-medium"
                     title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
                   >
-                    {activeConcept?.title ?? activeUnit.name}
+                    {reviewMode === "files"
+                      ? (activeUnit.path.split("/").at(-1) ?? activeUnit.path)
+                      : (activeConcept?.title ?? activeUnit.name)}
                   </h1>
                   {activeWaitStatus === "waiting" &&
                     (activeUnitAnswered ? (
@@ -6770,6 +7052,33 @@ export function ReviewWorkspace({
                       Changed
                     </Badge>
                   )}
+                  {reviewMode === "files" &&
+                    activeReviewFile &&
+                    activeReviewFile.newUnits > 0 && (
+                      <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                        {activeReviewFile.newUnits} new
+                      </Badge>
+                    )}
+                  {reviewMode === "files" &&
+                    activeReviewFile &&
+                    activeReviewFile.updatedUnits > 0 && (
+                      <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+                        {activeReviewFile.updatedUnits} updated
+                      </Badge>
+                    )}
+                  {reviewMode === "path" &&
+                    activeUnit.revisionState === "new" && (
+                      <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                        New
+                      </Badge>
+                    )}
+                  {reviewMode === "path" &&
+                    activeUnit.revisionState === "updated" &&
+                    !activeUnit.changedSinceSignOff && (
+                      <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+                        Updated
+                      </Badge>
+                    )}
                   {activeUnit.changeType !== "modified" && (
                     <Badge
                       className={cn(
@@ -7038,10 +7347,12 @@ export function ReviewWorkspace({
                       : "rounded-t-xl border-t",
                   )}
                 >
-                  <ReviewConceptFileCardHeader
+                  <ReviewFileCardHeader
                     members={activeFileCardMembers}
-                    index={activeConceptCardIndex}
-                    count={activeConceptFileCards.length}
+                    index={reviewMode === "files" ? 0 : activeConceptCardIndex}
+                    count={
+                      reviewMode === "files" ? 1 : activeConceptFileCards.length
+                    }
                     selected
                     actions={
                       activeUnit.kind !== "binary" ? (
@@ -7442,17 +7753,18 @@ export function ReviewWorkspace({
                   )}
               </div>
             </div>
-            {activeConceptFileCards
-              .slice(activeConceptCardIndex + 1)
-              .map((card, cardOffset) => (
-                <div key={card.path} className="mt-4">
-                  {
-                    conceptFileCardPreviews[
-                      activeConceptCardIndex + cardOffset + 1
-                    ]
-                  }
-                </div>
-              ))}
+            {reviewMode === "path" &&
+              activeConceptFileCards
+                .slice(activeConceptCardIndex + 1)
+                .map((card, cardOffset) => (
+                  <div key={card.path} className="mt-4">
+                    {
+                      conceptFileCardPreviews[
+                        activeConceptCardIndex + cardOffset + 1
+                      ]
+                    }
+                  </div>
+                ))}
           </div>
           {aiStatus.data?.status === "completed" && aiStatus.data.result && (
             <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">
@@ -7831,18 +8143,30 @@ export function ReviewWorkspace({
                       }}
                       options={[
                         {
-                          description: cardActionAvailable
-                            ? `Record all ${outstandingCardMembers.length} outstanding units represented by this file card`
-                            : "Record this unit and open the next card in the concept",
-                          disabled: cardActionAvailable
-                            ? !canSignOffCard
-                            : !canSignOffUnit,
-                          label: cardActionAvailable
-                            ? "Sign off card"
-                            : "Sign off unit",
-                          onSelect: cardActionAvailable
-                            ? signOffActiveCard
-                            : signOffActiveUnit,
+                          description:
+                            reviewMode === "files" && activeReviewFile
+                              ? `Record all ${activeFileOutstandingUnits} outstanding units in this file`
+                              : cardActionAvailable
+                                ? `Record all ${outstandingCardMembers.length} outstanding units represented by this file card`
+                                : "Record this unit and open the next card in the concept",
+                          disabled:
+                            reviewMode === "files"
+                              ? !canSignOffActiveFile
+                              : cardActionAvailable
+                                ? !canSignOffCard
+                                : !canSignOffUnit,
+                          label:
+                            reviewMode === "files"
+                              ? "Sign off file"
+                              : cardActionAvailable
+                                ? "Sign off card"
+                                : "Sign off unit",
+                          onSelect:
+                            reviewMode === "files" && activeReviewFile
+                              ? () => toggleReviewFile(activeReviewFile)
+                              : cardActionAvailable
+                                ? signOffActiveCard
+                                : signOffActiveUnit,
                           shortcut: reviewShortcuts.signOff,
                         },
                         {

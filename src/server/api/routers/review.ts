@@ -33,6 +33,7 @@ import {
   reviewUnits,
   reviewWaits,
   signOffs,
+  snapshotFiles,
   syncRuns,
   users,
   workflowRuns,
@@ -116,6 +117,7 @@ import {
   replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
   resolveReviewThreadSchema,
+  reviewFileActionSchema,
   reviewThreadCommentSchema,
   reviewThreadSchema,
   reviewUnitSchema,
@@ -127,6 +129,7 @@ import {
   symbolDefinitionSchema,
   syncPullRequestSchema,
   unreviewConceptSchema,
+  unreviewFileSchema,
   unreviewSchema,
 } from "~/validators/review";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
@@ -2150,6 +2153,7 @@ export const reviewRouter = createTRPCRouter({
           snapshot: null,
           previousSnapshot: null,
           units: [],
+          files: [],
           fileContexts: [],
           conceptLayout: null,
           concepts: [],
@@ -2159,42 +2163,63 @@ export const reviewRouter = createTRPCRouter({
         };
       // The unit list, the reviewer's concept layouts and their sign-offs on
       // earlier revisions depend only on the snapshot, so they are one round.
-      const [storedUnits, layouts, priorSignedUnits] = await Promise.all([
-        ctx.db.query.reviewUnits.findMany({
-          where: eq(reviewUnits.snapshotId, snapshot.id),
-          orderBy: [reviewUnits.reviewOrder],
-        }),
-        ctx.db
-          .select()
-          .from(reviewConceptLayouts)
-          .where(
-            and(
-              eq(reviewConceptLayouts.snapshotId, snapshot.id),
-              or(
-                eq(reviewConceptLayouts.userId, ctx.auth.userId),
-                isNull(reviewConceptLayouts.userId),
+      const [storedUnits, storedFiles, layouts, priorSignedUnits, priorUnits] =
+        await Promise.all([
+          ctx.db.query.reviewUnits.findMany({
+            where: eq(reviewUnits.snapshotId, snapshot.id),
+            orderBy: [reviewUnits.reviewOrder],
+          }),
+          ctx.db.query.snapshotFiles.findMany({
+            where: eq(snapshotFiles.snapshotId, snapshot.id),
+            orderBy: [snapshotFiles.path],
+            columns: {
+              id: true,
+              path: true,
+              previousPath: true,
+              changeType: true,
+              additions: true,
+              deletions: true,
+              isBinary: true,
+              skipReason: true,
+            },
+          }),
+          ctx.db
+            .select()
+            .from(reviewConceptLayouts)
+            .where(
+              and(
+                eq(reviewConceptLayouts.snapshotId, snapshot.id),
+                or(
+                  eq(reviewConceptLayouts.userId, ctx.auth.userId),
+                  isNull(reviewConceptLayouts.userId),
+                ),
               ),
             ),
-          ),
-        snapshot.version > 1
-          ? ctx.db
-              .selectDistinct({ stableKey: reviewUnits.stableKey })
-              .from(signOffs)
-              .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
-              .innerJoin(
-                reviewSnapshots,
-                eq(reviewUnits.snapshotId, reviewSnapshots.id),
-              )
-              .where(
-                and(
-                  eq(signOffs.userId, ctx.auth.userId),
-                  isNull(signOffs.invalidatedAt),
-                  eq(reviewSnapshots.pullRequestId, pullRequest.id),
-                  lt(reviewSnapshots.version, snapshot.version),
-                ),
-              )
-          : [],
-      ]);
+          snapshot.version > 1
+            ? ctx.db
+                .selectDistinct({ stableKey: reviewUnits.stableKey })
+                .from(signOffs)
+                .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
+                .innerJoin(
+                  reviewSnapshots,
+                  eq(reviewUnits.snapshotId, reviewSnapshots.id),
+                )
+                .where(
+                  and(
+                    eq(signOffs.userId, ctx.auth.userId),
+                    isNull(signOffs.invalidatedAt),
+                    eq(reviewSnapshots.pullRequestId, pullRequest.id),
+                    lt(reviewSnapshots.version, snapshot.version),
+                  ),
+                )
+            : [],
+          previousSnapshot
+            ? ctx.db.query.reviewUnits.findMany({
+                where: eq(reviewUnits.snapshotId, previousSnapshot.id),
+                columns: { stableKey: true },
+              })
+            : [],
+        ]);
       const activeLayout =
         layouts.find(({ userId }) => userId === ctx.auth.userId) ??
         layouts.find(({ userId }) => userId === null);
@@ -2274,6 +2299,9 @@ export const reviewRouter = createTRPCRouter({
       const signedUnitIds = new Set(
         userSignOffs.map((signOff) => signOff.unitId),
       );
+      const signedOffAtByUnitId = new Map(
+        userSignOffs.map((signOff) => [signOff.unitId, signOff.signedOffAt]),
+      );
       const layoutLockedByNewSignOff = userSignOffs.some(
         ({ signedOffAt }) => signedOffAt >= snapshot.createdAt,
       );
@@ -2283,8 +2311,12 @@ export const reviewRouter = createTRPCRouter({
       const previouslySignedStableKeys = new Set(
         priorSignedUnits.map(({ stableKey }) => stableKey),
       );
+      const previousStableKeys = new Set(
+        priorUnits.map(({ stableKey }) => stableKey),
+      );
       const workspaceUnits = units.map((unit) => {
         const wait = waitByUnitId.get(unit.id);
+        const signedOffAt = signedOffAtByUnitId.get(unit.id);
         return {
           ...unit,
           dependencies: dependenciesByUnit.get(unit.id) ?? [],
@@ -2300,6 +2332,19 @@ export const reviewRouter = createTRPCRouter({
           changedSinceSignOff:
             unit.requiresReReview &&
             previouslySignedStableKeys.has(unit.stableKey),
+          revisionState:
+            snapshot.version === 1
+              ? ("initial" as const)
+              : !previousStableKeys.has(unit.stableKey)
+                ? ("new" as const)
+                : unit.requiresReReview
+                  ? ("updated" as const)
+                  : ("unchanged" as const),
+          signOffOrigin: signedOffAt
+            ? signedOffAt < snapshot.createdAt
+              ? ("preserved" as const)
+              : ("current" as const)
+            : ("none" as const),
         };
       });
       let conceptLayout: {
@@ -2414,6 +2459,7 @@ export const reviewRouter = createTRPCRouter({
               version: previousSnapshot.version,
             }
           : null,
+        files: storedFiles,
         fileContexts,
         conceptLayout,
         concepts,
@@ -4674,6 +4720,259 @@ export const reviewRouter = createTRPCRouter({
         return {
           unreviewed: true,
           unitIds: active.map(({ unitId }) => unitId),
+        };
+      }),
+    ),
+
+  signOffFile: protectedProcedure
+    .input(reviewFileActionSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        const [file] = await tx
+          .select({
+            id: snapshotFiles.id,
+            snapshotId: snapshotFiles.snapshotId,
+            pullRequestId: pullRequests.id,
+          })
+          .from(snapshotFiles)
+          .innerJoin(
+            reviewSnapshots,
+            eq(snapshotFiles.snapshotId, reviewSnapshots.id),
+          )
+          .innerJoin(
+            pullRequests,
+            eq(reviewSnapshots.pullRequestId, pullRequests.id),
+          )
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(
+            and(
+              eq(snapshotFiles.id, input.snapshotFileId),
+              eq(reviewSnapshots.headSha, pullRequests.headSha),
+              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+              eq(workspaceMembers.userId, ctx.auth.userId),
+            ),
+          )
+          .limit(1);
+        if (!file) throw new TRPCError({ code: "NOT_FOUND" });
+        const members = await tx.query.reviewUnits.findMany({
+          where: and(
+            eq(reviewUnits.snapshotFileId, file.id),
+            notInArray(reviewUnits.kind, ["file"]),
+          ),
+          orderBy: [reviewUnits.reviewOrder],
+        });
+        if (members.length === 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "This file has no semantic review units to sign off",
+          });
+        }
+        const waits = await tx
+          .select({ unitId: reviewWaits.unitId })
+          .from(reviewWaits)
+          .where(
+            and(
+              eq(reviewWaits.userId, ctx.auth.userId),
+              inArray(
+                reviewWaits.unitId,
+                members.map(({ id }) => id),
+              ),
+            ),
+          )
+          .limit(1);
+        if (waits.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Resolve the units waiting for a provider response before signing off this file",
+          });
+        }
+        const complexity = members.reduce(
+          (total, member) => total + Math.max(1, member.complexity),
+          0,
+        );
+        let allocated = 0;
+        const memberInputs = members.map((member, index) => {
+          const durationSeconds =
+            index === members.length - 1
+              ? input.durationSeconds - allocated
+              : Math.floor(
+                  (input.durationSeconds * Math.max(1, member.complexity)) /
+                    complexity,
+                );
+          allocated += durationSeconds;
+          return {
+            unitId: member.id,
+            sessionId: input.sessionId,
+            durationSeconds,
+          };
+        });
+        const outcomes = await persistSignOffs(
+          tx,
+          ctx.auth.userId,
+          memberInputs,
+        );
+        const writes: PersistedSignOff[] = [];
+        for (const { unitId } of memberInputs) {
+          const outcome = outcomes.get(unitId);
+          if (!outcome) throw new TRPCError({ code: "NOT_FOUND" });
+          if (!outcome.ok) throw signOffFailure(outcome);
+          writes.push(outcome.write);
+        }
+        await finalizeSignOffs(tx, ctx.auth.userId, writes);
+        return {
+          snapshotFileId: file.id,
+          signedUnitIds: members.map(({ id }) => id),
+        };
+      }),
+    ),
+
+  unreviewFile: protectedProcedure
+    .input(unreviewFileSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        const [file] = await tx
+          .select({
+            id: snapshotFiles.id,
+            snapshotId: snapshotFiles.snapshotId,
+            pullRequestId: pullRequests.id,
+          })
+          .from(snapshotFiles)
+          .innerJoin(
+            reviewSnapshots,
+            eq(snapshotFiles.snapshotId, reviewSnapshots.id),
+          )
+          .innerJoin(
+            pullRequests,
+            eq(reviewSnapshots.pullRequestId, pullRequests.id),
+          )
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(
+            and(
+              eq(snapshotFiles.id, input.snapshotFileId),
+              eq(reviewSnapshots.headSha, pullRequests.headSha),
+              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+              eq(workspaceMembers.userId, ctx.auth.userId),
+            ),
+          )
+          .limit(1);
+        if (!file) throw new TRPCError({ code: "NOT_FOUND" });
+        const members = await tx
+          .select({
+            id: reviewUnits.id,
+            stableKey: reviewUnits.stableKey,
+            complexity: reviewUnits.complexity,
+          })
+          .from(reviewUnits)
+          .where(
+            and(
+              eq(reviewUnits.snapshotFileId, file.id),
+              notInArray(reviewUnits.kind, ["file"]),
+            ),
+          );
+        if (members.length === 0) {
+          return { snapshotFileId: file.id, unreviewedUnitIds: [] };
+        }
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${file.pullRequestId}:${ctx.auth.userId}`}))`,
+        );
+        const active = await tx
+          .select({
+            unitId: signOffs.unitId,
+            signedOffAt: signOffs.signedOffAt,
+            durationSeconds: signOffs.durationSeconds,
+            complexity: reviewUnits.complexity,
+          })
+          .from(signOffs)
+          .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
+          .where(
+            and(
+              eq(signOffs.userId, ctx.auth.userId),
+              isNull(signOffs.invalidatedAt),
+              inArray(
+                signOffs.unitId,
+                members.map(({ id }) => id),
+              ),
+            ),
+          );
+        if (active.length === 0) {
+          return { snapshotFileId: file.id, unreviewedUnitIds: [] };
+        }
+        const lineage = await tx
+          .select({ id: reviewUnits.id })
+          .from(reviewUnits)
+          .innerJoin(
+            reviewSnapshots,
+            eq(reviewUnits.snapshotId, reviewSnapshots.id),
+          )
+          .where(
+            and(
+              eq(reviewSnapshots.pullRequestId, file.pullRequestId),
+              inArray(
+                reviewUnits.stableKey,
+                members.map(({ stableKey }) => stableKey),
+              ),
+            ),
+          );
+        await tx
+          .update(signOffs)
+          .set({ invalidatedAt: new Date() })
+          .where(
+            and(
+              eq(signOffs.userId, ctx.auth.userId),
+              isNull(signOffs.invalidatedAt),
+              inArray(
+                signOffs.unitId,
+                lineage.map(({ id }) => id),
+              ),
+            ),
+          );
+        if (input.sessionId) {
+          const session = await tx.query.reviewSessions.findFirst({
+            where: and(
+              eq(reviewSessions.id, input.sessionId),
+              eq(reviewSessions.userId, ctx.auth.userId),
+              eq(reviewSessions.snapshotId, file.snapshotId),
+            ),
+          });
+          if (session) {
+            const inSession = active.filter(
+              ({ signedOffAt }) => signedOffAt >= session.startedAt,
+            );
+            const experience = inSession.reduce(
+              (total, signOff) =>
+                total +
+                reviewExperience(signOff.complexity, signOff.durationSeconds),
+              0,
+            );
+            await tx
+              .update(reviewSessions)
+              .set({
+                reviewedUnits: sql`greatest(${reviewSessions.reviewedUnits} - ${inSession.length}, 0)`,
+                experienceAwarded: sql`greatest(${reviewSessions.experienceAwarded} - ${experience}, 0)`,
+                completedAt: null,
+              })
+              .where(eq(reviewSessions.id, session.id));
+          }
+        }
+        await recomputeReviewStats(tx, ctx.auth.userId);
+        return {
+          snapshotFileId: file.id,
+          unreviewedUnitIds: active.map(({ unitId }) => unitId),
         };
       }),
     ),

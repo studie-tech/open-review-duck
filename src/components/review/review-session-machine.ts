@@ -7,6 +7,7 @@ export const reviewSessionMachine = setup({
       | { type: "SYNC_STARTED" }
       | { type: "SYNC_FINISHED" }
       | { type: "REVIEW_COMPLETED" }
+      | { type: "REVIEW_BROWSED" }
       | { type: "REVIEW_REOPENED" },
   },
 }).createMachine({
@@ -16,16 +17,23 @@ export const reviewSessionMachine = setup({
     reviewing: {
       on: {
         SYNC_STARTED: "synchronizing",
-        REVIEW_COMPLETED: "completed",
+        REVIEW_COMPLETED: "completedOverlay",
       },
     },
     synchronizing: {
       on: {
         SYNC_FINISHED: "reviewing",
-        REVIEW_COMPLETED: "completed",
+        REVIEW_COMPLETED: "completedOverlay",
       },
     },
-    completed: {
+    completedOverlay: {
+      on: {
+        REVIEW_BROWSED: "completedBrowsing",
+        REVIEW_REOPENED: "reviewing",
+        SYNC_STARTED: "synchronizing",
+      },
+    },
+    completedBrowsing: {
       on: {
         REVIEW_REOPENED: "reviewing",
         SYNC_STARTED: "synchronizing",

@@ -81,7 +81,7 @@ vi.mock("~/trpc/react", () => ({
       },
     },
     review: {
-      signOff: {
+      signOffFile: {
         useMutation: (options: unknown) => {
           mutationSpies.signOffOptions(options);
           return {
@@ -91,7 +91,7 @@ vi.mock("~/trpc/react", () => ({
           };
         },
       },
-      unreview: {
+      unreviewFile: {
         useMutation: () => ({
           mutate: mutationSpies.unreviewMutate,
           isPending: false,
@@ -135,8 +135,11 @@ function makeUnit(
     source: `source of ${sequence}\nline two\nline three\n`,
     previousSource: null,
     changeType: "modified",
+    changedLineCount: 3,
     changedSinceSignOff: false,
     requiresReReview: false,
+    revisionState: "initial",
+    signOffOrigin: "none",
     waitingSince: null,
     relatedRanges: [],
   };
@@ -234,7 +237,7 @@ describe("RepositoryReader", () => {
     expect(registrations.length).toBeGreaterThan(0);
     const ids = registrations.at(-1)?.map(({ id }) => id) ?? [];
     expect(ids).toContain("reader-sign-off");
-    expect(ids).toContain("reader-next-unit");
+    expect(ids).toContain("reader-next-file");
     expect(ids).toContain("reader-next-pending");
     // The active unit is unread, so marking unread starts disabled.
     const entries = registrations.at(-1) ?? [];
@@ -321,7 +324,7 @@ describe("RepositoryReader", () => {
       ["src/one.ts", "src/two.ts"],
     ]);
 
-    fireEvent.click(screen.getByText("unitName2"));
+    fireEvent.click(screen.getByRole("button", { name: /two\.ts/i }));
     await waitFor(() => {
       expect(sourceHydrationSpies.hydrate).toHaveBeenCalledTimes(3);
     });
@@ -330,30 +333,49 @@ describe("RepositoryReader", () => {
     ]);
   });
 
-  it("steps between units with the next-unit stroke and jumps whole files", () => {
+  it("shows each file once, groups its units in one card, and steps by file", async () => {
+    const first = makeUnit({
+      path: "src/a.ts",
+      snapshotFileId: "file-a",
+      name: "firstMember",
+      startLine: 1,
+      endLine: 2,
+    });
+    const second = makeUnit({
+      path: "src/a.ts",
+      snapshotFileId: "file-a",
+      name: "secondMember",
+      startLine: 4,
+      endLine: 5,
+    });
+    const third = makeUnit({
+      path: "src/b.ts",
+      snapshotFileId: "file-b",
+      name: "thirdMember",
+    });
     render(
       <ShellHarness>
         <RepositoryReader
-          initialData={makeData([
-            makeUnit({ path: "src/a.ts" }),
-            makeUnit({ path: "src/a.ts" }),
-            makeUnit({ path: "src/b.ts" }),
-          ])}
+          initialData={makeData([first, second, third])}
           monitor={monitor as never}
         />
       </ShellHarness>,
     );
-    expect(screen.getAllByText(/unitName1 ·/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /a\.ts/i })).toHaveLength(1);
+    await waitFor(() => {
+      expect(screen.getByText("firstMember")).toBeVisible();
+      expect(screen.getByText("secondMember")).toBeVisible();
+    });
+    expect(screen.getByText(/2 review units · 0\/2 reviewed/i)).toBeVisible();
     fireEvent.keyDown(document, {
       key: "ArrowDown",
       ctrlKey: true,
     });
-    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
-    fireEvent.keyDown(document, { key: "ArrowRight" });
-    expect(screen.getAllByText(/unitName3 ·/).length).toBeGreaterThan(0);
-    // Back one file lands on that file's first unit, not the unit stepped from.
-    fireEvent.keyDown(document, { key: "ArrowLeft" });
-    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
+    expect(screen.getByText("thirdMember")).toBeVisible();
+    expect(screen.queryByText("firstMember")).toBeNull();
+    fireEvent.keyDown(document, { key: "ArrowUp", ctrlKey: true });
+    expect(screen.getByText("firstMember")).toBeVisible();
+    expect(screen.getByText("secondMember")).toBeVisible();
   });
 
   it("reveals surrounding file context with the PR review shortcuts", () => {
@@ -395,103 +417,67 @@ describe("RepositoryReader", () => {
     expect(screen.getByText("below six")).toBeVisible();
   });
 
-  it("marks the active unit read and advances optimistically", () => {
-    const first = makeUnit();
-    const { container } = render(
+  it("signs off every unit in the active file with one mutation", () => {
+    const first = makeUnit({
+      path: "src/grouped.ts",
+      snapshotFileId: "file-grouped",
+    });
+    const second = makeUnit({
+      path: "src/grouped.ts",
+      snapshotFileId: "file-grouped",
+    });
+    render(
       <ShellHarness>
         <RepositoryReader
-          initialData={makeData([first, makeUnit()])}
+          initialData={makeData([first, second])}
           monitor={monitor as never}
         />
       </ShellHarness>,
     );
     fireEvent.keyDown(document, { key: "s" });
     expect(mutationSpies.signOffMutate).toHaveBeenCalledWith({
-      unitId: first.id,
+      snapshotFileId: "file-grouped",
       durationSeconds: 0,
     });
     const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as {
-      onMutate: (variables: { unitId: string }) => unknown;
+      onSuccess: (result: {
+        snapshotFileId: string;
+        signedUnitIds: string[];
+      }) => void;
     };
     act(() => {
-      options.onMutate({ unitId: first.id });
+      options.onSuccess({
+        snapshotFileId: "file-grouped",
+        signedUnitIds: [first.id, second.id],
+      });
     });
-    expect(container.querySelector("[aria-current='true']")).not.toBeNull();
-    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /sign off/i })).toBeEnabled();
+    expect(screen.getByText(/2 review units · 2\/2 reviewed/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /return file/i })).toBeEnabled();
   });
 
-  it("shows background save progress without waiting before advancing", () => {
-    const first = makeUnit();
+  it("keeps a file visibly pending and prevents duplicate submissions", () => {
+    const first = makeUnit({ snapshotFileId: "file-pending" });
     render(
       <ShellHarness>
         <RepositoryReader
-          initialData={makeData([first, makeUnit()])}
+          initialData={makeData([first])}
           monitor={monitor as never}
         />
       </ShellHarness>,
     );
-    const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as
-      | {
-          onMutate: (variables: { unitId: string }) => unknown;
-          onSettled: (
-            result: unknown,
-            error: unknown,
-            variables: { unitId: string },
-          ) => void;
-        }
-      | undefined;
-    if (!options) throw new Error("sign-off mutation was not registered");
-    act(() => {
-      options.onMutate({ unitId: first.id });
-    });
-    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
+    fireEvent.keyDown(document, { key: "s" });
+    fireEvent.keyDown(document, { key: "s" });
+    expect(mutationSpies.signOffMutate).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("status", { name: /saving reviews, 0\/1/i }),
-    ).toBeVisible();
-    act(() => {
-      options.onSettled(undefined, undefined, { unitId: first.id });
-    });
-    expect(screen.getAllByText(/unitName2 ·/).length).toBeGreaterThan(0);
-    expect(
-      screen.queryByRole("status", { name: /saving reviews/i }),
-    ).toBeNull();
+      screen.getByRole("button", { name: /sign off file/i }),
+    ).toBeDisabled();
   });
 
-  it("expands save progress when several sign-offs are queued", () => {
-    const first = makeUnit();
-    const second = makeUnit();
-    render(
-      <ShellHarness>
-        <RepositoryReader
-          initialData={makeData([first, second, makeUnit()])}
-          monitor={monitor as never}
-        />
-      </ShellHarness>,
-    );
-    const firstOptions = mutationSpies.signOffOptions.mock.calls.at(
-      -1,
-    )?.[0] as {
-      onMutate: (variables: { unitId: string }) => unknown;
-    };
-    act(() => {
-      firstOptions.onMutate({ unitId: first.id });
+  it("returns every reviewed unit in a file to review together", () => {
+    const unit = makeUnit({
+      status: "signed_off",
+      snapshotFileId: "file-reviewed",
     });
-    const secondOptions = mutationSpies.signOffOptions.mock.calls.at(
-      -1,
-    )?.[0] as {
-      onMutate: (variables: { unitId: string }) => unknown;
-    };
-    act(() => {
-      secondOptions.onMutate({ unitId: second.id });
-    });
-    expect(
-      screen.getByRole("status", { name: /saving reviews, 0\/2/i }),
-    ).toBeVisible();
-  });
-
-  it("prevents marking a unit unread while a sign-off is pending", () => {
-    const unit = makeUnit({ status: "signed_off" });
     const registrations: CommandCenterItem[][] = [];
     render(
       <ShellHarness onRegister={(commands) => registrations.push(commands)}>
@@ -501,19 +487,14 @@ describe("RepositoryReader", () => {
         />
       </ShellHarness>,
     );
-    const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as {
-      onMutate: (variables: { unitId: string }) => unknown;
-    };
-    act(() => {
-      options.onMutate({ unitId: unit.id });
-    });
-    expect(screen.getByRole("button", { name: /mark unread/i })).toBeDisabled();
     const command = registrations
       .at(-1)
       ?.find(({ id }) => id === "reader-mark-unread");
-    expect(command?.disabled).toBe(true);
+    expect(command?.disabled).toBe(false);
     command?.onSelect();
-    expect(mutationSpies.unreviewMutate).not.toHaveBeenCalled();
+    expect(mutationSpies.unreviewMutate).toHaveBeenCalledWith({
+      snapshotFileId: "file-reviewed",
+    });
   });
 
   it("focuses the path search with the search stroke and clears it on Escape", async () => {
@@ -526,18 +507,18 @@ describe("RepositoryReader", () => {
       </ShellHarness>,
     );
     fireEvent.keyDown(document, { key: "f" });
-    const search = screen.getByLabelText("Find file or symbol");
+    const search = screen.getByLabelText("Find a file");
     await waitFor(() => {
       expect(search).toHaveFocus();
     });
     fireEvent.change(search, { target: { value: "zzz-no-match" } });
-    expect(screen.getByText(/No files or symbols match/)).toBeVisible();
+    expect(screen.getByText(/No repository files match/)).toBeVisible();
     fireEvent.keyDown(search, { key: "Escape" });
     await waitFor(() => {
       expect(search).not.toHaveFocus();
     });
     expect(search).toHaveValue("");
-    expect(screen.queryByText(/No files or symbols match/)).toBeNull();
+    expect(screen.queryByText(/No repository files match/)).toBeNull();
   });
 
   it("toggles the review path panel with the panel stroke", () => {
@@ -549,11 +530,11 @@ describe("RepositoryReader", () => {
         />
       </ShellHarness>,
     );
-    expect(screen.getByLabelText("Find file or symbol")).toBeVisible();
+    expect(screen.getByLabelText("Find a file")).toBeVisible();
     fireEvent.keyDown(document, { key: "b", ctrlKey: true });
-    expect(screen.queryByLabelText("Find file or symbol")).toBeNull();
+    expect(screen.queryByLabelText("Find a file")).toBeNull();
     fireEvent.keyDown(document, { key: "b", ctrlKey: true });
-    expect(screen.getByLabelText("Find file or symbol")).toBeVisible();
+    expect(screen.getByLabelText("Find a file")).toBeVisible();
   });
 
   it("shows the previous revision when the unit carries one", async () => {
@@ -598,9 +579,9 @@ describe("RepositoryReader", () => {
         />
       </ShellHarness>,
     );
-    await user.click(screen.getByLabelText("Find file or symbol"));
-    await user.type(screen.getByLabelText("Find file or symbol"), "s");
+    await user.click(screen.getByLabelText("Find a file"));
+    await user.type(screen.getByLabelText("Find a file"), "s");
     expect(mutationSpies.signOffMutate).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Find file or symbol")).toHaveValue("s");
+    expect(screen.getByLabelText("Find a file")).toHaveValue("s");
   });
 });
