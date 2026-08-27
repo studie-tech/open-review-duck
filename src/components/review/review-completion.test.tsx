@@ -109,7 +109,7 @@ describe("ReviewCompletion", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Review complete." });
     const dismiss = screen.getByRole("button", {
-      name: "Keep completed review open",
+      name: "Close summary and browse reviewed files",
     });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(dismiss).toHaveFocus();

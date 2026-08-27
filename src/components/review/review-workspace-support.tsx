@@ -229,7 +229,7 @@ export function reviewCardMemberForLine(
 }
 
 /** Renders one file-card identity while preserving the atomic ledger beneath it. */
-export function ReviewConceptFileCardHeader({
+export function ReviewFileCardHeader({
   members,
   index,
   count,
@@ -313,6 +313,46 @@ export function ReviewConceptFileCardHeader({
         >
           {content}
         </button>
+      )}
+    </div>
+  );
+}
+
+/** Backwards-compatible name for concept cards; both modes use one file header. */
+export const ReviewConceptFileCardHeader = ReviewFileCardHeader;
+
+/** Shows revision provenance and ledger state at one unit's line boundary. */
+export function ReviewFileUnitMarker({ member }: { member: ReviewUnit }) {
+  return (
+    <div className="border-cyan/15 bg-cyan/[.025] mx-4 my-2 ml-[82px] flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 font-sans">
+      <span className="text-fog text-[9px] font-semibold tracking-[.12em] uppercase">
+        Review unit
+      </span>
+      <span className="text-cloud min-w-0 flex-1 truncate text-[10px] font-medium">
+        {member.name}
+      </span>
+      {member.revisionState === "new" && (
+        <Badge className="border-cyan/25 bg-cyan/10 text-cyan">New</Badge>
+      )}
+      {member.revisionState === "updated" && (
+        <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+          Updated
+        </Badge>
+      )}
+      {member.status === "signed_off" ? (
+        <Badge className="border-lime/25 bg-lime/10 text-lime">
+          <Check className="size-3" />
+          {member.signOffOrigin === "preserved"
+            ? "Reviewed earlier"
+            : "Reviewed"}
+        </Badge>
+      ) : member.status === "waiting" ? (
+        <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+          <Clock3 className="size-3" />
+          Waiting
+        </Badge>
+      ) : (
+        <Badge>Not reviewed</Badge>
       )}
     </div>
   );
@@ -633,7 +673,7 @@ export function relatedReviewRanges(
   unit: Pick<ReviewUnit, "relatedRanges"> | undefined,
   side: "current" | "previous",
 ) {
-  if (!unit?.relatedRanges) return undefined;
+  if (!unit?.relatedRanges?.length) return undefined;
   return unit.relatedRanges.flatMap((range) => {
     const startLine =
       side === "current" ? range.startLine : range.previousStartLine;

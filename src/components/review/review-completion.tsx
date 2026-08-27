@@ -171,8 +171,8 @@ export function ReviewCompletion({
         <button
           ref={initialFocusRef}
           type="button"
-          aria-label="Keep completed review open"
-          title="Keep completed review open (Escape)"
+          aria-label="Close summary and browse reviewed files"
+          title="Browse reviewed files (Escape)"
           onClick={onDismiss}
           className="text-mist hover:text-cloud hover:bg-surface-subtle absolute top-4 right-4 z-10 grid size-9 place-items-center rounded-full border border-transparent transition hover:border-line"
         >
@@ -198,7 +198,8 @@ export function ReviewCompletion({
             className="text-mist mt-3 max-w-xl text-sm leading-6"
           >
             You made it through every review unit. Your sign-offs are saved and
-            this pull request is fully reviewed at its current revision.
+            this pull request is fully reviewed at its current revision. Close
+            this summary to browse the reviewed files.
           </p>
 
           <dl className="mt-7 grid grid-cols-3 overflow-hidden rounded-2xl border border-line bg-surface/55">
@@ -301,7 +302,7 @@ export function ReviewCompletion({
               className="sm:mr-auto"
               onClick={onDismiss}
             >
-              Keep review open
+              Browse reviewed files
               <ShortcutHint shortcut={dismissShortcut} />
             </Button>
             <Button

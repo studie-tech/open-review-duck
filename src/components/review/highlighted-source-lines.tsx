@@ -15,6 +15,7 @@ export function HighlightedSourceLines({
   startLine,
   className,
   focusRange,
+  focusRanges,
   selectedRange,
   onSelectLine,
   renderAfterLine,
@@ -23,10 +24,13 @@ export function HighlightedSourceLines({
   startLine: number;
   className?: string;
   focusRange?: { startLine: number; endLine: number };
+  focusRanges?: Array<{ startLine: number; endLine: number }>;
   selectedRange?: { startLine: number; endLine: number };
   onSelectLine?: (line: number, extend: boolean) => void;
   renderAfterLine?: (line: number) => ReactNode;
 }) {
+  const reviewedRanges =
+    focusRanges ?? (focusRange === undefined ? [] : [focusRange]);
   return (
     <div
       className={cn(
@@ -42,9 +46,11 @@ export function HighlightedSourceLines({
             lineNumber <= selectedRange.endLine,
         );
         const contextLine = Boolean(
-          focusRange &&
-            (lineNumber < focusRange.startLine ||
-              lineNumber > focusRange.endLine),
+          reviewedRanges.length > 0 &&
+            !reviewedRanges.some(
+              ({ startLine: rangeStart, endLine: rangeEnd }) =>
+                lineNumber >= rangeStart && lineNumber <= rangeEnd,
+            ),
         );
         return (
           <Fragment key={lineNumber}>
@@ -52,7 +58,9 @@ export function HighlightedSourceLines({
               data-source-line={lineNumber}
               className={cn(
                 "group hover:bg-surface-hover/45 flex min-h-6 border-l-2 border-transparent",
-                focusRange && !contextLine && "border-l-cyan/35 bg-cyan/[.012]",
+                reviewedRanges.length > 0 &&
+                  !contextLine &&
+                  "border-l-cyan/35 bg-cyan/[.012]",
                 contextLine &&
                   "bg-surface-subtle/15 opacity-55 hover:opacity-80",
                 selected &&
