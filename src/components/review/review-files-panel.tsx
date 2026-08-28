@@ -288,10 +288,9 @@ export function ReviewFilesPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-line px-4 py-2.5">
-        <div
-          role="group"
+        <fieldset
           aria-label="Filter files"
-          className="bg-ink/55 flex w-full rounded-lg border border-line p-0.5 shadow-inner"
+          className="bg-ink/55 m-0 flex w-full min-w-0 rounded-lg border border-line p-0.5 shadow-inner"
         >
           {filters.map((option) => {
             const selected = filter === option.id;
@@ -312,7 +311,7 @@ export function ReviewFilesPanel({
               </button>
             );
           })}
-        </div>
+        </fieldset>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {tree.length > 0 ? (
