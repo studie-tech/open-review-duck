@@ -1380,6 +1380,7 @@ export function ReviewWorkspace({
     const pane = codeScrollRef.current;
     if (!pane) return;
 
+    /** Scrolls the selected file card just below the pane top. */
     const pinSelectedCard = () => {
       const card = reviewUnitStartRef.current;
       if (!card) {
