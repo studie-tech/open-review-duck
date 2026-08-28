@@ -200,7 +200,7 @@ export function DashboardOverview({
   const attentionCount = needsReview.length + repositoryAttentionCount;
 
   return (
-    <PageContainer className="mx-auto max-w-[1500px]">
+    <PageContainer>
       <header className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold tracking-[.18em] text-lime uppercase">

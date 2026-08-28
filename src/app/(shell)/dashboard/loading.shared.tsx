@@ -4,7 +4,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 /** Shows the workspace overview placeholder while the dashboard loads. */
 export default function DashboardLoading() {
   return (
-    <PageContainer className="mx-auto max-w-[1500px]">
+    <PageContainer>
       <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-end">
         <div className="w-full max-w-2xl">
           <Skeleton className="h-3 w-36" />

@@ -99,18 +99,80 @@ describe("ReviewFilesPanel", () => {
     );
   });
 
-  it("filters to files with new or updated units", async () => {
+  it("filters the tree from a single All / Needs review row", async () => {
     const user = userEvent.setup();
+    const signedOff = reviewFileEntries(
+      [
+        ...files.map((file) => ({
+          id: file.id,
+          path: file.path,
+          previousPath: file.previousPath,
+          changeType: file.changeType,
+          additions: file.additions,
+          deletions: file.deletions,
+          isBinary: file.isBinary,
+          skipReason: file.skipReason,
+        })),
+        {
+          id: "done-file",
+          path: "src/done.ts",
+          previousPath: null,
+          changeType: "modified",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+      ],
+      [
+        {
+          id: "reviewed",
+          path: "src/review/workspace.ts",
+          status: "signed_off",
+          revisionState: "unchanged",
+        },
+        {
+          id: "updated",
+          path: "src/review/workspace.ts",
+          status: "changed",
+          revisionState: "updated",
+        },
+        {
+          id: "done",
+          path: "src/done.ts",
+          status: "signed_off",
+          revisionState: "unchanged",
+        },
+      ],
+    );
     render(
       <ReviewFilesPanel
-        files={files}
+        files={signedOff}
         search=""
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "New & updated" }));
+
+    const group = screen.getByRole("group", { name: "Filter files" });
+    expect(group).toHaveClass("flex", "w-full");
+    expect(group).not.toHaveClass("flex-col");
+    expect(group.querySelectorAll("button.flex-1")).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: "New & updated" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reviewed" }),
+    ).not.toBeInTheDocument();
+
+    const all = screen.getByRole("button", { name: "All" });
+    const needsReview = screen.getByRole("button", { name: "Needs review" });
+    expect(all).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("done.ts")).toBeVisible();
+
+    await user.click(needsReview);
+    expect(needsReview).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("workspace.ts")).toBeVisible();
-    expect(screen.queryByText("duck.png")).not.toBeInTheDocument();
+    expect(screen.queryByText("done.ts")).not.toBeInTheDocument();
   });
 });

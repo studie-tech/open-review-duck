@@ -83,8 +83,11 @@ import {
 import {
   type ReviewFileEntry,
   type ReviewMode,
+  nextOutstandingReviewFile,
+  outstandingReviewFileUnits,
   rememberReviewMode,
   reviewFileEntries,
+  sortByReviewFileTreeOrder,
   storedReviewMode,
 } from "~/lib/review-files";
 import {
@@ -906,6 +909,10 @@ import {
   symbolPeekNotice,
   useSymbolPeek,
 } from "./symbol-peek";
+
+/** Matches the `h-5` spacer above the selected card so its header is never flush. */
+const SELECTED_REVIEW_CARD_GUTTER_PX = 20;
+
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -918,6 +925,8 @@ export function ReviewWorkspace({
   const [reviewSession, sendReviewSession] = useMachine(reviewSessionMachine);
   useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
   const [fileContexts, setFileContexts] = useState(initialData.fileContexts);
   // The workspace opens on work the reviewer can act on. A wait is a
   // property of one unit, so a sibling that is still pending remains a
@@ -1205,7 +1214,9 @@ export function ReviewWorkspace({
   const [undoPending, setUndoPending] = useState(false);
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
+  const reviewCardsAboveRef = useRef<HTMLDivElement>(null);
   const codeOverviewRef = useRef<HTMLDivElement>(null);
+  const [selectedCardStuck, setSelectedCardStuck] = useState(false);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState<string>();
   const [signOffQueue, dispatchSignOffQueue] = useReducer(
@@ -1221,13 +1232,6 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
-  useEffect(() => {
-    if (reviewMode !== "files" || !activeUnitId) return;
-    setFullFileUnitIds((current) => {
-      if (current.has(activeUnitId)) return current;
-      return new Set(current).add(activeUnitId);
-    });
-  }, [activeUnitId, reviewMode]);
   const restoredPositionSnapshotId = useRef<string | undefined>(undefined);
   useEffect(() => {
     const snapshotId = initialData.snapshot?.id;
@@ -1299,16 +1303,19 @@ export function ReviewWorkspace({
   );
   const activeConceptFileCards = useMemo(() => {
     const cards = conceptFileCardsInReadingOrder(activeConceptMembers);
-    if (
+    const withActive =
       activeUnit &&
       !cards.some(({ members }) =>
         members.some(({ id }) => id === activeUnit.id),
       )
-    ) {
-      return [{ path: activeUnit.path, members: [activeUnit] }, ...cards];
-    }
-    return cards;
-  }, [activeConceptMembers, activeUnit]);
+        ? [{ path: activeUnit.path, members: [activeUnit] }, ...cards]
+        : cards;
+    // Files mode follows the sidebar tree so a selected file is never buried
+    // under a later validator that happened to come first in the concept.
+    return reviewMode === "files"
+      ? sortByReviewFileTreeOrder(withActive)
+      : withActive;
+  }, [activeConceptMembers, activeUnit, reviewMode]);
   const activeFileCard = activeUnit
     ? activeConceptFileCards.find(({ members }) =>
         members.some(({ id }) => id === activeUnit.id),
@@ -1353,22 +1360,58 @@ export function ReviewWorkspace({
   const activeUnitFoundation = activeUnit
     ? reviewFoundationPriority(activeUnit)
     : undefined;
+  const updateSelectedCardChrome = useCallback(() => {
+    const pane = codeScrollRef.current;
+    const card = reviewUnitStartRef.current;
+    if (!pane || !card) {
+      setSelectedCardStuck(false);
+      return;
+    }
+    // The stuck chrome is only for when this card has scrolled under its own
+    // sticky header. Landing on a later file must keep a complete card top,
+    // even if earlier cards left the pane scrolled.
+    setSelectedCardStuck(
+      card.getBoundingClientRect().top <
+        pane.getBoundingClientRect().top - 1,
+    );
+  }, []);
   useLayoutEffect(() => {
     if (!activeUnit?.id) return;
     const pane = codeScrollRef.current;
-    const unitStart = reviewUnitStartRef.current;
     if (!pane) return;
-    if (!unitStart) {
-      pane.scrollTo({ top: 0, behavior: "auto" });
-      return;
-    }
-    const paneTop = pane.getBoundingClientRect().top;
-    const unitTop = unitStart.getBoundingClientRect().top;
-    pane.scrollTo({
-      top: Math.max(0, pane.scrollTop + unitTop - paneTop - 20),
-      behavior: "auto",
-    });
-  }, [activeUnit?.id]);
+
+    const pinSelectedCard = () => {
+      const card = reviewUnitStartRef.current;
+      if (!card) {
+        pane.scrollTo({ top: 0, behavior: "auto" });
+        setSelectedCardStuck(false);
+        return;
+      }
+      const paneTop = pane.getBoundingClientRect().top;
+      const cardTop = card.getBoundingClientRect().top;
+      pane.scrollTo({
+        top: Math.max(
+          0,
+          pane.scrollTop + cardTop - paneTop - SELECTED_REVIEW_CARD_GUTTER_PX,
+        ),
+        behavior: "auto",
+      });
+      updateSelectedCardChrome();
+    };
+
+    pinSelectedCard();
+    const cardsAbove = reviewCardsAboveRef.current;
+    if (!cardsAbove) return;
+    const observer = new ResizeObserver(pinSelectedCard);
+    observer.observe(cardsAbove);
+    // Previous-card previews can grow after first paint. Re-pin only while
+    // that layout is still settling so a later manual scroll is not yanked.
+    const settleId = window.setTimeout(() => observer.disconnect(), 400);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(settleId);
+    };
+  }, [activeConceptCardIndex, activeUnit?.id, reviewMode, updateSelectedCardChrome]);
   useLayoutEffect(() => {
     if (aiQuestionLine === undefined) {
       aiQuestionMoveAnchor.current = undefined;
@@ -2002,7 +2045,7 @@ export function ReviewWorkspace({
     },
     [units],
   );
-  /** Opens a complete file while retaining atomic ownership for interactions. */
+  /** Opens a file at its first actionable unit without expanding to the full file. */
   const selectReviewFile = useCallback(
     (file: ReviewFileEntry) => {
       const member =
@@ -2023,27 +2066,46 @@ export function ReviewWorkspace({
       if (index < 0) return;
       setCompletedBrowsing(false);
       selectUnit(index);
-      setFullFileUnitIds((current) => new Set(current).add(member.id));
     },
     [selectUnit, units],
   );
 
-  /** Applies or reverses one file-sized semantic review decision. */
+  /**
+   * Applies or reverses one file-sized semantic review decision.
+   *
+   * Sign-off uses the same optimistic queue as unit and card actions so a
+   * reviewer can tick several files without waiting for each save. After a
+   * sign-off the workspace opens the next outstanding file in the sidebar.
+   */
   function toggleReviewFile(file: ReviewFileEntry) {
-    if (pendingFileId || file.totalUnits === 0) return;
-    setPendingFileId(file.id);
+    if (file.totalUnits === 0 || file.waitingUnits > 0) return;
     if (file.state === "reviewed") {
+      if (
+        pendingFileId ||
+        file.units.some((unit) => signOffQueue.ids.has(unit.id))
+      ) {
+        return;
+      }
+      setPendingFileId(file.id);
       unreviewFile.mutate({
         snapshotFileId: file.id,
         sessionId,
       });
       return;
     }
-    signOffFile.mutate({
-      snapshotFileId: file.id,
-      sessionId,
-      durationSeconds: Math.round((Date.now() - startedAt) / 1000),
-    });
+    const outstanding = outstandingReviewFileUnits(file);
+    if (outstanding.length === 0) return;
+    const nextFile = nextOutstandingReviewFile(reviewFiles, file.path);
+    const activeDuration = Math.round((Date.now() - startedAt) / 1000);
+    setCompletedBrowsing(false);
+    optimisticallyQueueSignOffs(
+      outstanding.map((unit) => ({
+        unitId: unit.id,
+        sessionId,
+        durationSeconds: unit.id === activeUnit?.id ? activeDuration : 0,
+      })),
+      nextFile ? (unit) => unit.path === nextFile.path : undefined,
+    );
   }
   /**
    * Opens the composer on a line a reviewer picked in another member's card.
@@ -2324,41 +2386,6 @@ export function ReviewWorkspace({
   ]);
   const signOff = api.review.signOff.useMutation();
   const signOffBatch = api.review.signOffBatch.useMutation();
-  const signOffFile = api.review.signOffFile.useMutation({
-    onSuccess: ({ snapshotFileId, signedUnitIds }) => {
-      const signed = new Set(signedUnitIds);
-      setUnits((current) =>
-        current.map((unit) =>
-          signed.has(unit.id)
-            ? {
-                ...unit,
-                status: "signed_off" as const,
-                changedSinceSignOff: false,
-                signOffOrigin: "current" as const,
-              }
-            : unit,
-        ),
-      );
-      setPendingFileId((current) =>
-        current === snapshotFileId ? undefined : current,
-      );
-      void Promise.all([
-        utils.workspace.guidance.invalidate(),
-        utils.review.dashboard.invalidate(),
-        utils.review.gamification.invalidate(),
-      ]);
-      toast.success(
-        `${signedUnitIds.length} ${signedUnitIds.length === 1 ? "unit" : "units"} signed off`,
-        { description: "This file is fully reviewed at the current revision." },
-      );
-    },
-    onError: (error) => {
-      setPendingFileId(undefined);
-      toast.error("File sign-off was not saved", {
-        description: error.message,
-      });
-    },
-  });
   const unreviewFile = api.review.unreviewFile.useMutation({
     onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
       const unreviewed = new Set(unreviewedUnitIds);
@@ -2401,13 +2428,15 @@ export function ReviewWorkspace({
   function optimisticallyQueueSignOffs(
     inputs: SignOffInput[],
     preferredNextUnit?: (unit: ReviewUnit, index: number) => boolean,
+    options?: { advance?: boolean },
   ) {
     const inputByUnitId = new Map(inputs.map((input) => [input.unitId, input]));
     const alreadyQueued = new Set(
       queuedSignOffs.current.map(({ input }) => input.unitId),
     );
     const scrollTop = codeScrollRef.current?.scrollTop ?? 0;
-    const queued = units.flatMap((unit, unitIndex): QueuedSignOff[] => {
+    const currentUnits = unitsRef.current;
+    const queued = currentUnits.flatMap((unit, unitIndex): QueuedSignOff[] => {
       const input = inputByUnitId.get(unit.id);
       if (
         !input ||
@@ -2435,7 +2464,7 @@ export function ReviewWorkspace({
     });
     if (queued.length === 0) return;
     const updated = optimisticallySignOffReviewUnits(
-      units,
+      currentUnits,
       queued.map(({ input }) => input.unitId),
     );
     const first = queued[0];
@@ -2452,7 +2481,6 @@ export function ReviewWorkspace({
         }),
       );
     }
-    const nextIndex = nextReviewIndexAfterAction(updated, preferredNextUnit);
     for (const entry of queued) {
       dispatchSignOffQueue({
         type: "enqueue",
@@ -2460,7 +2488,13 @@ export function ReviewWorkspace({
       });
     }
     queuedSignOffs.current.push(...queued);
+    unitsRef.current = updated;
     setUnits(updated);
+    if (options?.advance === false) {
+      void drainSignOffQueue();
+      return;
+    }
+    const nextIndex = nextReviewIndexAfterAction(updated, preferredNextUnit);
     if (nextIndex >= 0) {
       setActiveIndex(nextIndex);
     }
@@ -4253,7 +4287,6 @@ export function ReviewWorkspace({
     undoSignOff.isPending ||
     undoConcept.isPending ||
     awaitPending ||
-    !!pendingFileId ||
     resetReview.isPending;
   // One unit needs only its own source; the concept needs every member's,
   // because it records all of them at once.
@@ -4309,14 +4342,11 @@ export function ReviewWorkspace({
       : cardActionAvailable
         ? `Sign off card (${outstandingCardMembers.length})`
         : "Sign off";
-  const primaryActionLabel =
-    reviewMode === "files" && pendingFileId === activeReviewFile?.id
-      ? "Saving file…"
-      : activeConceptSignOffPending
-        ? "Saving concept…"
-        : activeSignOffPending
-          ? `Saving ${signOffQueueProgress}…`
-          : primaryScopeLabel;
+  const primaryActionLabel = activeConceptSignOffPending
+    ? "Saving concept…"
+    : activeSignOffPending
+      ? `Saving ${signOffQueueProgress}…`
+      : primaryScopeLabel;
   const canAwaitResponse =
     !!activeUnit &&
     hasLiveConversation &&
@@ -7285,6 +7315,7 @@ export function ReviewWorkspace({
             onScroll={() => {
               closeSymbolPeek();
               updateCodeOverview();
+              updateSelectedCardChrome();
             }}
             {...peekHandlers}
             className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-xs leading-[21px] font-medium [overflow-anchor:none]"
@@ -7315,13 +7346,15 @@ export function ReviewWorkspace({
                 </span>
               </div>
             )}
-            {activeConceptFileCards
-              .slice(0, activeConceptCardIndex)
-              .map((card, cardIndex) => (
-                <div key={card.path} className="mb-4">
-                  {conceptFileCardPreviews[cardIndex]}
-                </div>
-              ))}
+            <div ref={reviewCardsAboveRef}>
+              {activeConceptFileCards
+                .slice(0, activeConceptCardIndex)
+                .map((card, cardIndex) => (
+                  <div key={card.path} className="mb-4">
+                    {conceptFileCardPreviews[cardIndex]}
+                  </div>
+                ))}
+            </div>
             {/* Inside the scroller, so it scrolls away with the source it
                 could not be anchored to instead of pinning above it. */}
             {renderDetachedFindingCard()}
@@ -7329,30 +7362,28 @@ export function ReviewWorkspace({
               ref={reviewUnitStartRef}
               data-review-member-id={activeUnit.id}
               data-selected="true"
-              className="mx-4"
+              className="mx-4 scroll-mt-5"
             >
               <div className="sticky top-0 z-20">
                 <div
                   aria-hidden="true"
                   className={cn(
                     "bg-code pointer-events-none absolute inset-x-[-1rem] bottom-full h-5",
-                    !codePaneScrolled && "hidden",
+                    !selectedCardStuck && "hidden",
                   )}
                 />
                 <div
                   className={cn(
                     "overflow-hidden border-x border-b border-cyan/35 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]",
-                    codePaneScrolled
+                    selectedCardStuck
                       ? "rounded-none border-t-0"
                       : "rounded-t-xl border-t",
                   )}
                 >
                   <ReviewFileCardHeader
                     members={activeFileCardMembers}
-                    index={reviewMode === "files" ? 0 : activeConceptCardIndex}
-                    count={
-                      reviewMode === "files" ? 1 : activeConceptFileCards.length
-                    }
+                    index={activeConceptCardIndex}
+                    count={activeConceptFileCards.length}
                     selected
                     actions={
                       activeUnit.kind !== "binary" ? (
@@ -7753,18 +7784,17 @@ export function ReviewWorkspace({
                   )}
               </div>
             </div>
-            {reviewMode === "path" &&
-              activeConceptFileCards
-                .slice(activeConceptCardIndex + 1)
-                .map((card, cardOffset) => (
-                  <div key={card.path} className="mt-4">
-                    {
-                      conceptFileCardPreviews[
-                        activeConceptCardIndex + cardOffset + 1
-                      ]
-                    }
-                  </div>
-                ))}
+            {activeConceptFileCards
+              .slice(activeConceptCardIndex + 1)
+              .map((card, cardOffset) => (
+                <div key={card.path} className="mt-4">
+                  {
+                    conceptFileCardPreviews[
+                      activeConceptCardIndex + cardOffset + 1
+                    ]
+                  }
+                </div>
+              ))}
           </div>
           {aiStatus.data?.status === "completed" && aiStatus.data.result && (
             <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">
