@@ -161,7 +161,7 @@ export function nextOutstandingReviewFile<Unit extends FileReviewUnit>(
   currentPath: string,
 ) {
   const ordered = flattenReviewFileTree(buildReviewFileTree(files));
-  const actionable = (file: ReviewFileEntry<Unit>) =>
+  const actionable = (file: ReviewFileEntry) =>
     file.path !== currentPath && outstandingReviewFileUnits(file).length > 0;
   const currentIndex = ordered.findIndex((file) => file.path === currentPath);
   if (currentIndex < 0) return ordered.find(actionable);
