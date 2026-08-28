@@ -161,6 +161,7 @@ export function nextOutstandingReviewFile<Unit extends FileReviewUnit>(
   currentPath: string,
 ) {
   const ordered = flattenReviewFileTree(buildReviewFileTree(files));
+  /** True when a file still has work and is not the one just signed off. */
   const actionable = (file: ReviewFileEntry) =>
     file.path !== currentPath && outstandingReviewFileUnits(file).length > 0;
   const currentIndex = ordered.findIndex((file) => file.path === currentPath);
