@@ -1374,8 +1374,9 @@ export function ReviewWorkspace({
       card.getBoundingClientRect().top < pane.getBoundingClientRect().top - 1,
     );
   }, []);
+  const selectedCardPinKey = `${reviewMode}:${activeConceptCardIndex}:${activeUnit?.id ?? ""}`;
   useLayoutEffect(() => {
-    if (!activeUnit?.id) return;
+    if (!activeUnit?.id || !selectedCardPinKey) return;
     const pane = codeScrollRef.current;
     if (!pane) return;
 
@@ -1411,12 +1412,7 @@ export function ReviewWorkspace({
       observer.disconnect();
       window.clearTimeout(settleId);
     };
-  }, [
-    activeConceptCardIndex,
-    activeUnit?.id,
-    reviewMode,
-    updateSelectedCardChrome,
-  ]);
+  }, [activeUnit?.id, selectedCardPinKey, updateSelectedCardChrome]);
   useLayoutEffect(() => {
     if (aiQuestionLine === undefined) {
       aiQuestionMoveAnchor.current = undefined;
