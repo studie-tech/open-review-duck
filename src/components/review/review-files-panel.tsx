@@ -284,33 +284,35 @@ export function ReviewFilesPanel({
   const filters: Array<{ id: ReviewFileFilter; label: string }> = [
     { id: "all", label: "All" },
     { id: "needs_review", label: "Needs review" },
-    { id: "attention", label: "New & updated" },
-    { id: "reviewed", label: "Reviewed" },
   ];
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b border-line px-3 py-2.5">
-        <fieldset
-          className="flex gap-1 overflow-x-auto"
+      <div className="shrink-0 border-b border-line px-4 py-2.5">
+        <div
+          role="group"
           aria-label="Filter files"
+          className="bg-ink/55 flex w-full rounded-lg border border-line p-0.5 shadow-inner"
         >
-          {filters.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              aria-pressed={filter === option.id}
-              onClick={() => setFilter(option.id)}
-              className={cn(
-                "shrink-0 rounded-md px-2 py-1 text-[8px] transition",
-                filter === option.id
-                  ? "bg-cyan/10 text-cyan"
-                  : "text-fog hover:bg-surface-subtle hover:text-mist",
-              )}
-            >
-              {option.label}
-            </button>
-          ))}
-        </fieldset>
+          {filters.map((option) => {
+            const selected = filter === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => setFilter(option.id)}
+                className={cn(
+                  "flex h-7 flex-1 items-center justify-center rounded-md px-2.5 text-[10px] font-medium transition",
+                  selected
+                    ? "bg-surface text-cloud shadow-sm ring-1 ring-line-strong"
+                    : "text-fog hover:bg-surface/60 hover:text-mist",
+                )}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {tree.length > 0 ? (

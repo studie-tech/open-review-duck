@@ -105,6 +105,72 @@ export function reviewFileEntries<Unit extends FileReviewUnit>(
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
+/** Selects the units a file checkbox can still record. */
+export function outstandingReviewFileUnits<Unit extends FileReviewUnit>(
+  file: Pick<ReviewFileEntry<Unit>, "units">,
+) {
+  return file.units.filter(
+    (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
+  );
+}
+
+/** Walks the changed-file tree in the same order the sidebar renders. */
+export function flattenReviewFileTree(
+  nodes: readonly ReviewFileTreeNode[],
+): ReviewFileEntry[] {
+  return nodes.flatMap((node) =>
+    node.kind === "file" ? [node.file] : flattenReviewFileTree(node.children),
+  );
+}
+
+/**
+ * Compares repository paths the same way the Files sidebar walks folders:
+ * directories before files at each level, then locale-sorted names.
+ */
+export function compareReviewFileTreePaths(left: string, right: string) {
+  const leftParts = left.split("/").filter(Boolean);
+  const rightParts = right.split("/").filter(Boolean);
+  const limit = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < limit; index += 1) {
+    const leftPart = leftParts[index] ?? "";
+    const rightPart = rightParts[index] ?? "";
+    const leftIsFile = index === leftParts.length - 1;
+    const rightIsFile = index === rightParts.length - 1;
+    if (leftPart === rightPart) {
+      if (leftIsFile !== rightIsFile) return leftIsFile ? 1 : -1;
+      continue;
+    }
+    if (leftIsFile !== rightIsFile) return leftIsFile ? 1 : -1;
+    return leftPart.localeCompare(rightPart);
+  }
+  return leftParts.length - rightParts.length;
+}
+
+/** Orders file cards to match the changed-file sidebar. */
+export function sortByReviewFileTreeOrder<Item extends { path: string }>(
+  items: readonly Item[],
+) {
+  return [...items].sort((left, right) =>
+    compareReviewFileTreePaths(left.path, right.path),
+  );
+}
+
+/** Finds the next file that still has work, wrapping once through the tree. */
+export function nextOutstandingReviewFile<Unit extends FileReviewUnit>(
+  files: readonly ReviewFileEntry<Unit>[],
+  currentPath: string,
+) {
+  const ordered = flattenReviewFileTree(buildReviewFileTree(files));
+  const actionable = (file: ReviewFileEntry<Unit>) =>
+    file.path !== currentPath && outstandingReviewFileUnits(file).length > 0;
+  const currentIndex = ordered.findIndex((file) => file.path === currentPath);
+  if (currentIndex < 0) return ordered.find(actionable);
+  return (
+    ordered.slice(currentIndex + 1).find(actionable) ??
+    ordered.slice(0, currentIndex).find(actionable)
+  );
+}
+
 /** Filters files without hiding an opened path unexpectedly. */
 export function filterReviewFiles(
   files: readonly ReviewFileEntry[],

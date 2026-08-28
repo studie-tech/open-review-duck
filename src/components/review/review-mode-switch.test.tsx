@@ -7,8 +7,12 @@ import { ReviewModeSwitch } from "./review-mode-switch";
 describe("ReviewModeSwitch", () => {
   it("presents one selected review projection and changes without mutation", () => {
     const onChange = vi.fn();
-    render(<ReviewModeSwitch mode="path" onChange={onChange} />);
+    const { container } = render(
+      <ReviewModeSwitch mode="path" onChange={onChange} />,
+    );
 
+    expect(screen.getByRole("tablist")).toHaveClass("w-full");
+    expect(container.querySelectorAll('[role="tab"].flex-1')).toHaveLength(2);
     expect(screen.getByRole("tab", { name: "Guided" })).toHaveAttribute(
       "aria-selected",
       "true",

@@ -13,6 +13,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { sortByReviewFileTreeOrder } from "~/lib/review-files";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
@@ -515,6 +516,30 @@ describe("same-file concept cards", () => {
     expect(cards[0]?.members.map(({ id }) => id)).toEqual([
       "configuration",
       "main",
+    ]);
+  });
+
+  it("can reorder concept cards to match the Files sidebar", () => {
+    const cards = conceptFileCardsInReadingOrder([
+      {
+        path: "app/src/server/api/validators/user.ts",
+        id: "schema",
+      },
+      {
+        path: "app/src/server/api/routers/profile.ts",
+        id: "router",
+      },
+    ]);
+
+    expect(cards.map(({ path }) => path)).toEqual([
+      "app/src/server/api/validators/user.ts",
+      "app/src/server/api/routers/profile.ts",
+    ]);
+    expect(
+      sortByReviewFileTreeOrder(cards).map(({ path }) => path),
+    ).toEqual([
+      "app/src/server/api/routers/profile.ts",
+      "app/src/server/api/validators/user.ts",
     ]);
   });
 

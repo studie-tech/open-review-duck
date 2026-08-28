@@ -102,5 +102,7 @@ describe("DashboardOverview", () => {
       screen.getByRole("link", { name: /Open pull request inbox/i }),
     ).toHaveAttribute("href", "/pullrequests");
     expect(screen.getByText("Latest updates")).toBeVisible();
+    expect(screen.getByRole("main")).toHaveClass("w-full");
+    expect(screen.getByRole("main").className).not.toMatch(/max-w-/);
   });
 });
