@@ -535,9 +535,7 @@ describe("same-file concept cards", () => {
       "app/src/server/api/validators/user.ts",
       "app/src/server/api/routers/profile.ts",
     ]);
-    expect(
-      sortByReviewFileTreeOrder(cards).map(({ path }) => path),
-    ).toEqual([
+    expect(sortByReviewFileTreeOrder(cards).map(({ path }) => path)).toEqual([
       "app/src/server/api/routers/profile.ts",
       "app/src/server/api/validators/user.ts",
     ]);

@@ -1371,8 +1371,7 @@ export function ReviewWorkspace({
     // sticky header. Landing on a later file must keep a complete card top,
     // even if earlier cards left the pane scrolled.
     setSelectedCardStuck(
-      card.getBoundingClientRect().top <
-        pane.getBoundingClientRect().top - 1,
+      card.getBoundingClientRect().top < pane.getBoundingClientRect().top - 1,
     );
   }, []);
   useLayoutEffect(() => {
@@ -1412,7 +1411,12 @@ export function ReviewWorkspace({
       observer.disconnect();
       window.clearTimeout(settleId);
     };
-  }, [activeConceptCardIndex, activeUnit?.id, reviewMode, updateSelectedCardChrome]);
+  }, [
+    activeConceptCardIndex,
+    activeUnit?.id,
+    reviewMode,
+    updateSelectedCardChrome,
+  ]);
   useLayoutEffect(() => {
     if (aiQuestionLine === undefined) {
       aiQuestionMoveAnchor.current = undefined;
