@@ -14,6 +14,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       "**/.claude/**",
       "**/.codex/**",
+      "**/.cursor/**",
       "**/*.integration.test.ts",
       "tests/e2e/**",
     ],
