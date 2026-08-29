@@ -155,6 +155,60 @@ export function sortByReviewFileTreeOrder<Item extends { path: string }>(
   );
 }
 
+/** How many file cards sit on each side of the selected file in Files mode. */
+export const FILES_VIEWER_PAGE_SIZE = 40;
+/** How many neighboring cards render full source instead of a header. */
+export const FILES_VIEWER_PREVIEW_RADIUS = 2;
+/** Extra tree neighbors to hydrate and syntax-preload beyond the visible window. */
+export const FILES_VIEWER_PREFETCH_RADIUS = 4;
+
+/** Builds file-sized viewer cards for every changed file that has review units. */
+export function reviewFileCardsInTreeOrder<Unit extends FileReviewUnit>(
+  files: readonly ReviewFileEntry<Unit>[],
+) {
+  return sortByReviewFileTreeOrder(
+    files
+      .filter((file) => file.totalUnits > 0)
+      .map((file) => ({ path: file.path, members: file.units })),
+  );
+}
+
+/** Window of cards around the selected file, plus how many remain on each side. */
+export function windowReviewFileCards<Card>(
+  cards: readonly Card[],
+  selectedIndex: number,
+  above: number,
+  below: number,
+) {
+  const start = Math.max(0, selectedIndex - above);
+  const end = Math.min(cards.length, selectedIndex + 1 + below);
+  return {
+    start,
+    end,
+    cards: cards.slice(start, end),
+    hiddenAbove: start,
+    hiddenBelow: cards.length - end,
+  };
+}
+
+/** Paths around the selected file to hydrate and syntax-preload first. */
+export function nearbyReviewFilePaths(
+  files: readonly ReviewFileEntry[],
+  activePath: string | undefined,
+  radius: number,
+) {
+  const cards = reviewFileCardsInTreeOrder(files);
+  const selectedIndex = activePath
+    ? cards.findIndex((card) => card.path === activePath)
+    : 0;
+  const start = Math.max(0, (selectedIndex < 0 ? 0 : selectedIndex) - radius);
+  const end = Math.min(
+    cards.length,
+    (selectedIndex < 0 ? 0 : selectedIndex) + radius + 1,
+  );
+  return new Set(cards.slice(start, end).map(({ path }) => path));
+}
+
 /** Finds the next file that still has work, wrapping once through the tree. */
 export function nextOutstandingReviewFile<Unit extends FileReviewUnit>(
   files: readonly ReviewFileEntry<Unit>[],

@@ -4,11 +4,13 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleDot,
   Clock3,
   FileCode2,
   FileDiff,
   Folder,
   FolderOpen,
+  List,
   LoaderCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +22,11 @@ import {
   type ReviewFileTreeNode,
 } from "~/lib/review-files";
 import { cn } from "~/lib/utils";
+
+const filters = [
+  { id: "all" as const, icon: List, label: "All" },
+  { id: "needs_review" as const, icon: CircleDot, label: "New" },
+];
 
 /** Renders the semantic checkbox for one changed file. */
 function FileReviewCheckbox({
@@ -281,10 +288,6 @@ export function ReviewFilesPanel({
     [files, filter, search],
   );
   const tree = useMemo(() => buildReviewFileTree(filtered), [filtered]);
-  const filters: Array<{ id: ReviewFileFilter; label: string }> = [
-    { id: "all", label: "All" },
-    { id: "needs_review", label: "Needs review" },
-  ];
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-line px-4 py-2.5">
@@ -293,6 +296,7 @@ export function ReviewFilesPanel({
           className="bg-ink/55 m-0 flex w-full min-w-0 rounded-lg border border-line p-0.5 shadow-inner"
         >
           {filters.map((option) => {
+            const Icon = option.icon;
             const selected = filter === option.id;
             return (
               <button
@@ -301,12 +305,16 @@ export function ReviewFilesPanel({
                 aria-pressed={selected}
                 onClick={() => setFilter(option.id)}
                 className={cn(
-                  "flex h-7 flex-1 items-center justify-center rounded-md px-2.5 text-[10px] font-medium transition",
+                  "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-[10px] font-medium transition",
                   selected
                     ? "bg-surface text-cloud shadow-sm ring-1 ring-line-strong"
                     : "text-fog hover:bg-surface/60 hover:text-mist",
                 )}
               >
+                <Icon
+                  className={cn("size-3", selected && "text-cyan")}
+                  aria-hidden="true"
+                />
                 {option.label}
               </button>
             );

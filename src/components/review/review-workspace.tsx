@@ -81,14 +81,19 @@ import {
   prioritizePrivateReviewSources,
 } from "~/lib/private-source-client";
 import {
-  type ReviewFileEntry,
-  type ReviewMode,
+  FILES_VIEWER_PAGE_SIZE,
+  FILES_VIEWER_PREFETCH_RADIUS,
+  FILES_VIEWER_PREVIEW_RADIUS,
+  nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
+  type ReviewFileEntry,
+  type ReviewMode,
   rememberReviewMode,
+  reviewFileCardsInTreeOrder,
   reviewFileEntries,
-  sortByReviewFileTreeOrder,
   storedReviewMode,
+  windowReviewFileCards,
 } from "~/lib/review-files";
 import {
   buildReviewHierarchy,
@@ -968,6 +973,7 @@ export function ReviewWorkspace({
       activeIndex,
       concepts: initialData.concepts,
       fileContexts: initialData.fileContexts,
+      files: initialData.files,
       units: initialData.units,
     }),
     [sourceSnapshotId],
@@ -984,11 +990,18 @@ export function ReviewWorkspace({
         )
       : undefined;
     const relatedIds = new Set(visibleConcept?.memberIds ?? []);
-    const relatedPaths = new Set(
-      sourceUnits
-        .filter(({ id }) => relatedIds.has(id))
-        .map(({ path }) => path),
-    );
+    const filesMode = storedReviewMode(window.localStorage) === "files";
+    const relatedPaths = filesMode
+      ? nearbyReviewFilePaths(
+          reviewFileEntries(sourceHydrationInput.files, sourceUnits),
+          visibleUnit?.path,
+          FILES_VIEWER_PAGE_SIZE + FILES_VIEWER_PREFETCH_RADIUS,
+        )
+      : new Set(
+          sourceUnits
+            .filter(({ id }) => relatedIds.has(id))
+            .map(({ path }) => path),
+        );
     const prioritizedUnits = prioritizePrivateReviewSources(sourceUnits, {
       activeId: visibleUnit?.id,
       activePath: visibleUnit?.path,
@@ -1101,6 +1114,12 @@ export function ReviewWorkspace({
   }, [initialData.sourceDelivery, sourceHydrationInput, sourceSnapshotId]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [reviewMode, setReviewMode] = useState<ReviewMode>("path");
+  const [filesViewerAbove, setFilesViewerAbove] = useState(
+    FILES_VIEWER_PAGE_SIZE,
+  );
+  const [filesViewerBelow, setFilesViewerBelow] = useState(
+    FILES_VIEWER_PAGE_SIZE,
+  );
   const [completedBrowsing, setCompletedBrowsing] = useState(false);
   const [pendingFileId, setPendingFileId] = useState<string>();
   const [showDiff, setShowDiff] = useState(true);
@@ -1301,21 +1320,26 @@ export function ReviewWorkspace({
     () => conceptMembersInReadingOrder(activeConceptProgress?.members ?? []),
     [activeConceptProgress],
   );
-  const activeConceptFileCards = useMemo(() => {
+  const reviewFiles = useMemo(
+    () => reviewFileEntries(initialData.files, units),
+    [initialData.files, units],
+  );
+  const conceptFileCards = useMemo(() => {
     const cards = conceptFileCardsInReadingOrder(activeConceptMembers);
-    const withActive =
-      activeUnit &&
+    return activeUnit &&
       !cards.some(({ members }) =>
         members.some(({ id }) => id === activeUnit.id),
       )
-        ? [{ path: activeUnit.path, members: [activeUnit] }, ...cards]
-        : cards;
-    // Files mode follows the sidebar tree so a selected file is never buried
-    // under a later validator that happened to come first in the concept.
-    return reviewMode === "files"
-      ? sortByReviewFileTreeOrder(withActive)
-      : withActive;
-  }, [activeConceptMembers, activeUnit, reviewMode]);
+      ? [{ path: activeUnit.path, members: [activeUnit] }, ...cards]
+      : cards;
+  }, [activeConceptMembers, activeUnit]);
+  const activeConceptFileCards = useMemo(
+    () =>
+      reviewMode === "files"
+        ? reviewFileCardsInTreeOrder(reviewFiles)
+        : conceptFileCards,
+    [conceptFileCards, reviewFiles, reviewMode],
+  );
   const activeFileCard = activeUnit
     ? activeConceptFileCards.find(({ members }) =>
         members.some(({ id }) => id === activeUnit.id),
@@ -1331,6 +1355,37 @@ export function ReviewWorkspace({
   const activeConceptCardIndex = activeFileCard
     ? activeConceptFileCards.indexOf(activeFileCard)
     : -1;
+  const viewerCardWindow = useMemo(() => {
+    if (reviewMode !== "files" || activeConceptCardIndex < 0) {
+      return {
+        start: 0,
+        cards: activeConceptFileCards,
+        hiddenAbove: 0,
+        hiddenBelow: 0,
+      };
+    }
+    return windowReviewFileCards(
+      activeConceptFileCards,
+      activeConceptCardIndex,
+      filesViewerAbove,
+      filesViewerBelow,
+    );
+  }, [
+    activeConceptCardIndex,
+    activeConceptFileCards,
+    filesViewerAbove,
+    filesViewerBelow,
+    reviewMode,
+  ]);
+  const selectedWindowOffset = Math.max(
+    0,
+    activeConceptCardIndex - viewerCardWindow.start,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recenter when the open file or projection changes, not when the reviewer expands the window
+  useEffect(() => {
+    setFilesViewerAbove(FILES_VIEWER_PAGE_SIZE);
+    setFilesViewerBelow(FILES_VIEWER_PAGE_SIZE);
+  }, [activeUnit?.path, reviewMode]);
   const deletedFilePaths = useMemo(
     () =>
       new Set(
@@ -1528,12 +1583,33 @@ export function ReviewWorkspace({
       )?.unit ?? pathSections.upcoming[0]?.unit)
     : pathSections.upcoming[0]?.unit;
   useEffect(() => {
-    if (!nextUnitToPreload || nextUnitToPreload.kind === "binary") {
-      return;
-    }
-    /** Prepares the next unit's highlighted source outside the input event. */
+    const nearbyFiles =
+      reviewMode === "files"
+        ? nearbyReviewFilePaths(
+            reviewFiles,
+            activeUnit?.path,
+            FILES_VIEWER_PREVIEW_RADIUS + FILES_VIEWER_PREFETCH_RADIUS,
+          )
+        : undefined;
+    const languages = nearbyFiles
+      ? [
+          ...new Set(
+            units
+              .filter(
+                (unit) => unit.kind !== "binary" && nearbyFiles.has(unit.path),
+              )
+              .map((unit) => unit.language),
+          ),
+        ]
+      : nextUnitToPreload && nextUnitToPreload.kind !== "binary"
+        ? [nextUnitToPreload.language]
+        : [];
+    if (languages.length === 0) return;
+    /** Prepares nearby highlighted source outside the input event. */
     const preload = () => {
-      void preloadSyntaxLanguage(nextUnitToPreload.language);
+      for (const language of languages) {
+        void preloadSyntaxLanguage(language);
+      }
     };
     if (typeof window.requestIdleCallback === "function") {
       const idleId = window.requestIdleCallback(preload, { timeout: 400 });
@@ -1541,7 +1617,7 @@ export function ReviewWorkspace({
     }
     const timeoutId = window.setTimeout(preload, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [nextUnitToPreload]);
+  }, [activeUnit?.path, nextUnitToPreload, reviewFiles, reviewMode, units]);
   const reviewHierarchy = useMemo(() => buildReviewHierarchy(units), [units]);
   const searchResults = useMemo(() => {
     if (!pathSearch.trim()) return [];
@@ -1562,10 +1638,6 @@ export function ReviewWorkspace({
   const signedCount = units.filter(
     (unit) => unit.status === "signed_off",
   ).length;
-  const reviewFiles = useMemo(
-    () => reviewFileEntries(initialData.files, units),
-    [initialData.files, units],
-  );
   const reviewedFileCount = reviewFiles.filter(
     ({ state }) => state === "reviewed",
   ).length;
@@ -2160,9 +2232,39 @@ export function ReviewWorkspace({
   // unrelated workspace state never re-reconciles hundreds of source lines.
   const conceptFileCardPreviews = useMemo(
     () =>
-      activeConceptFileCards.map((card, cardIndex) => {
+      viewerCardWindow.cards.map((card, windowIndex) => {
+        const cardIndex = viewerCardWindow.start + windowIndex;
         const firstActionable = actionableReviewCardMember(card.members);
         const fileContext = fileContexts.find(({ path }) => path === card.path);
+        const itemLabel = reviewMode === "files" ? "File" : "Card";
+        /** Opens this file card at its first remaining review unit. */
+        const openCard = () =>
+          selectUnit(
+            firstActionable
+              ? (unitIndexById.get(firstActionable.id) ?? -1)
+              : -1,
+          );
+        if (
+          reviewMode === "files" &&
+          Math.abs(cardIndex - activeConceptCardIndex) >
+            FILES_VIEWER_PREVIEW_RADIUS
+        ) {
+          return (
+            <article
+              key={card.path}
+              className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30"
+            >
+              <ReviewFileCardHeader
+                members={card.members}
+                index={cardIndex}
+                count={activeConceptFileCards.length}
+                selected={false}
+                itemLabel={itemLabel}
+                onSelect={openCard}
+              />
+            </article>
+          );
+        }
         return (
           <ReviewConceptFileCardPreview
             key={card.path}
@@ -2170,23 +2272,22 @@ export function ReviewWorkspace({
             index={cardIndex}
             count={activeConceptFileCards.length}
             fileSource={fileContext?.source ?? ""}
-            onSelect={() =>
-              selectUnit(
-                firstActionable
-                  ? (unitIndexById.get(firstActionable.id) ?? -1)
-                  : -1,
-              )
-            }
+            itemLabel={itemLabel}
+            onSelect={openCard}
             onCommentLine={commentOnMemberLine}
           />
         );
       }),
     [
-      activeConceptFileCards,
+      activeConceptCardIndex,
+      activeConceptFileCards.length,
       commentOnMemberLine,
       fileContexts,
+      reviewMode,
       selectUnit,
       unitIndexById,
+      viewerCardWindow.cards,
+      viewerCardWindow.start,
     ],
   );
 
@@ -2200,7 +2301,7 @@ export function ReviewWorkspace({
     if (unitIndex >= 0) selectUnit(unitIndex);
   }
 
-  /** Selects an adjacent atomic member inside the current review concept. */
+  /** Selects an adjacent file card in the current viewer list. */
   function navigateConceptCard(direction: -1 | 1) {
     const card = activeConceptFileCards[activeConceptCardIndex + direction];
     const member = card ? actionableReviewCardMember(card.members) : undefined;
@@ -5854,7 +5955,10 @@ export function ReviewWorkspace({
     {
       id: "next-unit",
       label: "Select next card",
-      description: "Select the next file card in this concept",
+      description:
+        reviewMode === "files"
+          ? "Select the next changed file"
+          : "Select the next file card in this concept",
       group: "Review navigation",
       icon: <ChevronDown className="size-4" />,
       shortcut: reviewShortcuts.nextUnit,
@@ -5864,7 +5968,10 @@ export function ReviewWorkspace({
     {
       id: "previous-unit",
       label: "Select previous card",
-      description: "Select the previous file card in this concept",
+      description:
+        reviewMode === "files"
+          ? "Select the previous changed file"
+          : "Select the previous file card in this concept",
       group: "Review navigation",
       icon: <ChevronRight className="size-4 -rotate-90" />,
       shortcut: reviewShortcuts.previousUnit,
@@ -7126,11 +7233,13 @@ export function ReviewWorkspace({
                   <span className="text-mist font-mono">{activeUnit.path}</span>
                   <span aria-hidden="true">·</span>
                   <span className="shrink-0">
-                    {activeFileCardMembers.length > 1
-                      ? `Card ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} individual units`
-                      : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                    {reviewMode === "files"
+                      ? `File ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} ${activeFileCardMembers.length === 1 ? "unit" : "units"}`
+                      : activeFileCardMembers.length > 1
+                        ? `Card ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} individual units`
+                        : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
                   </span>
-                  {activeConcept && (
+                  {reviewMode === "path" && activeConcept && (
                     <>
                       <span aria-hidden="true">·</span>
                       <span className="shrink-0">
@@ -7348,11 +7457,33 @@ export function ReviewWorkspace({
               </div>
             )}
             <div ref={reviewCardsAboveRef}>
-              {activeConceptFileCards
-                .slice(0, activeConceptCardIndex)
-                .map((card, cardIndex) => (
+              {reviewMode === "files" && viewerCardWindow.hiddenAbove > 0 && (
+                <div className="mb-4 flex items-center gap-3 px-4 font-sans">
+                  <span className="h-px flex-1 bg-line" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFilesViewerAbove(
+                        (current) => current + FILES_VIEWER_PAGE_SIZE,
+                      )
+                    }
+                    className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                  >
+                    Show{" "}
+                    {Math.min(
+                      FILES_VIEWER_PAGE_SIZE,
+                      viewerCardWindow.hiddenAbove,
+                    )}{" "}
+                    more files above
+                  </button>
+                  <span className="h-px flex-1 bg-line" />
+                </div>
+              )}
+              {viewerCardWindow.cards
+                .slice(0, selectedWindowOffset)
+                .map((card, windowIndex) => (
                   <div key={card.path} className="mb-4">
-                    {conceptFileCardPreviews[cardIndex]}
+                    {conceptFileCardPreviews[windowIndex]}
                   </div>
                 ))}
             </div>
@@ -7385,6 +7516,7 @@ export function ReviewWorkspace({
                     members={activeFileCardMembers}
                     index={activeConceptCardIndex}
                     count={activeConceptFileCards.length}
+                    itemLabel={reviewMode === "files" ? "File" : "Card"}
                     selected
                     actions={
                       activeUnit.kind !== "binary" ? (
@@ -7785,17 +7917,39 @@ export function ReviewWorkspace({
                   )}
               </div>
             </div>
-            {activeConceptFileCards
-              .slice(activeConceptCardIndex + 1)
+            {viewerCardWindow.cards
+              .slice(selectedWindowOffset + 1)
               .map((card, cardOffset) => (
                 <div key={card.path} className="mt-4">
                   {
                     conceptFileCardPreviews[
-                      activeConceptCardIndex + cardOffset + 1
+                      selectedWindowOffset + cardOffset + 1
                     ]
                   }
                 </div>
               ))}
+            {reviewMode === "files" && viewerCardWindow.hiddenBelow > 0 && (
+              <div className="mt-4 flex items-center gap-3 px-4 font-sans">
+                <span className="h-px flex-1 bg-line" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFilesViewerBelow(
+                      (current) => current + FILES_VIEWER_PAGE_SIZE,
+                    )
+                  }
+                  className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                >
+                  Show{" "}
+                  {Math.min(
+                    FILES_VIEWER_PAGE_SIZE,
+                    viewerCardWindow.hiddenBelow,
+                  )}{" "}
+                  more files below
+                </button>
+                <span className="h-px flex-1 bg-line" />
+              </div>
+            )}
           </div>
           {aiStatus.data?.status === "completed" && aiStatus.data.result && (
             <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">

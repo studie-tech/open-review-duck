@@ -99,7 +99,7 @@ describe("ReviewFilesPanel", () => {
     );
   });
 
-  it("filters the tree from a single All / Needs review row", async () => {
+  it("filters the tree from a single All / New row", async () => {
     const user = userEvent.setup();
     const signedOff = reviewFileEntries(
       [
@@ -166,7 +166,7 @@ describe("ReviewFilesPanel", () => {
     ).not.toBeInTheDocument();
 
     const all = screen.getByRole("button", { name: "All" });
-    const needsReview = screen.getByRole("button", { name: "Needs review" });
+    const needsReview = screen.getByRole("button", { name: "New" });
     expect(all).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("done.ts")).toBeVisible();
 

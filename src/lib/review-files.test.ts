@@ -3,10 +3,13 @@ import {
   buildReviewFileTree,
   filterReviewFiles,
   flattenReviewFileTree,
+  nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
+  reviewFileCardsInTreeOrder,
   reviewFileEntries,
   sortByReviewFileTreeOrder,
+  windowReviewFileCards,
 } from "./review-files";
 
 const files = [
@@ -245,5 +248,43 @@ describe("review file browsing", () => {
         { path: "src/b/c.ts" },
       ]).map(({ path }) => path),
     ).toEqual(sidebarOrder);
+  });
+});
+
+describe("files-mode viewer cards", () => {
+  it("includes every reviewable file across concepts and skips empty files", () => {
+    const entries = reviewFileEntries(files, units);
+    expect(reviewFileCardsInTreeOrder(entries).map(({ path }) => path)).toEqual(
+      ["src/review/one.ts", "src/two.ts"],
+    );
+    expect(
+      reviewFileCardsInTreeOrder(entries).map(({ members }) =>
+        members.map(({ id }) => id),
+      ),
+    ).toEqual([["reviewed", "updated"], ["new"]]);
+  });
+
+  it("windows the selected file without hiding how many remain", () => {
+    const cards = ["a", "b", "c", "d", "e"].map((path) => ({ path }));
+    expect(windowReviewFileCards(cards, 2, 1, 1)).toEqual({
+      start: 1,
+      end: 4,
+      cards: [{ path: "b" }, { path: "c" }, { path: "d" }],
+      hiddenAbove: 1,
+      hiddenBelow: 1,
+    });
+    expect(windowReviewFileCards(cards, 0, 2, 2).hiddenAbove).toBe(0);
+    expect(windowReviewFileCards(cards, 4, 2, 2).hiddenBelow).toBe(0);
+  });
+
+  it("names nearby tree paths for prefetch around the open file", () => {
+    const entries = reviewFileEntries(files, units);
+    expect([...nearbyReviewFilePaths(entries, "src/two.ts", 1)]).toEqual([
+      "src/review/one.ts",
+      "src/two.ts",
+    ]);
+    expect(
+      nearbyReviewFilePaths(entries, "missing.ts", 1).has("src/review/one.ts"),
+    ).toBe(true);
   });
 });
