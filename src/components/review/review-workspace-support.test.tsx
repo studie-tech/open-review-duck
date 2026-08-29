@@ -17,8 +17,8 @@ import { sortByReviewFileTreeOrder } from "~/lib/review-files";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
-  actionableReviewCardMember,
   AI_QUICK_QUESTIONS,
+  actionableReviewCardMember,
   aiConversationVisibility,
   ConceptMoveDialog,
   conceptFileCardsInReadingOrder,
@@ -36,9 +36,9 @@ import {
   ReviewConceptMemberPreview,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
+  rememberAiConversationVisibility,
   reviewCardMemberForLine,
   reviewCardRanges,
-  rememberAiConversationVisibility,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
@@ -666,6 +666,21 @@ describe("same-file concept cards", () => {
 
     expect(screen.getByText("1 remaining")).toBeInTheDocument();
     expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+  });
+
+  it("can label a files-mode card as a file in the stack", () => {
+    render(
+      <ReviewConceptFileCardHeader
+        members={[units[0]] as never}
+        index={3}
+        count={12}
+        selected
+        itemLabel="File"
+      />,
+    );
+
+    expect(screen.getByText("File 4/12")).toBeInTheDocument();
+    expect(screen.queryByText("Card 4/12")).not.toBeInTheDocument();
   });
 });
 

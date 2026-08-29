@@ -236,6 +236,7 @@ export function ReviewFileCardHeader({
   selected,
   actions,
   onSelect,
+  itemLabel = "Card",
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -243,6 +244,7 @@ export function ReviewFileCardHeader({
   selected: boolean;
   actions?: ReactNode;
   onSelect?: () => void;
+  itemLabel?: "Card" | "File";
 }) {
   const first = members[0];
   if (!first) return null;
@@ -269,7 +271,7 @@ export function ReviewFileCardHeader({
       <span className="flex shrink-0 items-center gap-2 text-[9px]">
         {actions}
         <span className="text-fog">
-          Card {index + 1}/{count}
+          {itemLabel} {index + 1}/{count}
         </span>
         {fullyReviewed && (
           <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
@@ -423,6 +425,7 @@ export function ReviewConceptFileCardPreview({
   fileSource,
   onSelect,
   onCommentLine,
+  itemLabel = "Card",
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -430,6 +433,7 @@ export function ReviewConceptFileCardPreview({
   fileSource: string;
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
+  itemLabel?: "Card" | "File";
 }) {
   const ranges = reviewCardRanges(members);
   const startLine = ranges.at(0)?.startLine ?? 1;
@@ -451,6 +455,7 @@ export function ReviewConceptFileCardPreview({
         count={count}
         selected={false}
         onSelect={onSelect}
+        itemLabel={itemLabel}
       />
       <div className="overflow-x-auto py-2">
         {fileSource
