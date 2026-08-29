@@ -674,13 +674,20 @@ describe("same-file concept cards", () => {
         members={[units[0]] as never}
         index={3}
         count={12}
-        selected
+        selected={false}
         itemLabel="File"
       />,
     );
 
     expect(screen.getByText("File 4/12")).toBeInTheDocument();
     expect(screen.queryByText("Card 4/12")).not.toBeInTheDocument();
+    expect(screen.getByText(/in this file/)).toBeInTheDocument();
+    expect(screen.queryByText(/in this card/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Select review file for src/preview.ts",
+      }),
+    ).toBeInTheDocument();
   });
 });
 
