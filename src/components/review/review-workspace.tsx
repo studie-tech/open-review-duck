@@ -4341,6 +4341,7 @@ export function ReviewWorkspace({
         setPathPanelCollapsed(false);
         if (!window.matchMedia("(min-width: 1536px)").matches) {
           setInsightsPanelOpen(false);
+          setInsightsPanelCollapsed(true);
           setPathPanelOpen(true);
         }
         sendReviewSession({ type: "REVIEW_BROWSED" });
@@ -4480,6 +4481,7 @@ export function ReviewWorkspace({
     setPathPanelCollapsed(false);
     if (!window.matchMedia("(min-width: 1536px)").matches) {
       setInsightsPanelOpen(false);
+      setInsightsPanelCollapsed(true);
       setPathPanelOpen(true);
     }
   }

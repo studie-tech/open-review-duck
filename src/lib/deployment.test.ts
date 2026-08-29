@@ -36,6 +36,9 @@ describe("deployment boundaries", () => {
   it("warns when a local process would bind a public address", () => {
     expect(isSafeLocalListenAddress("192.168.1.20")).toBe(false);
     expect(localListenAddressWarning("192.168.1.20")).toMatch("192.168.1.20");
+    expect(localListenAddressWarning("192.168.1.20", "3941")).toMatch(
+      "127.0.0.1:3941:3941",
+    );
     expect(localListenAddressWarning("127.0.0.1")).toBeUndefined();
   });
 
