@@ -99,6 +99,36 @@ describe("ReviewFilesPanel", () => {
     );
   });
 
+  it("keeps the sign-off checkbox inside its control so focusing it cannot scroll the workspace", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Sign off 2 review units in src\/review\/workspace.ts/i,
+    });
+    expect(checkbox.closest("label")).toHaveClass(
+      "relative",
+      "overflow-hidden",
+    );
+
+    const mouseDown = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+    });
+    checkbox.dispatchEvent(mouseDown);
+    expect(mouseDown.defaultPrevented).toBe(true);
+
+    await user.click(checkbox);
+    expect(checkbox).not.toHaveFocus();
+  });
+
   it("filters the tree from a single All / New row", async () => {
     const user = userEvent.setup();
     const signedOff = reviewFileEntries(

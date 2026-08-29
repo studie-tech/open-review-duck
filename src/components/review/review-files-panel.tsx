@@ -58,7 +58,12 @@ function FileReviewCheckbox({
           : `${action} this file`
       }
       className={cn(
-        "grid size-5 shrink-0 place-items-center rounded-md border transition",
+        // The control is visually hidden with `sr-only` (`position: absolute`).
+        // Without a positioned clip on this label, that input is laid out
+        // against the fixed workspace shell. Focusing it then scrolls that
+        // `overflow: hidden` shell and shoves the whole review into the top
+        // of the window.
+        "relative grid size-5 shrink-0 place-items-center overflow-hidden rounded-md border transition",
         checked
           ? "border-lime bg-lime text-accent-foreground"
           : mixed
@@ -73,6 +78,7 @@ function FileReviewCheckbox({
         checked={checked}
         aria-label={`${action} ${file.totalUnits} review ${file.totalUnits === 1 ? "unit" : "units"} in ${file.path}.${waitReason}`}
         disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()}
         onChange={() => onToggle(file)}
         className="sr-only"
       />
