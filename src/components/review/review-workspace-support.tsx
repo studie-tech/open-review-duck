@@ -256,6 +256,7 @@ export function ReviewFileCardHeader({
     (total, member) => total + member.changedLineCount,
     0,
   );
+  const itemName = itemLabel.toLowerCase();
   const content = (
     <>
       <span className="min-w-0">
@@ -264,7 +265,7 @@ export function ReviewFileCardHeader({
         </span>
         <span className="text-fog mt-0.5 block truncate text-[9px]">
           Reviewing {members.length} individual{" "}
-          {members.length === 1 ? "unit" : "units"} in this card ·{" "}
+          {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
           {changedLines} changed lines
         </span>
       </span>
@@ -309,7 +310,7 @@ export function ReviewFileCardHeader({
       ) : (
         <button
           type="button"
-          aria-label={`Select review card for ${first.path}`}
+          aria-label={`Select review ${itemName} for ${first.path}`}
           onClick={onSelect}
           className="hover:bg-surface-subtle flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left transition"
         >
