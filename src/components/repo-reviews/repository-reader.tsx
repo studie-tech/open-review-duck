@@ -818,7 +818,7 @@ export function RepositoryReader({
   );
 
   return (
-    <div className="bg-ink fixed inset-0 z-40 flex flex-col overflow-hidden">
+    <div className="bg-ink fixed inset-0 z-40 flex flex-col overflow-clip">
       <header className="bg-panel flex h-16 shrink-0 items-center gap-3 border-b border-line px-3 sm:px-5">
         <Button size="icon" variant="ghost" asChild>
           <Link href="/repo-reviews" aria-label="Back to repo reviews">

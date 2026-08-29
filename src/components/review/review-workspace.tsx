@@ -6412,7 +6412,10 @@ export function ReviewWorkspace({
   }
 
   return (
-    <div className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-hidden">
+    // `overflow: clip` rather than `hidden`: hidden still forms a scroll
+    // port, so focusing a visually-hidden file checkbox can scroll this
+    // shell and leave the review jammed into the top of the window.
+    <div className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-clip">
       <header className="flex h-16 items-center gap-4 border-b border-line px-4 sm:px-6">
         <Link
           href="/pullrequests"
