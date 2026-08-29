@@ -13,6 +13,7 @@ import {
   reviewSnapshots,
   reviewUnitDependencies,
   reviewUnits,
+  reviewWaits,
   signOffs,
   snapshotFiles,
   sourceBlobs,
@@ -41,6 +42,7 @@ import {
 } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
+import { canCarryReviewWait } from "~/server/review/waiting";
 import {
   persistSourceBlob,
   readSourceText,
@@ -622,6 +624,34 @@ export async function syncRepositoryBranch(
       signOff,
     ]);
   }
+  const priorWaits: (typeof reviewWaits.$inferSelect)[] = [];
+  if (previousUnits.length) {
+    const previousUnitIds = previousUnits.map((unit) => unit.id);
+    for (
+      let offset = 0;
+      offset < previousUnitIds.length;
+      offset += QUERY_CHUNK_SIZE
+    ) {
+      priorWaits.push(
+        ...(await db
+          .select()
+          .from(reviewWaits)
+          .where(
+            inArray(
+              reviewWaits.unitId,
+              previousUnitIds.slice(offset, offset + QUERY_CHUNK_SIZE),
+            ),
+          )),
+      );
+    }
+  }
+  const waitsByUnit = new Map<string, typeof priorWaits>();
+  for (const wait of priorWaits) {
+    waitsByUnit.set(wait.unitId, [
+      ...(waitsByUnit.get(wait.unitId) ?? []),
+      wait,
+    ]);
+  }
 
   await options?.onProgress?.(REPOSITORY_SYNC_PROGRESS.saving);
   const result = await db.transaction(async (tx) => {
@@ -984,6 +1014,30 @@ export async function syncRepositoryBranch(
             offset,
             offset + REVIEW_STATE_INSERT_BATCH_SIZE,
           ),
+        );
+    }
+    const carriedWaits = insertedUnits.flatMap((unit) => {
+      const prior = priorByKey.get(unit.stableKey);
+      if (!prior || !canCarryReviewWait(prior.contentHash, unit.contentHash)) {
+        return [];
+      }
+      return (waitsByUnit.get(prior.id) ?? []).map((wait) => ({
+        unitId: unit.id,
+        userId: wait.userId,
+        providerThreadIds: wait.providerThreadIds,
+        observedCommentIds: wait.observedCommentIds,
+        waitingSince: wait.waitingSince,
+      }));
+    });
+    for (
+      let offset = 0;
+      offset < carriedWaits.length;
+      offset += REVIEW_STATE_INSERT_BATCH_SIZE
+    ) {
+      await tx
+        .insert(reviewWaits)
+        .values(
+          carriedWaits.slice(offset, offset + REVIEW_STATE_INSERT_BATCH_SIZE),
         );
     }
     await tx

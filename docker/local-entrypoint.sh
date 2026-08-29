@@ -167,7 +167,18 @@ maintenance_loop() {
   done
 }
 
-echo "Starting ReviewDuck at http://localhost:${PORT:-3000}"
+listen_address="${HOSTNAME:-0.0.0.0}"
+if [ -n "${REVIEWDUCK_LISTEN:-}" ]; then
+  export HOSTNAME="$REVIEWDUCK_LISTEN"
+elif [ "$listen_address" != "0.0.0.0" ] &&
+  [ "$listen_address" != "::" ] &&
+  [ "$listen_address" != "127.0.0.1" ] &&
+  [ "$listen_address" != "localhost" ] &&
+  [ "$listen_address" != "::1" ]; then
+  echo "Container HOSTNAME '$listen_address' is not a bind address; listening on 0.0.0.0 inside the container." >&2
+  export HOSTNAME=0.0.0.0
+fi
+echo "Starting ReviewDuck at http://localhost:${PORT:-3000}. Publish the port as 127.0.0.1:${PORT:-3000}:3000."
 node ./server.js &
 web_pid=$!
 maintenance_loop &

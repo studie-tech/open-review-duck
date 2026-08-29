@@ -9,6 +9,7 @@ import {
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
   sortByReviewFileTreeOrder,
+  visibleReviewFileTreeItems,
   windowReviewFileCards,
 } from "./review-files";
 
@@ -134,6 +135,9 @@ describe("review file browsing", () => {
     expect(
       filterReviewFiles(entries, "all", "duck").map(({ id }) => id),
     ).toEqual(["asset"]);
+    expect(
+      filterReviewFiles(entries, "needs_review", "").map(({ id }) => id),
+    ).toEqual(["one", "two"]);
   });
 
   it("advances to the next outstanding file in sidebar order", () => {
@@ -248,6 +252,18 @@ describe("review file browsing", () => {
         { path: "src/b/c.ts" },
       ]).map(({ path }) => path),
     ).toEqual(sidebarOrder);
+  });
+
+  it("lists only expanded tree rows for keyboard focus", () => {
+    const tree = buildReviewFileTree(reviewFileEntries(files, units));
+    expect(
+      visibleReviewFileTreeItems(tree, new Set()).map(({ path }) => path),
+    ).toEqual(["public", "src"]);
+    expect(
+      visibleReviewFileTreeItems(tree, new Set(["src"])).map(
+        ({ path }) => path,
+      ),
+    ).toEqual(["public", "src", "src/review", "src/two.ts"]);
   });
 });
 

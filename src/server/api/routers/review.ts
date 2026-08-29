@@ -1133,6 +1133,41 @@ type ReviewTransaction = Parameters<
   Parameters<(typeof database)["transaction"]>[0]
 >[0];
 
+/** Loads one current-revision snapshot file the caller is allowed to act on. */
+async function currentSnapshotFileForMember(
+  tx: ReviewTransaction,
+  userId: string,
+  snapshotFileId: string,
+) {
+  const [file] = await tx
+    .select({
+      id: snapshotFiles.id,
+      snapshotId: snapshotFiles.snapshotId,
+      pullRequestId: pullRequests.id,
+    })
+    .from(snapshotFiles)
+    .innerJoin(
+      reviewSnapshots,
+      eq(snapshotFiles.snapshotId, reviewSnapshots.id),
+    )
+    .innerJoin(pullRequests, eq(reviewSnapshots.pullRequestId, pullRequests.id))
+    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+    .innerJoin(
+      workspaceMembers,
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
+    )
+    .where(
+      and(
+        eq(snapshotFiles.id, snapshotFileId),
+        eq(reviewSnapshots.headSha, pullRequests.headSha),
+        eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+        eq(workspaceMembers.userId, userId),
+      ),
+    )
+    .limit(1);
+  return file;
+}
+
 interface PersistedSignOff {
   added: boolean;
   experience: number;
@@ -4728,38 +4763,11 @@ export const reviewRouter = createTRPCRouter({
     .input(reviewFileActionSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        const [file] = await tx
-          .select({
-            id: snapshotFiles.id,
-            snapshotId: snapshotFiles.snapshotId,
-            pullRequestId: pullRequests.id,
-          })
-          .from(snapshotFiles)
-          .innerJoin(
-            reviewSnapshots,
-            eq(snapshotFiles.snapshotId, reviewSnapshots.id),
-          )
-          .innerJoin(
-            pullRequests,
-            eq(reviewSnapshots.pullRequestId, pullRequests.id),
-          )
-          .innerJoin(
-            repositories,
-            eq(pullRequests.repositoryId, repositories.id),
-          )
-          .innerJoin(
-            workspaceMembers,
-            eq(repositories.workspaceId, workspaceMembers.workspaceId),
-          )
-          .where(
-            and(
-              eq(snapshotFiles.id, input.snapshotFileId),
-              eq(reviewSnapshots.headSha, pullRequests.headSha),
-              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
-              eq(workspaceMembers.userId, ctx.auth.userId),
-            ),
-          )
-          .limit(1);
+        const file = await currentSnapshotFileForMember(
+          tx,
+          ctx.auth.userId,
+          input.snapshotFileId,
+        );
         if (!file) throw new TRPCError({ code: "NOT_FOUND" });
         const members = await tx.query.reviewUnits.findMany({
           where: and(
@@ -4838,38 +4846,11 @@ export const reviewRouter = createTRPCRouter({
     .input(unreviewFileSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        const [file] = await tx
-          .select({
-            id: snapshotFiles.id,
-            snapshotId: snapshotFiles.snapshotId,
-            pullRequestId: pullRequests.id,
-          })
-          .from(snapshotFiles)
-          .innerJoin(
-            reviewSnapshots,
-            eq(snapshotFiles.snapshotId, reviewSnapshots.id),
-          )
-          .innerJoin(
-            pullRequests,
-            eq(reviewSnapshots.pullRequestId, pullRequests.id),
-          )
-          .innerJoin(
-            repositories,
-            eq(pullRequests.repositoryId, repositories.id),
-          )
-          .innerJoin(
-            workspaceMembers,
-            eq(repositories.workspaceId, workspaceMembers.workspaceId),
-          )
-          .where(
-            and(
-              eq(snapshotFiles.id, input.snapshotFileId),
-              eq(reviewSnapshots.headSha, pullRequests.headSha),
-              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
-              eq(workspaceMembers.userId, ctx.auth.userId),
-            ),
-          )
-          .limit(1);
+        const file = await currentSnapshotFileForMember(
+          tx,
+          ctx.auth.userId,
+          input.snapshotFileId,
+        );
         if (!file) throw new TRPCError({ code: "NOT_FOUND" });
         const members = await tx
           .select({

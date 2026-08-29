@@ -215,6 +215,7 @@ describe("PullRequestsContent", () => {
     queryState.recentSyncFailures = [
       {
         id: "sync-failed",
+        repositoryId: "repository-failed",
         pullRequestNumber: 18_622,
         progress: 10,
         completedAt: new Date(),
@@ -241,6 +242,33 @@ describe("PullRequestsContent", () => {
     expect(
       screen.getByRole("link", { name: "Review connection" }),
     ).toHaveAttribute("href", "/settings/providers");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+  });
+
+  it("retries a failed synchronization from the inbox", async () => {
+    const user = userEvent.setup();
+    queryState.activeSyncs = [];
+    queryState.recentSyncFailures = [
+      {
+        id: "sync-failed",
+        repositoryId: "repository-failed",
+        pullRequestNumber: 18_622,
+        progress: 10,
+        completedAt: new Date(),
+        repositoryOwner: "DSAIE",
+        repositoryName: "hub-app",
+        provider: "azure_devops",
+        title: "Track Chat AI token usage per user and model",
+        message: "Azure DevOps denied access while loading this pull request.",
+      },
+    ];
+
+    render(<PullRequestsContent initialPullRequests={[]} />);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(queryState.syncMutate).toHaveBeenCalledWith({
+      repositoryId: "repository-failed",
+      number: 18_622,
+    });
   });
 
   it("prioritizes continued work and filters across providers", async () => {

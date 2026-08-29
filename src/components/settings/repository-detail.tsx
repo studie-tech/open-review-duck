@@ -80,7 +80,7 @@ export function RepositoryDetail({
   );
   const utils = api.useUtils();
   const syncPullRequest = api.review.sync.useMutation({
-    onSuccess: (result) => {
+    onSuccess: (_result, input) => {
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
@@ -88,7 +88,7 @@ export function RepositoryDetail({
         utils.provider.listOpenPullRequests.invalidate(),
       ]);
       toast.success("Review synchronization queued", {
-        description: `Durable sync ${result.syncId.slice(0, 8)} is running in the background.`,
+        description: `${repository.owner}/${repository.name} #${input.number} is being prepared in the background.`,
       });
     },
     onError: (error) =>

@@ -71,7 +71,7 @@ const workCopy = {
   ready: ["Ready to start", "Prepared changes waiting for a first pass."],
   unreviewable: [
     "Not reviewable here",
-    "No supported review units were found.",
+    "Open on the provider or synchronize if supported files landed.",
   ],
   reviewed: [
     "Reviewed, awaiting merge",
@@ -200,7 +200,7 @@ export function PullRequestsContent({
           number: input.number,
         }),
       ),
-    onSuccess: (result) => {
+    onSuccess: (_result, input) => {
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
@@ -208,7 +208,7 @@ export function PullRequestsContent({
         utils.provider.listOpenPullRequests.invalidate(),
       ]);
       toast.success("Review synchronization queued", {
-        description: `Durable sync ${result.syncId.slice(0, 8)} is running in the background.`,
+        description: `Pull request #${input.number} is being prepared in the background.`,
       });
     },
     onError: (error) =>
@@ -493,7 +493,20 @@ export function PullRequestsContent({
 
       <div className="mt-8 space-y-4">
         <DashboardSyncPanel synchronizing={synchronizing} />
-        <DashboardFailurePanel failedSyncs={failedSyncs} />
+        <DashboardFailurePanel
+          failedSyncs={failedSyncs}
+          retryingKey={
+            prepareReview.isPending
+              ? `${prepareReview.variables?.repositoryId}:${prepareReview.variables?.number}`
+              : undefined
+          }
+          onRetry={(sync) =>
+            prepareReview.mutate({
+              repositoryId: sync.repositoryId,
+              number: sync.pullRequestNumber,
+            })
+          }
+        />
       </div>
 
       <section className="mt-10">

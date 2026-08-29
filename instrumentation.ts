@@ -6,6 +6,13 @@ export async function register() {
     process.env.NEXT_RUNTIME === "nodejs" &&
     process.env.DEPLOYMENT_MODE === "local"
   ) {
+    const { localListenAddressWarning } = await import("~/lib/deployment");
+    const listenWarning = localListenAddressWarning(
+      process.env.HOSTNAME ?? "0.0.0.0",
+    );
+    if (listenWarning) {
+      console.warn(listenWarning);
+    }
     // This explicit import makes the complete Postgres World part of the
     // standalone trace; getWorld selects it through WORKFLOW_TARGET_WORLD.
     await import("@workflow/world-postgres");

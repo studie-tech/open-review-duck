@@ -102,9 +102,9 @@ export function useSymbolPeek(enabled: boolean) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [close, peeked]);
 
-  /** Opens the card once the pointer has rested on one name long enough. */
-  const onPointerOver = useCallback(
-    (event: ReactMouseEvent<HTMLElement>) => {
+  /** Opens the card for one name, immediately on click or after a hover dwell. */
+  const revealPeek = useCallback(
+    (event: ReactMouseEvent<HTMLElement>, immediate: boolean) => {
       if (!enabled) return;
       const token = (
         event.target as HTMLElement | null
@@ -112,13 +112,14 @@ export function useSymbolPeek(enabled: boolean) {
       const symbol = token?.getAttribute(SYMBOL_PEEK_ATTRIBUTE);
       if (!token || !symbol) return;
       clearTimers();
-      if (anchored.current === token) return;
+      if (!immediate && anchored.current === token) return;
       const line = Number(token.getAttribute(SYMBOL_PEEK_LINE_ATTRIBUTE));
-      openTimer.current = setTimeout(() => {
+      /** Places the card on the token that is still in the document. */
+      const open = () => {
         // The dwell outlives a re-render, which can take the token with it.
         if (!token.isConnected) return;
         const bounds = token.getBoundingClientRect();
-        pinned.current = false;
+        pinned.current = immediate;
         anchored.current = token;
         setPeeked({
           anchor: {
@@ -129,9 +130,25 @@ export function useSymbolPeek(enabled: boolean) {
           line: Number.isInteger(line) && line > 0 ? line : undefined,
           symbol,
         });
-      }, SYMBOL_PEEK_HOVER_DELAY_MS);
+      };
+      if (immediate) {
+        event.stopPropagation();
+        open();
+        return;
+      }
+      openTimer.current = setTimeout(open, SYMBOL_PEEK_HOVER_DELAY_MS);
     },
     [clearTimers, enabled],
+  );
+
+  const onPointerOver = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => revealPeek(event, false),
+    [revealPeek],
+  );
+
+  const onPointerActivate = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => revealPeek(event, true),
+    [revealPeek],
   );
 
   /** Lets the pointer cross the gap between a name and the card below it. */
@@ -159,6 +176,7 @@ export function useSymbolPeek(enabled: boolean) {
     holdOpen,
     peeked,
     peekHandlers: {
+      onClick: onPointerActivate,
       onMouseOut: onPointerOut,
       onMouseOver: onPointerOver,
     },
