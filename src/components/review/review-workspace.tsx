@@ -4504,8 +4504,7 @@ export function ReviewWorkspace({
     if (pathPanelOpen) {
       setPathPanelOpen(false);
     } else {
-      setInsightsPanelOpen(false);
-      setPathPanelOpen(true);
+      showPathPanel();
     }
   }
 
