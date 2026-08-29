@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@workflow/world-postgres": "4.3.3",
+    "@workflow/world-postgres": "4.3.4",
     "drizzle-orm": "0.45.2",
-    "pg": "8.22.0"
+    "pg": "8.23.0"
   }
 }
