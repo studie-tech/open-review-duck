@@ -30,9 +30,12 @@ export function isSafeLocalListenAddress(address: string) {
 }
 
 /** Warns when a local process would bind a concrete public address. */
-export function localListenAddressWarning(address: string) {
+export function localListenAddressWarning(
+  address: string,
+  port = process.env.PORT ?? "3000",
+) {
   if (isSafeLocalListenAddress(address)) return undefined;
-  return `Local mode should bind loopback or an unspecified address, not ${address}. Publish Docker as 127.0.0.1:3000:3000.`;
+  return `Local mode should bind loopback or an unspecified address, not ${address}. Publish Docker as 127.0.0.1:${port}:${port}.`;
 }
 
 /** Extracts a normalized hostname from an HTTP Host header. */

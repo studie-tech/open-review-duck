@@ -126,6 +126,7 @@ function ReviewFileRow({
     <div
       role="treeitem"
       tabIndex={-1}
+      data-review-file-path={file.path}
       aria-current={selected ? "page" : undefined}
       aria-label={`${file.path}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
       className={cn(
@@ -221,7 +222,13 @@ function ReviewFileTreeRows({
     }
     const open = expanded.has(node.path);
     return (
-      <div key={node.path} role="treeitem" aria-expanded={open} tabIndex={-1}>
+      <div
+        key={node.path}
+        role="treeitem"
+        aria-expanded={open}
+        tabIndex={-1}
+        data-review-file-path={node.path}
+      >
         <button
           type="button"
           id={reviewFileTreeControlId(node.path)}
@@ -337,9 +344,13 @@ export function ReviewFilesPanel({
     if (!keys.includes(event.key)) return;
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    const currentPath = target.id.startsWith("review-file-tree-")
-      ? decodeURIComponent(target.id.slice("review-file-tree-".length))
-      : undefined;
+    const currentPath =
+      target
+        .closest("[data-review-file-path]")
+        ?.getAttribute("data-review-file-path") ??
+      (target.id.startsWith("review-file-tree-")
+        ? decodeURIComponent(target.id.slice("review-file-tree-".length))
+        : undefined);
     const currentIndex = visibleItems.findIndex(
       (item) => item.path === currentPath,
     );

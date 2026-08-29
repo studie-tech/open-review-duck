@@ -227,4 +227,26 @@ describe("ReviewFilesPanel", () => {
     await user.keyboard("{ArrowDown}");
     expect(file).toHaveFocus();
   });
+
+  it("arrows from a file checkbox using the containing tree row", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    screen
+      .getByRole("checkbox", {
+        name: /Sign off 2 review units in src\/review\/workspace.ts/i,
+      })
+      .focus();
+    await user.keyboard("{ArrowUp}");
+    expect(
+      screen.getByRole("button", { name: "Collapse review" }),
+    ).toHaveFocus();
+  });
 });
