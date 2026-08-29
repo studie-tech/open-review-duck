@@ -24,6 +24,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   ShieldCheck,
@@ -4318,12 +4319,12 @@ export function ReviewWorkspace({
     if (mode === "path") setCompletedBrowsing(false);
   }
 
-  /** Leaves the modal at a neutral completed-review browsing surface. */
+  /** Leaves the modal at a completed-review browsing surface without persisting Files mode. */
   function browseCompletedReview() {
-    changeReviewMode("files");
+    setReviewMode("files");
     setCompletionOpen(false);
     setCompletedBrowsing(true);
-    setPathPanelCollapsed(false);
+    showPathPanel();
     sendReviewSession({ type: "REVIEW_BROWSED" });
   }
   useEffect(() => {
@@ -4335,10 +4336,13 @@ export function ReviewWorkspace({
       event.preventDefault();
       if (completionVisible) {
         setReviewMode("files");
-        rememberReviewMode(window.localStorage, "files");
         setCompletionOpen(false);
         setCompletedBrowsing(true);
         setPathPanelCollapsed(false);
+        if (!window.matchMedia("(min-width: 1536px)").matches) {
+          setInsightsPanelOpen(false);
+          setPathPanelOpen(true);
+        }
         sendReviewSession({ type: "REVIEW_BROWSED" });
       }
       if (waitingCompletionVisible) setWaitingCompletionOpen(false);
@@ -6216,7 +6220,7 @@ export function ReviewWorkspace({
       label: "Reset review",
       description: "Sync the latest code and clear all of your sign-offs",
       group: "Review actions",
-      icon: <Undo2 className="size-4" />,
+      icon: <RotateCcw className="size-4" />,
       shortcut: reviewShortcuts.reset,
       disabled:
         signOffQueue.ids.size > 0 ||
@@ -6398,14 +6402,30 @@ export function ReviewWorkspace({
             No reviewable symbols yet
           </h1>
           <p className="text-mist mt-2 text-sm">
-            Synchronize this pull request after its first file change.
+            ReviewDuck found no supported review units in this pull request.
+            Open it on the provider to review unsupported files, or synchronize
+            again if supported changes have landed.
           </p>
-          <Button asChild className="mt-6">
-            <Link href="/pullrequests">
-              <LinkPendingSpinner />
-              Back to pull requests
-            </Link>
-          </Button>
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button asChild>
+              <Link href="/pullrequests">
+                <LinkPendingSpinner />
+                Back to pull requests
+              </Link>
+            </Button>
+            {initialData.pullRequest.webUrl ? (
+              <Button asChild variant="secondary">
+                <a
+                  href={initialData.pullRequest.webUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open pull request
+                  <ExternalLink className="size-3.5" />
+                </a>
+              </Button>
+            ) : null}
+          </div>
         </div>
       </main>
     );
@@ -6556,7 +6576,7 @@ export function ReviewWorkspace({
           }
           className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
         >
-          <Undo2 className="size-4" />
+          <RotateCcw className="size-4" />
           <span className="hidden sm:inline">Reset</span>
           <ShortcutHint
             shortcut={reviewShortcuts.reset}
@@ -8637,7 +8657,7 @@ export function ReviewWorkspace({
               </>
             }
             pending={resetReview.isPending}
-            icon={<Undo2 className="text-coral size-4" />}
+            icon={<RotateCcw className="text-coral size-4" />}
             onCancel={() => setResetDialogOpen(false)}
             onConfirm={() =>
               resetReview.mutate({

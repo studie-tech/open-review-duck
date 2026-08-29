@@ -204,5 +204,27 @@ describe("ReviewFilesPanel", () => {
     expect(needsReview).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("workspace.ts")).toBeVisible();
     expect(screen.queryByText("done.ts")).not.toBeInTheDocument();
+    expect(screen.queryByText("No review units")).not.toBeInTheDocument();
+  });
+
+  it("moves keyboard focus between visible tree rows with arrow keys", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const file = screen.getByRole("button", { name: /workspace\.ts/i });
+    file.focus();
+    await user.keyboard("{ArrowUp}");
+    expect(
+      screen.getByRole("button", { name: "Collapse review" }),
+    ).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(file).toHaveFocus();
   });
 });

@@ -39,7 +39,8 @@ const groups = {
   unreviewable: {
     id: "unreviewable",
     label: "Not reviewable here",
-    description: "No supported review units were found",
+    description:
+      "Open on the provider or synchronize if supported files landed",
     rank: 2,
   },
 } satisfies Record<PriorityInboxGroupId, PriorityInboxGroup>;

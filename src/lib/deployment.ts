@@ -18,6 +18,23 @@ export function isLoopbackHostname(hostname: string) {
   );
 }
 
+/** Returns whether a listen address is loopback or left unspecified for Docker. */
+export function isSafeLocalListenAddress(address: string) {
+  const normalized = address.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    isLoopbackHostname(normalized) ||
+    normalized === "0.0.0.0" ||
+    normalized === "::" ||
+    normalized === ""
+  );
+}
+
+/** Warns when a local process would bind a concrete public address. */
+export function localListenAddressWarning(address: string) {
+  if (isSafeLocalListenAddress(address)) return undefined;
+  return `Local mode should bind loopback or an unspecified address, not ${address}. Publish Docker as 127.0.0.1:3000:3000.`;
+}
+
 /** Extracts a normalized hostname from an HTTP Host header. */
 export function hostnameFromHostHeader(host: string | null) {
   if (!host) return "";

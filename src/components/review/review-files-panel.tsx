@@ -13,15 +13,27 @@ import {
   List,
   LoaderCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   buildReviewFileTree,
   filterReviewFiles,
   type ReviewFileEntry,
   type ReviewFileFilter,
   type ReviewFileTreeNode,
+  visibleReviewFileTreeItems,
 } from "~/lib/review-files";
 import { cn } from "~/lib/utils";
+
+/** Stable id for the focusable control of one tree row. */
+function reviewFileTreeControlId(path: string) {
+  return `review-file-tree-${encodeURIComponent(path)}`;
+}
 
 const filters = [
   { id: "all" as const, icon: List, label: "All" },
@@ -125,6 +137,7 @@ function ReviewFileRow({
       <FileReviewCheckbox file={file} pending={pending} onToggle={onToggle} />
       <button
         type="button"
+        id={reviewFileTreeControlId(file.path)}
         onClick={() => onSelect(file)}
         className="min-w-0 flex-1 text-left"
         title={file.path}
@@ -211,6 +224,8 @@ function ReviewFileTreeRows({
       <div key={node.path} role="treeitem" aria-expanded={open} tabIndex={-1}>
         <button
           type="button"
+          id={reviewFileTreeControlId(node.path)}
+          aria-label={`${open ? "Collapse" : "Expand"} ${node.name}`}
           onClick={() => onExpandedChange(node.path)}
           className="text-mist hover:bg-surface-subtle flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 text-left transition"
           style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
@@ -294,6 +309,98 @@ export function ReviewFilesPanel({
     [files, filter, search],
   );
   const tree = useMemo(() => buildReviewFileTree(filtered), [filtered]);
+  const visibleItems = useMemo(
+    () => visibleReviewFileTreeItems(tree, expanded),
+    [expanded, tree],
+  );
+
+  /** Expands or collapses one folder without rebuilding the rest of the tree. */
+  function onExpandedChange(path: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  /** Moves keyboard focus across visible tree rows without changing mouse behavior. */
+  function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const keys = [
+      "ArrowDown",
+      "ArrowUp",
+      "ArrowLeft",
+      "ArrowRight",
+      "Home",
+      "End",
+    ];
+    if (!keys.includes(event.key)) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const currentPath = target.id.startsWith("review-file-tree-")
+      ? decodeURIComponent(target.id.slice("review-file-tree-".length))
+      : undefined;
+    const currentIndex = visibleItems.findIndex(
+      (item) => item.path === currentPath,
+    );
+    const current =
+      currentIndex >= 0 ? visibleItems[currentIndex] : visibleItems[0];
+    if (!current) return;
+
+    /** Focuses the control for one visible tree row. */
+    const focusPath = (path: string) => {
+      document.getElementById(reviewFileTreeControlId(path))?.focus();
+    };
+    const parentPath = current.path.includes("/")
+      ? current.path.slice(0, current.path.lastIndexOf("/"))
+      : undefined;
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const next =
+        visibleItems[
+          Math.min(
+            visibleItems.length - 1,
+            Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta),
+          )
+        ];
+      if (next) focusPath(next.path);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      const first = visibleItems[0];
+      if (first) focusPath(first.path);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      const last = visibleItems.at(-1);
+      if (last) focusPath(last.path);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      if (current.kind === "directory" && !expanded.has(current.path)) {
+        event.preventDefault();
+        onExpandedChange(current.path);
+      }
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      if (current.kind === "directory" && expanded.has(current.path)) {
+        event.preventDefault();
+        onExpandedChange(current.path);
+        return;
+      }
+      if (parentPath) {
+        event.preventDefault();
+        focusPath(parentPath);
+      }
+      return;
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-line px-4 py-2.5">
@@ -329,21 +436,19 @@ export function ReviewFilesPanel({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {tree.length > 0 ? (
-          <div role="tree" aria-label={treeLabel} className="space-y-0.5">
+          <div
+            role="tree"
+            aria-label={treeLabel}
+            className="space-y-0.5"
+            onKeyDown={handleTreeKeyDown}
+          >
             <ReviewFileTreeRows
               nodes={tree}
               level={0}
               selectedPath={selectedPath}
               pendingFileId={pendingFileId}
               expanded={expanded}
-              onExpandedChange={(path) =>
-                setExpanded((current) => {
-                  const next = new Set(current);
-                  if (next.has(path)) next.delete(path);
-                  else next.add(path);
-                  return next;
-                })
-              }
+              onExpandedChange={onExpandedChange}
               onSelect={onSelect}
               onToggle={onToggle}
             />

@@ -226,7 +226,10 @@ export function nextOutstandingReviewFile<Unit extends FileReviewUnit>(
   );
 }
 
-/** Filters files without hiding an opened path unexpectedly. */
+/**
+ * Filters the changed-file tree. All keeps empty and binary files visible.
+ * Needs review hides signed-off files and files with no units to sign.
+ */
 export function filterReviewFiles(
   files: readonly ReviewFileEntry[],
   filter: ReviewFileFilter,
@@ -235,11 +238,37 @@ export function filterReviewFiles(
   const query = search.trim().toLowerCase();
   return files.filter((file) => {
     if (query && !file.path.toLowerCase().includes(query)) return false;
-    if (filter === "needs_review") return file.state !== "reviewed";
+    if (filter === "needs_review") {
+      return file.state !== "reviewed" && file.totalUnits > 0;
+    }
     if (filter === "attention")
       return file.newUnits > 0 || file.updatedUnits > 0;
     if (filter === "reviewed") return file.state === "reviewed";
     return true;
+  });
+}
+
+/** One visible tree row the Files sidebar can move keyboard focus across. */
+export type ReviewFileTreeFocus =
+  | { kind: "directory"; path: string }
+  | { kind: "file"; path: string; file: ReviewFileEntry };
+
+/** Lists currently visible tree rows in render order, honoring collapsed folders. */
+export function visibleReviewFileTreeItems(
+  nodes: readonly ReviewFileTreeNode[],
+  expanded: ReadonlySet<string>,
+): ReviewFileTreeFocus[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === "file") {
+      return [{ kind: "file" as const, path: node.path, file: node.file }];
+    }
+    const row: ReviewFileTreeFocus = {
+      kind: "directory",
+      path: node.path,
+    };
+    return expanded.has(node.path)
+      ? [row, ...visibleReviewFileTreeItems(node.children, expanded)]
+      : [row];
   });
 }
 

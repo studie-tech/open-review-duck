@@ -1,5 +1,6 @@
-import { CircleAlert, Loader2 } from "lucide-react";
+import { CircleAlert, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { syncProgressLabel } from "~/lib/sync-progress";
 import type { RouterOutputs } from "~/trpc/react";
@@ -91,8 +92,12 @@ export function DashboardSyncPanel({
 /** Renders recent synchronization failures that still need attention. */
 export function DashboardFailurePanel({
   failedSyncs,
+  onRetry,
+  retryingKey,
 }: {
   failedSyncs: FailedSyncs;
+  onRetry?: (sync: FailedSyncs[number]) => void;
+  retryingKey?: string;
 }) {
   if (failedSyncs.length === 0) return null;
   return (
@@ -145,6 +150,28 @@ export function DashboardFailurePanel({
                       <LinkPendingSpinner className="size-3" />
                     </Link>
                   </p>
+                  {onRetry ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="mt-2"
+                      disabled={
+                        retryingKey ===
+                        `${sync.repositoryId}:${sync.pullRequestNumber}`
+                      }
+                      onClick={() => onRetry(sync)}
+                    >
+                      <RefreshCw
+                        className={
+                          retryingKey ===
+                          `${sync.repositoryId}:${sync.pullRequestNumber}`
+                            ? "size-3.5 animate-spin"
+                            : "size-3.5"
+                        }
+                      />
+                      Retry
+                    </Button>
+                  ) : null}
                 </li>
               );
             })}

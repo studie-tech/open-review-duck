@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   hostnameFromHostHeader,
   isLoopbackHostname,
+  isSafeLocalListenAddress,
+  localListenAddressWarning,
   workflowUsesApplicationDatabase,
 } from "./deployment";
 
@@ -24,6 +26,17 @@ describe("deployment boundaries", () => {
     [null, ""],
   ])("extracts the hostname from %s", (host, expected) => {
     expect(hostnameFromHostHeader(host)).toBe(expected);
+  });
+
+  it.each(["localhost", "127.0.0.1", "::1", "0.0.0.0", "::", ""])(
+    "treats %s as a safe local listen address",
+    (address) => expect(isSafeLocalListenAddress(address)).toBe(true),
+  );
+
+  it("warns when a local process would bind a public address", () => {
+    expect(isSafeLocalListenAddress("192.168.1.20")).toBe(false);
+    expect(localListenAddressWarning("192.168.1.20")).toMatch("192.168.1.20");
+    expect(localListenAddressWarning("127.0.0.1")).toBeUndefined();
   });
 
   it("checks Workflow tables only for the explicit PostgreSQL world", () => {
