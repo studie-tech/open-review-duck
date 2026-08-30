@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dashboardFilters } from "~/lib/dashboard-filters";
+import { api } from "~/trpc/react";
 import { PullRequestsContent } from "./dashboard-content";
 
 vi.mock("next/navigation", () => ({
@@ -180,7 +181,9 @@ describe("PullRequestsContent", () => {
   };
 
   it("shows durable sync progress and refreshes reviews when it finishes", async () => {
-    const view = render(<PullRequestsContent initialPullRequests={[]} />);
+    const view = render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
 
     expect(screen.getByText("Preparing a review")).toBeVisible();
     expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
@@ -202,7 +205,9 @@ describe("PullRequestsContent", () => {
     ).toBeVisible();
 
     queryState.activeSyncs = [];
-    view.rerender(<PullRequestsContent initialPullRequests={[]} />);
+    view.rerender(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
 
     await waitFor(() =>
       expect(queryState.dashboardRefetch).toHaveBeenCalledTimes(1),
@@ -228,7 +233,9 @@ describe("PullRequestsContent", () => {
       },
     ];
 
-    render(<PullRequestsContent initialPullRequests={[]} />);
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
 
     expect(screen.getByText("A review could not be prepared")).toBeVisible();
     expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
@@ -263,7 +270,9 @@ describe("PullRequestsContent", () => {
       },
     ];
 
-    render(<PullRequestsContent initialPullRequests={[]} />);
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(queryState.syncMutate).toHaveBeenCalledWith({
       repositoryId: "repository-failed",
@@ -298,7 +307,12 @@ describe("PullRequestsContent", () => {
         totalUnits: 0,
       }),
     ];
-    const view = render(<PullRequestsContent initialPullRequests={items} />);
+    const view = render(
+      <PullRequestsContent
+        initialPullRequests={items}
+        fetchedAt={Date.now()}
+      />,
+    );
 
     const continued = screen.getByText("Inventory improvements");
     const ready = screen.getByText("Retry settlement webhooks");
@@ -349,6 +363,7 @@ describe("PullRequestsContent", () => {
     await user.click(screen.getByRole("option", { name: "payments/api" }));
     view.rerender(
       <PullRequestsContent
+        fetchedAt={Date.now()}
         initialPullRequests={items.filter(({ id }) => id !== "ready")}
       />,
     );
@@ -364,6 +379,7 @@ describe("PullRequestsContent", () => {
     const user = userEvent.setup();
     render(
       <PullRequestsContent
+        fetchedAt={Date.now()}
         initialPullRequests={[
           pullRequest({ id: "open", title: "Inventory improvements" }),
           pullRequest({
@@ -414,7 +430,12 @@ describe("PullRequestsContent", () => {
         signedUnits: 2,
       }),
     ];
-    const view = render(<PullRequestsContent initialPullRequests={items} />);
+    const view = render(
+      <PullRequestsContent
+        initialPullRequests={items}
+        fetchedAt={Date.now()}
+      />,
+    );
 
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Filter by provider" }),
@@ -436,7 +457,12 @@ describe("PullRequestsContent", () => {
     });
 
     view.unmount();
-    render(<PullRequestsContent initialPullRequests={items} />);
+    render(
+      <PullRequestsContent
+        initialPullRequests={items}
+        fetchedAt={Date.now()}
+      />,
+    );
     await waitFor(() => {
       expect(
         screen.getByRole("combobox", { name: "Filter by provider" }),
@@ -459,6 +485,7 @@ describe("PullRequestsContent", () => {
     const user = userEvent.setup();
     render(
       <PullRequestsContent
+        fetchedAt={Date.now()}
         initialPullRequests={[
           pullRequest({
             id: "ready",
@@ -511,6 +538,7 @@ describe("PullRequestsContent", () => {
     const user = userEvent.setup();
     render(
       <PullRequestsContent
+        fetchedAt={Date.now()}
         initialPullRequests={[
           pullRequest({
             id: "open",
@@ -551,6 +579,7 @@ describe("PullRequestsContent", () => {
     const user = userEvent.setup();
     render(
       <PullRequestsContent
+        fetchedAt={Date.now()}
         initialPullRequests={[
           pullRequest({
             id: "open",
@@ -617,6 +646,7 @@ describe("PullRequestsContent", () => {
     const user = userEvent.setup();
     render(
       <PullRequestsContent
+        fetchedAt={Date.now()}
         initialPullRequests={[
           pullRequest({ id: "ready", title: "Inventory improvements" }),
         ]}
@@ -674,7 +704,9 @@ describe("PullRequestsContent", () => {
       ],
     };
     const user = userEvent.setup();
-    render(<PullRequestsContent initialPullRequests={[]} />);
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
 
     expect(screen.getByText("Draft usage metrics")).toBeVisible();
     const draftsSwitch = screen.getByRole("switch", {
@@ -691,7 +723,9 @@ describe("PullRequestsContent", () => {
       message: "GitHub rate limited the open pull request list.",
     };
     const user = userEvent.setup();
-    render(<PullRequestsContent initialPullRequests={[]} />);
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
 
     expect(
       screen.getByText("Un-imported pull requests could not be loaded"),
@@ -708,5 +742,21 @@ describe("PullRequestsContent", () => {
     expect(
       screen.getByRole("heading", { name: "Un-imported PRs" }),
     ).toBeVisible();
+  });
+
+  it("ages the hydrated inbox from the server read instead of the mount", () => {
+    const fetchedAt = Date.parse("2026-08-21T12:20:00Z");
+
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={fetchedAt} />,
+    );
+
+    expect(api.review.dashboard.useQuery).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        initialDataUpdatedAt: fetchedAt,
+        refetchOnMount: true,
+      }),
+    );
   });
 });

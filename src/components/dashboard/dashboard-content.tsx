@@ -100,8 +100,10 @@ function isHistoryView(
 /** Renders live dashboard data and follows durable synchronization progress. */
 export function PullRequestsContent({
   initialPullRequests,
+  fetchedAt,
 }: {
   initialPullRequests: DashboardPullRequests;
+  fetchedAt: number;
 }) {
   const utils = api.useUtils();
   const [pendingPullRequestId, setPendingPullRequestId] = useState<string>();
@@ -122,10 +124,14 @@ export function PullRequestsContent({
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
+  // The sidebar prefetches this route eagerly, so the server payload can
+  // predate the navigation. Stamping it with the time it was read lets the
+  // shared stale time decide whether hydration has to refresh it.
   const pullRequests = api.review.dashboard.useQuery(undefined, {
     enabled: activeSyncs.isFetched,
     initialData: initialPullRequests,
-    refetchOnMount: "always",
+    initialDataUpdatedAt: fetchedAt,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
   });
   const unimportedPullRequests =

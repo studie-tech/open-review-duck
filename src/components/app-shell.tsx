@@ -66,8 +66,8 @@ const navigation = [
     mobileLabel: "Reviews",
     icon: GitPullRequest,
     shortcut: [{ key: "g" }, { key: "r" }],
-    // The inbox refetches its queries on mount, so a full prefetch can
-    // never pin stale data to the screen.
+    // The inbox refreshes whatever the stale time considers old on mount,
+    // so a full prefetch can never pin stale data to the screen.
     eagerPrefetch: true,
     primary: true,
   },
