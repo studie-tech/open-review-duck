@@ -1042,13 +1042,17 @@ function Findings({
     },
     onError: (error) => toast.error(error.message),
   });
+  // This payload carries the decrypted title and body of every finding in the
+  // run, so it polls slower than the run status: the `history` read above keeps
+  // progress live at 1.5s. The interval follows the status inside the payload
+  // so the run's last findings always arrive before the poll winds down.
   const findings = api.repoReviews.findings.useQuery(
     { monitorId: monitor.id, jobId: selectedJobId ?? EMPTY_UUID },
     {
       enabled: Boolean(selectedJobId),
-      refetchInterval:
-        selectedRun && activeRunStatuses.has(selectedRun.status)
-          ? 1_500
+      refetchInterval: (query) =>
+        query.state.data && activeRunStatuses.has(query.state.data.status)
+          ? 4_000
           : false,
     },
   );
