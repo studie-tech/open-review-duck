@@ -1,7 +1,8 @@
 import "server-only";
 
 import { generateText } from "ai";
-import { and, eq, sql } from "drizzle-orm";
+import { type SQL, and, eq, inArray, sql } from "drizzle-orm";
+import type { PgColumn, PgUpdateSetSource } from "drizzle-orm/pg-core";
 import {
   aiJobs,
   aiReviewFindingEvidence,
@@ -655,38 +656,109 @@ async function refuteFindings(
   return votes !== null;
 }
 
-/** Writes each finding's settled state and any resealed relocated snippet. */
+/**
+ * Builds one column's new value as a `case` over the findings' ids.
+ *
+ * The cast comes from the column itself because a `case` whose branches are
+ * all placeholders resolves to text, which Postgres will not assign to an
+ * enum, integer or boolean column.
+ */
+function settledColumn(
+  findings: readonly DeepReviewValidatedFinding[],
+  column: PgColumn,
+  value: (finding: DeepReviewValidatedFinding) => unknown,
+): SQL {
+  const type = sql.raw(column.getSQLType());
+  return sql`case ${aiReviewFindings.id} ${sql.join(
+    findings.map(
+      (finding) => sql`when ${finding.id} then ${value(finding)}::${type}`,
+    ),
+    sql` `,
+  )} end`;
+}
+
+/**
+ * Writes each finding's settled state and any resealed relocated snippet.
+ *
+ * The whole file settles in one statement: this runs on the critical path of
+ * closing a review item, with every other file's lane competing for the same
+ * pool.
+ */
 async function persistValidation(
   db: Database,
   findings: readonly DeepReviewValidatedFinding[],
   resealed: ReadonlyMap<string, string>,
 ): Promise<void> {
-  for (const finding of findings) {
-    const values: Record<string, unknown> = {
-      state: finding.state,
-      verdict: finding.verdict,
-      verdictReason: finding.verdictReason,
-      anchorTier: finding.anchorTier,
-      anchorSide: finding.anchorSide,
-      startLine: finding.startLine,
-      endLine: finding.endLine,
-      anchorAmbiguous: finding.anchorAmbiguous,
-      unitId: finding.unitId,
-    };
-    const sealed = resealed.get(finding.id);
-    if (sealed !== undefined) values.encryptedContent = sealed;
-    await db
-      .update(aiReviewFindings)
-      .set(values)
-      .where(
-        and(
-          eq(aiReviewFindings.id, finding.id),
-          // Guarding on the pre-validation state keeps a concurrent replay from
-          // overwriting a verdict that has already been settled.
-          eq(aiReviewFindings.state, "submitted"),
-        ),
-      );
+  const values: PgUpdateSetSource<typeof aiReviewFindings> = {
+    state: settledColumn(
+      findings,
+      aiReviewFindings.state,
+      (finding) => finding.state,
+    ),
+    verdict: settledColumn(
+      findings,
+      aiReviewFindings.verdict,
+      (finding) => finding.verdict,
+    ),
+    verdictReason: settledColumn(
+      findings,
+      aiReviewFindings.verdictReason,
+      (finding) => finding.verdictReason,
+    ),
+    anchorTier: settledColumn(
+      findings,
+      aiReviewFindings.anchorTier,
+      (finding) => finding.anchorTier,
+    ),
+    anchorSide: settledColumn(
+      findings,
+      aiReviewFindings.anchorSide,
+      (finding) => finding.anchorSide,
+    ),
+    startLine: settledColumn(
+      findings,
+      aiReviewFindings.startLine,
+      (finding) => finding.startLine,
+    ),
+    endLine: settledColumn(
+      findings,
+      aiReviewFindings.endLine,
+      (finding) => finding.endLine,
+    ),
+    anchorAmbiguous: settledColumn(
+      findings,
+      aiReviewFindings.anchorAmbiguous,
+      (finding) => finding.anchorAmbiguous,
+    ),
+    unitId: settledColumn(
+      findings,
+      aiReviewFindings.unitId,
+      (finding) => finding.unitId,
+    ),
+  };
+  if (resealed.size > 0) {
+    // Only a relocated finding is resealed, so every other row coalesces back
+    // onto the payload it already carries.
+    values.encryptedContent = sql`coalesce(${settledColumn(
+      findings,
+      aiReviewFindings.encryptedContent,
+      (finding) => resealed.get(finding.id) ?? null,
+    )}, ${aiReviewFindings.encryptedContent})`;
   }
+  await db
+    .update(aiReviewFindings)
+    .set(values)
+    .where(
+      and(
+        inArray(
+          aiReviewFindings.id,
+          findings.map((finding) => finding.id),
+        ),
+        // Guarding on the pre-validation state keeps a concurrent replay from
+        // overwriting a verdict that has already been settled.
+        eq(aiReviewFindings.state, "submitted"),
+      ),
+    );
 }
 
 /**
