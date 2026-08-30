@@ -5085,17 +5085,20 @@ export function ReviewWorkspace({
   /** Moves the AI question to the next rendered in-scope review line. */
   function stepAiQuestion(direction: -1 | 1) {
     if (!activeUnit || aiQuestionLine === undefined) return;
-    const renderedLines = Array.from(
-      document.querySelectorAll<HTMLElement>('[id^="review-line-"]'),
-    )
-      .map((element) => Number(element.id.replace("review-line-", "")))
-      .filter(
-        (line, index, lines) =>
-          Number.isInteger(line) &&
-          isPrimaryReviewLine(line) &&
-          lines.indexOf(line) === index,
-      )
-      .sort((left, right) => left - right);
+    // A set keeps the sweep linear: the pane renders thousands of line rows
+    // and this runs on every arrow press while the question is open.
+    const distinctLines = new Set<number>();
+    for (const element of document.querySelectorAll<HTMLElement>(
+      '[id^="review-line-"]',
+    )) {
+      const line = Number(element.id.replace("review-line-", ""));
+      if (Number.isInteger(line) && isPrimaryReviewLine(line)) {
+        distinctLines.add(line);
+      }
+    }
+    const renderedLines = [...distinctLines].sort(
+      (left, right) => left - right,
+    );
     const nextLine =
       direction === 1
         ? renderedLines.find((line) => line > aiQuestionLine)
