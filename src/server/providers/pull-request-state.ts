@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { pullRequests, repositories } from "@/drizzle/schema";
+import { mapWithLimit } from "~/lib/concurrency";
 import type { db as database } from "~/server/db";
 import { startPullRequestSync } from "~/server/workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
@@ -9,7 +10,23 @@ import type { ConnectionAccess } from "./credentials";
 
 type Database = typeof database;
 type Repository = typeof repositories.$inferSelect;
+type TrackedPullRequest = typeof pullRequests.$inferSelect;
 const STATE_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
+/** Pooled handles one repository pass takes for its own writes and syncs. */
+const RECONCILIATION_WRITE_CONCURRENCY = 3;
+
+/** Reports whether the stored row already carries every refreshed column. */
+function isPullRequestCurrent(
+  stored: TrackedPullRequest,
+  refreshed: Partial<TrackedPullRequest>,
+) {
+  return Object.entries(refreshed).every(
+    ([column, value]) =>
+      // An undefined column is omitted from the statement, so it cannot differ.
+      value === undefined ||
+      stored[column as keyof TrackedPullRequest] === value,
+  );
+}
 
 /** Refreshes tracked PR metadata and queues analysis only when an open revision changed. */
 export async function refreshRepositoryPullRequestStates(
@@ -67,7 +84,8 @@ export async function refreshRepositoryPullRequestStates(
     }
 
     let changed = 0;
-    let queued = 0;
+    const stale: { id: string; refreshed: Partial<TrackedPullRequest> }[] = [];
+    const toResync: number[] = [];
     for (const trackedPullRequest of tracked) {
       const remote = remoteByNumber.get(trackedPullRequest.number);
       if (!remote) continue;
@@ -77,39 +95,57 @@ export async function refreshRepositoryPullRequestStates(
       const providerStateChanged = trackedPullRequest.state !== remote.state;
       const summaryOnly = openByNumber.has(trackedPullRequest.number);
       if (revisionChanged || providerStateChanged) changed += 1;
-      await db
-        .update(pullRequests)
-        .set({
-          title: remote.title,
-          description: remote.description,
-          authorLogin: remote.authorLogin,
-          authorAvatarUrl: remote.authorAvatarUrl,
-          sourceBranch: remote.sourceBranch,
-          targetBranch: remote.targetBranch,
-          headSha: remote.headSha,
-          baseSha: remote.baseSha,
-          state: remote.state,
-          webUrl: remote.webUrl,
-          additions: summaryOnly
-            ? trackedPullRequest.additions
-            : remote.additions,
-          deletions: summaryOnly
-            ? trackedPullRequest.deletions
-            : remote.deletions,
-          changedFiles: summaryOnly
-            ? trackedPullRequest.changedFiles
-            : remote.changedFiles,
-          lastSyncedAt: new Date(),
-        })
-        .where(eq(pullRequests.id, trackedPullRequest.id));
+      const refreshed = {
+        title: remote.title,
+        description: remote.description,
+        authorLogin: remote.authorLogin,
+        authorAvatarUrl: remote.authorAvatarUrl,
+        sourceBranch: remote.sourceBranch,
+        targetBranch: remote.targetBranch,
+        headSha: remote.headSha,
+        baseSha: remote.baseSha,
+        state: remote.state,
+        webUrl: remote.webUrl,
+        additions: summaryOnly
+          ? trackedPullRequest.additions
+          : remote.additions,
+        deletions: summaryOnly
+          ? trackedPullRequest.deletions
+          : remote.deletions,
+        changedFiles: summaryOnly
+          ? trackedPullRequest.changedFiles
+          : remote.changedFiles,
+      };
+      // `lastSyncedAt` is bookkeeping no reader consults, so a row the provider
+      // still agrees with is left alone rather than rewritten every pass.
+      if (!isPullRequestCurrent(trackedPullRequest, refreshed)) {
+        stale.push({ id: trackedPullRequest.id, refreshed });
+      }
       if (
         revisionChanged &&
         (remote.state === "open" || remote.state === "draft")
       ) {
+        toResync.push(remote.number);
+      }
+    }
+    await mapWithLimit(
+      stale,
+      RECONCILIATION_WRITE_CONCURRENCY,
+      async (pullRequest) => {
+        await db
+          .update(pullRequests)
+          .set({ ...pullRequest.refreshed, lastSyncedAt: new Date() })
+          .where(eq(pullRequests.id, pullRequest.id));
+      },
+    );
+    await mapWithLimit(
+      toResync,
+      RECONCILIATION_WRITE_CONCURRENCY,
+      async (pullRequestNumber) => {
         await startPullRequestSync(db, {
           workspaceId: repository.workspaceId,
           repositoryId: repository.id,
-          pullRequestNumber: remote.number,
+          pullRequestNumber,
           queue:
             repository.reviewIntakeMode !== "manual" && repository.intakeOwnerId
               ? {
@@ -119,14 +155,13 @@ export async function refreshRepositoryPullRequestStates(
                 }
               : undefined,
         });
-        queued += 1;
-      }
-    }
+      },
+    );
     await db
       .update(repositories)
       .set({ pullRequestStateLastError: null })
       .where(eq(repositories.id, repository.id));
-    return { checked: true, changed, queued };
+    return { checked: true, changed, queued: toResync.length };
   } catch (cause) {
     const message = providerConnectionErrorMessage(connection.provider, cause);
     await db
