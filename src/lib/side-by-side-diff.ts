@@ -344,8 +344,8 @@ function pairChangedBlock(operations: LineDiffOperation[]) {
   return rows;
 }
 
-/** Produces aligned line rows for a side-by-side source diff. */
-export function sideBySideDiff(previousSource: string, currentSource: string) {
+/** Pairs the two revisions into aligned diff rows. */
+function alignedDiffRows(previousSource: string, currentSource: string) {
   const previousLines = previousSource ? previousSource.split("\n") : [];
   const currentLines = currentSource ? currentSource.split("\n") : [];
   const operations = lineDiffOperations(previousLines, currentLines);
@@ -366,6 +366,34 @@ export function sideBySideDiff(previousSource: string, currentSource: string) {
     });
   }
   rows.push(...pairChangedBlock(changedBlock));
+  return rows;
+}
+
+// A single unit navigation asks for the same file pair three times: the
+// overview map, the changed-line set, and the remounted diff pane. The bound
+// keeps a handful of recently opened files aligned without pinning whole-file
+// row arrays for a whole session.
+const DIFF_CACHE_LIMIT = 8;
+const diffRowCache = new Map<string, readonly SideBySideDiffRow[]>();
+
+/**
+ * Produces aligned line rows for a side-by-side source diff.
+ *
+ * Rows are shared between callers, so treat the result as read-only.
+ */
+export function sideBySideDiff(
+  previousSource: string,
+  currentSource: string,
+): readonly SideBySideDiffRow[] {
+  const key = `${previousSource.length}\0${previousSource}\0${currentSource}`;
+  const cached = diffRowCache.get(key);
+  if (cached) return cached;
+  const rows = alignedDiffRows(previousSource, currentSource);
+  diffRowCache.set(key, rows);
+  if (diffRowCache.size > DIFF_CACHE_LIMIT) {
+    const oldest = diffRowCache.keys().next().value;
+    if (oldest !== undefined) diffRowCache.delete(oldest);
+  }
   return rows;
 }
 

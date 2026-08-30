@@ -22,6 +22,21 @@ describe("sideBySideDiff", () => {
     );
   });
 
+  it("reuses the rows already aligned for the same revision pair", () => {
+    const previous = "one\nold\nthree";
+    const current = "one\nnew\nextra\nthree";
+
+    expect(sideBySideDiff(previous, current)).toBe(
+      sideBySideDiff(previous, current),
+    );
+  });
+
+  it("keeps pairs apart when a source carries a null byte", () => {
+    expect(sideBySideDiff("one\u0000two\nextra", "three")).not.toEqual(
+      sideBySideDiff("one", "two\nextra\u0000three"),
+    );
+  });
+
   it("represents complete deletion without inventing current lines", () => {
     expect(sideBySideDiff("removed", "")).toEqual([
       { kind: "deleted", previousIndex: 0, currentIndex: undefined },
