@@ -10,6 +10,7 @@ import {
   type aiReviewItems,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import { mapWithLimit } from "~/lib/concurrency";
 import { resolveAiModel } from "~/server/ai/models";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
@@ -49,6 +50,7 @@ type Database = typeof database;
  */
 const DEEP_REVIEW_RELOCATION_LIMIT = env.DEEP_REVIEW_RELOCATION_LIMIT;
 
+const RELOCATION_CONCURRENCY = 4;
 const MAX_RELOCATE_OUTPUT_TOKENS = 1_024;
 const MAX_REFUTE_OUTPUT_TOKENS = 4_096;
 const VALIDATION_TIMEOUT_MS = 120_000;
@@ -152,6 +154,19 @@ interface FindingContent {
 interface LoadedFinding {
   id: string;
   content: FindingContent | null;
+}
+
+/** One finding's first anchoring attempt, held while relocation runs. */
+interface PreparedFinding {
+  id: string;
+  /** Null for a payload that could not be read, which never anchors. */
+  content: FindingContent | null;
+  anchor: AnchorResult;
+}
+
+interface RelocatableFinding {
+  id: string;
+  content: FindingContent;
 }
 
 /** Creates the optional run-wide relocation guard, defaulting to §6.6's cap. */
@@ -354,65 +369,81 @@ export async function validateFileFindings(
     finding: DeepReviewValidatedFinding;
   }[] = [];
   const resealed = new Map<string, string>();
+  const prepared: PreparedFinding[] = [];
+  const missed: RelocatableFinding[] = [];
 
   for (const finding of loaded) {
     const content = finding.content;
     if (!content || content.existingCode.trim() === "") {
       // A finding whose sealed payload we cannot read has no snippet to match,
       // and inventing a line for it is precisely what the gates exist to stop.
-      result.findings.push(
-        unanchoredFinding(
-          finding.id,
-          {
-            tier: "none",
-            side: null,
-            startLine: null,
-            endLine: null,
-            ambiguous: false,
-          },
-          false,
-        ),
-      );
+      prepared.push({
+        id: finding.id,
+        content: null,
+        anchor: {
+          tier: "none",
+          side: null,
+          startLine: null,
+          endLine: null,
+          ambiguous: false,
+        },
+      });
+      continue;
+    }
+    const anchor = resolveAnchor({
+      ...anchorable,
+      existingCode: content.existingCode,
+    });
+    prepared.push({ id: finding.id, content, anchor });
+    if (!isLocated(anchor) && mayRelocate(input)) {
+      result.relocationsAttempted += 1;
+      missed.push({ id: finding.id, content });
+    }
+  }
+
+  const relocations = await relocateMissedFindings(input, missed);
+
+  for (const entry of prepared) {
+    const content = entry.content;
+    if (!content) {
+      result.findings.push(unanchoredFinding(entry.id, entry.anchor, false));
       continue;
     }
 
     let existingCode = content.existingCode;
-    let anchor = resolveAnchor({ ...anchorable, existingCode });
+    let anchor = entry.anchor;
     let relocated = false;
-    if (!isLocated(anchor) && mayRelocate(input)) {
-      result.relocationsAttempted += 1;
-      const attempt = await relocateFinding(input, content);
-      if (attempt) {
-        const retry = resolveAnchor({ ...anchorable, existingCode: attempt });
-        if (isLocated(retry)) {
-          // A re-extraction only survives if it anchors, so a failed rewrite
-          // never replaces the model's actual claim.
-          existingCode = attempt;
-          anchor = { ...retry, tier: "relocated" };
-          relocated = true;
-          result.relocationsResolved += 1;
-          resealed.set(
-            finding.id,
-            await sealVaultSecret(
-              {
-                workspaceId: input.job.workspaceId,
-                recordId: finding.id,
-                provider: "ai-review-finding",
-              },
-              JSON.stringify({ ...content, existingCode }),
-            ),
-          );
-        }
+    const attempt = relocations.get(entry.id);
+    if (attempt) {
+      const retry = resolveAnchor({ ...anchorable, existingCode: attempt });
+      if (isLocated(retry)) {
+        // A re-extraction only survives if it anchors, so a failed rewrite
+        // never replaces the model's actual claim.
+        existingCode = attempt;
+        anchor = { ...retry, tier: "relocated" };
+        relocated = true;
+        result.relocationsResolved += 1;
+        resealed.set(
+          entry.id,
+          await sealVaultSecret(
+            {
+              workspaceId: input.job.workspaceId,
+              recordId: entry.id,
+              provider: "ai-review-finding",
+            },
+            JSON.stringify({ ...content, existingCode }),
+          ),
+        );
       }
     }
 
     if (!isLocated(anchor)) {
-      result.findings.push(unanchoredFinding(finding.id, anchor, relocated));
+      result.findings.push(unanchoredFinding(entry.id, anchor, relocated));
       continue;
     }
 
     const settled: DeepReviewValidatedFinding = {
-      id: finding.id,
+      id: entry.id,
       state: "anchored",
       verdict: "unverified",
       verdictReason: null,
@@ -441,13 +472,13 @@ export async function validateFileFindings(
       // The link carries the job because grounding means this agent read this
       // range: the database checks the finding and the range against it.
       groundedLinks.push({
-        findingId: finding.id,
+        findingId: entry.id,
         evidenceId: row.id,
         jobId: input.job.id,
       });
     }
     refutable.push({
-      id: finding.id,
+      id: entry.id,
       content: findingText(content),
       existingCode,
       finding: settled,
@@ -526,6 +557,29 @@ function mayRelocate(input: ValidateFileFindingsInput): boolean {
   if (budget.remaining <= 0) return false;
   budget.remaining -= 1;
   return true;
+}
+
+/**
+ * Re-extracts every snippet that missed, a few calls at a time.
+ *
+ * Each re-extraction is a whole model round trip carrying the changed source,
+ * so running the file's misses one after another holds this lane of the
+ * fan-out open for the sum of them. Results are keyed by id, which is what
+ * lets the caller apply them in the order the findings were reported.
+ */
+async function relocateMissedFindings(
+  input: ValidateFileFindingsInput,
+  missed: RelocatableFinding[],
+): Promise<Map<string, string>> {
+  const attempts = await mapWithLimit(missed, RELOCATION_CONCURRENCY, (entry) =>
+    relocateFinding(input, entry.content),
+  );
+  const relocations = new Map<string, string>();
+  missed.forEach((entry, index) => {
+    const attempt = attempts[index];
+    if (attempt) relocations.set(entry.id, attempt);
+  });
+  return relocations;
 }
 
 /** Asks the model to re-extract a snippet, returning null on any failure. */
