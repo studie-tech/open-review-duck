@@ -1324,6 +1324,20 @@ describe("provider normalization", () => {
           authenticatedUser: { id: "user-1", providerDisplayName: "Duck" },
         });
       }
+      if (url.includes("/pullrequests/12?")) {
+        return jsonResponse({
+          pullRequestId: 12,
+          title: "Update sync",
+          status: "active",
+          isDraft: false,
+          sourceRefName: "refs/heads/sync",
+          targetRefName: "refs/heads/main",
+          lastMergeSourceCommit: { commitId: "head-sha" },
+          lastMergeTargetCommit: { commitId: "base-sha" },
+          repository: { webUrl: "https://dev.azure.com/acme/repo" },
+          createdBy: { displayName: "Duck", uniqueName: "duck@example.com" },
+        });
+      }
       return jsonResponse({ value: [] });
     });
     vi.stubGlobal("fetch", fetchMock);

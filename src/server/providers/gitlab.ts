@@ -484,10 +484,12 @@ export class GitLabProvider implements PullRequestProvider {
     number: number,
     options?: ChangedFilesOptions,
   ) {
-    const changes = await this.getAllPages<GitLabChange>(
-      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests/${number}/diffs?per_page=100`,
-    );
-    const pull = await this.getPullRequest(repositoryExternalId, number);
+    const [changes, pull] = await Promise.all([
+      this.getAllPages<GitLabChange>(
+        `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests/${number}/diffs?per_page=100`,
+      ),
+      this.getPullRequest(repositoryExternalId, number),
+    ]);
     return collectProviderSourceFiles(
       changes,
       options?.maximumSourceBytes,
