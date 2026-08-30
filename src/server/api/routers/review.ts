@@ -154,10 +154,13 @@ async function reviewThreadScope(
   input: { unitId: string },
   action: string,
 ) {
-  const scope = await providerScopeForUnit(db, userId, input.unitId);
   // Two gates, as everywhere else provider work is reached from: what one
   // reviewer may ask for at all, and what they may ask of one repository.
-  await enforceRateLimit(db, `${action}:${userId}`, 60, 60_000);
+  // Only the second one needs the lookup, so the first shares its round trip.
+  const [scope] = await Promise.all([
+    providerScopeForUnit(db, userId, input.unitId),
+    enforceRateLimit(db, `${action}:${userId}`, 60, 60_000),
+  ]);
   await enforceRateLimit(
     db,
     `${action}-resource:${userId}:${scope.pullRequestId}`,
@@ -2541,17 +2544,21 @@ export const reviewRouter = createTRPCRouter({
   providerReviewState: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
-      await enforceRateLimit(
-        ctx.db,
-        `provider-review-state:${ctx.auth.userId}`,
-        60,
-        60_000,
-      );
-      const scope = await providerScopeForPullRequest(
-        ctx.db,
-        ctx.auth.userId,
-        input.pullRequestId,
-      );
+      // The reviewer-wide gate reads nothing the lookup produces, so the two
+      // share one round trip.
+      const [scope] = await Promise.all([
+        providerScopeForPullRequest(
+          ctx.db,
+          ctx.auth.userId,
+          input.pullRequestId,
+        ),
+        enforceRateLimit(
+          ctx.db,
+          `provider-review-state:${ctx.auth.userId}`,
+          60,
+          60_000,
+        ),
+      ]);
       await enforceRateLimit(
         ctx.db,
         `provider-review-state-resource:${ctx.auth.userId}:${input.pullRequestId}`,
@@ -2599,17 +2606,21 @@ export const reviewRouter = createTRPCRouter({
   providerLifecycle: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
-      await enforceRateLimit(
-        ctx.db,
-        `provider-lifecycle:${ctx.auth.userId}`,
-        60,
-        60_000,
-      );
-      const scope = await providerScopeForPullRequest(
-        ctx.db,
-        ctx.auth.userId,
-        input.pullRequestId,
-      );
+      // The reviewer-wide gate reads nothing the lookup produces, so the two
+      // share one round trip.
+      const [scope] = await Promise.all([
+        providerScopeForPullRequest(
+          ctx.db,
+          ctx.auth.userId,
+          input.pullRequestId,
+        ),
+        enforceRateLimit(
+          ctx.db,
+          `provider-lifecycle:${ctx.auth.userId}`,
+          60,
+          60_000,
+        ),
+      ]);
       await enforceRateLimit(
         ctx.db,
         `provider-lifecycle-resource:${ctx.auth.userId}:${input.pullRequestId}`,
@@ -3047,31 +3058,38 @@ export const reviewRouter = createTRPCRouter({
   providerConversations: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
-      await enforceRateLimit(
-        ctx.db,
-        `review-conversations:${ctx.auth.userId}`,
-        60,
-        60_000,
-      );
-      const [scope] = await ctx.db
-        .select({
-          pullRequestId: pullRequests.id,
-          pullRequestNumber: pullRequests.number,
-          repositoryExternalId: repositories.externalId,
-          connection: providerConnections,
-        })
-        .from(pullRequests)
-        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
-          workspaceMembers,
-          eq(repositories.workspaceId, workspaceMembers.workspaceId),
-        )
-        .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
-        .limit(1);
+      // The reviewer-wide gate reads nothing the lookup produces, so the two
+      // share one round trip.
+      const [[scope]] = await Promise.all([
+        ctx.db
+          .select({
+            pullRequestId: pullRequests.id,
+            pullRequestNumber: pullRequests.number,
+            repositoryExternalId: repositories.externalId,
+            connection: providerConnections,
+          })
+          .from(pullRequests)
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            providerConnections,
+            eq(repositories.connectionId, providerConnections.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
+          .limit(1),
+        enforceRateLimit(
+          ctx.db,
+          `review-conversations:${ctx.auth.userId}`,
+          60,
+          60_000,
+        ),
+      ]);
       if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
       await enforceRateLimit(
         ctx.db,
