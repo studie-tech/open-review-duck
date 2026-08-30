@@ -556,6 +556,24 @@ export function RepositoryReader({
       ),
     [activeFileContext?.previousSource, activeFileUnits, showPrevious],
   );
+  // Every rendered source line asks which units start on it, so the answer is
+  // indexed once per unit rather than recomputed per line.
+  const unitMarkersByLine = useMemo(() => {
+    const markers = new Map<number, Array<Workspace["units"][number]>>();
+    if (activeFileUnits.length < 2) return markers;
+    for (const member of activeFileUnits) {
+      for (const { startLine } of reviewCardRanges(
+        [member],
+        showPrevious ? "previous" : "current",
+        activeFileContext?.previousSource,
+      )) {
+        const started = markers.get(startLine);
+        if (started) started.push(member);
+        else markers.set(startLine, [member]);
+      }
+    }
+    return markers;
+  }, [activeFileContext?.previousSource, activeFileUnits, showPrevious]);
   const unitStartLine = fileFocusRanges[0]?.startLine ?? active?.startLine ?? 1;
   const unitEndLine =
     fileFocusRanges.at(-1)?.endLine ?? active?.endLine ?? unitStartLine;
@@ -1093,24 +1111,14 @@ export function RepositoryReader({
                       selectedRange={ruleSelection}
                       onSelectLine={selectRuleLine}
                       renderBeforeLine={(lineNumber) =>
-                        activeFileUnits.length > 1
-                          ? activeFileUnits
-                              .filter((member) =>
-                                reviewCardRanges(
-                                  [member],
-                                  showPrevious ? "previous" : "current",
-                                  activeFileContext?.previousSource,
-                                ).some(
-                                  ({ startLine }) => startLine === lineNumber,
-                                ),
-                              )
-                              .map((member) => (
-                                <ReviewFileUnitMarker
-                                  key={member.id}
-                                  member={member}
-                                />
-                              ))
-                          : null
+                        unitMarkersByLine
+                          .get(lineNumber)
+                          ?.map((member) => (
+                            <ReviewFileUnitMarker
+                              key={member.id}
+                              member={member}
+                            />
+                          ))
                       }
                       renderAfterLine={(lineNumber) => (
                         <>
