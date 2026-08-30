@@ -3554,9 +3554,13 @@ export const reviewRouter = createTRPCRouter({
               imported: fileImport.imported,
               kind: fileImport.kind,
             };
+      const read = { line: input.line, path: input.sourcePath };
+      const analyzedDeclaration = parsedFile?.declarations.get(input.symbol);
       const local = localDefinitionForPeek(
-        parsedFile?.declarations.get(input.symbol),
-        parsedFile
+        analyzedDeclaration,
+        parsedFile &&
+          (!analyzedDeclaration ||
+            definitionIsWhereTheNameWasRead(analyzedDeclaration, read))
           ? sameFileDeclarationPeek({
               language: parsedFile.language,
               path: input.sourcePath,
@@ -3564,7 +3568,7 @@ export const reviewRouter = createTRPCRouter({
               symbol: input.symbol,
             })
           : undefined,
-        { line: input.line, path: input.sourcePath },
+        read,
       );
       const imported = resolvedInput.specifier
         ? await importedSymbolDefinition(

@@ -401,11 +401,12 @@ export function PullRequestsContent({
     });
   }, [filtersReady, providerFilter, repositoryFilter, searchQuery, showDrafts]);
   useEffect(() => {
+    if (unimportedPullRequests.isFetched === false) return;
     const available = new Set(repositories.map((repository) => repository.key));
     if (repositoryFilter.some((key) => !available.has(key))) {
       setRepositoryFilter(repositoryFilter.filter((key) => available.has(key)));
     }
-  }, [repositories, repositoryFilter]);
+  }, [repositories, repositoryFilter, unimportedPullRequests.isFetched]);
   const filtersActive =
     workView !== "all" ||
     providerFilter !== "all" ||

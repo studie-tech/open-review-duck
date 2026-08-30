@@ -787,7 +787,10 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   ): ProviderPullRequestCheck[] {
     const latestByName = new Map<string, AzurePullStatus>();
     for (const status of statuses) {
-      const key = status.context?.name?.trim() || String(status.id);
+      const key =
+        [status.context?.genre?.trim(), status.context?.name?.trim()]
+          .filter(Boolean)
+          .join("/") || String(status.id);
       const existing = latestByName.get(key);
       if (
         !existing ||
@@ -869,8 +872,8 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     }
     return {
       mergeable: null,
-      canMerge: true,
-      mergeBlockedReason: undefined,
+      canMerge: false,
+      mergeBlockedReason: "Mergeability is still being computed",
     };
   }
 

@@ -13,7 +13,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { DashboardSyncPanel } from "~/components/dashboard/dashboard-panels";
 import { PageContainer } from "~/components/page-container";
@@ -155,6 +155,15 @@ export function DashboardOverview({
     refetchInterval: (query) =>
       query.state.data?.some(({ activeSync }) => activeSync) ? 1_500 : false,
   });
+  const hadActiveSync = useRef(false);
+  useEffect(() => {
+    const hasActiveSync = (activeSyncs.data?.length ?? 0) > 0;
+    if (hadActiveSync.current && !hasActiveSync) {
+      void pullRequestsQuery.refetch();
+      void monitorsQuery.refetch();
+    }
+    hadActiveSync.current = hasActiveSync;
+  }, [activeSyncs.data, monitorsQuery, pullRequestsQuery]);
   const pullRequests = pullRequestsQuery.data ?? initialPullRequests;
   const monitors = monitorsQuery.data ?? initialMonitors;
   const { needsReview, reviewed } = useMemo(

@@ -251,7 +251,7 @@ export async function providerVoid(
   await response.body?.cancel();
 }
 
-/** Fetches JSON and treats missing or forbidden resources as absent. */
+/** Fetches JSON and treats missing resources as absent. */
 export async function optionalProviderFetch<T>(
   provider: ProviderName,
   url: string,
@@ -260,10 +260,11 @@ export async function optionalProviderFetch<T>(
   try {
     return await providerFetch<T>(provider, url, init);
   } catch (cause) {
-    if (
-      cause instanceof ProviderError &&
-      (cause.status === 403 || cause.status === 404)
-    ) {
+    if (cause instanceof ProviderError && cause.status === 404) {
+      return undefined;
+    }
+    if (cause instanceof ProviderError && cause.status === 403) {
+      if (/rate limit|single sign-on/i.test(cause.message)) throw cause;
       return undefined;
     }
     throw cause;

@@ -148,6 +148,7 @@ export function ReviewCompletion({
   onDismiss,
   onNextReview,
 }: ReviewCompletionProps) {
+  const { dialogRef, initialFocusRef } = useReviewDialogFocus();
   const { pending: navigationPending } = usePendingNavigation();
   const nextReviewProgress = nextReview
     ? Math.round((nextReview.signedUnits / nextReview.totalUnits) * 100)
@@ -156,6 +157,7 @@ export function ReviewCompletion({
   return (
     <div className="bg-ink absolute inset-0 z-20 grid place-items-center overflow-y-auto p-4 font-sans sm:p-8">
       <section
+        ref={dialogRef}
         aria-labelledby="review-completion-title"
         aria-describedby="review-completion-description"
         className="bg-panel relative my-auto w-full max-w-4xl overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
@@ -287,6 +289,7 @@ export function ReviewCompletion({
 
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
             <Button
+              ref={initialFocusRef}
               type="button"
               variant="ghost"
               className="sm:mr-auto"
