@@ -15,6 +15,7 @@ import {
 import {
   type KeyboardEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,6 +33,13 @@ import { cn } from "~/lib/utils";
 /** Stable id for the focusable control of one tree row. */
 function reviewFileTreeControlId(path: string) {
   return `review-file-tree-${encodeURIComponent(path)}`;
+}
+
+/** Folder paths that must be open for a file row to exist in the tree. */
+function reviewFileAncestorPaths(path: string) {
+  const segments = path.split("/");
+  segments.pop();
+  return segments.map((_, index) => segments.slice(0, index + 1).join("/"));
 }
 
 const filters = [
@@ -282,16 +290,7 @@ export function ReviewFilesPanel({
 }) {
   const [filter, setFilter] = useState<ReviewFileFilter>("all");
   const [expanded, setExpanded] = useState(
-    () =>
-      new Set(
-        files.flatMap((file) => {
-          const segments = file.path.split("/");
-          segments.pop();
-          return segments.map((_, index) =>
-            segments.slice(0, index + 1).join("/"),
-          );
-        }),
-      ),
+    () => new Set(files.flatMap((file) => reviewFileAncestorPaths(file.path))),
   );
   const filtered = useMemo(
     () => filterReviewFiles(files, filter, search),
@@ -302,6 +301,29 @@ export function ReviewFilesPanel({
     () => visibleReviewFileTreeItems(tree, expanded),
     [expanded, tree],
   );
+
+  // Sign-off and next/previous file change `selectedPath` from outside the
+  // tree. Expand any collapsed ancestors so the row exists, then scroll it
+  // into the sidebar with `nearest` so an already-visible file does not jump.
+  useLayoutEffect(() => {
+    if (!selectedPath) return;
+    const ancestors = reviewFileAncestorPaths(selectedPath);
+    setExpanded((current) => {
+      if (ancestors.every((path) => current.has(path))) return current;
+      const next = new Set(current);
+      for (const path of ancestors) next.add(path);
+      return next;
+    });
+  }, [selectedPath]);
+
+  useLayoutEffect(() => {
+    if (!selectedPath) return;
+    const row = document
+      .getElementById(reviewFileTreeControlId(selectedPath))
+      ?.closest("[data-review-file-path]");
+    if (!(row instanceof HTMLElement)) return;
+    row.scrollIntoView?.({ block: "nearest" });
+  }, [expanded, selectedPath]);
 
   /** Expands or collapses one folder without rebuilding the rest of the tree. */
   function onExpandedChange(path: string) {

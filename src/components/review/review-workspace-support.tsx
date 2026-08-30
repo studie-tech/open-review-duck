@@ -60,6 +60,13 @@ import type {
 } from "~/lib/review-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
+  formatReviewSourceBytes,
+  isHeavyReviewSource,
+  reviewFileCardStartsExpanded,
+  reviewSourceByteLength,
+  reviewSourceKindLabel,
+} from "~/lib/review-source-display";
+import {
   compactSideBySideDiff,
   focusedRowRegions,
   focusedRowSpan,
@@ -99,6 +106,12 @@ const DIFF_CONTEXT_PAGE_LINES = 20;
 
 export { reviewShortcuts } from "~/lib/review-shortcuts";
 
+type ReviewCardMemberState = {
+  revisionState?: string;
+  startLine?: number;
+  status: string;
+};
+
 /**
  * Reports whether a member no longer needs the reviewer's attention.
  *
@@ -107,6 +120,22 @@ export { reviewShortcuts } from "~/lib/review-shortcuts";
  */
 function reviewedMember(unit: ReviewUnit) {
   return unit.status === "signed_off";
+}
+
+/**
+ * Reports whether a file-card member still needs the reviewer's attention.
+ *
+ * Standing sign-off is done. Waiting is paused, not owed. A unit that
+ * appeared or changed after a revision arrives as pending or changed, so it
+ * stays outstanding until it has its own sign-off.
+ */
+export function outstandingReviewCardMember(member: ReviewCardMemberState) {
+  return member.status !== "signed_off" && member.status !== "waiting";
+}
+
+/** Reports whether every atomic unit in a file card has been signed off. */
+export function reviewedFileCard(members: readonly ReviewCardMemberState[]) {
+  return members.length > 0 && !members.some(outstandingReviewCardMember);
 }
 
 /**
@@ -146,14 +175,18 @@ export function conceptFileCardsInReadingOrder<Member extends { path: string }>(
 }
 
 /** Chooses the member a file card should open for the next review action. */
-export function actionableReviewCardMember<Member extends { status: string }>(
+export function actionableReviewCardMember<
+  Member extends ReviewCardMemberState,
+>(members: readonly Member[]) {
+  return members.find(outstandingReviewCardMember) ?? members[0];
+}
+
+/** Line a selected file card should bring into view for remaining work. */
+export function reviewCardFocusStartLine<Member extends ReviewCardMemberState>(
   members: readonly Member[],
+  fallback = 1,
 ) {
-  return (
-    members.find(
-      ({ status }) => status !== "signed_off" && status !== "waiting",
-    ) ?? members[0]
-  );
+  return actionableReviewCardMember(members)?.startLine ?? fallback;
 }
 
 /** Merges the disjoint source ranges reviewed by every unit in one file card. */
@@ -225,6 +258,107 @@ export function reviewCardMemberForLine(
   });
 }
 
+/**
+ * Copies a card-title file path without leaving the review.
+ *
+ * The path is truncated in the title, so a check replaces the icon once the
+ * clipboard has it and a toast is not needed to confirm the click.
+ */
+export function CopyReviewPathButton({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  /** Puts the file path on the clipboard. */
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+    } catch {
+      toast.error("Could not copy the file path");
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={copied ? "File path copied" : "Copy file path"}
+      title={copied ? "Copied" : "Copy file path"}
+      onClick={(event) => {
+        event.stopPropagation();
+        void copy();
+      }}
+      className="text-fog hover:text-mist grid size-5 shrink-0 place-items-center rounded transition hover:bg-surface-subtle"
+    >
+      {copied ? (
+        <Check className="size-3" aria-hidden="true" />
+      ) : (
+        <Copy className="size-3" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+/** Path, copy control, and meta for a card title that must stay selectable. */
+function ReviewCardPathTitle({
+  meta,
+  onSelect,
+  path,
+  selectLabel,
+  selected,
+  subtitle,
+}: {
+  meta: ReactNode;
+  onSelect?: () => void;
+  path: string;
+  selectLabel: string;
+  selected: boolean;
+  subtitle: ReactNode;
+}) {
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left">
+      {!selected && (
+        <button
+          type="button"
+          aria-label={selectLabel}
+          onClick={onSelect}
+          className="hover:bg-surface-subtle absolute inset-0 transition"
+        />
+      )}
+      <span
+        className={cn(
+          "relative z-10 min-w-0",
+          !selected && "pointer-events-none",
+        )}
+      >
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="text-cloud min-w-0 truncate font-mono text-[10px]">
+            {path}
+          </span>
+          <span className="pointer-events-auto">
+            <CopyReviewPathButton path={path} />
+          </span>
+        </span>
+        <span className="text-fog mt-0.5 block truncate text-[9px]">
+          {subtitle}
+        </span>
+      </span>
+      <span
+        className={cn(
+          "relative z-10 flex shrink-0 items-center gap-2 text-[9px]",
+          !selected && "pointer-events-none",
+        )}
+      >
+        {meta}
+      </span>
+    </div>
+  );
+}
+
 /** Renders one file-card identity while preserving the atomic ledger beneath it. */
 export function ReviewFileCardHeader({
   members,
@@ -234,6 +368,9 @@ export function ReviewFileCardHeader({
   actions,
   onSelect,
   itemLabel = "Card",
+  expanded,
+  onToggleExpanded,
+  sourceBytes,
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -242,53 +379,20 @@ export function ReviewFileCardHeader({
   actions?: ReactNode;
   onSelect?: () => void;
   itemLabel?: "Card" | "File";
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
+  sourceBytes?: number;
 }) {
   const first = members[0];
   if (!first) return null;
-  const outstanding = members.filter(
-    ({ status }) => status !== "signed_off" && status !== "waiting",
-  ).length;
-  const fullyReviewed = members.every(({ status }) => status === "signed_off");
+  const outstanding = members.filter(outstandingReviewCardMember).length;
+  const fullyReviewed = reviewedFileCard(members);
   const changedLines = members.reduce(
     (total, member) => total + member.changedLineCount,
     0,
   );
   const itemName = itemLabel.toLowerCase();
-  const content = (
-    <>
-      <span className="min-w-0">
-        <span className="text-cloud block truncate font-mono text-[10px]">
-          {first.path}
-        </span>
-        <span className="text-fog mt-0.5 block truncate text-[9px]">
-          Reviewing {members.length} individual{" "}
-          {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
-          {changedLines} changed lines
-        </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-2 text-[9px]">
-        {actions}
-        <span className="text-fog">
-          {itemLabel} {index + 1}/{count}
-        </span>
-        {fullyReviewed && (
-          <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
-            <Check className="size-2.5" aria-hidden />
-            Reviewed
-          </span>
-        )}
-        {selected && (
-          <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
-            {outstanding > 0
-              ? `${outstanding} remaining`
-              : fullyReviewed
-                ? "Selected"
-                : "Waiting"}
-          </span>
-        )}
-      </span>
-    </>
-  );
+  const fileName = first.path.split("/").at(-1) ?? first.path;
   return (
     <div
       className={cn(
@@ -300,20 +404,62 @@ export function ReviewFileCardHeader({
             : "border-line",
       )}
     >
-      {selected ? (
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left">
-          {content}
-        </div>
-      ) : (
+      {onToggleExpanded && (
         <button
           type="button"
-          aria-label={`Select review ${itemName} for ${first.path}`}
-          onClick={onSelect}
-          className="hover:bg-surface-subtle flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left transition"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${fileName}`}
+          onClick={onToggleExpanded}
+          className="hover:bg-surface-subtle text-fog flex shrink-0 items-center px-2 transition"
         >
-          {content}
+          <ChevronRight
+            className={cn(
+              "size-3.5 transition-transform",
+              expanded && "rotate-90",
+            )}
+            aria-hidden
+          />
         </button>
       )}
+      <ReviewCardPathTitle
+        path={first.path}
+        selected={selected}
+        onSelect={onSelect}
+        selectLabel={`Select review ${itemName} for ${first.path}`}
+        subtitle={
+          <>
+            Reviewing {members.length} individual{" "}
+            {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
+            {changedLines} changed lines
+            {sourceBytes
+              ? ` · ${formatReviewSourceBytes(sourceBytes)}`
+              : null}
+          </>
+        }
+        meta={
+          <>
+            {actions}
+            <span className="text-fog">
+              {itemLabel} {index + 1}/{count}
+            </span>
+            {fullyReviewed && (
+              <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
+                <Check className="size-2.5" aria-hidden />
+                Reviewed
+              </span>
+            )}
+            {selected && (
+              <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+                {outstanding > 0
+                  ? `${outstanding} remaining`
+                  : fullyReviewed
+                    ? "Selected"
+                    : "Waiting"}
+              </span>
+            )}
+          </>
+        }
+      />
     </div>
   );
 }
@@ -321,16 +467,80 @@ export function ReviewFileCardHeader({
 /** Backwards-compatible name for concept cards; both modes use one file header. */
 export const ReviewConceptFileCardHeader = ReviewFileCardHeader;
 
-/** Shows revision provenance and ledger state at one unit's line boundary. */
-export function ReviewFileUnitMarker({ member }: { member: ReviewUnit }) {
+/**
+ * Replaces mounted source on a folded file card.
+ *
+ * The highlighter is a hook, so a collapsed card must not render the body
+ * that calls it. This placeholder is what the reviewer uses to open it again.
+ */
+export function ReviewFileCardSourcePlaceholder({
+  itemLabel = "file",
+  language,
+  lineCount,
+  onShow,
+  path,
+  reviewed,
+  sourceBytes,
+}: {
+  itemLabel?: "card" | "file";
+  language?: string;
+  lineCount: number;
+  onShow: () => void;
+  path?: string;
+  reviewed: boolean;
+  sourceBytes?: number;
+}) {
+  const kind = reviewSourceKindLabel({ language, path });
   return (
-    <div className="border-cyan/15 bg-cyan/[.025] mx-4 my-2 ml-[82px] flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 font-sans">
-      <span className="text-fog text-[9px] font-semibold tracking-[.12em] uppercase">
-        Review unit
-      </span>
-      <span className="text-cloud min-w-0 flex-1 truncate text-[10px] font-medium">
+    <div className="flex items-center justify-between gap-3 px-4 py-3 font-sans">
+      <div className="min-w-0">
+        <p className="text-cloud text-[11px] font-medium">
+          {lineCount.toLocaleString("en-US")}{" "}
+          {lineCount === 1 ? "line" : "lines"} of {kind} hidden
+        </p>
+        <p className="text-fog mt-0.5 text-[10px]">
+          {reviewed
+            ? "Folded after review. Open it again if you need another look."
+            : "Hidden so the review stays responsive."}
+          {sourceBytes ? ` · ${formatReviewSourceBytes(sourceBytes)}` : null}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onShow}
+        className="text-cyan hover:border-cyan/25 hover:bg-cyan/[.05] flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+      >
+        Show {itemLabel}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Labels one file-mode unit as a section in the source, not a separate card.
+ *
+ * The next unit's label used to sit under this one's last line and read as a
+ * closer. A rule with the name and its line span makes each banner an opener
+ * for the code that follows.
+ */
+export function ReviewFileUnitMarker({ member }: { member: ReviewUnit }) {
+  const lineLabel =
+    member.endLine > member.startLine
+      ? `L${member.startLine}–${member.endLine}`
+      : `L${member.startLine}`;
+  return (
+    <div
+      data-review-unit-start={member.id}
+      className="my-2 flex items-center gap-2 px-4 font-sans"
+    >
+      <span className="bg-cyan/45 h-px w-5 shrink-0" />
+      <span className="text-cloud min-w-0 truncate text-[10px] font-medium">
         {member.name}
       </span>
+      <span className="text-fog shrink-0 font-mono text-[9px]">
+        {lineLabel}
+      </span>
+      <span className="h-px min-w-3 flex-1 bg-line" />
       {member.revisionState === "new" && (
         <Badge className="border-cyan/25 bg-cyan/10 text-cyan">New</Badge>
       )}
@@ -415,23 +625,20 @@ function ReviewConceptFileCardFallbackMember({
   );
 }
 
-/** Shows every same-file member as one continuous card with dimmed gaps. */
-export function ReviewConceptFileCardPreview({
-  members,
-  index,
-  count,
+/**
+ * Renders highlighted source for one neighboring file card.
+ *
+ * Kept in its own component so a collapsed preview never calls the
+ * highlighter hook — the same reason concept member bodies are split out.
+ */
+function ReviewConceptFileCardSource({
   fileSource,
-  onSelect,
+  members,
   onCommentLine,
-  itemLabel = "Card",
 }: {
-  members: readonly ReviewUnit[];
-  index: number;
-  count: number;
   fileSource: string;
-  onSelect: () => void;
+  members: readonly ReviewUnit[];
   onCommentLine?: (unitId: string, line: number) => void;
-  itemLabel?: "Card" | "File";
 }) {
   const ranges = reviewCardRanges(members);
   const startLine = ranges.at(0)?.startLine ?? 1;
@@ -446,7 +653,115 @@ export function ReviewConceptFileCardPreview({
     ranges: reviewCardRanges([member]),
   }));
   return (
-    <article className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30">
+    <div className="overflow-x-auto py-2">
+      {fileSource
+        ? lines.map((line, lineIndex) => {
+            const lineNumber = startLine + lineIndex;
+            const owner = memberRanges.find(({ ranges: ownedRanges }) =>
+              ownedRanges.some(
+                ({ startLine: from, endLine: to }) =>
+                  lineNumber >= from && lineNumber <= to,
+              ),
+            )?.member;
+            return (
+              <div
+                key={`${members[0]?.id}-${lineNumber}`}
+                className={cn(
+                  "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                  !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
+                  owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+                )}
+              >
+                {owner && onCommentLine ? (
+                  <button
+                    type="button"
+                    aria-label={`Comment on line ${lineNumber} of ${owner.name}`}
+                    onClick={() => onCommentLine(owner.id, lineNumber)}
+                    className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                  >
+                    <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                    <span>{lineNumber}</span>
+                  </button>
+                ) : (
+                  <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                    {lineNumber}
+                  </span>
+                )}
+                <pre className="syntax-code overflow-visible text-cloud">
+                  {line.tokens.length
+                    ? line.tokens.map((token, tokenIndex) => (
+                        <span
+                          key={`${tokenIndex}-${token.text.length}`}
+                          className={token.className || undefined}
+                        >
+                          {token.text}
+                        </span>
+                      ))
+                    : " "}
+                </pre>
+              </div>
+            );
+          })
+        : members.map((member) => (
+            <ReviewConceptFileCardFallbackMember
+              key={member.id}
+              member={member}
+              onCommentLine={onCommentLine}
+            />
+          ))}
+    </div>
+  );
+}
+
+/** Shows every same-file member as one continuous card with dimmed gaps. */
+export function ReviewConceptFileCardPreview({
+  members,
+  index,
+  count,
+  fileSource,
+  onSelect,
+  onCommentLine,
+  itemLabel = "Card",
+  sourceBytes,
+}: {
+  members: readonly ReviewUnit[];
+  index: number;
+  count: number;
+  fileSource: string;
+  onSelect: () => void;
+  onCommentLine?: (unitId: string, line: number) => void;
+  itemLabel?: "Card" | "File";
+  sourceBytes?: number;
+}) {
+  const ranges = reviewCardRanges(members);
+  const startLine = ranges.at(0)?.startLine ?? 1;
+  const endLine = ranges.at(-1)?.endLine ?? startLine;
+  const lineCount = endLine - startLine + 1;
+  const reviewed = reviewedFileCard(members);
+  const heavy = isHeavyReviewSource({
+    language: members[0]?.language,
+    lineCount,
+    path: members[0]?.path,
+  });
+  const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [defaultExpandedState, setDefaultExpandedState] =
+    useState(defaultExpanded);
+  if (defaultExpanded !== defaultExpandedState) {
+    setDefaultExpandedState(defaultExpanded);
+    setExpanded(defaultExpanded);
+  }
+  const fileBytes =
+    sourceBytes ?? reviewSourceByteLength({ source: fileSource });
+  return (
+    <article
+      className={cn(
+        "mx-4 overflow-hidden rounded-xl border",
+        reviewed
+          ? "border-addition/30 bg-addition/10"
+          : "border-line bg-surface/30",
+      )}
+    >
       <ReviewConceptFileCardHeader
         members={members}
         index={index}
@@ -454,65 +769,27 @@ export function ReviewConceptFileCardPreview({
         selected={false}
         onSelect={onSelect}
         itemLabel={itemLabel}
+        expanded={expanded}
+        onToggleExpanded={() => setExpanded((open) => !open)}
+        sourceBytes={fileBytes}
       />
-      <div className="overflow-x-auto py-2">
-        {fileSource
-          ? lines.map((line, lineIndex) => {
-              const lineNumber = startLine + lineIndex;
-              const owner = memberRanges.find(({ ranges: ownedRanges }) =>
-                ownedRanges.some(
-                  ({ startLine: from, endLine: to }) =>
-                    lineNumber >= from && lineNumber <= to,
-                ),
-              )?.member;
-              return (
-                <div
-                  key={`${members[0]?.id}-${lineNumber}`}
-                  className={cn(
-                    "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
-                    !owner &&
-                      "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                    owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
-                  )}
-                >
-                  {owner && onCommentLine ? (
-                    <button
-                      type="button"
-                      aria-label={`Comment on line ${lineNumber} of ${owner.name}`}
-                      onClick={() => onCommentLine(owner.id, lineNumber)}
-                      className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
-                    >
-                      <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                      <span>{lineNumber}</span>
-                    </button>
-                  ) : (
-                    <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-                      {lineNumber}
-                    </span>
-                  )}
-                  <pre className="syntax-code overflow-visible text-cloud">
-                    {line.tokens.length
-                      ? line.tokens.map((token, tokenIndex) => (
-                          <span
-                            key={`${tokenIndex}-${token.text.length}`}
-                            className={token.className || undefined}
-                          >
-                            {token.text}
-                          </span>
-                        ))
-                      : " "}
-                  </pre>
-                </div>
-              );
-            })
-          : members.map((member) => (
-              <ReviewConceptFileCardFallbackMember
-                key={member.id}
-                member={member}
-                onCommentLine={onCommentLine}
-              />
-            ))}
-      </div>
+      {expanded ? (
+        <ReviewConceptFileCardSource
+          fileSource={fileSource}
+          members={members}
+          onCommentLine={onCommentLine}
+        />
+      ) : (
+        <ReviewFileCardSourcePlaceholder
+          itemLabel={itemLabel === "File" ? "file" : "card"}
+          language={members[0]?.language}
+          lineCount={lineCount}
+          onShow={() => setExpanded(true)}
+          path={members[0]?.path}
+          reviewed={reviewed}
+          sourceBytes={fileBytes}
+        />
+      )}
     </article>
   );
 }
@@ -527,6 +804,7 @@ export function ReviewConceptMemberHeader({
   onSelect,
   expanded,
   onToggleExpanded,
+  sourceBytes,
 }: {
   unit: ReviewUnit;
   index: number;
@@ -536,39 +814,15 @@ export function ReviewConceptMemberHeader({
   onSelect?: () => void;
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  sourceBytes?: number;
 }) {
-  const content = (
-    <>
-      <span className="min-w-0">
-        <span className="text-cloud block truncate font-mono text-[10px]">
-          {unit.path}
-        </span>
-        <span className="text-fog mt-0.5 block truncate text-[9px]">
-          {unit.name} · {unit.changedLineCount} changed lines
-        </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-2 text-[9px]">
-        {actions}
-        <span className="text-fog">
-          Unit {index + 1}/{count}
-        </span>
-        {reviewedMember(unit) && (
-          // Green, not the accent: the accent is the colour of the sign-off
-          // button, and a marker saying "already done" must not wear the same
-          // hue as the control asking for the next sign-off.
-          <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
-            <Check className="size-2.5" aria-hidden />
-            Reviewed
-          </span>
-        )}
-        {selected && (
-          <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
-            Selected
-          </span>
-        )}
-      </span>
-    </>
-  );
+  const snippetBytes =
+    sourceBytes == null ? reviewSourceByteLength(unit) : undefined;
+  const sizeLabel = sourceBytes
+    ? formatReviewSourceBytes(sourceBytes)
+    : snippetBytes
+      ? `${formatReviewSourceBytes(snippetBytes)} snippet`
+      : undefined;
   return (
     <div
       className={cn(
@@ -597,20 +851,40 @@ export function ReviewConceptMemberHeader({
           />
         </button>
       )}
-      {selected ? (
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left">
-          {content}
-        </div>
-      ) : (
-        <button
-          type="button"
-          aria-label={`Select ${unit.name}`}
-          onClick={onSelect}
-          className="hover:bg-surface-subtle flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left transition"
-        >
-          {content}
-        </button>
-      )}
+      <ReviewCardPathTitle
+        path={unit.path}
+        selected={selected}
+        onSelect={onSelect}
+        selectLabel={`Select ${unit.name}`}
+        subtitle={
+          <>
+            {unit.name} · {unit.changedLineCount} changed lines
+            {sizeLabel ? ` · ${sizeLabel}` : null}
+          </>
+        }
+        meta={
+          <>
+            {actions}
+            <span className="text-fog">
+              Unit {index + 1}/{count}
+            </span>
+            {reviewedMember(unit) && (
+              // Green, not the accent: the accent is the colour of the sign-off
+              // button, and a marker saying "already done" must not wear the same
+              // hue as the control asking for the next sign-off.
+              <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
+                <Check className="size-2.5" aria-hidden />
+                Reviewed
+              </span>
+            )}
+            {selected && (
+              <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+                Selected
+              </span>
+            )}
+          </>
+        }
+      />
     </div>
   );
 }
@@ -1113,6 +1387,7 @@ export function ReviewConceptMemberPreview({
   sourcePending = false,
   onSelect,
   onCommentLine,
+  sourceBytes,
 }: {
   unit: ReviewUnit;
   index: number;
@@ -1121,6 +1396,7 @@ export function ReviewConceptMemberPreview({
   sourcePending?: boolean;
   onSelect: () => void;
   onCommentLine?: (line: number) => void;
+  sourceBytes?: number;
 }) {
   // A member already signed off opens closed: its header still says what it
   // is and that it is done, and the code behind it is work the reviewer has
@@ -1146,6 +1422,7 @@ export function ReviewConceptMemberPreview({
         onSelect={onSelect}
         expanded={expanded}
         onToggleExpanded={() => setExpanded((open) => !open)}
+        sourceBytes={sourceBytes}
       />
       {!expanded ? null : !sourceAvailable && sourcePending ? (
         <div
@@ -1283,6 +1560,28 @@ export function rememberAiConversationVisibility(
   } catch {
     // Browser privacy settings can make local storage unavailable.
   }
+}
+
+/** Drops persisted AI questions that a thread delete just removed. */
+export function withoutDeletedAiQuestions<T extends { id: string }>(
+  questions: readonly T[] | undefined,
+  jobIds: readonly string[],
+): T[] | undefined {
+  if (!questions) return questions;
+  const deleted = new Set(jobIds);
+  return questions.filter((question) => !deleted.has(question.id));
+}
+
+/** Drops optimistic live entries that belonged to a deleted conversation. */
+export function withoutDeletedLiveAiQuestions<
+  T extends { id: string; jobId?: string },
+>(questions: readonly T[], jobIds: readonly string[]): T[] {
+  const deleted = new Set(jobIds);
+  return questions.filter(
+    (question) =>
+      !deleted.has(question.id) &&
+      (question.jobId === undefined || !deleted.has(question.jobId)),
+  );
 }
 
 /** Finds the nearest rendered review line to a vertical pointer coordinate. */
@@ -2049,6 +2348,7 @@ interface SideBySideUnitDiffProps {
   expanded?: boolean;
   onSelectReviewLine: (line: number) => void;
   onAskReviewLine?: (line: number) => void;
+  renderBeforeLine?: (line: number) => ReactNode;
   renderLineDetails?: (line: number) => ReactNode;
 }
 
@@ -2144,6 +2444,7 @@ export const SideBySideUnitDiff = forwardRef<
     expanded = false,
     onSelectReviewLine,
     onAskReviewLine,
+    renderBeforeLine,
     renderLineDetails,
   },
   ref,
@@ -2464,6 +2765,7 @@ export const SideBySideUnitDiff = forwardRef<
     onSelectReviewLine(line);
   }
   const renderedDetailLines = new Set<number>();
+  const renderedBeforeLines = new Set<number>();
 
   if (additionOnly) {
     return (
@@ -2521,6 +2823,9 @@ export const SideBySideUnitDiff = forwardRef<
           const rendersLineDetails =
             reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
           if (rendersLineDetails) renderedDetailLines.add(reviewLine);
+          const rendersBeforeLine =
+            reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
+          if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
           const interactive = reviewLine !== undefined;
           const absoluteRowIndex = visibleRowStart + item.rowIndex;
           const isContextRow = reviewLine === undefined;
@@ -2540,6 +2845,7 @@ export const SideBySideUnitDiff = forwardRef<
               {startsScope && (
                 <ReviewScopeMarker edge="start" line={scopeStartLine} />
               )}
+              {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
               <div className="group relative">
                 <LineContainer
                   {...(interactive
@@ -2695,6 +3001,9 @@ export const SideBySideUnitDiff = forwardRef<
         const rendersLineDetails =
           reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
         if (rendersLineDetails) renderedDetailLines.add(reviewLine);
+        const rendersBeforeLine =
+          reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
+        if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
         const currentIsReviewLine =
           reviewLine !== undefined &&
           currentLineNumber !== undefined &&
@@ -2724,6 +3033,7 @@ export const SideBySideUnitDiff = forwardRef<
             {startsScope && (
               <ReviewScopeMarker edge="start" line={scopeStartLine} />
             )}
+            {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
             {rendersLineDetails && (
               <span
                 id={`review-line-${reviewLine}`}

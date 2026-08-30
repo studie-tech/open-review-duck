@@ -175,4 +175,33 @@ describe("ReviewCompletion", () => {
     await user.click(screen.getByRole("button", { name: /Pull requests/i }));
     expect(onDashboard).toHaveBeenCalledOnce();
   });
+
+  it("fills the review pane instead of floating a card over the last file", () => {
+    const { container } = render(
+      <ReviewCompletion
+        completedFiles={55}
+        completedUnits={82}
+        dashboardShortcut={[{ key: "g" }, { key: "r" }]}
+        dismissShortcut={[{ key: "Escape" }]}
+        nextReview={reviews[3]}
+        nextReviewShortcut={[{ key: "n", shift: true }]}
+        providerReview={<div>Provider approval</div>}
+        queueLoading={false}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+      />,
+    );
+
+    const page = container.firstElementChild;
+    expect(page).toHaveClass(
+      "absolute",
+      "inset-0",
+      "flex",
+      "min-h-0",
+      "flex-col",
+    );
+    expect(page).not.toHaveClass("place-items-center");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });

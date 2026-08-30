@@ -6,9 +6,11 @@ import {
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
+  rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
   sortByReviewFileTreeOrder,
+  storedReviewMode,
   visibleReviewFileTreeItems,
   windowReviewFileCards,
 } from "./review-files";
@@ -302,5 +304,47 @@ describe("files-mode viewer cards", () => {
     expect(
       nearbyReviewFilePaths(entries, "missing.ts", 1).has("src/review/one.ts"),
     ).toBe(true);
+  });
+});
+
+describe("storedReviewMode", () => {
+  it("defaults to Files when no preference is saved", () => {
+    expect(storedReviewMode({ getItem: () => null })).toBe("files");
+  });
+
+  it("keeps a saved Guided preference", () => {
+    expect(storedReviewMode({ getItem: () => "path" })).toBe("path");
+  });
+
+  it("restores a saved Files preference", () => {
+    expect(storedReviewMode({ getItem: () => "files" })).toBe("files");
+  });
+
+  it("defaults to Files when storage is unavailable", () => {
+    expect(
+      storedReviewMode({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBe("files");
+  });
+
+  it("round-trips the reviewer's last chosen projection", () => {
+    const store = new Map<string, string>();
+    rememberReviewMode(
+      { setItem: (key, value) => store.set(key, value) },
+      "path",
+    );
+    expect(storedReviewMode({ getItem: (key) => store.get(key) ?? null })).toBe(
+      "path",
+    );
+    rememberReviewMode(
+      { setItem: (key, value) => store.set(key, value) },
+      "files",
+    );
+    expect(storedReviewMode({ getItem: (key) => store.get(key) ?? null })).toBe(
+      "files",
+    );
   });
 });

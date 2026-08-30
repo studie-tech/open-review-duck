@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewFileEntries } from "~/lib/review-files";
 import { ReviewFilesPanel } from "./review-files-panel";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  HTMLElement.prototype.scrollIntoView = undefined as never;
+});
 
 const files = reviewFileEntries(
   [
@@ -289,5 +292,76 @@ describe("ReviewFilesPanel", () => {
     expect(
       screen.getByRole("button", { name: "Collapse review" }),
     ).toHaveFocus();
+  });
+
+  it("scrolls the selected file row into view when selectedPath changes", () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const { rerender } = render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        selectedPath="public/duck.png"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const workspace = screen
+      .getByRole("button", { name: /workspace\.ts/i })
+      .closest("[data-review-file-path]");
+    expect(workspace).toBeInstanceOf(HTMLElement);
+    scrollIntoView.mockClear();
+
+    rerender(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        selectedPath="src/review/workspace.ts"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrollIntoView.mock.instances).toContain(workspace);
+  });
+
+  it("expands collapsed ancestors so the selected file can scroll into view", async () => {
+    const user = userEvent.setup();
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const { rerender } = render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        selectedPath="public/duck.png"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Collapse review" }));
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+    scrollIntoView.mockClear();
+
+    rerender(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        selectedPath="src/review/workspace.ts"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const workspace = screen
+      .getByRole("button", { name: /workspace\.ts/i })
+      .closest("[data-review-file-path]");
+    expect(workspace).toBeVisible();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrollIntoView.mock.instances).toContain(workspace);
   });
 });

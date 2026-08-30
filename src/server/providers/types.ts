@@ -118,6 +118,7 @@ export interface ProviderPullRequestCheck {
   state: ProviderCheckState;
   description?: string;
   webUrl?: string;
+  required?: boolean;
 }
 
 /** Live checks and mergeability for the pull request being reviewed. */

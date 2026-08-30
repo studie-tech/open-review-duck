@@ -117,14 +117,17 @@ export function overviewViewportFromElements(
 }
 
 /**
- * Shows the file map only when mixed changes sit outside the visible pane.
+ * Shows the file map when mixed changes sit outside the visible pane, or
+ * when the reviewer has opened the whole file to find those changes.
  *
  * A solid add or delete bar cannot point at anything the reviewer does not
- * already know, and a unit that already fits on screen has nowhere to jump.
+ * already know. Opening the full file is the opposite: they asked to see
+ * the rest, and the map is how they find the hunks.
  */
 export function shouldShowReviewScrollOverview(
   rows: readonly Pick<SideBySideDiffRow, "kind">[],
   viewport: ReviewOverviewRange,
+  options?: { revealWholeFile?: boolean },
 ) {
   if (rows.length === 0) return false;
   let hasUnchanged = false;
@@ -135,6 +138,7 @@ export function shouldShowReviewScrollOverview(
     if (hasUnchanged && hasChanged) break;
   }
   if (!hasUnchanged || !hasChanged) return false;
+  if (options?.revealWholeFile) return true;
   return viewport.start > 0 || viewport.end < 1;
 }
 
@@ -186,12 +190,14 @@ function ratioFromPointer(
  * occupy the vertical edges.
  */
 export function ReviewScrollOverview({
+  className,
   label,
   marks,
   onSeek,
   unitRange,
   viewport,
 }: {
+  className?: string;
   label?: string;
   marks: readonly ReviewOverviewMark[];
   onSeek: (ratio: number) => void;
@@ -264,7 +270,12 @@ export function ReviewScrollOverview({
   );
 
   return (
-    <div className="border-t border-line px-3 py-2 sm:px-5 lg:px-7">
+    <div
+      className={cn(
+        "border-t border-line px-3 py-2 sm:px-5 lg:px-7",
+        className,
+      )}
+    >
       <div className="flex items-center gap-3">
         <div
           ref={trackRef}
@@ -371,12 +382,24 @@ export function useReviewCodeOverview(
     const pane = paneRef.current;
     const code = codeRef.current;
     if (!pane) return;
-    setScrolled(pane.scrollTop > 8);
+    const nextScrolled = pane.scrollTop > 8;
+    setScrolled((current) =>
+      current === nextScrolled ? current : nextScrolled,
+    );
     if (!code) {
-      setViewport({ end: 1, start: 0 });
+      setViewport((current) =>
+        current.start === 0 && current.end === 1
+          ? current
+          : { end: 1, start: 0 },
+      );
       return;
     }
-    setViewport(overviewViewportFromElements(pane, code));
+    const nextViewport = overviewViewportFromElements(pane, code);
+    setViewport((current) =>
+      current.start === nextViewport.start && current.end === nextViewport.end
+        ? current
+        : nextViewport,
+    );
   }, [codeRef, paneRef]);
 
   const update = useCallback(() => {

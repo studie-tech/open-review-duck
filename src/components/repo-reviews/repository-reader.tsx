@@ -40,6 +40,7 @@ import { ReviewFilesPanel } from "~/components/review/review-files-panel";
 import {
   ReviewFileCardHeader,
   ReviewFileUnitMarker,
+  actionableReviewCardMember,
   reviewCardRanges,
 } from "~/components/review/review-workspace-support";
 import { Button } from "~/components/ui/button";
@@ -59,6 +60,7 @@ import {
   optimisticallyUnreviewReviewUnits,
 } from "~/lib/review-navigation";
 import { readerShortcuts } from "~/lib/review-shortcuts";
+import { reviewSourceByteLength } from "~/lib/review-source-display";
 import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -348,10 +350,7 @@ export function RepositoryReader({
     (file: ReviewFileEntry | undefined) => {
       if (!file) return;
       const members = units.filter(({ path }) => path === file.path);
-      const member =
-        members.find(
-          ({ status }) => status !== "signed_off" && status !== "waiting",
-        ) ?? members[0];
+      const member = actionableReviewCardMember(members);
       if (!member) {
         toast.info("This file has no semantic review units");
         return;
@@ -1052,6 +1051,7 @@ export function RepositoryReader({
                       index={0}
                       count={1}
                       selected
+                      sourceBytes={reviewSourceByteLength(activeFileContext)}
                     />
                     {contextBefore < availableBefore && (
                       <div className="flex items-center gap-3 px-4 pt-3 font-sans">
@@ -1082,24 +1082,28 @@ export function RepositoryReader({
                       focusRanges={fileFocusRanges}
                       selectedRange={ruleSelection}
                       onSelectLine={selectRuleLine}
+                      renderBeforeLine={(lineNumber) =>
+                        activeFileUnits.length > 1
+                          ? activeFileUnits
+                              .filter((member) =>
+                                reviewCardRanges(
+                                  [member],
+                                  showPrevious ? "previous" : "current",
+                                  activeFileContext?.previousSource,
+                                ).some(
+                                  ({ startLine }) => startLine === lineNumber,
+                                ),
+                              )
+                              .map((member) => (
+                                <ReviewFileUnitMarker
+                                  key={member.id}
+                                  member={member}
+                                />
+                              ))
+                          : null
+                      }
                       renderAfterLine={(lineNumber) => (
                         <>
-                          {activeFileUnits
-                            .filter((member) =>
-                              reviewCardRanges(
-                                [member],
-                                showPrevious ? "previous" : "current",
-                                activeFileContext?.previousSource,
-                              ).some(
-                                ({ startLine }) => startLine === lineNumber,
-                              ),
-                            )
-                            .map((member) => (
-                              <ReviewFileUnitMarker
-                                key={member.id}
-                                member={member}
-                              />
-                            ))}
                           {ruleSelection?.endLine === lineNumber ? (
                             <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-4 font-sans shadow-xl">
                               <div className="flex min-w-0 items-start justify-between gap-3">

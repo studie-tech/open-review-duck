@@ -1967,6 +1967,138 @@ describe("provider normalization", () => {
     });
   });
 
+  it("allows GitHub merge when required checks passed and optional checks are queued", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/pulls/12")) {
+        return jsonResponse({
+          id: 12,
+          number: 12,
+          title: "Checks",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/12",
+          user: { id: 9, login: "author", avatar_url: "" },
+          head: { ref: "feature", sha: "head-sha" },
+          base: { ref: "main", sha: "base-sha" },
+          mergeable: true,
+          mergeable_state: "blocked",
+        });
+      }
+      if (url.includes("/check-runs")) {
+        return jsonResponse({
+          check_runs: [
+            {
+              id: 1,
+              name: "ci / test",
+              status: "completed",
+              conclusion: "success",
+            },
+            {
+              id: 2,
+              name: "deploy preview",
+              status: "queued",
+              conclusion: null,
+            },
+            {
+              id: 3,
+              name: "notify",
+              status: "completed",
+              conclusion: "skipped",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse({ statuses: [] });
+      }
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewDecision: "APPROVED",
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [
+                      {
+                        __typename: "CheckRun",
+                        databaseId: 1,
+                        name: "ci / test",
+                        isRequired: true,
+                      },
+                      {
+                        __typename: "CheckRun",
+                        databaseId: 2,
+                        name: "deploy preview",
+                        isRequired: false,
+                      },
+                      {
+                        __typename: "CheckRun",
+                        databaseId: 3,
+                        name: "notify",
+                        isRequired: false,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      checks: [
+        {
+          id: "check-1",
+          name: "ci / test",
+          state: "success",
+          description: undefined,
+          webUrl: undefined,
+          required: true,
+        },
+        {
+          id: "check-2",
+          name: "deploy preview",
+          state: "queued",
+          description: undefined,
+          webUrl: undefined,
+          required: false,
+        },
+        {
+          id: "check-3",
+          name: "notify",
+          state: "skipped",
+          description: undefined,
+          webUrl: undefined,
+          required: false,
+        },
+      ],
+      summary: "passing",
+      pullRequestState: "open",
+      headSha: "head-sha",
+      mergeable: true,
+      canMerge: true,
+      mergeBlockedReason: undefined,
+      mergeActionLabel: "Merge",
+    });
+  });
+
   it("surfaces GitLab pipeline failures and merge blockers", async () => {
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {
@@ -2052,6 +2184,7 @@ describe("provider normalization", () => {
           name: "merge request",
           state: "failure",
           webUrl: "https://gitlab.com/acme/review/-/pipelines/80",
+          required: true,
         },
         {
           id: "job-3",
@@ -2059,6 +2192,7 @@ describe("provider normalization", () => {
           state: "failure",
           description: "Script failed",
           webUrl: "https://gitlab.com/acme/review/-/jobs/3",
+          required: true,
         },
         {
           id: "job-4",
@@ -2066,6 +2200,7 @@ describe("provider normalization", () => {
           state: "skipped",
           description: "Script failed",
           webUrl: undefined,
+          required: false,
         },
       ],
       summary: "failing",
@@ -2088,6 +2223,79 @@ describe("provider normalization", () => {
     expect(JSON.parse(String(mergeRequest?.[1]?.body))).toEqual({
       sha: "head-sha",
       should_remove_source_branch: false,
+    });
+  });
+
+  it("allows GitLab merge when optional jobs are still running", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/merge_requests/12")) {
+        return jsonResponse({
+          id: 12,
+          iid: 12,
+          title: "Pipelines",
+          description: null,
+          state: "opened",
+          draft: false,
+          web_url: "https://gitlab.com/acme/review/-/merge_requests/12",
+          source_branch: "feature",
+          target_branch: "main",
+          sha: "head-sha",
+          diff_refs: { base_sha: "base-sha", head_sha: "head-sha" },
+          author: { id: 9, username: "author", avatar_url: null },
+          detailed_merge_status: "mergeable",
+        });
+      }
+      if (url.includes("/pipelines?") && !url.includes("/jobs")) {
+        return jsonResponse([
+          {
+            id: 80,
+            status: "running",
+            name: "merge request",
+            web_url: "https://gitlab.com/acme/review/-/pipelines/80",
+          },
+        ]);
+      }
+      if (url.includes("/pipelines/80/jobs")) {
+        return jsonResponse([
+          {
+            id: 4,
+            name: "optional",
+            status: "running",
+            allow_failure: true,
+          },
+        ]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitLabProvider("token");
+
+    await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      checks: [
+        {
+          id: "pipeline-80",
+          name: "merge request",
+          state: "in_progress",
+          webUrl: "https://gitlab.com/acme/review/-/pipelines/80",
+          required: false,
+        },
+        {
+          id: "job-4",
+          name: "optional",
+          state: "in_progress",
+          description: undefined,
+          webUrl: undefined,
+          required: false,
+        },
+      ],
+      summary: "passing",
+      pullRequestState: "open",
+      headSha: "head-sha",
+      mergeable: true,
+      canMerge: true,
+      mergeBlockedReason: undefined,
+      mergeActionLabel: "Merge",
     });
   });
 
@@ -2234,6 +2442,109 @@ describe("provider normalization", () => {
         deleteSourceBranch: false,
       },
     });
+  });
+
+  it("allows Azure complete when blocking policies passed and optional statuses are pending", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/policy/evaluations")) {
+        return jsonResponse({
+          value: [
+            {
+              evaluationId: "eval-1",
+              status: "approved",
+              configuration: {
+                id: "policy-build",
+                isEnabled: true,
+                isBlocking: true,
+                type: { displayName: "Build" },
+              },
+            },
+            {
+              evaluationId: "eval-2",
+              status: "running",
+              configuration: {
+                id: "policy-optional",
+                isEnabled: true,
+                isBlocking: false,
+                type: { displayName: "Optional status" },
+              },
+            },
+          ],
+        });
+      }
+      if (url.includes("/statuses?")) {
+        return jsonResponse({
+          value: [
+            {
+              id: 4,
+              state: "pending",
+              description: "Preview",
+              context: { name: "Preview" },
+              creationDate: "2026-08-30T09:40:00Z",
+            },
+          ],
+        });
+      }
+      if (url.includes("/pullRequests/12?")) {
+        return jsonResponse({
+          pullRequestId: 12,
+          title: "Checks",
+          status: "active",
+          isDraft: false,
+          mergeStatus: "succeeded",
+          sourceRefName: "refs/heads/feature",
+          targetRefName: "refs/heads/main",
+          lastMergeSourceCommit: { commitId: "head-sha" },
+          lastMergeTargetCommit: { commitId: "base-sha" },
+          repository: {
+            webUrl: "https://dev.azure.com/acme/repo",
+            project: { id: "project-1", name: "acme" },
+          },
+          createdBy: { id: "author-1", displayName: "Author" },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    );
+
+    await expect(provider.getPullRequestLifecycle("repo", 12)).resolves.toEqual(
+      {
+        checks: [
+          {
+            id: "status-4",
+            name: "Preview",
+            state: "in_progress",
+            description: "Preview",
+            webUrl: undefined,
+            required: false,
+          },
+          {
+            id: "policy-policy-build",
+            name: "Build",
+            state: "success",
+            required: true,
+          },
+          {
+            id: "policy-policy-optional",
+            name: "Optional status",
+            state: "in_progress",
+            required: false,
+          },
+        ],
+        summary: "passing",
+        pullRequestState: "open",
+        headSha: "head-sha",
+        mergeable: true,
+        canMerge: true,
+        mergeBlockedReason: undefined,
+        mergeActionLabel: "Complete",
+      },
+    );
   });
 
   it("resolves a GitHub conversation through its review-thread node", async () => {

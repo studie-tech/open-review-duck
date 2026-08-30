@@ -360,14 +360,14 @@ export function buildReviewFileTree(
 
 const REVIEW_MODE_STORAGE_KEY = "reviewduck:review-mode";
 
-/** Reads the reviewer's preferred navigation projection. */
+/** Reads the reviewer's preferred navigation projection, defaulting to Files. */
 export function storedReviewMode(storage: Pick<Storage, "getItem">) {
   try {
-    return storage.getItem(REVIEW_MODE_STORAGE_KEY) === "files"
-      ? ("files" as const)
-      : ("path" as const);
+    return storage.getItem(REVIEW_MODE_STORAGE_KEY) === "path"
+      ? ("path" as const)
+      : ("files" as const);
   } catch {
-    return "path" as const;
+    return "files" as const;
   }
 }
 

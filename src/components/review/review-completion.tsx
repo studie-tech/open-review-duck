@@ -133,7 +133,7 @@ export function findNextReview<T extends ReviewCompletionCandidate>(
   );
 }
 
-/** Presents a completed review as the workspace page with useful next actions. */
+/** Presents a completed review as a full-pane workspace page with useful next actions. */
 export function ReviewCompletion({
   completedFiles,
   completedUnits,
@@ -155,139 +155,142 @@ export function ReviewCompletion({
     : 0;
 
   return (
-    <div className="bg-ink absolute inset-0 z-20 grid place-items-center overflow-y-auto p-4 font-sans sm:p-8">
+    <div className="bg-code absolute inset-0 z-30 flex min-h-0 flex-col font-sans">
       <section
         ref={dialogRef}
         aria-labelledby="review-completion-title"
         aria-describedby="review-completion-description"
-        className="bg-panel relative my-auto w-full max-w-4xl overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
+        tabIndex={-1}
+        className="flex min-h-0 flex-1 flex-col outline-none"
       >
-        <div
-          aria-hidden="true"
-          className="from-lime/12 via-cyan/[.035] absolute inset-x-0 top-0 h-48 bg-gradient-to-b to-transparent"
-        />
+        <div className="from-lime/10 via-code to-code pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b" />
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-8 lg:px-8 xl:px-10">
+            <span className="border-lime/25 bg-lime/10 text-lime grid size-12 place-items-center rounded-2xl border shadow-[0_10px_36px_var(--app-shadow)] sm:size-14">
+              <CheckCheck className="size-6 sm:size-7" strokeWidth={1.8} />
+            </span>
 
-        <div className="relative px-5 pt-8 pb-5 sm:px-8 sm:pt-10">
-          <div className="border-lime/25 bg-lime/10 text-lime grid size-14 place-items-center rounded-2xl border shadow-[0_10px_36px_var(--app-shadow)]">
-            <CheckCheck className="size-7" strokeWidth={1.8} />
+            <p className="text-lime mt-5 flex items-center gap-2 text-[10px] font-semibold tracking-[.18em] uppercase sm:mt-6">
+              <Sparkles className="size-3.5" />
+              Review finished
+            </p>
+            <h2
+              id="review-completion-title"
+              className="font-editorial mt-2 text-3xl font-medium tracking-[-.035em] text-cloud sm:text-4xl lg:text-5xl"
+            >
+              Review complete.
+            </h2>
+            <p
+              id="review-completion-description"
+              className="text-mist mt-3 max-w-2xl text-sm leading-6"
+            >
+              You made it through every review unit. Your sign-offs are saved
+              and this pull request is fully reviewed at its current revision.
+              Check the pipelines, merge when they are ready, or continue to the
+              next pull request.
+            </p>
+
+            <dl className="mt-6 grid grid-cols-3 gap-2 sm:mt-8 sm:gap-3">
+              <div className="rounded-2xl border border-line bg-surface/55 px-3 py-4 text-center sm:px-5 sm:py-5">
+                <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
+                  Units
+                </dt>
+                <dd className="mt-1 font-mono text-lg text-cloud sm:text-xl">
+                  {completedUnits}
+                </dd>
+              </div>
+              <div className="rounded-2xl border border-line bg-surface/55 px-3 py-4 text-center sm:px-5 sm:py-5">
+                <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
+                  Files
+                </dt>
+                <dd className="mt-1 font-mono text-lg text-cloud sm:text-xl">
+                  {completedFiles}
+                </dd>
+              </div>
+              <div className="rounded-2xl border border-lime/20 bg-lime/[.06] px-3 py-4 text-center sm:px-5 sm:py-5">
+                <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
+                  Progress
+                </dt>
+                <dd className="text-lime mt-1 font-mono text-lg sm:text-xl">
+                  100%
+                </dd>
+              </div>
+            </dl>
+
+            <div className="mt-6 space-y-4 lg:mt-8">
+              {lifecycle}
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(16rem,1fr)] lg:items-start xl:gap-6">
+                {providerReview}
+
+                {nextReview ? (
+                  <div>
+                    <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
+                      Ready next
+                    </p>
+                    <button
+                      type="button"
+                      disabled={navigationPending}
+                      aria-busy={navigationPending || undefined}
+                      onClick={onNextReview}
+                      className="hover:border-cyan/25 hover:bg-cyan/[.035] mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/70 p-4 text-left transition disabled:pointer-events-none"
+                    >
+                      <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
+                        <GitPullRequest className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-cloud">
+                          {nextReview.title}
+                        </span>
+                        <span className="text-fog mt-1 block truncate text-[10px]">
+                          {nextReview.repositoryOwner}/
+                          {nextReview.repositoryName} #{nextReview.number} ·{" "}
+                          {nextReview.signedUnits}/{nextReview.totalUnits}{" "}
+                          reviewed
+                        </span>
+                        <span className="bg-surface-subtle mt-2 block h-1 overflow-hidden rounded-full">
+                          <span
+                            className="bg-cyan block h-full rounded-full"
+                            style={{ width: `${nextReviewProgress}%` }}
+                          />
+                        </span>
+                      </span>
+                      {navigationPending ? (
+                        <Spinner className="text-mist size-4 shrink-0" />
+                      ) : (
+                        <ArrowRight className="text-mist size-4 shrink-0" />
+                      )}
+                    </button>
+                  </div>
+                ) : queueLoading ? (
+                  <div
+                    role="status"
+                    className="text-mist flex min-h-[74px] items-center justify-center rounded-2xl border border-dashed border-line px-4 text-center text-xs"
+                  >
+                    Checking your review queue…
+                  </div>
+                ) : (
+                  <div className="flex min-h-[74px] items-center gap-3 rounded-2xl border border-lime/15 bg-lime/[.035] p-4">
+                    <span className="bg-lime/10 text-lime grid size-10 shrink-0 place-items-center rounded-xl">
+                      <Check className="size-4" />
+                    </span>
+                    <span>
+                      <span className="block text-sm font-medium text-cloud">
+                        Your review queue is clear
+                      </span>
+                      <span className="text-mist mt-1 block text-[10px] leading-4">
+                        There are no other prepared pull requests waiting for
+                        review.
+                      </span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-          <p className="text-lime mt-6 flex items-center gap-2 text-[10px] font-semibold tracking-[.18em] uppercase">
-            <Sparkles className="size-3.5" />
-            Review finished
-          </p>
-          <h2
-            id="review-completion-title"
-            className="font-editorial mt-2 text-3xl font-medium tracking-[-.035em] text-cloud sm:text-4xl"
-          >
-            Review complete.
-          </h2>
-          <p
-            id="review-completion-description"
-            className="text-mist mt-3 max-w-xl text-sm leading-6"
-          >
-            You made it through every review unit. Your sign-offs are saved and
-            this pull request is fully reviewed at its current revision. Check
-            the pipelines, merge when they are ready, or continue to the next
-            pull request.
-          </p>
-
-          <dl className="mt-7 grid grid-cols-3 overflow-hidden rounded-2xl border border-line bg-surface/55">
-            <div className="border-r border-line px-3 py-4 text-center sm:px-5">
-              <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                Units
-              </dt>
-              <dd className="mt-1 font-mono text-lg text-cloud">
-                {completedUnits}
-              </dd>
-            </div>
-            <div className="border-r border-line px-3 py-4 text-center sm:px-5">
-              <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                Files
-              </dt>
-              <dd className="mt-1 font-mono text-lg text-cloud">
-                {completedFiles}
-              </dd>
-            </div>
-            <div className="px-3 py-4 text-center sm:px-5">
-              <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                Progress
-              </dt>
-              <dd className="text-lime mt-1 font-mono text-lg">100%</dd>
-            </div>
-          </dl>
         </div>
 
-        <div className="relative border-t border-line bg-surface/35 px-5 py-5 sm:px-8 sm:py-6">
-          <div className="space-y-4">
-            {lifecycle}
-            <div className="grid items-start gap-4 sm:grid-cols-[minmax(0,1.45fr)_minmax(14rem,.75fr)]">
-              {providerReview}
-
-              {nextReview ? (
-                <div>
-                  <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
-                    Ready next
-                  </p>
-                  <button
-                    type="button"
-                    disabled={navigationPending}
-                    aria-busy={navigationPending || undefined}
-                    onClick={onNextReview}
-                    className="hover:border-cyan/25 hover:bg-cyan/[.035] mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/70 p-4 text-left transition disabled:pointer-events-none"
-                  >
-                    <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
-                      <GitPullRequest className="size-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-cloud">
-                        {nextReview.title}
-                      </span>
-                      <span className="text-fog mt-1 block truncate text-[10px]">
-                        {nextReview.repositoryOwner}/{nextReview.repositoryName}{" "}
-                        #{nextReview.number} · {nextReview.signedUnits}/
-                        {nextReview.totalUnits} reviewed
-                      </span>
-                      <span className="bg-surface-subtle mt-2 block h-1 overflow-hidden rounded-full">
-                        <span
-                          className="bg-cyan block h-full rounded-full"
-                          style={{ width: `${nextReviewProgress}%` }}
-                        />
-                      </span>
-                    </span>
-                    {navigationPending ? (
-                      <Spinner className="text-mist size-4 shrink-0" />
-                    ) : (
-                      <ArrowRight className="text-mist size-4 shrink-0" />
-                    )}
-                  </button>
-                </div>
-              ) : queueLoading ? (
-                <div
-                  role="status"
-                  className="text-mist flex h-full min-h-[74px] items-center justify-center rounded-2xl border border-dashed border-line px-4 text-center text-xs"
-                >
-                  Checking your review queue…
-                </div>
-              ) : (
-                <div className="flex h-full min-h-[74px] items-center gap-3 rounded-2xl border border-lime/15 bg-lime/[.035] p-4">
-                  <span className="bg-lime/10 text-lime grid size-10 shrink-0 place-items-center rounded-xl">
-                    <Check className="size-4" />
-                  </span>
-                  <span>
-                    <span className="block text-sm font-medium text-cloud">
-                      Your review queue is clear
-                    </span>
-                    <span className="text-mist mt-1 block text-[10px] leading-4">
-                      There are no other prepared pull requests waiting for
-                      review.
-                    </span>
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+        <div className="relative shrink-0 border-t border-line bg-panel/90 px-4 py-3 backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8">
+          <div className="mx-auto flex w-full max-w-6xl flex-col-reverse gap-2 sm:flex-row sm:items-center">
             <Button
               ref={initialFocusRef}
               type="button"
