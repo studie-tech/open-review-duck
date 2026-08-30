@@ -30,10 +30,6 @@ export async function refreshRepositoryPullRequestStates(
     ),
   });
   if (!repository) throw new Error("Repository not found");
-  const connection = await db.query.providerConnections.findFirst({
-    where: eq(providerConnections.id, repository.connectionId),
-  });
-  if (!connection) throw new Error("Provider connection not found");
   const now = new Date();
   if (!input.force) {
     const dueBefore = new Date(
@@ -59,6 +55,12 @@ export async function refreshRepositoryPullRequestStates(
       .set({ pullRequestStateLastCheckedAt: now })
       .where(eq(repositories.id, repository.id));
   }
+  // The connection is only needed once the throttle claim succeeds, so the
+  // frequent no-op pass costs a single round-trip.
+  const connection = await db.query.providerConnections.findFirst({
+    where: eq(providerConnections.id, repository.connectionId),
+  });
+  if (!connection) throw new Error("Provider connection not found");
   try {
     const provider = await providerForConnection(db, connection);
     const [openPullRequests, tracked] = await Promise.all([

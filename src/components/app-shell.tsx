@@ -179,6 +179,9 @@ type Guidance = RouterOutputs["workspace"]["guidance"];
 type AiConfiguration = RouterOutputs["ai"]["configuration"];
 type AiPlanUsage = RouterOutputs["ai"]["planUsage"];
 const INBOX_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
+// A reconciliation pass walks every workspace repository, so rapid tab
+// switching must not fire one per focus event.
+const INBOX_REFOCUS_MIN_INTERVAL_MS = 60_000;
 
 /** Renders the app shell interface. */
 export function AppShell({
@@ -222,8 +225,10 @@ export function AppShell({
     reconcileRepositoriesRef.current = reconcileRepositories;
   }, [reconcileIntake, reconcileRepositories]);
   useEffect(() => {
+    let lastReconciliationAt = 0;
     /** Refreshes provider state without overlapping an existing reconciliation. */
     const reconcile = () => {
+      lastReconciliationAt = Date.now();
       if (!reconcileIntakeRef.current.isPending) {
         reconcileIntakeRef.current.mutate();
       }
@@ -231,14 +236,21 @@ export function AppShell({
         reconcileRepositoriesRef.current.mutate();
       }
     };
+    /** Reconciles on return to the tab unless a recent pass still covers it. */
+    const reconcileOnFocus = () => {
+      if (Date.now() - lastReconciliationAt < INBOX_REFOCUS_MIN_INTERVAL_MS) {
+        return;
+      }
+      reconcile();
+    };
     reconcile();
-    window.addEventListener("focus", reconcile);
+    window.addEventListener("focus", reconcileOnFocus);
     const interval = window.setInterval(
       reconcile,
       INBOX_RECONCILIATION_INTERVAL_MS,
     );
     return () => {
-      window.removeEventListener("focus", reconcile);
+      window.removeEventListener("focus", reconcileOnFocus);
       window.clearInterval(interval);
     };
   }, []);
