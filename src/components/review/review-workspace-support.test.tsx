@@ -1194,6 +1194,37 @@ describe("conceptMembersInReadingOrder", () => {
   });
 });
 
+/** Places measurable review line anchors for the drag gesture tests. */
+function renderDraggableReviewLines(
+  placements: readonly { line: number; top: number }[],
+) {
+  let measureCount = 0;
+  const elements = placements.map(({ line, top }) => {
+    const element = document.createElement("span");
+    element.id = `review-line-${line}`;
+    element.getBoundingClientRect = () => {
+      measureCount += 1;
+      return { top, height: 20 } as DOMRect;
+    };
+    document.body.append(element);
+    return element;
+  });
+  return {
+    cleanup: () => {
+      for (const element of elements) element.remove();
+    },
+    measureCount: () => measureCount,
+  };
+}
+
+/** Runs the animation frame the drag preview coalesces its updates into. */
+async function flushAnimationFrame() {
+  await act(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  );
+}
+
 describe("InlineAiQuestion", () => {
   it("can restore a saved conversation without stealing keyboard focus", () => {
     const priorControl = document.createElement("button");
@@ -1546,18 +1577,13 @@ describe("InlineAiQuestion", () => {
     expect(step).toHaveBeenNthCalledWith(2, 1);
   });
 
-  it("tracks dragging outside the handle and commits the nearest line", () => {
+  it("tracks dragging outside the handle and commits the nearest line", async () => {
     const move = vi.fn();
     const preview = vi.fn();
-    const firstLine = document.createElement("span");
-    firstLine.id = "review-line-17";
-    firstLine.getBoundingClientRect = () =>
-      ({ top: 100, height: 20 }) as DOMRect;
-    const secondLine = document.createElement("span");
-    secondLine.id = "review-line-22";
-    secondLine.getBoundingClientRect = () =>
-      ({ top: 220, height: 20 }) as DOMRect;
-    document.body.append(firstLine, secondLine);
+    const lines = renderDraggableReviewLines([
+      { line: 17, top: 100 },
+      { line: 22, top: 220 },
+    ]);
 
     render(
       <InlineAiQuestion
@@ -1583,12 +1609,60 @@ describe("InlineAiQuestion", () => {
       { pointerId: 7, clientY: 110 },
     );
     fireEvent.pointerMove(window, { pointerId: 7, clientY: 225 });
+    await flushAnimationFrame();
     fireEvent.pointerUp(window, { pointerId: 7, clientY: 225 });
 
     expect(preview).toHaveBeenCalledWith(22);
     expect(move).toHaveBeenCalledWith(22);
-    firstLine.remove();
-    secondLine.remove();
+    lines.cleanup();
+  });
+
+  it("measures the review lines once per drag and previews once per frame", async () => {
+    const move = vi.fn();
+    const preview = vi.fn();
+    const lines = renderDraggableReviewLines([
+      { line: 17, top: 100 },
+      { line: 22, top: 220 },
+      { line: 27, top: 340 },
+    ]);
+
+    render(
+      <InlineAiQuestion
+        canAsk
+        draft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onMove={move}
+        onPreview={preview}
+        onStep={vi.fn()}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", {
+        name: "Drag AI question to another line",
+      }),
+      { pointerId: 3, clientY: 110 },
+    );
+    const measurements = lines.measureCount();
+
+    fireEvent.pointerMove(window, { pointerId: 3, clientY: 225 });
+    fireEvent.pointerMove(window, { pointerId: 3, clientY: 300 });
+    fireEvent.pointerMove(window, { pointerId: 3, clientY: 345 });
+    await flushAnimationFrame();
+
+    expect(lines.measureCount()).toBe(measurements);
+    expect(preview.mock.calls).toEqual([[17], [27]]);
+
+    fireEvent.pointerUp(window, { pointerId: 3, clientY: 345 });
+
+    expect(move).toHaveBeenCalledWith(27);
+    lines.cleanup();
   });
 });
 

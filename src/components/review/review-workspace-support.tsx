@@ -1589,13 +1589,14 @@ export function withoutDeletedLiveAiQuestions<
   );
 }
 
-/** Finds the nearest rendered review line to a vertical pointer coordinate. */
-function nearestRenderedReviewLine(
-  clientY: number,
+type MeasuredReviewLine = { center: number; line: number };
+
+/** Measures every rendered in-scope review line, ordered top to bottom. */
+function measureRenderedReviewLines(
   minimumLine: number,
   maximumLine: number,
-) {
-  let nearest: { distance: number; line: number } | undefined;
+): MeasuredReviewLine[] {
+  const measured: MeasuredReviewLine[] = [];
   const seen = new Set<number>();
   for (const element of document.querySelectorAll<HTMLElement>(
     '[id^="review-line-"]',
@@ -1611,10 +1612,34 @@ function nearestRenderedReviewLine(
     }
     seen.add(line);
     const bounds = element.getBoundingClientRect();
-    const distance = Math.abs(clientY - (bounds.top + bounds.height / 2));
-    if (!nearest || distance < nearest.distance) nearest = { distance, line };
+    measured.push({ center: bounds.top + bounds.height / 2, line });
   }
-  return nearest?.line;
+  return measured.sort((left, right) => left.center - right.center);
+}
+
+/** Finds the measured line closest to a vertical pointer coordinate. */
+function nearestMeasuredReviewLine(
+  measured: readonly MeasuredReviewLine[],
+  clientY: number,
+) {
+  let low = 0;
+  let high = measured.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    const candidate = measured[middle];
+    if (candidate && candidate.center < clientY) low = middle + 1;
+    else high = middle;
+  }
+  const below = measured[low];
+  if (!below) return undefined;
+  const above = measured[low - 1];
+  if (
+    above &&
+    Math.abs(clientY - above.center) <= Math.abs(clientY - below.center)
+  ) {
+    return above.line;
+  }
+  return below.line;
 }
 
 /** Renders a line-anchored AI conversation that can move through review scope. */
@@ -1793,9 +1818,16 @@ export function InlineAiQuestion({
     const previousUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "ns-resize";
     document.body.style.userSelect = "none";
+    // The pane does not scroll during the gesture, so one measuring pass at
+    // pointerdown keeps every later move free of layout reads.
+    const measuredLines = measureRenderedReviewLines(minimumLine, maximumLine);
+    let pendingClientY: number | undefined;
+    let previewFrame: number | undefined;
 
     /** Removes global drag listeners and restores document interaction styles. */
     function cleanupDrag() {
+      if (previewFrame !== undefined) cancelAnimationFrame(previewFrame);
+      previewFrame = undefined;
       window.removeEventListener("pointermove", previewDrag, true);
       window.removeEventListener("pointerup", finishDrag, true);
       window.removeEventListener("pointercancel", cancelDrag, true);
@@ -1804,27 +1836,35 @@ export function InlineAiQuestion({
       clearDragListeners.current = () => undefined;
     }
 
-    /** Previews the closest rendered in-scope line beneath the pointer. */
-    function previewDrag(pointerEvent: PointerEvent) {
-      if (pointerEvent.pointerId !== pointerId) return;
-      pointerEvent.preventDefault();
-      const nearest = nearestRenderedReviewLine(
-        pointerEvent.clientY,
-        minimumLine,
-        maximumLine,
-      );
+    /** Previews the in-scope line closest to the latest pointer position. */
+    function applyPendingPreview() {
+      previewFrame = undefined;
+      if (pendingClientY === undefined) return;
+      const nearest = nearestMeasuredReviewLine(measuredLines, pendingClientY);
       if (nearest === undefined || nearest === previewLine.current) return;
       previewLine.current = nearest;
       onPreview(nearest);
     }
 
-    /** Commits the previewed line after a completed drag. */
+    /** Records the pointer position and previews it on the next frame. */
+    function previewDrag(pointerEvent: PointerEvent) {
+      if (pointerEvent.pointerId !== pointerId) return;
+      pointerEvent.preventDefault();
+      pendingClientY = pointerEvent.clientY;
+      previewFrame ??= requestAnimationFrame(applyPendingPreview);
+    }
+
+    /** Commits the line under the pointer after a completed drag. */
     function finishDrag(pointerEvent: PointerEvent) {
       if (pointerEvent.pointerId !== pointerId) return;
       pointerEvent.preventDefault();
+      const nearest =
+        pendingClientY === undefined
+          ? undefined
+          : nearestMeasuredReviewLine(measuredLines, pendingClientY);
       cleanupDrag();
       onPreview(undefined);
-      onMove(previewLine.current);
+      onMove(nearest ?? previewLine.current);
     }
 
     /** Cancels the gesture without changing the question's anchor. */
