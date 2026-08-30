@@ -1067,6 +1067,19 @@ export function applyAiQuestionStreamUpdate(
   );
 }
 
+/** Gives the named waits back to the actionable review path. */
+export function releaseWaitingUnits(
+  units: ReviewUnit[],
+  unitIds: Iterable<string>,
+): ReviewUnit[] {
+  const released = new Set(unitIds);
+  return units.map((unit) =>
+    released.has(unit.id)
+      ? { ...unit, status: "pending" as const, waitingSince: null }
+      : unit,
+  );
+}
+
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -1283,8 +1296,6 @@ export function ReviewWorkspace({
   const [reviewedExpanded, setReviewedExpanded] = useState(false);
   const [waitingLimit, setWaitingLimit] = useState(INITIAL_PATH_ITEMS);
   const [waitingExpanded, setWaitingExpanded] = useState(true);
-  const [releasingWaitingUnitId, setReleasingWaitingUnitId] =
-    useState<string>();
   const [pathPanelOpen, setPathPanelOpen] = useState(false);
   const [pathPanelCollapsed, setPathPanelCollapsed] = useState(false);
   const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
@@ -3742,6 +3753,15 @@ export function ReviewWorkspace({
   });
 
   const releaseReviewWaits = api.review.releaseReviewWaits.useMutation({
+    // The reviewer is the only source of a release, so the units leave the
+    // waiting room and rejoin the path on the click; the reply below only
+    // confirms it, and a failure hands the waits back.
+    onMutate: ({ unitIds }) => {
+      const releasing = new Set(unitIds);
+      const paused = units.filter((unit) => releasing.has(unit.id));
+      setUnits((current) => releaseWaitingUnits(current, releasing));
+      return { paused };
+    },
     // Every unit the request reached comes back, not only the rows this call
     // deleted: a wait the server had already dropped — answered in another
     // tab, or reopened by a poll this view has not seen — leaves nothing to
@@ -3749,13 +3769,7 @@ export function ReviewWorkspace({
     // on screen with no row behind it.
     onSuccess: ({ authorizedUnitIds }) => {
       const released = new Set(authorizedUnitIds);
-      setUnits((current) =>
-        current.map((unit) =>
-          released.has(unit.id)
-            ? { ...unit, status: "pending" as const, waitingSince: null }
-            : unit,
-        ),
-      );
+      setUnits((current) => releaseWaitingUnits(current, released));
       setQueueLimit(INITIAL_PATH_ITEMS);
       setWaitingLimit(INITIAL_PATH_ITEMS);
       setStartedAt(Date.now());
@@ -3766,8 +3780,17 @@ export function ReviewWorkspace({
             : `${released.size} units no longer wait for a response.`,
       });
     },
-    onError: (error) => toast.error(error.message),
-    onSettled: () => setReleasingWaitingUnitId(undefined),
+    onError: (error, _input, rollback) => {
+      if (rollback) {
+        const paused = new Map(
+          rollback.paused.map((unit) => [unit.id, unit] as const),
+        );
+        setUnits((current) =>
+          current.map((unit) => paused.get(unit.id) ?? unit),
+        );
+      }
+      toast.error(error.message);
+    },
   });
   const publishComment = api.review.publishComment.useMutation({
     onSuccess: () => {
@@ -4917,8 +4940,7 @@ export function ReviewWorkspace({
   const canStopWaiting =
     activeWaitStatus === "waiting" &&
     heldWaitUnitIds.length > 0 &&
-    !awaitPending &&
-    !releaseReviewWaits.isPending;
+    !awaitPending;
   const undoableSignOff = nextUndoableSignOff(signOffUndoHistory, units);
   const canUndoSignOff =
     !!undoableSignOff &&
@@ -5720,8 +5742,6 @@ export function ReviewWorkspace({
 
   /** Returns one waiting unit to the actionable review path. */
   function stopWaitingOnUnit(unitId: string) {
-    if (releaseReviewWaits.isPending) return;
-    setReleasingWaitingUnitId(unitId);
     releaseReviewWaits.mutate({ unitIds: [unitId] });
   }
 
@@ -7544,7 +7564,6 @@ export function ReviewWorkspace({
               nextReviewShortcut={reviewShortcuts.nextReview}
               providerName={providerLabel(initialData.pullRequest.provider)}
               queueLoading={reviewQueue.isLoading}
-              releasingUnitId={releasingWaitingUnitId}
               reviewedConcepts={signedConceptCount}
               totalConcepts={conceptProgress.length}
               units={waitingReviewUnits}
@@ -8657,19 +8676,13 @@ export function ReviewWorkspace({
                       onClick={stopWaitingOnActive}
                       disabled={!canStopWaiting}
                     >
-                      {releaseReviewWaits.isPending ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : activeUnitAnswered ? (
+                      {activeUnitAnswered ? (
                         <MessageSquareText className="size-4" />
                       ) : (
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {releaseReviewWaits.isPending
-                          ? "Resuming…"
-                          : activeUnitAnswered
-                            ? "Resume review"
-                            : "Stop waiting"}
+                        {activeUnitAnswered ? "Resume review" : "Stop waiting"}
                       </span>
                     </Button>
                   )}
@@ -8764,29 +8777,19 @@ export function ReviewWorkspace({
                       onClick={stopWaitingOnActive}
                       disabled={!canStopWaiting}
                     >
-                      {releaseReviewWaits.isPending ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : activeUnitAnswered ? (
+                      {activeUnitAnswered ? (
                         <MessageSquareText className="size-4" />
                       ) : (
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {releaseReviewWaits.isPending
-                          ? "Resuming…"
-                          : activeUnitAnswered
-                            ? "Resume review"
-                            : "Stop waiting"}
+                        {activeUnitAnswered ? "Resume review" : "Stop waiting"}
                       </span>
-                      <span className="sm:hidden">
-                        {releaseReviewWaits.isPending ? "Resuming…" : "Resume"}
-                      </span>
-                      {!releaseReviewWaits.isPending && (
-                        <ShortcutHint
-                          shortcut={reviewShortcuts.undoReview}
-                          className="hidden sm:inline-flex"
-                        />
-                      )}
+                      <span className="sm:hidden">Resume</span>
+                      <ShortcutHint
+                        shortcut={reviewShortcuts.undoReview}
+                        className="hidden sm:inline-flex"
+                      />
                     </Button>
                   ) : (
                     hasLiveConversation &&
