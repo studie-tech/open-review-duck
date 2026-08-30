@@ -584,6 +584,39 @@ describe("relocation", () => {
     expect(result.relocationsResolved).toBe(0);
   });
 
+  it("re-extracts several missed snippets at once", async () => {
+    const rows = await Promise.all(
+      Array.from({ length: 5 }, (_slot, index) =>
+        sealFinding({
+          id: `f${index}`,
+          existingCode: `const missing${index} = 1;`,
+        }),
+      ),
+    );
+    const { db } = fakeDatabase(rows);
+    let inFlight = 0;
+    let peak = 0;
+    const model: DeepReviewValidationModel = {
+      async generate() {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        inFlight -= 1;
+        return "```\nstill missing\n```";
+      },
+    };
+    const result = await validateFileFindings(db, validationInput({ model }));
+    expect(result.relocationsAttempted).toBe(5);
+    expect(peak).toBe(4);
+    expect(result.findings.map((finding) => finding.id)).toEqual([
+      "f0",
+      "f1",
+      "f2",
+      "f3",
+      "f4",
+    ]);
+  });
+
   it("stops relocating once a shared run budget is spent", async () => {
     const rows = [
       await sealFinding({ id: "f1", existingCode: "const missingOne = 1;" }),
