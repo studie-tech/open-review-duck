@@ -897,6 +897,13 @@ export function RepositoryReader({
     displayedSource ?? "",
     language ?? "text",
   );
+  const pinnedSourceLines = useMemo(
+    () =>
+      ruleSelection
+        ? [unitStartLine, ruleSelection.startLine, ruleSelection.endLine]
+        : [unitStartLine],
+    [ruleSelection, unitStartLine],
+  );
 
   return (
     <div className="bg-ink fixed inset-0 z-40 flex flex-col overflow-clip">
@@ -1105,9 +1112,11 @@ export function RepositoryReader({
                       </div>
                     )}
                     <HighlightedSourceLines
+                      key={active.id}
                       lines={highlightedLines}
                       startLine={displayedStartLine}
                       focusRanges={fileFocusRanges}
+                      pinnedLines={pinnedSourceLines}
                       selectedRange={ruleSelection}
                       onSelectLine={selectRuleLine}
                       renderBeforeLine={(lineNumber) =>

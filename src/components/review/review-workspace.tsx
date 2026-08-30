@@ -1010,12 +1010,16 @@ import {
   withoutDeletedAiQuestions,
   withoutDeletedLiveAiQuestions,
 } from "./review-workspace-support";
+import { SourceLineWindow } from "./source-line-window";
 import {
   SymbolPeekCard,
   SymbolPeekMessage,
   symbolPeekNotice,
   useSymbolPeek,
 } from "./symbol-peek";
+
+/** Height a folded block reserves per row: the pane sets `leading-[21px]`. */
+const SOURCE_ROW_HEIGHT_PX = 21;
 
 /** Matches the `h-5` spacer above the selected card so its header is never flush. */
 const SELECTED_REVIEW_CARD_GUTTER_PX = 20;
@@ -6976,6 +6980,18 @@ export function ReviewWorkspace({
     );
   }
 
+  // The pane scrolls to these lines and hangs chrome off them, so their
+  // blocks stay mounted wherever the reviewer has scrolled the source.
+  const pinnedReviewLines = [
+    activeUnit?.startLine,
+    aiQuestionLine,
+    aiQuestionPreviewLine,
+    findingLine,
+    keyboardLine,
+    pendingFindingReveal?.line,
+    selectedLine,
+  ].flatMap((line) => (line === undefined ? [] : [line]));
+
   const reviewHeaderUrl = reviewProviderWebUrl(initialData.pullRequest);
   const reviewHeaderCopiesPullRequest = Boolean(
     initialData.pullRequest.webUrl?.trim(),
@@ -8311,52 +8327,195 @@ export function ReviewWorkspace({
                   {selectedFileSourceExpanded &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
-                    activeUnit.kind !== "binary" &&
-                    lines.map((line, index) => {
-                      const lineNumber = visibleStartLine + index;
-                      const isUnitLine = isPrimaryReviewLine(lineNumber);
-                      const isChangedLine =
-                        isUnitLine && changedCurrentLines.has(lineNumber);
-                      const isContextLine = !isUnitLine;
-                      const coveringExplanations = isUnitLine
-                        ? explanationAnnotations.filter(
-                            (annotation) =>
-                              lineNumber >= annotation.line &&
-                              lineNumber <=
-                                (annotation.endLine ?? annotation.line),
-                          )
-                        : [];
-                      return (
-                        <Fragment key={`${activeUnit.id}-${index}`}>
-                          {fileUnitsStartingAt(lineNumber).map((member) => (
-                            <ReviewFileUnitMarker
-                              key={member.id}
-                              member={member}
-                            />
-                          ))}
-                          {contextBefore > 0 &&
-                            lineNumber === cardStartLine &&
-                            cardStartLine && (
-                              <ReviewScopeMarker
-                                edge="start"
-                                line={cardStartLine}
-                              />
-                            )}
-                          {lineNumber === activeUnit.startLine &&
-                            previousRewriteLines.map((line, previousIndex) => {
-                              const previousLineNumber =
-                                previousUnitStartLine + previousIndex;
-                              return (
-                                <div
-                                  key={`${activeUnit.id}-previous-${previousIndex}`}
-                                  className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
-                                >
-                                  <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
-                                    {previousLineNumber}
+                    activeUnit.kind !== "binary" && (
+                      <SourceLineWindow
+                        key={activeUnit.id}
+                        items={lines}
+                        pinnedLines={pinnedReviewLines}
+                        rowHeight={SOURCE_ROW_HEIGHT_PX}
+                        startLine={visibleStartLine}
+                        renderLine={(line, lineNumber) => {
+                          const isUnitLine = isPrimaryReviewLine(lineNumber);
+                          const isChangedLine =
+                            isUnitLine && changedCurrentLines.has(lineNumber);
+                          const isContextLine = !isUnitLine;
+                          const coveringExplanations = isUnitLine
+                            ? explanationAnnotations.filter(
+                                (annotation) =>
+                                  lineNumber >= annotation.line &&
+                                  lineNumber <=
+                                    (annotation.endLine ?? annotation.line),
+                              )
+                            : [];
+                          return (
+                            <Fragment key={`${activeUnit.id}-${lineNumber}`}>
+                              {fileUnitsStartingAt(lineNumber).map((member) => (
+                                <ReviewFileUnitMarker
+                                  key={member.id}
+                                  member={member}
+                                />
+                              ))}
+                              {contextBefore > 0 &&
+                                lineNumber === cardStartLine &&
+                                cardStartLine && (
+                                  <ReviewScopeMarker
+                                    edge="start"
+                                    line={cardStartLine}
+                                  />
+                                )}
+                              {lineNumber === activeUnit.startLine &&
+                                previousRewriteLines.map(
+                                  (line, previousIndex) => {
+                                    const previousLineNumber =
+                                      previousUnitStartLine + previousIndex;
+                                    return (
+                                      <div
+                                        key={`${activeUnit.id}-previous-${previousIndex}`}
+                                        className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
+                                      >
+                                        <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
+                                          {previousLineNumber}
+                                        </span>
+                                        <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
+                                          {line.tokens.length
+                                            ? line.tokens.map(
+                                                (token, tokenIndex) => (
+                                                  <span
+                                                    key={`${tokenIndex}-${token.text.length}`}
+                                                    className={
+                                                      token.className ||
+                                                      undefined
+                                                    }
+                                                  >
+                                                    {token.text}
+                                                  </span>
+                                                ),
+                                              )
+                                            : " "}
+                                        </pre>
+                                      </div>
+                                    );
+                                  },
+                                )}
+                              <div
+                                id={`review-line-${lineNumber}`}
+                                className={cn(
+                                  "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
+                                  contextVisible &&
+                                    isUnitLine &&
+                                    "border-l-cyan/35 bg-cyan/[.012]",
+                                  isChangedLine &&
+                                    "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
+                                  isContextLine &&
+                                    "bg-surface-subtle/15 opacity-55 hover:opacity-80",
+                                  coveringExplanations.length > 0 &&
+                                    "bg-violet/[.025] shadow-[inset_2px_0_0_var(--app-ai)]",
+                                  // Amber already means "AI review finding" in this
+                                  // file, and is the one tint not already spoken for by
+                                  // the line picker, the composer, additions or
+                                  // deletions. Both of those still win over it below.
+                                  findingLine === lineNumber &&
+                                    "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+                                  selectedLine === lineNumber &&
+                                    "bg-violet/[.055]",
+                                  keyboardLine === lineNumber &&
+                                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                                  aiQuestionPreviewLine === lineNumber &&
+                                    "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
+                                )}
+                              >
+                                {isUnitLine && activeUnit.kind !== "binary" ? (
+                                  <span
+                                    className={cn(
+                                      "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
+                                      isChangedLine &&
+                                        "bg-addition/20 text-addition",
+                                    )}
+                                  >
+                                    <AskAiLineButton
+                                      line={lineNumber}
+                                      onAsk={askAboutCardLine}
+                                      visible={aiQuestionLine === lineNumber}
+                                    />
+                                    <button
+                                      type="button"
+                                      aria-label={`Comment on line ${lineNumber}`}
+                                      aria-pressed={selectedLine === lineNumber}
+                                      onClick={() =>
+                                        commentOnCardLine(lineNumber)
+                                      }
+                                      className="hover:text-violet flex items-center gap-1 transition"
+                                    >
+                                      <MessageSquareText
+                                        className={cn(
+                                          "size-3 transition-opacity",
+                                          selectedLine === lineNumber ||
+                                            keyboardLine === lineNumber
+                                            ? "text-cyan opacity-100"
+                                            : "opacity-0 group-hover:opacity-100",
+                                        )}
+                                      />
+                                      <span>{lineNumber}</span>
+                                    </button>
                                   </span>
-                                  <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
-                                    {line.tokens.length
-                                      ? line.tokens.map((token, tokenIndex) => (
+                                ) : (
+                                  <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
+                                    {lineNumber}
+                                  </span>
+                                )}
+                                <pre className="syntax-code overflow-visible text-cloud">
+                                  {line.tokens.length
+                                    ? line.tokens.map((token, tokenIndex) => {
+                                        const importReference =
+                                          importReferences.find(
+                                            (reference) =>
+                                              reference.from >= token.from &&
+                                              reference.to <= token.to,
+                                          );
+                                        const resolutionKey = importReference
+                                          ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
+                                          : undefined;
+                                        return importReference ? (
+                                          <button
+                                            type="button"
+                                            key={`${tokenIndex}-${token.text.length}`}
+                                            aria-label={`Open ${importReference.local} from ${importReference.specifier}`}
+                                            title={`Open ${importReference.specifier}`}
+                                            disabled={
+                                              resolvingImport === resolutionKey
+                                            }
+                                            onClick={() =>
+                                              void followImport(importReference)
+                                            }
+                                            {...symbolPeekAttributes(
+                                              importReference.local,
+                                              lineNumber,
+                                            )}
+                                            className={cn(
+                                              "text-cyan decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
+                                              token.className,
+                                              resolvingImport ===
+                                                resolutionKey &&
+                                                "animate-pulse cursor-wait",
+                                            )}
+                                          >
+                                            {token.text}
+                                          </button>
+                                        ) : isPeekableToken(token) ? (
+                                          <span
+                                            key={`${tokenIndex}-${token.text.length}`}
+                                            {...symbolPeekAttributes(
+                                              token.text,
+                                              lineNumber,
+                                            )}
+                                            className={cn(
+                                              "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
+                                              token.className,
+                                            )}
+                                          >
+                                            {token.text}
+                                          </span>
+                                        ) : (
                                           <span
                                             key={`${tokenIndex}-${token.text.length}`}
                                             className={
@@ -8365,150 +8524,26 @@ export function ReviewWorkspace({
                                           >
                                             {token.text}
                                           </span>
-                                        ))
-                                      : " "}
-                                  </pre>
-                                </div>
-                              );
-                            })}
-                          <div
-                            id={`review-line-${lineNumber}`}
-                            className={cn(
-                              "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
-                              contextVisible &&
-                                isUnitLine &&
-                                "border-l-cyan/35 bg-cyan/[.012]",
-                              isChangedLine &&
-                                "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
-                              isContextLine &&
-                                "bg-surface-subtle/15 opacity-55 hover:opacity-80",
-                              coveringExplanations.length > 0 &&
-                                "bg-violet/[.025] shadow-[inset_2px_0_0_var(--app-ai)]",
-                              // Amber already means "AI review finding" in this
-                              // file, and is the one tint not already spoken for by
-                              // the line picker, the composer, additions or
-                              // deletions. Both of those still win over it below.
-                              findingLine === lineNumber &&
-                                "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
-                              selectedLine === lineNumber && "bg-violet/[.055]",
-                              keyboardLine === lineNumber &&
-                                "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                              aiQuestionPreviewLine === lineNumber &&
-                                "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
-                            )}
-                          >
-                            {isUnitLine && activeUnit.kind !== "binary" ? (
-                              <span
-                                className={cn(
-                                  "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
-                                  isChangedLine &&
-                                    "bg-addition/20 text-addition",
-                                )}
-                              >
-                                <AskAiLineButton
-                                  line={lineNumber}
-                                  onAsk={askAboutCardLine}
-                                  visible={aiQuestionLine === lineNumber}
-                                />
-                                <button
-                                  type="button"
-                                  aria-label={`Comment on line ${lineNumber}`}
-                                  aria-pressed={selectedLine === lineNumber}
-                                  onClick={() => commentOnCardLine(lineNumber)}
-                                  className="hover:text-violet flex items-center gap-1 transition"
-                                >
-                                  <MessageSquareText
-                                    className={cn(
-                                      "size-3 transition-opacity",
-                                      selectedLine === lineNumber ||
-                                        keyboardLine === lineNumber
-                                        ? "text-cyan opacity-100"
-                                        : "opacity-0 group-hover:opacity-100",
-                                    )}
+                                        );
+                                      })
+                                    : " "}
+                                </pre>
+                              </div>
+                              {isUnitLine &&
+                                renderReviewLineDetails(lineNumber)}
+                              {contextAfter > 0 &&
+                                lineNumber === cardEndLine &&
+                                cardEndLine && (
+                                  <ReviewScopeMarker
+                                    edge="end"
+                                    line={cardEndLine}
                                   />
-                                  <span>{lineNumber}</span>
-                                </button>
-                              </span>
-                            ) : (
-                              <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
-                                {lineNumber}
-                              </span>
-                            )}
-                            <pre className="syntax-code overflow-visible text-cloud">
-                              {line.tokens.length
-                                ? line.tokens.map((token, tokenIndex) => {
-                                    const importReference =
-                                      importReferences.find(
-                                        (reference) =>
-                                          reference.from >= token.from &&
-                                          reference.to <= token.to,
-                                      );
-                                    const resolutionKey = importReference
-                                      ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
-                                      : undefined;
-                                    return importReference ? (
-                                      <button
-                                        type="button"
-                                        key={`${tokenIndex}-${token.text.length}`}
-                                        aria-label={`Open ${importReference.local} from ${importReference.specifier}`}
-                                        title={`Open ${importReference.specifier}`}
-                                        disabled={
-                                          resolvingImport === resolutionKey
-                                        }
-                                        onClick={() =>
-                                          void followImport(importReference)
-                                        }
-                                        {...symbolPeekAttributes(
-                                          importReference.local,
-                                          lineNumber,
-                                        )}
-                                        className={cn(
-                                          "text-cyan decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
-                                          token.className,
-                                          resolvingImport === resolutionKey &&
-                                            "animate-pulse cursor-wait",
-                                        )}
-                                      >
-                                        {token.text}
-                                      </button>
-                                    ) : isPeekableToken(token) ? (
-                                      <span
-                                        key={`${tokenIndex}-${token.text.length}`}
-                                        {...symbolPeekAttributes(
-                                          token.text,
-                                          lineNumber,
-                                        )}
-                                        className={cn(
-                                          "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
-                                          token.className,
-                                        )}
-                                      >
-                                        {token.text}
-                                      </span>
-                                    ) : (
-                                      <span
-                                        key={`${tokenIndex}-${token.text.length}`}
-                                        className={token.className || undefined}
-                                      >
-                                        {token.text}
-                                      </span>
-                                    );
-                                  })
-                                : " "}
-                            </pre>
-                          </div>
-                          {isUnitLine && renderReviewLineDetails(lineNumber)}
-                          {contextAfter > 0 &&
-                            lineNumber === cardEndLine &&
-                            cardEndLine && (
-                              <ReviewScopeMarker
-                                edge="end"
-                                line={cardEndLine}
-                              />
-                            )}
-                        </Fragment>
-                      );
-                    })}
+                                )}
+                            </Fragment>
+                          );
+                        }}
+                      />
+                    )}
                   {selectedFileSourceExpanded &&
                     !sideBySideVisible &&
                     contextAvailable &&

@@ -752,6 +752,45 @@ describe("same-file concept cards", () => {
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
   });
 
+  it("mounts only the leading rows of a file card longer than a window", () => {
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        /** Ignores the block: this case only reads the first paint. */
+        observe() {}
+
+        /** Ignores teardown: nothing was ever reported. */
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const member = {
+      ...units[0],
+      id: "long",
+      name: "long",
+      startLine: 1,
+      endLine: 600,
+    };
+    render(
+      <ReviewConceptFileCardPreview
+        members={[member] as never}
+        index={0}
+        count={1}
+        fileSource={Array.from(
+          { length: 600 },
+          (_, index) => `const line${index + 1} = true;`,
+        ).join("\n")}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("const line1 = true;")).toBeInTheDocument();
+    expect(screen.getByText("const line200 = true;")).toBeInTheDocument();
+    expect(screen.queryByText("const line201 = true;")).not.toBeInTheDocument();
+  });
+
   it("keeps member line numbers accurate without hydrated file context", async () => {
     const onCommentLine = vi.fn();
     render(
