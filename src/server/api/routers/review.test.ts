@@ -418,7 +418,9 @@ describe("deep review read path", () => {
     const run = await deepReviewRunPayload(db, job);
 
     expect(run.findings).toEqual([]);
-    expect(reads).toEqual({ comments: 0, findings: 0, locations: 0 });
+    // The comment read keys off the job alone, so it is issued next to the
+    // coverage read rather than behind the findings the plan never made.
+    expect(reads).toEqual({ comments: 1, findings: 0, locations: 0 });
     expect(run.terminalState).toBe("partial");
   });
 

@@ -978,18 +978,33 @@ export async function deepReviewRunPayload(
     | "status"
   >,
 ) {
-  const items = await db.query.aiReviewItems.findMany({
-    columns: {
-      id: true,
-      path: true,
-      changeType: true,
-      changedLineCount: true,
-      state: true,
-      failureClass: true,
-      reason: true,
-    },
-    where: eq(aiReviewItems.parentJobId, job.id),
-  });
+  // `review_comment` has no column for a finding id: publication is keyed on
+  // (aiJobId, aiFindingIndex), and the deep-review path writes the run-wide
+  // `orderIndex` into that column. Reading it for the whole run is what lets a
+  // findings list tell the truth about every file at once; the per-unit
+  // discussion read can only answer for the unit that happens to be open. It
+  // keys off the job alone, so it rides along with the item read.
+  const [items, publishedComments] = await Promise.all([
+    db.query.aiReviewItems.findMany({
+      columns: {
+        id: true,
+        path: true,
+        changeType: true,
+        changedLineCount: true,
+        state: true,
+        failureClass: true,
+        reason: true,
+      },
+      where: eq(aiReviewItems.parentJobId, job.id),
+    }),
+    db.query.reviewComments.findMany({
+      columns: { aiFindingIndex: true },
+      where: and(
+        eq(reviewComments.aiJobId, job.id),
+        eq(reviewComments.status, "published"),
+      ),
+    }),
+  ]);
   const findingRows =
     items.length === 0
       ? []
@@ -1059,21 +1074,6 @@ export async function deepReviewRunPayload(
     }),
   );
 
-  // `review_comment` has no column for a finding id: publication is keyed on
-  // (aiJobId, aiFindingIndex), and the deep-review path writes the run-wide
-  // `orderIndex` into that column. Reading it for the whole run is what lets a
-  // findings list tell the truth about every file at once; the per-unit
-  // discussion read can only answer for the unit that happens to be open.
-  const publishedComments =
-    findings.length === 0
-      ? []
-      : await db.query.reviewComments.findMany({
-          columns: { aiFindingIndex: true },
-          where: and(
-            eq(reviewComments.aiJobId, job.id),
-            eq(reviewComments.status, "published"),
-          ),
-        });
   const publishedRanks = new Set(
     publishedComments.flatMap((comment) =>
       comment.aiFindingIndex === null ? [] : [comment.aiFindingIndex],
@@ -3725,6 +3725,16 @@ export const reviewRouter = createTRPCRouter({
       // the findings below inherit: a deep-review parent is the reviewer's own
       // run against this revision, and `parentJobId` excludes its children.
       const job = await ctx.db.query.aiJobs.findFirst({
+        columns: {
+          id: true,
+          status: true,
+          createdAt: true,
+          completedAt: true,
+          completionReason: true,
+          deepReviewTerminalState: true,
+          runFailureClass: true,
+          error: true,
+        },
         where: and(
           eq(aiJobs.pullRequestId, input.pullRequestId),
           eq(aiJobs.snapshotId, snapshot.id),
