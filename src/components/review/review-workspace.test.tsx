@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   aiJobActive,
+  applyAiQuestionStreamUpdate,
   DeepReviewFindingRow,
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
@@ -114,6 +115,89 @@ describe("aiJobActive", () => {
     expect(aiJobActive(undefined)).toBe(false);
     expect(aiJobActive(null)).toBe(false);
     expect(aiJobActive("")).toBe(false);
+  });
+});
+
+describe("applyAiQuestionStreamUpdate", () => {
+  const live = [
+    {
+      error: null,
+      focusLine: 12,
+      id: "live-1",
+      progress: "Investigating the review revision…",
+      question: "Why this cast?",
+      result: { summary: "Because of the union." },
+      status: "streaming" as const,
+      threadId: "thread-1",
+    },
+  ];
+
+  it("keeps the same array when the update restates the entry", () => {
+    expect(
+      applyAiQuestionStreamUpdate(live, "live-1", {
+        progress: "Investigating the review revision…",
+        status: "streaming",
+        text: "Because of the union.",
+      }),
+    ).toBe(live);
+  });
+
+  it("keeps the same array for an update naming no live entry", () => {
+    expect(
+      applyAiQuestionStreamUpdate(live, "live-2", {
+        progress: "Answer complete",
+        status: "completed",
+        text: "Done.",
+      }),
+    ).toBe(live);
+  });
+
+  it("maps a working heartbeat onto the running status", () => {
+    expect(
+      applyAiQuestionStreamUpdate(live, "live-1", {
+        progress: "Waiting for the model provider…",
+        status: "working",
+        text: "",
+      })[0],
+    ).toMatchObject({
+      progress: "Waiting for the model provider…",
+      result: { summary: "Because of the union." },
+      status: "running",
+    });
+  });
+
+  it("takes the newer answer text and its comment proposals", () => {
+    const commentProposals = [{ body: "Narrow it", line: 12, path: "a.ts" }];
+
+    expect(
+      applyAiQuestionStreamUpdate(live, "live-1", {
+        commentProposals,
+        progress: "Answer complete",
+        status: "completed",
+        text: "Because of the union, narrowed later.",
+      })[0],
+    ).toMatchObject({
+      error: null,
+      result: {
+        commentProposals,
+        summary: "Because of the union, narrowed later.",
+      },
+      status: "completed",
+    });
+  });
+
+  it("records a failure reported by the stream", () => {
+    expect(
+      applyAiQuestionStreamUpdate(live, "live-1", {
+        error: "The AI answer could not be completed.",
+        progress: "Answer interrupted",
+        status: "failed",
+        text: "",
+      })[0],
+    ).toMatchObject({
+      error: "The AI answer could not be completed.",
+      status: "failed",
+    });
   });
 });
 

@@ -191,6 +191,10 @@ export async function GET(
           ).join("");
           cursor = precedingChunks.at(-1)?.sequence ?? -1;
         }
+        // The idle poll runs twice a second and would otherwise repeat the
+        // same progress line with the whole answer so far, which re-renders
+        // the review workspace and re-sends the text on every pass.
+        let lastProgress: string | undefined;
         while (!closed && !request.signal.aborted) {
           const [chunks, current] = await Promise.all([
             db.query.aiJobChunks.findMany({
@@ -264,15 +268,14 @@ export async function GET(
             return;
           }
           if (chunks.length === 0) {
-            send({
-              progress:
-                current.status === "waiting_for_provider"
-                  ? "Waiting for the model provider…"
-                  : "Investigating the review revision…",
-              status: "working",
-              text,
-              cursor,
-            });
+            const progress =
+              current.status === "waiting_for_provider"
+                ? "Waiting for the model provider…"
+                : "Investigating the review revision…";
+            if (progress !== lastProgress) {
+              lastProgress = progress;
+              send({ progress, status: "working", text, cursor });
+            }
           }
           await delay(500, request.signal);
         }
