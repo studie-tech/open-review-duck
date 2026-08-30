@@ -1364,6 +1364,9 @@ export function ReviewWorkspace({
   // this only carries the text across an unmount the reviewer did not ask
   // for, such as a wait that failed.
   const commentDraft = useRef("");
+  // Keys the composer, so a draft handed to it from outside reaches the
+  // textarea even when the composer already stands open on that line.
+  const [draftRevision, setDraftRevision] = useState(0);
   const [selectedLine, setSelectedLine] = useState<number>();
   const [pendingCommentLine, setPendingCommentLine] = useState<{
     line: number;
@@ -2413,6 +2416,7 @@ export function ReviewWorkspace({
     setKeyboardLine(undefined);
     setSelectedLine(line);
     commentDraft.current = draft;
+    setDraftRevision((revision) => revision + 1);
     window.requestAnimationFrame(() =>
       window.requestAnimationFrame(() =>
         document
@@ -4468,6 +4472,7 @@ export function ReviewWorkspace({
         ))}
         {selectedLine === lineNumber && (
           <InlineCommentComposer
+            key={`${lineNumber}-${draftRevision}`}
             initialDraft={commentDraft.current}
             line={lineNumber}
             path={activeUnit.path}
