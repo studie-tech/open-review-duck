@@ -2376,6 +2376,47 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenLastCalledWith(13);
   });
 
+  it("routes row actions to the latest handlers after a re-render", async () => {
+    const staleSelect = vi.fn();
+    const staleAsk = vi.fn();
+    const freshSelect = vi.fn();
+    const freshAsk = vi.fn();
+    const user = userEvent.setup();
+    /** Renders the diff with one generation of the two line handlers. */
+    function diff(onSelect: () => void, onAsk: () => void) {
+      return (
+        <SideBySideUnitDiff
+          previousSource={"const value = 1;\nreturn value;"}
+          currentSource={"const value = 2;\nreturn value;"}
+          language="typescript"
+          previousStartLine={10}
+          currentStartLine={12}
+          onSelectReviewLine={onSelect}
+          onAskReviewLine={onAsk}
+        />
+      );
+    }
+    const { rerender } = render(diff(staleSelect, staleAsk));
+
+    rerender(diff(freshSelect, freshAsk));
+
+    const [commentButton] = screen.getAllByRole("button", {
+      name: "Comment on current line 12",
+    });
+    if (!commentButton) throw new Error("Expected a current-line action");
+    await user.click(commentButton);
+    expect(staleSelect).not.toHaveBeenCalled();
+    expect(freshSelect).toHaveBeenCalledWith(12);
+
+    const [askButton] = screen.getAllByRole("button", {
+      name: "Ask AI about line 12",
+    });
+    if (!askButton) throw new Error("Expected an ask action");
+    await user.click(askButton);
+    expect(staleAsk).not.toHaveBeenCalled();
+    expect(freshAsk).toHaveBeenCalledWith(12);
+  });
+
   it("renders a file-mode unit label before the line it opens", () => {
     render(
       <SideBySideUnitDiff
