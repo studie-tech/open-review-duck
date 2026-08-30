@@ -80,39 +80,46 @@ async function jobScope(
     reviewRules?: NonNullable<typeof aiJobs.$inferInsert.reviewRules>;
   },
 ) {
-  const [scope] = await db
-    .select({
-      workspace: workspaces,
-    })
-    .from(pullRequests)
-    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-    .innerJoin(workspaces, eq(repositories.workspaceId, workspaces.id))
-    .innerJoin(
-      workspaceMembers,
-      eq(workspaces.id, workspaceMembers.workspaceId),
-    )
-    .where(
-      and(
-        eq(pullRequests.id, input.pullRequestId),
-        eq(workspaceMembers.userId, input.userId),
-      ),
-    )
-    .limit(1);
-  if (!scope) throw new Error("Pull request not found");
-  const snapshot = await db.query.reviewSnapshots.findFirst({
-    where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
-    orderBy: (table, { desc }) => [desc(table.version)],
-  });
-  if (!snapshot) throw new Error("No review snapshot found");
-  const preference = await db.query.aiPreferences.findFirst({
-    where: eq(aiPreferences.workspaceId, scope.workspace.id),
-  });
   const local = isLocalDeployment();
-  const localConfiguration = local
-    ? await db.query.localAiConfigurations.findFirst({
-        where: eq(localAiConfigurations.workspaceId, scope.workspace.id),
+  const [scopes, snapshot] = await Promise.all([
+    db
+      .select({
+        workspace: workspaces,
       })
-    : undefined;
+      .from(pullRequests)
+      .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+      .innerJoin(workspaces, eq(repositories.workspaceId, workspaces.id))
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaces.id, workspaceMembers.workspaceId),
+      )
+      .where(
+        and(
+          eq(pullRequests.id, input.pullRequestId),
+          eq(workspaceMembers.userId, input.userId),
+        ),
+      )
+      .limit(1),
+    db.query.reviewSnapshots.findFirst({
+      where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+      orderBy: (table, { desc }) => [desc(table.version)],
+    }),
+  ]);
+  const [scope] = scopes;
+  // Authorization decides the error the caller sees, so it is checked before
+  // the snapshot even though both rows are already loaded.
+  if (!scope) throw new Error("Pull request not found");
+  if (!snapshot) throw new Error("No review snapshot found");
+  const [preference, localConfiguration] = await Promise.all([
+    db.query.aiPreferences.findFirst({
+      where: eq(aiPreferences.workspaceId, scope.workspace.id),
+    }),
+    local
+      ? db.query.localAiConfigurations.findFirst({
+          where: eq(localAiConfigurations.workspaceId, scope.workspace.id),
+        })
+      : undefined,
+  ]);
   const subscribed = !local && input.subscribed;
   const planTier: ManagedAiPlanTier = local
     ? "free"
