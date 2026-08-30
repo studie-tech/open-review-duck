@@ -939,6 +939,7 @@ export function ReviewWorkspace({
   const router = useRouter();
   const { navigate, pending: navigationPending } = usePendingNavigation();
   const [loadingChanges, startLoadingChanges] = useTransition();
+  const [layoutRefreshing, startLayoutRefresh] = useTransition();
   const [, startReviewFileAdvance] = useTransition();
   const [reviewSession, sendReviewSession] = useMachine(reviewSessionMachine);
   useLayoutEffect(() => lockDocumentScroll(document), []);
@@ -2968,10 +2969,18 @@ export function ReviewWorkspace({
           description:
             "Your personal concept layout is ready. Atomic coverage is unchanged.",
         });
-        router.refresh();
+        // The new grouping only reaches the screen with the refreshed server
+        // payload, so the pressed control keeps its spinner inside the
+        // transition until that payload arrives.
+        startLayoutRefresh(() => {
+          router.refresh();
+          setConceptLayoutAction(undefined);
+        });
       },
-      onError: (error) => toast.error(error.message),
-      onSettled: () => setConceptLayoutAction(undefined),
+      onError: (error) => {
+        setConceptLayoutAction(undefined);
+        toast.error(error.message);
+      },
     });
   const improveConceptGrouping = api.review.improveConceptGrouping.useMutation({
     onSuccess: ({ concepts }) => {
@@ -2992,18 +3001,23 @@ export function ReviewWorkspace({
       toast.error(error.message);
     },
   });
+  // The layout is only on screen once the refreshed payload lands, so the
+  // refresh counts as part of the action the reviewer started.
+  const conceptLayoutPending =
+    replaceConceptLayout.isPending || layoutRefreshing;
   // The regrouping spans two mutations: the model proposes concepts, then the
   // layout is replaced. Both stages read as one action to the reviewer.
   const groupingImproving =
     improveConceptGrouping.isPending ||
-    (replaceConceptLayout.isPending && conceptLayoutAction === "improve");
+    (conceptLayoutPending && conceptLayoutAction === "improve");
   const improveGroupingLabel = improveConceptGrouping.isPending
     ? "Improving grouping…"
-    : replaceConceptLayout.isPending && conceptLayoutAction === "improve"
+    : conceptLayoutPending && conceptLayoutAction === "improve"
       ? "Applying grouping…"
       : "Improve grouping with AI";
-  const movingMember =
-    replaceConceptLayout.isPending && conceptLayoutAction === "move";
+  const splittingConcept =
+    conceptLayoutPending && conceptLayoutAction === "split";
+  const movingMember = conceptLayoutPending && conceptLayoutAction === "move";
   const moveMemberLabel = movingMember
     ? "Moving unit…"
     : "Move this unit to another concept";
@@ -7479,8 +7493,7 @@ export function ReviewWorkspace({
                       type="button"
                       onClick={() => setConceptGroupingDialogOpen(true)}
                       disabled={
-                        improveConceptGrouping.isPending ||
-                        replaceConceptLayout.isPending
+                        improveConceptGrouping.isPending || conceptLayoutPending
                       }
                       aria-label={improveGroupingLabel}
                       className="text-violet hover:bg-violet/[.06] grid size-8 shrink-0 place-items-center rounded-lg border border-violet/20 transition disabled:cursor-wait disabled:opacity-60"
@@ -7499,18 +7512,14 @@ export function ReviewWorkspace({
                       <button
                         type="button"
                         onClick={() => setSplitConceptDialogOpen(true)}
-                        disabled={replaceConceptLayout.isPending}
+                        disabled={conceptLayoutPending}
                         className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
                         title="Split this concept"
                       >
-                        {replaceConceptLayout.isPending &&
-                          conceptLayoutAction === "split" && (
-                            <LoaderCircle className="size-3.5 animate-spin" />
-                          )}
-                        {replaceConceptLayout.isPending &&
-                        conceptLayoutAction === "split"
-                          ? "Splitting…"
-                          : "Split"}
+                        {splittingConcept && (
+                          <LoaderCircle className="size-3.5 animate-spin" />
+                        )}
+                        {splittingConcept ? "Splitting…" : "Split"}
                       </button>
                     )}
                   {initialData.conceptLayout &&
@@ -7519,7 +7528,7 @@ export function ReviewWorkspace({
                       <button
                         type="button"
                         onClick={() => setMoveMemberDialogOpen(true)}
-                        disabled={replaceConceptLayout.isPending}
+                        disabled={conceptLayoutPending}
                         aria-label={moveMemberLabel}
                         title={moveMemberLabel}
                         className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05] disabled:opacity-50"
