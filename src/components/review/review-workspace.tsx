@@ -1002,6 +1002,27 @@ import {
 /** Matches the `h-5` spacer above the selected card so its header is never flush. */
 const SELECTED_REVIEW_CARD_GUTTER_PX = 20;
 
+// The per-line indexes below are read once for every rendered line of a unit,
+// so the misses share one bucket rather than allocating an empty one each.
+const NO_GROUPED_ENTRIES: never[] = [];
+const NO_QUESTION_GROUPS = new Map<string, never>();
+
+/** Reads one bucket out of a grouped index. */
+function groupedEntries<Key, Entry>(
+  index: Map<Key, Entry[]>,
+  key: Key,
+): Entry[] {
+  return index.get(key) ?? NO_GROUPED_ENTRIES;
+}
+
+/** Reads one line's AI conversations, grouped by the thread they belong to. */
+function questionGroupsAt<Entry>(
+  index: Map<number, Map<string, Entry>>,
+  line: number,
+): Map<string, Entry> {
+  return index.get(line) ?? NO_QUESTION_GROUPS;
+}
+
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -3298,22 +3319,30 @@ export function ReviewWorkspace({
       ["queued", "running"].includes(status),
     ) ??
       false);
-  const explanationAnnotations =
-    aiStatus.data?.status === "completed" && aiStatus.data.result
-      ? [...(aiStatus.data.result.annotations ?? [])]
-          .filter(
-            (annotation) =>
-              annotation.path === activeUnit?.path &&
-              annotation.line >= (activeUnit?.startLine ?? 0) &&
-              (annotation.endLine ?? annotation.line) <=
-                (activeUnit?.endLine ?? 0),
-          )
-          .sort(
-            (left, right) =>
-              left.line - right.line ||
-              (left.endLine ?? left.line) - (right.endLine ?? right.line),
-          )
-      : [];
+  const explanationAnnotations = useMemo(
+    () =>
+      aiStatus.data?.status === "completed" && aiStatus.data.result
+        ? [...(aiStatus.data.result.annotations ?? [])]
+            .filter(
+              (annotation) =>
+                annotation.path === activeUnit?.path &&
+                annotation.line >= (activeUnit?.startLine ?? 0) &&
+                (annotation.endLine ?? annotation.line) <=
+                  (activeUnit?.endLine ?? 0),
+            )
+            .sort(
+              (left, right) =>
+                left.line - right.line ||
+                (left.endLine ?? left.line) - (right.endLine ?? right.line),
+            )
+        : [],
+    [
+      aiStatus.data,
+      activeUnit?.endLine,
+      activeUnit?.path,
+      activeUnit?.startLine,
+    ],
+  );
   const discussion = api.review.unitDiscussion.useQuery(
     { unitId: settledActiveUnitId ?? "" },
     { enabled: Boolean(settledActiveUnitId) },
@@ -3554,10 +3583,13 @@ export function ReviewWorkspace({
     ({ answered }) => answered,
   ).length;
 
-  const activeProviderThreads =
-    providerConversations.data?.threads.filter(
-      (thread) => thread.unitId === activeUnit?.id,
-    ) ?? [];
+  const activeProviderThreads = useMemo(
+    () =>
+      providerConversations.data?.threads.filter(
+        (thread) => thread.unitId === activeUnit?.id,
+      ) ?? [],
+    [activeUnit?.id, providerConversations.data?.threads],
+  );
   const activeUnitHasConversation =
     activeProviderThreads.length > 0 ||
     (discussion.data?.comments.some(
@@ -3982,103 +4014,39 @@ export function ReviewWorkspace({
   /** Renders every review artifact attached to one source line in either code view. */
   function renderReviewLineDetails(lineNumber: number) {
     if (!activeUnit) return null;
-    const endingExplanations = explanationAnnotations.filter(
-      (annotation) =>
-        lineNumber >= annotation.line &&
-        lineNumber <= (annotation.endLine ?? annotation.line) &&
-        (annotation.endLine ?? annotation.line) === lineNumber,
+    const endingExplanations = groupedEntries(
+      explanationsEndingAtLine,
+      lineNumber,
     );
-    const lineFindings =
-      discussion.data?.findings.filter(
-        (finding) => finding.line === lineNumber,
-      ) ?? [];
+    const lineFindings = groupedEntries(reviewFindingsByLine, lineNumber);
     // A different source entirely from `lineFindings` above: that one is a
     // completed explain job's `result.findings`, a payload a deep-review run
     // never writes, so the two blocks cannot collide on one line.
-    const lineDeepFindings = deepReviewFindingsByLine.get(lineNumber) ?? [];
-    const allLineQuestions = [
-      ...(aiQuestions.data
-        ?.filter(
-          (question) =>
-            question.focusLine === lineNumber &&
-            !liveAiQuestions.some(({ jobId }) => jobId === question.id),
-        )
-        .map((question) => ({
-          error: question.error,
-          id: question.id,
-          jobId: question.id,
-          question: question.question,
-          result: question.result
-            ? {
-                summary: question.result.summary,
-                commentProposals: question.result.commentProposals?.map(
-                  (proposal, index) => ({
-                    ...proposal,
-                    published:
-                      discussion.data?.comments.some(
-                        (comment) =>
-                          comment.aiJobId === question.id &&
-                          comment.aiFindingIndex === index &&
-                          comment.status === "published",
-                      ) ?? false,
-                  }),
-                ),
-              }
-            : null,
-          status: question.status,
-          threadId: question.conversationId,
-        })) ?? []),
-      ...liveAiQuestions
-        .filter((question) => question.focusLine === lineNumber)
-        .map((question) => ({
-          error: question.error,
-          id: question.id,
-          jobId: question.jobId,
-          progress: question.progress,
-          question: question.question,
-          result: question.result,
-          status: question.status,
-          threadId: question.threadId,
-        })),
-    ];
-    const lineQuestionGroups = new Map<string, typeof allLineQuestions>();
-    for (const question of allLineQuestions) {
-      const threadId = question.threadId;
-      const group = lineQuestionGroups.get(threadId) ?? [];
-      group.push(question);
-      lineQuestionGroups.set(threadId, group);
-    }
+    const lineDeepFindings = groupedEntries(
+      deepReviewFindingsByLine,
+      lineNumber,
+    );
+    const lineQuestionGroups = questionGroupsAt(
+      aiQuestionGroupsByLine,
+      lineNumber,
+    );
     const activeThreadId =
       aiQuestionThreadId && lineQuestionGroups.has(aiQuestionThreadId)
         ? aiQuestionThreadId
         : ([...lineQuestionGroups.keys()].at(-1) ?? aiQuestionThreadId);
     const lineQuestions = activeThreadId
-      ? (lineQuestionGroups.get(activeThreadId) ?? [])
-      : [];
-    const lineThreads = activeProviderThreads.filter(
-      (thread) => thread.line === lineNumber,
-    );
-    const providerThreadIds = new Set(
-      lineThreads.map((thread) => thread.externalId),
-    );
-    const lineComments =
-      discussion.data?.comments.filter(
-        (comment) =>
-          comment.line === lineNumber &&
-          comment.status === "published" &&
-          comment.source === "user" &&
-          (!comment.providerExternalId ||
-            !providerThreadIds.has(comment.providerExternalId)),
-      ) ?? [];
+      ? groupedEntries(lineQuestionGroups, activeThreadId)
+      : NO_GROUPED_ENTRIES;
+    const lineThreads = groupedEntries(providerThreadsByLine, lineNumber);
+    const lineComments = groupedEntries(publishedCommentsByLine, lineNumber);
 
     return (
       <>
-        {endingExplanations.map((annotation) => {
-          const annotationIndex = explanationAnnotations.indexOf(annotation);
+        {endingExplanations.map(({ annotation, index }) => {
           const endLine = annotation.endLine ?? annotation.line;
           return (
             <article
-              id={`ai-explanation-${annotationIndex}`}
+              id={`ai-explanation-${index}`}
               key={`${annotation.line}-${endLine}-${annotation.title}`}
               className="border-violet/20 bg-violet/[.045] relative mx-4 my-2 ml-[82px] overflow-hidden rounded-xl border p-3 font-sans shadow-[0_10px_30px_var(--app-shadow)]"
             >
@@ -4245,13 +4213,9 @@ export function ReviewWorkspace({
             ),
         )}
         {lineFindings.map((finding) => {
-          const published =
-            discussion.data?.comments.some(
-              (comment) =>
-                comment.aiJobId === finding.aiJobId &&
-                comment.aiFindingIndex === finding.index &&
-                comment.status === "published",
-            ) ?? false;
+          const published = publishedAiProposals.has(
+            `${finding.aiJobId}:${finding.index}`,
+          );
           const publishingThisFinding =
             publishComment.isPending &&
             publishComment.variables?.aiJobId === finding.aiJobId &&
@@ -4335,11 +4299,9 @@ export function ReviewWorkspace({
               replyToThread.variables?.threadExternalId === thread.externalId
             }
             {...providerThreadActions(activeUnit.id, thread.externalId)}
-            publishedByReviewDuck={
-              discussion.data?.comments.some(
-                (comment) => comment.providerExternalId === thread.externalId,
-              ) ?? false
-            }
+            publishedByReviewDuck={publishedProviderThreadIds.has(
+              thread.externalId,
+            )}
           />
         ))}
         {lineComments.map((comment) => (
@@ -4457,6 +4419,148 @@ export function ReviewWorkspace({
     }
     return byLine;
   }, [activeUnitId, deepReviewFindings, units]);
+  // Every index below answers `renderReviewLineDetails` for one line. Resolved
+  // per data change rather than per rendered line: a unit can hold hundreds of
+  // lines and the discussion hundreds of comments, and the workspace re-renders
+  // far more often than either collection changes.
+  const explanationsEndingAtLine = useMemo(() => {
+    const byLine = new Map<
+      number,
+      { annotation: (typeof explanationAnnotations)[number]; index: number }[]
+    >();
+    explanationAnnotations.forEach((annotation, index) => {
+      const endLine = annotation.endLine ?? annotation.line;
+      if (endLine < annotation.line) return;
+      const group = byLine.get(endLine) ?? [];
+      group.push({ annotation, index });
+      byLine.set(endLine, group);
+    });
+    return byLine;
+  }, [explanationAnnotations]);
+  const reviewFindingsByLine = useMemo(() => {
+    const byLine = new Map<
+      number,
+      NonNullable<typeof discussion.data>["findings"]
+    >();
+    for (const finding of discussion.data?.findings ?? []) {
+      if (finding.line === undefined) continue;
+      const group = byLine.get(finding.line) ?? [];
+      group.push(finding);
+      byLine.set(finding.line, group);
+    }
+    return byLine;
+  }, [discussion.data?.findings]);
+  const providerThreadsByLine = useMemo(() => {
+    const byLine = new Map<number, typeof activeProviderThreads>();
+    for (const thread of activeProviderThreads) {
+      const group = byLine.get(thread.line) ?? [];
+      group.push(thread);
+      byLine.set(thread.line, group);
+    }
+    return byLine;
+  }, [activeProviderThreads]);
+  const publishedAiProposals = useMemo(() => {
+    const proposals = new Set<string>();
+    for (const comment of discussion.data?.comments ?? []) {
+      if (comment.status !== "published") continue;
+      if (!comment.aiJobId || comment.aiFindingIndex === null) continue;
+      proposals.add(`${comment.aiJobId}:${comment.aiFindingIndex}`);
+    }
+    return proposals;
+  }, [discussion.data?.comments]);
+  const publishedProviderThreadIds = useMemo(() => {
+    const externalIds = new Set<string>();
+    for (const comment of discussion.data?.comments ?? []) {
+      if (comment.providerExternalId) {
+        externalIds.add(comment.providerExternalId);
+      }
+    }
+    return externalIds;
+  }, [discussion.data?.comments]);
+  const publishedCommentsByLine = useMemo(() => {
+    const byLine = new Map<
+      number,
+      NonNullable<typeof discussion.data>["comments"]
+    >();
+    for (const comment of discussion.data?.comments ?? []) {
+      if (comment.status !== "published" || comment.source !== "user") continue;
+      // A comment that opened a conversation the line already renders would
+      // otherwise appear twice, once on its own and once inside the thread.
+      if (
+        comment.providerExternalId &&
+        groupedEntries(providerThreadsByLine, comment.line).some(
+          ({ externalId }) => externalId === comment.providerExternalId,
+        )
+      ) {
+        continue;
+      }
+      const group = byLine.get(comment.line) ?? [];
+      group.push(comment);
+      byLine.set(comment.line, group);
+    }
+    return byLine;
+  }, [discussion.data?.comments, providerThreadsByLine]);
+  const aiQuestionGroupsByLine = useMemo(() => {
+    const liveJobIds = new Set(liveAiQuestions.map(({ jobId }) => jobId));
+    // Persisted questions lead each line's conversation, live ones close it.
+    const anchored = [
+      ...(aiQuestions.data ?? [])
+        .filter((question) => !liveJobIds.has(question.id))
+        .map((question) => ({
+          entry: {
+            error: question.error,
+            id: question.id,
+            jobId: question.id,
+            question: question.question,
+            result: question.result
+              ? {
+                  summary: question.result.summary,
+                  commentProposals: question.result.commentProposals?.map(
+                    (proposal, index) => ({
+                      ...proposal,
+                      published: publishedAiProposals.has(
+                        `${question.id}:${index}`,
+                      ),
+                    }),
+                  ),
+                }
+              : null,
+            status: question.status,
+            threadId: question.conversationId,
+          },
+          line: question.focusLine,
+        })),
+      ...liveAiQuestions.map((question) => ({
+        entry: {
+          error: question.error,
+          id: question.id,
+          jobId: question.jobId,
+          progress: question.progress,
+          question: question.question,
+          result: question.result,
+          status: question.status,
+          threadId: question.threadId,
+        },
+        line: question.focusLine,
+      })),
+    ];
+    const byLine = new Map<
+      number,
+      Map<string, (typeof anchored)[number]["entry"][]>
+    >();
+    for (const { entry, line } of anchored) {
+      if (line === null) continue;
+      let groups = byLine.get(line);
+      if (!groups) {
+        groups = new Map();
+        byLine.set(line, groups);
+      }
+      const group = groups.get(entry.threadId) ?? [];
+      group.push(entry);
+      groups.set(entry.threadId, group);
+    }
+    return byLine;
+  }, [aiQuestions.data, liveAiQuestions, publishedAiProposals]);
   const publishedFindingIds = useMemo(
     () => new Set(deepReview.data?.publishedFindingIds ?? []),
     [deepReview.data?.publishedFindingIds],
