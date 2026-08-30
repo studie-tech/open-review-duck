@@ -12,7 +12,7 @@ import { mapWithLimit } from "~/lib/concurrency";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { assignPullRequestToQueue } from "~/server/review/queue";
-import { pullRequestSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
+import { pullRequestsMissingSnapshotSources } from "~/server/storage/snapshot-sources";
 import { startPullRequestSync } from "../workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
 import { providerForConnection } from "./credentials";
@@ -177,31 +177,42 @@ export async function reconcileRepositoryIntake(
     const queueStateByNumber = new Map(
       queueItems.map((item) => [item.number, item.state]),
     );
-    const sourceRepairNumbers = new Set<number>();
-    if (isLocalDeployment()) {
-      await Promise.all(
-        candidates.map(async (candidate) => {
-          const known = knownByNumber.get(candidate.number);
-          if (
-            known &&
-            !(await pullRequestSnapshotSourcesAvailable(db, known.id))
-          ) {
-            sourceRepairNumbers.add(candidate.number);
-          }
-        }),
-      );
-    }
-    /** Reports whether a candidate differs from what intake already holds. */
-    const differsFromKnown = (candidate: (typeof candidates)[number]) => {
+    /** Reports whether a candidate's revision moved past intake's copy. */
+    const revisionDiffersFromKnown = (
+      candidate: (typeof candidates)[number],
+    ) => {
       const known = knownByNumber.get(candidate.number);
       return (
         !known ||
-        sourceRepairNumbers.has(candidate.number) ||
         known.headSha !== candidate.headSha ||
         known.baseSha !== candidate.baseSha ||
         known.state !== candidate.state
       );
     };
+    const sourceRepairNumbers = new Set<number>();
+    if (isLocalDeployment()) {
+      // A candidate whose revision already moved is queued either way, so only
+      // the unchanged ones are worth the stored-source probe.
+      const unchanged = candidates.flatMap((candidate) => {
+        const known = knownByNumber.get(candidate.number);
+        return known && !revisionDiffersFromKnown(candidate)
+          ? [{ number: candidate.number, pullRequestId: known.id }]
+          : [];
+      });
+      const missingSources = await pullRequestsMissingSnapshotSources(
+        db,
+        unchanged.map((entry) => entry.pullRequestId),
+      );
+      for (const entry of unchanged) {
+        if (missingSources.has(entry.pullRequestId)) {
+          sourceRepairNumbers.add(entry.number);
+        }
+      }
+    }
+    /** Reports whether a candidate differs from what intake already holds. */
+    const differsFromKnown = (candidate: (typeof candidates)[number]) =>
+      revisionDiffersFromKnown(candidate) ||
+      sourceRepairNumbers.has(candidate.number);
     const changedCandidates = candidates.filter(
       (candidate) =>
         !activeNumbers.has(candidate.number) && differsFromKnown(candidate),

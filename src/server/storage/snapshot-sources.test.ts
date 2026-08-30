@@ -11,9 +11,40 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./index", () => ({ sourceObjectStore: mocks.sourceObjectStore }));
 
 import {
-  pullRequestSnapshotSourcesAvailable,
+  pullRequestsMissingSnapshotSources,
   reviewSnapshotSourcesAvailable,
 } from "./snapshot-sources";
+
+/** Builds a stub database answering one batched pull-request source pass. */
+function batchedDatabase(input: {
+  snapshots: { id: string; pullRequestId: string }[];
+  units: {
+    snapshotId: string;
+    currentBlobId: string | null;
+    previousBlobId: string | null;
+  }[];
+  blobIds: string[];
+}) {
+  const orderBy = vi.fn(async () => input.snapshots);
+  return {
+    selectDistinctOn: vi.fn(() => ({
+      from: () => ({ where: () => ({ orderBy }) }),
+    })),
+    query: {
+      reviewUnits: { findMany: vi.fn(async () => input.units) },
+      sourceBlobs: {
+        findMany: vi.fn(async () =>
+          input.blobIds.map((id) => ({
+            id,
+            state: "ready",
+            storage: "local",
+            objectKey: `objects/${id}`,
+          })),
+        ),
+      },
+    },
+  };
+}
 
 /** Builds a stub database whose snapshot references many ready local blobs. */
 function databaseWithReadyBlobs(count: number) {
@@ -139,15 +170,106 @@ describe("snapshot source availability", () => {
     expect(mocks.exists.mock.calls.length).toBeLessThanOrEqual(12);
   });
 
-  it("rejects a pull request with no snapshot", async () => {
-    const database = {
-      query: {
-        reviewSnapshots: { findFirst: vi.fn(async () => undefined) },
-      },
-    };
+  it("reports pull requests that never prepared a snapshot", async () => {
+    const database = batchedDatabase({ snapshots: [], units: [], blobIds: [] });
 
     await expect(
-      pullRequestSnapshotSourcesAvailable(database as never, "pull-request"),
-    ).resolves.toBe(false);
+      pullRequestsMissingSnapshotSources(database as never, [
+        "pull-request-1",
+        "pull-request-2",
+      ]),
+    ).resolves.toEqual(new Set(["pull-request-1", "pull-request-2"]));
+    expect(database.query.reviewUnits.findMany).not.toHaveBeenCalled();
+  });
+
+  it("checks many pull requests with three queries and one probe per object", async () => {
+    mocks.exists.mockReset();
+    mocks.exists.mockResolvedValue(true);
+    const database = batchedDatabase({
+      snapshots: [
+        { id: "snapshot-1", pullRequestId: "pull-request-1" },
+        { id: "snapshot-2", pullRequestId: "pull-request-2" },
+      ],
+      units: [
+        {
+          snapshotId: "snapshot-1",
+          currentBlobId: "shared",
+          previousBlobId: "only-1",
+        },
+        {
+          snapshotId: "snapshot-2",
+          currentBlobId: "shared",
+          previousBlobId: null,
+        },
+      ],
+      blobIds: ["shared", "only-1"],
+    });
+
+    await expect(
+      pullRequestsMissingSnapshotSources(database as never, [
+        "pull-request-1",
+        "pull-request-2",
+      ]),
+    ).resolves.toEqual(new Set());
+    expect(database.selectDistinctOn).toHaveBeenCalledTimes(1);
+    expect(database.query.reviewUnits.findMany).toHaveBeenCalledTimes(1);
+    expect(database.query.sourceBlobs.findMany).toHaveBeenCalledTimes(1);
+    expect(mocks.exists.mock.calls.map(([key]) => key)).toEqual([
+      "objects/shared",
+      "objects/only-1",
+    ]);
+  });
+
+  it("reports only the pull requests whose objects are gone", async () => {
+    mocks.exists.mockReset();
+    mocks.exists.mockImplementation(
+      async (objectKey: string) => objectKey !== "objects/only-2",
+    );
+    const database = batchedDatabase({
+      snapshots: [
+        { id: "snapshot-1", pullRequestId: "pull-request-1" },
+        { id: "snapshot-2", pullRequestId: "pull-request-2" },
+      ],
+      units: [
+        {
+          snapshotId: "snapshot-1",
+          currentBlobId: "shared",
+          previousBlobId: null,
+        },
+        {
+          snapshotId: "snapshot-2",
+          currentBlobId: "shared",
+          previousBlobId: "only-2",
+        },
+      ],
+      blobIds: ["shared", "only-2"],
+    });
+
+    await expect(
+      pullRequestsMissingSnapshotSources(database as never, [
+        "pull-request-1",
+        "pull-request-2",
+      ]),
+    ).resolves.toEqual(new Set(["pull-request-2"]));
+  });
+
+  it("reports a pull request whose snapshot lost a blob row", async () => {
+    mocks.exists.mockReset();
+    mocks.exists.mockResolvedValue(true);
+    const database = batchedDatabase({
+      snapshots: [{ id: "snapshot-1", pullRequestId: "pull-request-1" }],
+      units: [
+        {
+          snapshotId: "snapshot-1",
+          currentBlobId: "kept",
+          previousBlobId: "pruned",
+        },
+      ],
+      blobIds: ["kept"],
+    });
+
+    await expect(
+      pullRequestsMissingSnapshotSources(database as never, ["pull-request-1"]),
+    ).resolves.toEqual(new Set(["pull-request-1"]));
   });
 });
