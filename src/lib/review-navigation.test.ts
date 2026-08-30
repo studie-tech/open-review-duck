@@ -8,7 +8,9 @@ import {
   nextPendingReviewIndexPreferring,
   optimisticallySignOffReviewUnit,
   optimisticallySignOffReviewUnits,
+  optimisticallyUnreviewReviewUnits,
   pushReviewNavigationHistory,
+  resetSignedOffReviewUnits,
   restoreReviewUnitAfterFailedSignOff,
   reviewAvailability,
   reviewNavigationHistoryTarget,
@@ -240,6 +242,72 @@ describe("optimisticallySignOffReviewUnit", () => {
       ],
     );
     expect(units[0]?.status).toBe("changed");
+  });
+
+  it("returns signed-off units to the path the checkbox already showed", () => {
+    const units = [
+      {
+        id: "fresh",
+        status: "signed_off" as const,
+        revisionState: "unchanged" as const,
+        signOffOrigin: "current",
+      },
+      {
+        id: "revised",
+        status: "signed_off" as const,
+        revisionState: "updated" as const,
+        signOffOrigin: "preserved",
+      },
+    ];
+
+    expect(
+      optimisticallyUnreviewReviewUnits(units, ["fresh", "revised"]),
+    ).toEqual([
+      {
+        id: "fresh",
+        status: "pending",
+        revisionState: "unchanged",
+        signOffOrigin: "none",
+      },
+      {
+        id: "revised",
+        status: "changed",
+        revisionState: "updated",
+        signOffOrigin: "none",
+      },
+    ]);
+  });
+
+  it("clears every local sign-off a reset just invalidated", () => {
+    expect(
+      resetSignedOffReviewUnits([
+        {
+          id: "done",
+          status: "signed_off" as const,
+          revisionState: "unchanged" as const,
+          signOffOrigin: "current",
+        },
+        {
+          id: "paused",
+          status: "waiting" as const,
+          revisionState: "unchanged" as const,
+          signOffOrigin: "none",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "done",
+        status: "pending",
+        revisionState: "unchanged",
+        signOffOrigin: "none",
+      },
+      {
+        id: "paused",
+        status: "waiting",
+        revisionState: "unchanged",
+        signOffOrigin: "none",
+      },
+    ]);
   });
 
   it("rolls back only the failed unit after later optimistic saves", () => {

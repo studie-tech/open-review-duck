@@ -1,3 +1,10 @@
+/** Polls while at least one durable pull-request job is still running. */
+export function followActiveReviewJobs(query: {
+  state: { data?: readonly unknown[] };
+}) {
+  return (query.state.data?.length ?? 0) > 0 ? 1_500 : false;
+}
+
 export const SYNC_PROGRESS = {
   queued: 0,
   fetching: 10,

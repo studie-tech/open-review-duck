@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { sortByReviewFileTreeOrder } from "~/lib/review-files";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
@@ -21,6 +22,7 @@ import {
   actionableReviewCardMember,
   aiConversationVisibility,
   ConceptMoveDialog,
+  CopyRepositoryUrlButton,
   conceptFileCardsInReadingOrder,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
@@ -2415,6 +2417,57 @@ describe("SplitActionButton", () => {
     } finally {
       document.removeEventListener("keydown", onWorkspaceEscape);
     }
+  });
+});
+
+describe("CopyRepositoryUrlButton", () => {
+  /** Installs a clipboard the jsdom navigator does not expose. */
+  function mockClipboard(writeText: ReturnType<typeof vi.fn>) {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+  }
+
+  it("puts the repository URL on the clipboard", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    mockClipboard(writeText);
+    render(
+      <CopyRepositoryUrlButton url="https://github.com/studie-tech/TheNinjaRPG" />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy repository URL" }),
+    );
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "https://github.com/studie-tech/TheNinjaRPG",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Repository URL copied" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when the clipboard refuses the URL", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
+    mockClipboard(writeText);
+    render(
+      <CopyRepositoryUrlButton url="https://github.com/studie-tech/TheNinjaRPG" />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy repository URL" }),
+    );
+
+    await waitFor(() => {
+      expect(error).toHaveBeenCalledWith("Could not copy the repository URL");
+    });
+    expect(
+      screen.getByRole("button", { name: "Copy repository URL" }),
+    ).toBeInTheDocument();
   });
 });
 

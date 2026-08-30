@@ -12,6 +12,9 @@ vi.mock("~/trpc/react", () => ({
       dashboard: {
         useQuery: vi.fn((_input, options) => ({ data: options.initialData })),
       },
+      activeSyncs: {
+        useQuery: vi.fn(() => ({ data: [] })),
+      },
     },
     repoReviews: {
       list: {

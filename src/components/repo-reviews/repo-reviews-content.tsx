@@ -613,11 +613,12 @@ function RepositoryCockpit({
             <Button
               size="sm"
               variant="secondary"
-              loading={sync.isPending}
+              loading={sync.isPending || Boolean(monitor.activeSync)}
               disabled={Boolean(monitor.activeSync)}
               onClick={() => sync.mutate({ monitorId: monitor.id })}
             >
-              <RefreshCw className="size-3.5" /> Check now
+              <RefreshCw className="size-3.5" />
+              {monitor.activeSync || sync.isPending ? "Checking…" : "Check now"}
               <ShortcutHint
                 shortcut={cockpitShortcuts.checkNow}
                 className="max-sm:hidden"
@@ -809,14 +810,21 @@ function Overview({
             <Button
               variant="secondary"
               className="w-full"
-              loading={runPendingPurpose === "code"}
+              loading={
+                runPendingPurpose === "code" ||
+                activeStatuses.has(monitor.latestCodeRun?.status ?? "")
+              }
               disabled={
                 !monitor.snapshot ||
                 activeStatuses.has(monitor.latestCodeRun?.status ?? "")
               }
               onClick={() => startRun("code")}
             >
-              <Code2 className="size-4" /> Run code audit
+              <Code2 className="size-4" />
+              {runPendingPurpose === "code" ||
+              activeStatuses.has(monitor.latestCodeRun?.status ?? "")
+                ? "Running…"
+                : "Run code audit"}
               <ShortcutHint
                 shortcut={cockpitShortcuts.runCodeAudit}
                 className="ml-auto"
@@ -841,7 +849,10 @@ function Overview({
             <div className="grid grid-cols-[1fr_auto] gap-2">
               <Button
                 variant="secondary"
-                loading={runPendingPurpose === "compliance"}
+                loading={
+                  runPendingPurpose === "compliance" ||
+                  activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
+                }
                 disabled={
                   !monitor.snapshot ||
                   rules.isLoading ||
@@ -850,7 +861,12 @@ function Overview({
                 onClick={() => startRun("compliance")}
               >
                 <ShieldCheck className="size-4" />
-                {enabledRuleCount === 0 ? "Set up rules" : "Check rules"}
+                {runPendingPurpose === "compliance" ||
+                activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
+                  ? "Checking…"
+                  : enabledRuleCount === 0
+                    ? "Set up rules"
+                    : "Check rules"}
                 <ShortcutHint
                   shortcut={cockpitShortcuts.runCompliance}
                   className="ml-auto"

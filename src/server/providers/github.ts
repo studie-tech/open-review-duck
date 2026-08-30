@@ -1,6 +1,8 @@
+import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   mapWithConcurrency,
+  optionalProviderFetch,
   providerFetch,
   providerResponse,
   providerText,
@@ -9,7 +11,10 @@ import {
 import { collectProviderSourceFiles } from "./source-budget";
 import {
   type ChangedFilesOptions,
+  type ProviderCheckState,
   ProviderError,
+  type ProviderPullRequestCheck,
+  type ProviderPullRequestLifecycle,
   type ProviderPullRequestReviewState,
   type ProviderReviewAction,
   type PullRequestListOptions,
@@ -58,6 +63,8 @@ interface GitHubPull {
   assignees?: Array<{ id: number; login: string }>;
   head: { ref: string; sha: string };
   base: { ref: string; sha: string };
+  mergeable?: boolean | null;
+  mergeable_state?: string;
 }
 interface GitHubReview {
   id: number;
@@ -129,6 +136,27 @@ interface GitHubReviewThreadsConnection {
   };
 }
 
+interface GitHubCheckRun {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  html_url?: string | null;
+  output?: { title?: string | null };
+}
+interface GitHubCheckRuns {
+  check_runs: GitHubCheckRun[];
+}
+interface GitHubCommitStatus {
+  id: number;
+  context: string;
+  state: string;
+  description?: string | null;
+  target_url?: string | null;
+}
+interface GitHubCombinedStatus {
+  statuses: GitHubCommitStatus[];
+}
 interface GitHubResolveThreadResponse {
   data?: {
     resolveReviewThread?: { thread: { isResolved: boolean } | null } | null;
@@ -429,6 +457,74 @@ export class GitHubProvider implements PullRequestProvider {
           commit_id: input.headSha,
           event: input.action === "approve" ? "APPROVE" : "REQUEST_CHANGES",
           ...(body ? { body } : {}),
+        }),
+      },
+    );
+  }
+
+  /** Fetches GitHub check runs, commit statuses, and mergeability. */
+  async getPullRequestLifecycle(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestLifecycle> {
+    const pull = await providerFetch<GitHubPull>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}/pulls/${number}`,
+      { headers: this.headers },
+    );
+    const sha = pull.head.sha;
+    const [checkRuns, combined] = await Promise.all([
+      optionalProviderFetch<GitHubCheckRuns>(
+        this.name,
+        `${this.apiUrl}/repositories/${repositoryExternalId}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`,
+        { headers: this.headers },
+      ),
+      optionalProviderFetch<GitHubCombinedStatus>(
+        this.name,
+        `${this.apiUrl}/repositories/${repositoryExternalId}/commits/${encodeURIComponent(sha)}/status`,
+        { headers: this.headers },
+      ),
+    ]);
+    const checks = this.normalizeChecks(
+      checkRuns?.check_runs ?? [],
+      combined?.statuses ?? [],
+    );
+    const merge = this.mergeState(pull);
+    return buildProviderLifecycle({
+      checks,
+      pullRequestState: pull.merged_at
+        ? "merged"
+        : pull.draft
+          ? "draft"
+          : pull.state === "closed"
+            ? "closed"
+            : "open",
+      headSha: sha,
+      mergeable: merge.mergeable,
+      canMerge: merge.canMerge,
+      mergeBlockedReason: merge.mergeBlockedReason,
+      mergeActionLabel: "Merge",
+    });
+  }
+
+  /** Merges the pull request at the exact reviewed GitHub commit. */
+  async mergePullRequest(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+  }) {
+    await providerFetch<{ merged?: boolean }>(
+      this.name,
+      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/${input.pullRequestNumber}/merge`,
+      {
+        method: "PUT",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sha: input.headSha,
+          merge_method: "merge",
         }),
       },
     );
@@ -1115,6 +1211,134 @@ export class GitHubProvider implements PullRequestProvider {
       },
       maximumBytes,
     );
+  }
+
+  /** Prefers check runs and fills gaps from the older commit-status API. */
+  private normalizeChecks(
+    checkRuns: GitHubCheckRun[],
+    statuses: GitHubCommitStatus[],
+  ): ProviderPullRequestCheck[] {
+    const checks = checkRuns.map((check) => ({
+      id: `check-${check.id}`,
+      name: check.name,
+      state: this.checkRunState(check.status, check.conclusion),
+      description: check.output?.title?.trim() || undefined,
+      webUrl: check.html_url ?? undefined,
+    }));
+    const seen = new Set(checks.map((check) => check.name));
+    for (const status of statuses) {
+      if (seen.has(status.context)) continue;
+      seen.add(status.context);
+      checks.push({
+        id: `status-${status.id}`,
+        name: status.context,
+        state: this.commitStatusState(status.state),
+        description: status.description?.trim() || undefined,
+        webUrl: status.target_url ?? undefined,
+      });
+    }
+    return checks;
+  }
+
+  /** Maps a GitHub check-run status and conclusion onto the shared check model. */
+  private checkRunState(
+    status: string,
+    conclusion: string | null,
+  ): ProviderCheckState {
+    if (status !== "completed") {
+      return status === "queued" ? "queued" : "in_progress";
+    }
+    if (conclusion === "success") return "success";
+    if (
+      conclusion === "failure" ||
+      conclusion === "timed_out" ||
+      conclusion === "action_required" ||
+      conclusion === "startup_failure"
+    ) {
+      return "failure";
+    }
+    if (conclusion === "cancelled" || conclusion === "canceled") {
+      return "cancelled";
+    }
+    if (conclusion === "skipped") return "skipped";
+    return "neutral";
+  }
+
+  /** Maps a GitHub commit-status state onto the shared check model. */
+  private commitStatusState(state: string): ProviderCheckState {
+    if (state === "success") return "success";
+    if (state === "pending") return "in_progress";
+    if (state === "failure" || state === "error") return "failure";
+    return "neutral";
+  }
+
+  /** Interprets GitHub mergeable_state for the completion-page merge button. */
+  private mergeState(pull: GitHubPull) {
+    if (pull.merged_at) {
+      return {
+        mergeable: true,
+        canMerge: false,
+        mergeBlockedReason: "Already merged",
+      };
+    }
+    if (pull.state === "closed") {
+      return {
+        mergeable: false,
+        canMerge: false,
+        mergeBlockedReason: "This pull request is closed",
+      };
+    }
+    if (pull.draft) {
+      return {
+        mergeable: pull.mergeable ?? null,
+        canMerge: false,
+        mergeBlockedReason: "Draft pull requests cannot be merged",
+      };
+    }
+    const mergeable = pull.mergeable ?? null;
+    const mergeableState = pull.mergeable_state ?? "unknown";
+    if (mergeableState === "dirty" || mergeable === false) {
+      return {
+        mergeable: false,
+        canMerge: false,
+        mergeBlockedReason: "Has merge conflicts",
+      };
+    }
+    if (mergeableState === "blocked") {
+      return {
+        mergeable,
+        canMerge: false,
+        mergeBlockedReason: "Required checks or reviews are not satisfied",
+      };
+    }
+    if (mergeableState === "behind") {
+      return {
+        mergeable,
+        canMerge: false,
+        mergeBlockedReason: "Branch is behind the target and must be updated",
+      };
+    }
+    if (mergeableState === "unknown" || mergeable === null) {
+      return {
+        mergeable: null,
+        canMerge: false,
+        mergeBlockedReason: "Mergeability is still being computed",
+      };
+    }
+    if (
+      mergeableState === "clean" ||
+      mergeableState === "unstable" ||
+      mergeableState === "has_hooks"
+    ) {
+      return { mergeable: true, canMerge: true };
+    }
+    return {
+      mergeable,
+      canMerge: Boolean(mergeable),
+      mergeBlockedReason: mergeable
+        ? undefined
+        : "This pull request cannot be merged yet",
+    };
   }
 
   /** Maps a GitHub file status to a normalized change type. */

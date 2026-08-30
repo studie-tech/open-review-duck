@@ -439,6 +439,8 @@ describe("RepositoryReader", () => {
       snapshotFileId: "file-grouped",
       durationSeconds: 0,
     });
+    expect(screen.getByText(/2 review units · 2\/2 reviewed/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /return file/i })).toBeDisabled();
     const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as {
       onSuccess: (result: {
         snapshotFileId: string;
@@ -451,7 +453,6 @@ describe("RepositoryReader", () => {
         signedUnitIds: [first.id, second.id],
       });
     });
-    expect(screen.getByText(/2 review units · 2\/2 reviewed/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /return file/i })).toBeEnabled();
   });
 
@@ -468,9 +469,7 @@ describe("RepositoryReader", () => {
     fireEvent.keyDown(document, { key: "s" });
     fireEvent.keyDown(document, { key: "s" });
     expect(mutationSpies.signOffMutate).toHaveBeenCalledTimes(1);
-    expect(
-      screen.getByRole("button", { name: /sign off file/i }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: /return file/i })).toBeDisabled();
   });
 
   it("returns every reviewed unit in a file to review together", () => {

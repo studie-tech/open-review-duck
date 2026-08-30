@@ -45,9 +45,12 @@ import {
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
+import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   definitionIsWhereTheNameWasRead,
+  localDefinitionForPeek,
   SYMBOL_PEEK_MAXIMUM_LINES,
+  sameFileDeclarationPeek,
 } from "~/lib/symbol-peek";
 import { managedAiPlanTier } from "~/server/ai/plan";
 import {
@@ -72,6 +75,7 @@ import { providerForConnection } from "~/server/providers/credentials";
 import {
   ProviderError,
   type ProviderName,
+  type ProviderPullRequestLifecycle,
   type PullRequestProvider,
 } from "~/server/providers/types";
 import {
@@ -437,6 +441,8 @@ const DIRECTORY_IMPORT = /\/(?:index\.[^./]+|__init__\.py)$/;
 interface ParsedSymbolFile {
   declarations: Map<string, ReturnType<typeof symbolDefinitionOf>>;
   imports: ReturnType<typeof parseImportReferences>;
+  language: string;
+  source: string;
 }
 
 /**
@@ -509,7 +515,12 @@ async function parsedSymbolFile(
   if (!file?.source) return undefined;
   const declarations: ParsedSymbolFile["declarations"] = new Map();
   for (const unit of analyzeFiles([
-    { path: input.sourcePath, content: file.source, changeType: "modified" },
+    {
+      path: input.sourcePath,
+      content: file.source,
+      changeType: "modified",
+      reviewWholeFile: true,
+    },
   ]).units) {
     if (unit.kind === "file" || unit.kind === "module") continue;
     // The first declaration of a name wins, the same way a single `find` did.
@@ -525,6 +536,8 @@ async function parsedSymbolFile(
   const parsed = {
     declarations,
     imports: parseImportReferences(file.source, input.sourceLanguage),
+    language: input.sourceLanguage,
+    source: file.source,
   } satisfies ParsedSymbolFile;
   symbolFileCache.set(key, parsed);
   symbolFileCacheCharacters += file.source.length;
@@ -772,9 +785,10 @@ async function providerScopeForPullRequest(
 }
 
 /** Converts a live provider failure into a safe user-facing review message. */
-function providerDecisionError(
-  provider: "github" | "gitlab" | "azure_devops",
+function providerOperationError(
+  provider: ProviderName,
   cause: unknown,
+  operation: "review" | "lifecycle" | "merge",
 ) {
   if (cause instanceof TRPCError) return cause;
   const label =
@@ -786,13 +800,53 @@ function providerDecisionError(
   const permissionDenied =
     cause instanceof ProviderError &&
     (cause.status === 401 || cause.status === 403);
+  const messages = {
+    review: {
+      forbidden: `${label} did not allow this review decision. Reconnect it with code-review write permission and confirm that you are an eligible reviewer.`,
+      failed: `${label} review state could not be synchronized`,
+    },
+    lifecycle: {
+      forbidden: `${label} did not allow reading checks and merge state. Reconnect it with permission to view pipelines.`,
+      failed: `${label} checks and merge state could not be synchronized`,
+    },
+    merge: {
+      forbidden: `${label} did not allow merging this pull request. Reconnect it with merge permission, or finish the merge on ${label}.`,
+      failed: `${label} could not merge this pull request`,
+    },
+  }[operation];
   return new TRPCError({
     code: permissionDenied ? "FORBIDDEN" : "BAD_GATEWAY",
-    message: permissionDenied
-      ? `${label} did not allow this review decision. Reconnect it with code-review write permission and confirm that you are an eligible reviewer.`
-      : `${label} review state could not be synchronized`,
+    message: permissionDenied ? messages.forbidden : messages.failed,
     cause,
   });
+}
+
+/** Gates merge on the exact revision the reviewer just finished. */
+function scopedProviderLifecycle(
+  scope: {
+    provider: ProviderName;
+    headSha: string;
+    baseSha: string;
+    snapshot?: { headSha: string; baseSha: string } | null;
+  },
+  lifecycle: ProviderPullRequestLifecycle,
+  remote: { headSha: string; baseSha: string },
+) {
+  const revisionCurrent =
+    remote.headSha === scope.headSha &&
+    remote.baseSha === scope.baseSha &&
+    scope.snapshot?.headSha === scope.headSha &&
+    scope.snapshot?.baseSha === scope.baseSha;
+  return {
+    ...lifecycle,
+    provider: scope.provider,
+    revisionCurrent,
+    syncedAt: new Date(),
+    canMerge: revisionCurrent && lifecycle.canMerge,
+    mergeBlockedReason: revisionCurrent
+      ? lifecycle.mergeBlockedReason
+      : "The provider has a newer revision. Synchronize this pull request before merging.",
+  };
 }
 
 /**
@@ -2552,7 +2606,177 @@ export const reviewRouter = createTRPCRouter({
             : "The provider has a newer revision. Synchronize this pull request before changing its review decision.",
         };
       } catch (cause) {
-        throw providerDecisionError(scope.provider, cause);
+        throw providerOperationError(scope.provider, cause, "review");
+      }
+    }),
+
+  providerLifecycle: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .query(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `provider-lifecycle:${ctx.auth.userId}`,
+        60,
+        60_000,
+      );
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `provider-lifecycle-resource:${ctx.auth.userId}:${input.pullRequestId}`,
+        30,
+        60_000,
+      );
+      try {
+        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const [lifecycle, remotePullRequest] = await Promise.all([
+          provider.getPullRequestLifecycle(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+          provider.getPullRequest(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+        ]);
+        return scopedProviderLifecycle(scope, lifecycle, remotePullRequest);
+      } catch (cause) {
+        throw providerOperationError(scope.provider, cause, "lifecycle");
+      }
+    }),
+
+  mergePullRequest: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .mutation(async ({ ctx, input }) => {
+      await enforceRateLimit(
+        ctx.db,
+        `provider-merge:${ctx.auth.userId}`,
+        10,
+        10 * 60_000,
+      );
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      if (
+        !scope.snapshot ||
+        scope.snapshot.headSha !== scope.headSha ||
+        scope.snapshot.baseSha !== scope.baseSha
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Synchronize the pull request before merging",
+        });
+      }
+      const completion = await reviewCompletionCounts(
+        ctx.db,
+        scope.snapshot.id,
+        ctx.auth.userId,
+      );
+      if (completion.total === 0 || completion.signed < completion.total) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Complete every review unit before merging",
+        });
+      }
+      if (
+        scope.pullRequestState !== "open" &&
+        scope.pullRequestState !== "draft"
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This pull request is no longer open",
+        });
+      }
+      try {
+        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const [remotePullRequest, currentLifecycle] = await Promise.all([
+          provider.getPullRequest(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+          provider.getPullRequestLifecycle(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+        ]);
+        if (
+          remotePullRequest.headSha !== scope.headSha ||
+          remotePullRequest.baseSha !== scope.baseSha
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The provider has a newer revision. Synchronize it before merging.",
+          });
+        }
+        if (currentLifecycle.pullRequestState === "merged") {
+          await ctx.db
+            .update(pullRequests)
+            .set({ state: "merged", lastSyncedAt: new Date() })
+            .where(eq(pullRequests.id, scope.pullRequestId));
+          return scopedProviderLifecycle(
+            scope,
+            currentLifecycle,
+            remotePullRequest,
+          );
+        }
+        if (!currentLifecycle.canMerge) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              currentLifecycle.mergeBlockedReason ??
+              "The provider is not ready to merge this pull request",
+          });
+        }
+        await provider.mergePullRequest({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          headSha: scope.headSha,
+        });
+        let updatedLifecycle: ProviderPullRequestLifecycle;
+        try {
+          updatedLifecycle = await provider.getPullRequestLifecycle(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          );
+        } catch {
+          updatedLifecycle = buildProviderLifecycle({
+            checks: currentLifecycle.checks,
+            pullRequestState: "merged",
+            headSha: scope.headSha,
+            mergeable: true,
+            canMerge: false,
+            mergeBlockedReason:
+              scope.provider === "azure_devops"
+                ? "Already completed"
+                : "Already merged",
+            mergeActionLabel: currentLifecycle.mergeActionLabel,
+          });
+        }
+        if (
+          updatedLifecycle.pullRequestState === "merged" ||
+          updatedLifecycle.pullRequestState === "closed"
+        ) {
+          await ctx.db
+            .update(pullRequests)
+            .set({
+              state: updatedLifecycle.pullRequestState,
+              lastSyncedAt: new Date(),
+            })
+            .where(eq(pullRequests.id, scope.pullRequestId));
+        }
+        return scopedProviderLifecycle(
+          scope,
+          updatedLifecycle,
+          remotePullRequest,
+        );
+      } catch (cause) {
+        throw providerOperationError(scope.provider, cause, "merge");
       }
     }),
 
@@ -2699,7 +2923,7 @@ export const reviewRouter = createTRPCRouter({
           unavailableReason: updatedState.unavailableReason,
         };
       } catch (cause) {
-        throw providerDecisionError(scope.provider, cause);
+        throw providerOperationError(scope.provider, cause, "review");
       }
     }),
 
@@ -3330,7 +3554,18 @@ export const reviewRouter = createTRPCRouter({
               imported: fileImport.imported,
               kind: fileImport.kind,
             };
-      const local = parsedFile?.declarations.get(input.symbol);
+      const local = localDefinitionForPeek(
+        parsedFile?.declarations.get(input.symbol),
+        parsedFile
+          ? sameFileDeclarationPeek({
+              language: parsedFile.language,
+              path: input.sourcePath,
+              source: parsedFile.source,
+              symbol: input.symbol,
+            })
+          : undefined,
+        { line: input.line, path: input.sourcePath },
+      );
       const imported = resolvedInput.specifier
         ? await importedSymbolDefinition(
             ctx.db,

@@ -233,6 +233,54 @@ export function optimisticallySignOffReviewUnits<
   );
 }
 
+/**
+ * Returns signed-off units to the review path before the server confirms it.
+ *
+ * File checkboxes have to flip as soon as they are clicked. Waiting for the
+ * unreview request left the mark in place for seconds, which reads as the
+ * control doing nothing.
+ */
+export function optimisticallyUnreviewReviewUnits<
+  T extends ReviewNavigationUnit & {
+    id: string;
+    revisionState?: "initial" | "new" | "updated" | "unchanged";
+    signOffOrigin?: string;
+  },
+>(units: T[], unitIds: Iterable<string>) {
+  const selected = new Set(unitIds);
+  if (!units.some((unit) => selected.has(unit.id))) return units;
+  return units.map(
+    (unit): T =>
+      selected.has(unit.id)
+        ? {
+            ...unit,
+            status: unit.revisionState === "updated" ? "changed" : "pending",
+            signOffOrigin: "none",
+          }
+        : unit,
+  );
+}
+
+/**
+ * Returns every signed-off unit to the path after the reviewer resets.
+ *
+ * Reset invalidates sign-offs on the server, but the workspace keeps its own
+ * unit list. Without this, the completion screen stays up until a full reload
+ * replaces that list.
+ */
+export function resetSignedOffReviewUnits<
+  T extends ReviewNavigationUnit & {
+    id: string;
+    revisionState?: "initial" | "new" | "updated" | "unchanged";
+    signOffOrigin?: string;
+  },
+>(units: T[]) {
+  return optimisticallyUnreviewReviewUnits(
+    units,
+    units.filter((unit) => unit.status === "signed_off").map((unit) => unit.id),
+  );
+}
+
 /** Selects outstanding units that belong to files deleted in their entirety. */
 export function deletedFileSignOffUnits<
   T extends ReviewNavigationUnit & { path: string },

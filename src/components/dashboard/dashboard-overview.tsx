@@ -15,6 +15,7 @@ import {
 import Link from "next/link";
 import { useMemo } from "react";
 
+import { DashboardSyncPanel } from "~/components/dashboard/dashboard-panels";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import {
@@ -23,6 +24,7 @@ import {
 } from "~/components/ui/link-status";
 import { prioritizeInbox } from "~/lib/priority-inbox";
 import { partitionReviewQueue } from "~/lib/review-queue";
+import { followActiveReviewJobs } from "~/lib/sync-progress";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -136,6 +138,11 @@ export function DashboardOverview({
   initialPullRequests: PullRequests;
   initialMonitors: Monitors;
 }) {
+  const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: followActiveReviewJobs,
+  });
   const pullRequestsQuery = api.review.dashboard.useQuery(undefined, {
     initialData: initialPullRequests,
     refetchOnMount: "always",
@@ -241,6 +248,10 @@ export function DashboardOverview({
           </div>
         </div>
       </header>
+
+      <div className="mt-8">
+        <DashboardSyncPanel synchronizing={activeSyncs.data ?? []} />
+      </div>
 
       <section
         className="mt-10 grid gap-5 lg:grid-cols-2"

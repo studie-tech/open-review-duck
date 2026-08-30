@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   definitionIsWhereTheNameWasRead,
   isPeekableToken,
+  localDefinitionForPeek,
   peekPlacement,
   SYMBOL_PEEK_ATTRIBUTE,
   SYMBOL_PEEK_LINE_ATTRIBUTE,
+  sameFileDeclarationPeek,
   symbolPeekAttributes,
 } from "./symbol-peek";
 
@@ -55,6 +57,110 @@ describe("a definition worth showing", () => {
     expect(
       definitionIsWhereTheNameWasRead(definition, { path: definition.path }),
     ).toBe(false);
+  });
+});
+
+describe("a same-file constant the analyzer never stored", () => {
+  const source = [
+    "const OTHER = 1;",
+    "",
+    "const QUEST_RESET_BATCH_SIZE = 250;",
+    "",
+    "export async function resetDailyQuests() {",
+    "  const batches = chunkArray(allUsers, QUEST_RESET_BATCH_SIZE);",
+    "}",
+  ].join("\n");
+
+  it("windows the declaration so a later use can show it", () => {
+    expect(
+      sameFileDeclarationPeek({
+        language: "typescript",
+        path: "app/src/server/api/routers/quests.ts",
+        source,
+        symbol: "QUEST_RESET_BATCH_SIZE",
+      }),
+    ).toMatchObject({
+      focusLine: 3,
+      name: "QUEST_RESET_BATCH_SIZE",
+      source: expect.stringContaining("const QUEST_RESET_BATCH_SIZE = 250;"),
+      startLine: 1,
+      unitKind: "constant",
+    });
+  });
+
+  it("leaves a name with no declaration in the file unanswered", () => {
+    expect(
+      sameFileDeclarationPeek({
+        language: "typescript",
+        path: "app/src/server/api/routers/quests.ts",
+        source,
+        symbol: "UNKNOWN_BATCH",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("prefers a parsed unit that lives somewhere else in the file", () => {
+    const analyzed = {
+      endLine: 3,
+      path: "quests.ts",
+      startLine: 3,
+      source: "const QUEST_RESET_BATCH_SIZE = 250;",
+    };
+    const scanned = sameFileDeclarationPeek({
+      language: "typescript",
+      path: "quests.ts",
+      source,
+      symbol: "QUEST_RESET_BATCH_SIZE",
+    });
+
+    expect(
+      localDefinitionForPeek(analyzed, scanned, {
+        line: 6,
+        path: "quests.ts",
+      }),
+    ).toBe(analyzed);
+  });
+
+  it("falls back to the scanned declaration when the parsed unit is the code on screen", () => {
+    const analyzed = {
+      endLine: 7,
+      path: "quests.ts",
+      startLine: 5,
+    };
+    const scanned = sameFileDeclarationPeek({
+      language: "typescript",
+      path: "quests.ts",
+      source,
+      symbol: "QUEST_RESET_BATCH_SIZE",
+    });
+
+    expect(
+      localDefinitionForPeek(analyzed, scanned, {
+        line: 6,
+        path: "quests.ts",
+      }),
+    ).toEqual(scanned);
+  });
+
+  it("stays quiet when the pointer is already on the declaration", () => {
+    const analyzed = {
+      endLine: 3,
+      path: "quests.ts",
+      startLine: 3,
+    };
+    const scanned = sameFileDeclarationPeek({
+      language: "typescript",
+      path: "quests.ts",
+      source,
+      symbol: "QUEST_RESET_BATCH_SIZE",
+    });
+
+    expect(
+      localDefinitionForPeek(analyzed, scanned, {
+        line: 3,
+        path: "quests.ts",
+      }),
+    ).toBeUndefined();
   });
 });
 

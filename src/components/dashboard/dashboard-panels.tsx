@@ -1,5 +1,6 @@
 import { CircleAlert, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { SyncProgressMeter } from "~/components/review/sync-progress-meter";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { syncProgressLabel } from "~/lib/sync-progress";
@@ -36,7 +37,6 @@ export function DashboardSyncPanel({
       </div>
       <ul className="mt-3 space-y-2 border-t border-cyan/10 pt-3">
         {synchronizing.map((sync) => {
-          const progress = Math.min(99, Math.max(0, sync.progress));
           const provider =
             sync.provider === "azure_devops"
               ? "Azure DevOps"
@@ -45,41 +45,25 @@ export function DashboardSyncPanel({
                 : "GitHub";
           return (
             <li key={sync.id} className="min-w-0">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-cloud truncate text-xs font-medium">
-                    <span className="text-mist">{provider}</span>
-                    {" · "}
-                    {sync.repositoryOwner}/{sync.repositoryName} #
-                    {sync.pullRequestNumber}
-                  </p>
-                  {sync.title && (
-                    <p className="text-mist mt-0.5 truncate text-[11px]">
-                      {sync.title}
-                    </p>
-                  )}
-                </div>
-                <span className="text-cyan shrink-0 text-[11px] tabular-nums">
-                  {progress}%
-                </span>
-              </div>
-              <div className="mt-2 flex items-center gap-3">
-                <div
-                  className="bg-surface-subtle h-1.5 min-w-16 flex-1 overflow-hidden rounded-full"
-                  role="progressbar"
-                  aria-label={`${sync.repositoryOwner}/${sync.repositoryName} #${sync.pullRequestNumber} synchronization progress`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={progress}
-                >
-                  <div
-                    className="bg-cyan h-full rounded-full transition-[width] duration-500"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-                <p className="text-fog min-w-0 flex-1 truncate text-right text-[11px]">
-                  {syncProgressLabel(sync.status, progress)}
+              <div className="min-w-0">
+                <p className="text-cloud truncate text-xs font-medium">
+                  <span className="text-mist">{provider}</span>
+                  {" · "}
+                  {sync.repositoryOwner}/{sync.repositoryName} #
+                  {sync.pullRequestNumber}
                 </p>
+                {sync.title && (
+                  <p className="text-mist mt-0.5 truncate text-[11px]">
+                    {sync.title}
+                  </p>
+                )}
+              </div>
+              <div className="mt-2">
+                <SyncProgressMeter
+                  label={`${sync.repositoryOwner}/${sync.repositoryName} #${sync.pullRequestNumber} synchronization progress`}
+                  progress={sync.progress}
+                  status={sync.status}
+                />
               </div>
             </li>
           );

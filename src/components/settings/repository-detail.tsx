@@ -14,9 +14,13 @@ import {
   WandSparkles,
 } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { DashboardSyncPanel } from "~/components/dashboard/dashboard-panels";
+import { SyncProgressMeter } from "~/components/review/sync-progress-meter";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
+import { followActiveReviewJobs } from "~/lib/sync-progress";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
 import {
@@ -79,11 +83,63 @@ export function RepositoryDetail({
     },
   );
   const utils = api.useUtils();
+  const [heldNumbers, setHeldNumbers] = useState<Set<number>>(new Set());
+  const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: followActiveReviewJobs,
+  });
+  const queuedReviews = api.review.dashboard.useQuery(undefined, {
+    enabled: manual,
+    refetchOnWindowFocus: true,
+  });
+  const failedSyncs = api.review.recentSyncFailures.useQuery(undefined, {
+    enabled: manual,
+    refetchOnWindowFocus: true,
+  });
+  const hadActiveSync = useRef(false);
+  const synchronizing = useMemo(
+    () =>
+      (activeSyncs.data ?? []).filter(
+        (sync) => sync.repositoryId === repository.id,
+      ),
+    [activeSyncs.data, repository.id],
+  );
+  const queuedByNumber = useMemo(() => {
+    const items = new Map<
+      number,
+      { id: string; queueState: "active" | "removed" | string }
+    >();
+    for (const review of queuedReviews.data ?? []) {
+      if (
+        review.repositoryOwner !== repository.owner ||
+        review.repositoryName !== repository.name
+      ) {
+        continue;
+      }
+      items.set(review.number, {
+        id: review.id,
+        queueState: review.queueState,
+      });
+    }
+    return items;
+  }, [queuedReviews.data, repository.name, repository.owner]);
+  const failedByNumber = useMemo(() => {
+    const items = new Map<number, { message: string }>();
+    for (const sync of failedSyncs.data ?? []) {
+      if (sync.repositoryId !== repository.id) continue;
+      items.set(sync.pullRequestNumber, { message: sync.message });
+    }
+    return items;
+  }, [failedSyncs.data, repository.id]);
   const syncPullRequest = api.review.sync.useMutation({
+    onMutate: (input) =>
+      setHeldNumbers((current) => new Set(current).add(input.number)),
     onSuccess: (_result, input) => {
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
+        utils.review.recentSyncFailures.invalidate(),
         utils.provider.listUnimportedPullRequests.invalidate(),
         utils.provider.listOpenPullRequests.invalidate(),
       ]);
@@ -91,11 +147,39 @@ export function RepositoryDetail({
         description: `${repository.owner}/${repository.name} #${input.number} is being prepared in the background.`,
       });
     },
-    onError: (error) =>
+    onError: (error, input) => {
+      setHeldNumbers((current) => {
+        const next = new Set(current);
+        next.delete(input.number);
+        return next;
+      });
       toast.error("Could not prepare review", {
         description: error.message,
-      }),
+      });
+    },
   });
+
+  useEffect(() => {
+    setHeldNumbers((current) => {
+      if (current.size === 0) return current;
+      const next = new Set<number>();
+      for (const number of current) {
+        if (!queuedByNumber.has(number) && !failedByNumber.has(number)) {
+          next.add(number);
+        }
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, [failedByNumber, queuedByNumber]);
+
+  useEffect(() => {
+    const hasActiveSync = synchronizing.length > 0;
+    if (hadActiveSync.current && !hasActiveSync) {
+      void queuedReviews.refetch();
+      void failedSyncs.refetch();
+    }
+    hadActiveSync.current = hasActiveSync;
+  }, [failedSyncs, queuedReviews, synchronizing.length]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -228,13 +312,12 @@ export function RepositoryDetail({
             <Button
               size="sm"
               variant="secondary"
+              loading={reconcilePending}
               disabled={reconcilePending}
               onClick={onReconcile}
             >
-              <RefreshCw
-                className={cn("size-3.5", reconcilePending && "animate-spin")}
-              />
-              Check now
+              <RefreshCw className="size-3.5" />
+              {reconcilePending ? "Checking…" : "Check now"}
             </Button>
           )}
         </div>
@@ -255,6 +338,8 @@ export function RepositoryDetail({
           </div>
         )}
       </section>
+
+      {!manual && <DashboardSyncPanel synchronizing={synchronizing} />}
 
       {manual ? (
         <section className="bg-surface/70 rounded-2xl border border-line">
@@ -280,7 +365,7 @@ export function RepositoryDetail({
               />
             </button>
           </div>
-          <div className="space-y-2 p-3">
+          <div className="divide-y divide-line">
             {openPullRequests.isLoading && (
               <div className="grid h-24 place-items-center">
                 <Loader2 className="text-cyan size-4 animate-spin" />
@@ -289,7 +374,7 @@ export function RepositoryDetail({
             {openPullRequests.isError && (
               <div
                 role="alert"
-                className="border-coral/25 bg-coral/[.055] flex items-start gap-3 rounded-xl border px-4 py-3"
+                className="border-coral/25 bg-coral/[.055] m-3 flex items-start gap-3 rounded-xl border px-4 py-3"
               >
                 <CircleAlert className="text-coral mt-0.5 size-4 shrink-0" />
                 <div>
@@ -302,40 +387,41 @@ export function RepositoryDetail({
                 </div>
               </div>
             )}
-            {openPullRequests.data?.map((pullRequest) => (
-              <div
-                key={pullRequest.externalId}
-                className="bg-surface-subtle flex flex-col gap-3 rounded-xl border border-line px-4 py-3 sm:flex-row sm:items-center"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    #{pullRequest.number} {pullRequest.title}
-                  </p>
-                  <p className="text-fog mt-1 text-xs">
-                    {pullRequest.sourceBranch} → {pullRequest.targetBranch}
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  disabled={syncPullRequest.isPending}
-                  onClick={() =>
+            {openPullRequests.data?.map((pullRequest) => {
+              const sync = synchronizing.find(
+                (item) => item.pullRequestNumber === pullRequest.number,
+              );
+              const queued = queuedByNumber.get(pullRequest.number);
+              const failed = failedByNumber.get(pullRequest.number);
+              const requesting =
+                heldNumbers.has(pullRequest.number) ||
+                (syncPullRequest.isPending &&
+                  syncPullRequest.variables?.number === pullRequest.number);
+              const preparing = Boolean(sync) || (requesting && !queued);
+              return (
+                <OpenPullRequestRow
+                  key={pullRequest.externalId}
+                  failedMessage={failed?.message}
+                  onPrepare={() =>
                     syncPullRequest.mutate({
                       repositoryId: repository.id,
                       number: pullRequest.number,
                     })
                   }
-                >
-                  {syncPullRequest.isPending &&
-                    syncPullRequest.variables?.number ===
-                      pullRequest.number && (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    )}
-                  Prepare review
-                </Button>
-              </div>
-            ))}
+                  preparing={preparing}
+                  preparePending={
+                    syncPullRequest.isPending &&
+                    syncPullRequest.variables?.number === pullRequest.number
+                  }
+                  progress={sync?.progress ?? 0}
+                  pullRequest={pullRequest}
+                  queuedReviewId={queued?.id}
+                  status={sync?.status ?? "queued"}
+                />
+              );
+            })}
             {openPullRequests.data?.length === 0 && (
-              <p className="text-mist rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm">
+              <p className="text-mist px-5 py-8 text-center text-sm">
                 No open pull requests in this repository.
               </p>
             )}
@@ -360,6 +446,80 @@ export function RepositoryDetail({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Renders one open pull request and the durable action that applies to it. */
+function OpenPullRequestRow({
+  failedMessage,
+  onPrepare,
+  preparePending,
+  preparing,
+  progress,
+  pullRequest,
+  queuedReviewId,
+  status,
+}: {
+  failedMessage?: string;
+  onPrepare: () => void;
+  preparePending: boolean;
+  preparing: boolean;
+  progress: number;
+  pullRequest: {
+    number: number;
+    sourceBranch: string;
+    targetBranch: string;
+    title: string;
+  };
+  queuedReviewId?: string;
+  status: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center",
+        preparing && "bg-cyan/[.035]",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">
+          #{pullRequest.number} {pullRequest.title}
+        </p>
+        <p className="text-fog mt-1 text-xs">
+          {pullRequest.sourceBranch} → {pullRequest.targetBranch}
+        </p>
+        {preparing && (
+          <div className="mt-3 max-w-md">
+            <SyncProgressMeter
+              label={`#${pullRequest.number} synchronization progress`}
+              progress={progress}
+              status={status}
+            />
+          </div>
+        )}
+        {failedMessage && !preparing && !queuedReviewId && (
+          <p className="text-coral mt-2 text-[11px] leading-5">
+            {failedMessage}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {preparing ? (
+          <p className="text-cyan text-xs font-medium">Preparing…</p>
+        ) : queuedReviewId ? (
+          <Button asChild size="sm" variant="secondary">
+            <Link href={`/review/${queuedReviewId}`}>
+              <LinkPendingSpinner />
+              Open review
+            </Link>
+          </Button>
+        ) : (
+          <Button size="sm" loading={preparePending} onClick={onPrepare}>
+            {failedMessage ? "Retry" : "Prepare review"}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

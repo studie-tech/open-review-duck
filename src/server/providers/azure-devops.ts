@@ -1,5 +1,7 @@
+import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
+  optionalProviderFetch,
   providerFetch,
   providerResponse,
   providerText,
@@ -8,6 +10,9 @@ import {
 import { collectProviderSourceFiles } from "./source-budget";
 import type {
   ChangedFilesOptions,
+  ProviderCheckState,
+  ProviderPullRequestCheck,
+  ProviderPullRequestLifecycle,
   ProviderPullRequestReviewState,
   ProviderReviewAction,
   PullRequestListOptions,
@@ -37,6 +42,7 @@ interface AzurePull {
   targetRefName: string;
   lastMergeSourceCommit: { commitId: string };
   lastMergeTargetCommit: { commitId: string };
+  mergeStatus?: string;
   repository: {
     id?: string;
     name?: string;
@@ -50,6 +56,14 @@ interface AzurePull {
     uniqueName?: string;
     imageUrl?: string;
   };
+}
+interface AzurePullStatus {
+  id: number;
+  state: string;
+  description?: string;
+  creationDate?: string;
+  targetUrl?: string;
+  context?: { name?: string; genre?: string };
 }
 interface AzureReviewer {
   id: string;
@@ -387,6 +401,68 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       },
     );
   }
+  /** Fetches Azure DevOps PR statuses and mergeability. */
+  async getPullRequestLifecycle(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestLifecycle> {
+    const endpoint = `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullRequests/${number}`;
+    const [pull, statuses] = await Promise.all([
+      providerFetch<AzurePull>(this.name, `${endpoint}?api-version=7.1`, {
+        headers: this.headers,
+      }),
+      optionalProviderFetch<{ value: AzurePullStatus[] }>(
+        this.name,
+        `${endpoint}/statuses?api-version=7.1`,
+        { headers: this.headers },
+      ),
+    ]);
+    const merge = this.mergeState(pull);
+    return buildProviderLifecycle({
+      checks: this.normalizeStatuses(statuses?.value ?? []),
+      pullRequestState:
+        pull.status === "completed"
+          ? "merged"
+          : pull.status === "abandoned"
+            ? "closed"
+            : pull.isDraft
+              ? "draft"
+              : "open",
+      headSha: pull.lastMergeSourceCommit.commitId,
+      mergeable: merge.mergeable,
+      canMerge: merge.canMerge,
+      mergeBlockedReason: merge.mergeBlockedReason,
+      mergeActionLabel: "Complete",
+    });
+  }
+
+  /** Completes the pull request at the exact reviewed Azure commit. */
+  async mergePullRequest(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+  }) {
+    await providerFetch<AzurePull>(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}?api-version=7.1`,
+      {
+        method: "PATCH",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          status: "completed",
+          lastMergeSourceCommit: { commitId: input.headSha },
+          completionOptions: {
+            mergeStrategy: "noFastForward",
+            deleteSourceBranch: false,
+          },
+        }),
+      },
+    );
+  }
+
   /** Fetches the changed source files required for static analysis. */
   async getChangedFiles(
     repositoryExternalId: string,
@@ -705,6 +781,99 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       maximumBytes,
     );
   }
+  /** Keeps the newest status for each Azure policy or check context. */
+  private normalizeStatuses(
+    statuses: AzurePullStatus[],
+  ): ProviderPullRequestCheck[] {
+    const latestByName = new Map<string, AzurePullStatus>();
+    for (const status of statuses) {
+      const key = status.context?.name?.trim() || String(status.id);
+      const existing = latestByName.get(key);
+      if (
+        !existing ||
+        (status.creationDate ?? "") > (existing.creationDate ?? "")
+      ) {
+        latestByName.set(key, status);
+      }
+    }
+    return [...latestByName.values()].map((status) => ({
+      id: `status-${status.id}`,
+      name: status.context?.name?.trim() || `Status ${status.id}`,
+      state: this.statusState(status.state),
+      description: status.description?.trim() || undefined,
+      webUrl: status.targetUrl,
+    }));
+  }
+
+  /** Maps an Azure PR status onto the shared check model. */
+  private statusState(state: string): ProviderCheckState {
+    if (state === "succeeded") return "success";
+    if (state === "failed" || state === "error") return "failure";
+    if (state === "pending") return "in_progress";
+    return "neutral";
+  }
+
+  /** Interprets Azure mergeStatus for the completion-page complete button. */
+  private mergeState(pull: AzurePull) {
+    if (pull.status === "completed") {
+      return {
+        mergeable: true,
+        canMerge: false,
+        mergeBlockedReason: "Already completed",
+      };
+    }
+    if (pull.status === "abandoned") {
+      return {
+        mergeable: false,
+        canMerge: false,
+        mergeBlockedReason: "This pull request is abandoned",
+      };
+    }
+    if (pull.isDraft) {
+      return {
+        mergeable: null,
+        canMerge: false,
+        mergeBlockedReason: "Draft pull requests cannot be completed",
+      };
+    }
+    if (pull.mergeStatus === "conflicts") {
+      return {
+        mergeable: false,
+        canMerge: false,
+        mergeBlockedReason: "Has merge conflicts",
+      };
+    }
+    if (pull.mergeStatus === "rejectedByPolicy") {
+      return {
+        mergeable: null,
+        canMerge: false,
+        mergeBlockedReason: "Branch policies are not satisfied",
+      };
+    }
+    if (pull.mergeStatus === "failure") {
+      return {
+        mergeable: false,
+        canMerge: false,
+        mergeBlockedReason: "The merge could not be completed",
+      };
+    }
+    if (pull.mergeStatus === "queued") {
+      return {
+        mergeable: true,
+        canMerge: false,
+        mergeBlockedReason: "A merge is already queued",
+      };
+    }
+    if (pull.mergeStatus === "succeeded") {
+      return { mergeable: true, canMerge: true };
+    }
+    return {
+      mergeable: null,
+      canMerge: true,
+      mergeBlockedReason: undefined,
+    };
+  }
+
   /** Converts a provider-specific pull request into ReviewDuck's normalized model. */
   private normalize(item: AzurePull): PullRequestSummary {
     const projectName = item.repository.project?.name;

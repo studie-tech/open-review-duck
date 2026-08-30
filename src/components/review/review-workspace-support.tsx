@@ -9,6 +9,7 @@ import {
   CircleDot,
   Clock3,
   Columns2,
+  Copy,
   ExternalLink,
   FileCode2,
   FolderInput,
@@ -3146,6 +3147,49 @@ export function providerLabel(
   if (provider === "azure_devops") return "Azure DevOps";
   if (provider === "gitlab") return "GitLab";
   return "GitHub";
+}
+
+/**
+ * Copies the repository URL from the review title without leaving the review.
+ *
+ * The full URL is easy to miss in a truncated title line, and opening the
+ * provider just to copy it is the expensive part. A check replaces the icon
+ * once the clipboard has it, so the click does not need a toast to confirm.
+ */
+export function CopyRepositoryUrlButton({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  /** Puts the repository URL on the clipboard. */
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      toast.error("Could not copy the repository URL");
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={copied ? "Repository URL copied" : "Copy repository URL"}
+      title={copied ? "Copied" : "Copy repository URL"}
+      onClick={() => void copy()}
+      className="text-fog hover:text-mist grid size-5 shrink-0 place-items-center rounded transition hover:bg-surface-subtle"
+    >
+      {copied ? (
+        <Check className="size-3" aria-hidden="true" />
+      ) : (
+        <Copy className="size-3" aria-hidden="true" />
+      )}
+    </button>
+  );
 }
 
 /** Formats a provider comment timestamp for the review conversation. */

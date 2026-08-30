@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SYNC_PROGRESS, syncProgressLabel } from "./sync-progress";
+import {
+  followActiveReviewJobs,
+  SYNC_PROGRESS,
+  syncProgressLabel,
+} from "./sync-progress";
 
 describe("syncProgressLabel", () => {
   it("maps durable progress checkpoints to user-facing phases", () => {
@@ -21,5 +25,16 @@ describe("syncProgressLabel", () => {
     expect(syncProgressLabel("running", SYNC_PROGRESS.addingToQueue)).toBe(
       "Adding the review to your queue",
     );
+  });
+});
+
+describe("followActiveReviewJobs", () => {
+  it("polls only while a durable job is still in flight", () => {
+    expect(followActiveReviewJobs({ state: { data: [] } })).toBe(false);
+    expect(
+      followActiveReviewJobs({
+        state: { data: [{ id: "sync-1" }] },
+      }),
+    ).toBe(1_500);
   });
 });

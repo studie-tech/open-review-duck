@@ -86,12 +86,8 @@ describe("findNextReview", () => {
 });
 
 describe("ReviewCompletion", () => {
-  it("contains focus within an accessible modal and restores it on close", async () => {
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    outside.focus();
-    const user = userEvent.setup();
-    const { unmount } = render(
+  it("presents the finished review as a page rather than a modal", () => {
+    render(
       <ReviewCompletion
         completedFiles={7}
         completedUnits={24}
@@ -99,6 +95,7 @@ describe("ReviewCompletion", () => {
         dismissShortcut={[{ key: "Escape" }]}
         nextReview={reviews[3]}
         nextReviewShortcut={[{ key: "n", shift: true }]}
+        lifecycle={<div>Checks and merge</div>}
         providerReview={<div>Provider approval</div>}
         queueLoading={false}
         onDashboard={vi.fn()}
@@ -107,26 +104,19 @@ describe("ReviewCompletion", () => {
       />,
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Review complete." });
-    const dismiss = screen.getByRole("button", {
-      name: "Close summary and browse reviewed files",
-    });
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dismiss).toHaveFocus();
-
-    await user.tab({ shift: true });
     expect(
-      screen.getByRole("button", { name: /Review next PR/i }),
-    ).toHaveFocus();
-
-    await user.tab();
-    expect(dismiss).toHaveFocus();
-
-    outside.focus();
-    expect(dismiss).toHaveFocus();
-    unmount();
-    expect(outside).toHaveFocus();
-    outside.remove();
+      screen.getByRole("heading", { name: "Review complete." }),
+    ).toBeVisible();
+    expect(screen.getByText("Checks and merge")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Close summary and browse reviewed files",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Browse reviewed files/i }),
+    ).toBeVisible();
   });
 
   it("summarizes the accomplishment and continues to the next review", async () => {
