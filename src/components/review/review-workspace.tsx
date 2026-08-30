@@ -161,6 +161,14 @@ import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
+import {
+  actionableReviewCardMember,
+  ReviewFileCardHeader,
+  ReviewFileUnitMarker,
+  relatedReviewRanges,
+  reviewCardRanges,
+  reviewedFileCard,
+} from "./review-file-card";
 import { ReviewFilesPanel } from "./review-files-panel";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
@@ -170,9 +178,62 @@ import {
   useReviewCodeOverview,
 } from "./review-scroll-overview";
 import {
+  initialReviewSessionState,
+  reviewSessionReducer,
+} from "./review-session-machine";
+import {
   ReviewWaitingCompletion,
   type WaitingReviewUnit,
 } from "./review-waiting-completion";
+import {
+  AskAiLineButton,
+  aiConversationVisibility,
+  CONTEXT_PAGE_LINES,
+  ConceptMoveDialog,
+  CopyRepositoryUrlButton,
+  conceptFileCardsInReadingOrder,
+  conceptMembersInReadingOrder,
+  ExplanationLoader,
+  INITIAL_PATH_ITEMS,
+  InlineAiQuestion,
+  InlineCommentComposer,
+  knownLanguage,
+  lineWithinReviewRanges,
+  nextAnchorableLine,
+  PATH_PAGE_SIZE,
+  PROVIDER_CONVERSATION_REFRESH_MS,
+  ProviderConversation,
+  type ProviderConversationActions,
+  PullRequestDetailsDialog,
+  providerLabel,
+  ReviewCodeViewSwitch,
+  ReviewConceptFileCardPreview,
+  ReviewFileCardSourcePlaceholder,
+  ReviewHierarchyDialog,
+  ReviewPathUnit,
+  ReviewRevisionLoadedNotice,
+  ReviewScopeMarker,
+  ReviewUnitViewOptions,
+  rememberAiConversationVisibility,
+  reviewCardMemberForLine,
+  reviewProviderWebUrl,
+  reviewShortcuts,
+  SideBySideUnitDiff,
+  type SideBySideUnitDiffHandle,
+  SplitActionButton,
+  showAiStartError,
+  supportedLanguage,
+  UnitImportContext,
+  withoutDeletedAiQuestions,
+  withoutDeletedLiveAiQuestions,
+} from "./review-workspace-support";
+import { SourceLineWindow } from "./source-line-window";
+import {
+  SymbolPeekCard,
+  SymbolPeekMessage,
+  symbolPeekNotice,
+  useSymbolPeek,
+} from "./symbol-peek";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
@@ -955,68 +1016,6 @@ interface LiveAiQuestion {
   status: "queued" | "running" | "streaming" | "completed" | "failed";
   threadId: string;
 }
-
-import {
-  initialReviewSessionState,
-  reviewSessionReducer,
-} from "./review-session-machine";
-import {
-  ReviewFileCardHeader,
-  ReviewFileUnitMarker,
-  actionableReviewCardMember,
-  relatedReviewRanges,
-  reviewCardRanges,
-  reviewedFileCard,
-} from "./review-file-card";
-import {
-  AskAiLineButton,
-  aiConversationVisibility,
-  CONTEXT_PAGE_LINES,
-  ConceptMoveDialog,
-  CopyRepositoryUrlButton,
-  conceptFileCardsInReadingOrder,
-  conceptMembersInReadingOrder,
-  ExplanationLoader,
-  INITIAL_PATH_ITEMS,
-  InlineAiQuestion,
-  InlineCommentComposer,
-  knownLanguage,
-  lineWithinReviewRanges,
-  nextAnchorableLine,
-  PATH_PAGE_SIZE,
-  PROVIDER_CONVERSATION_REFRESH_MS,
-  ProviderConversation,
-  type ProviderConversationActions,
-  PullRequestDetailsDialog,
-  providerLabel,
-  ReviewCodeViewSwitch,
-  ReviewConceptFileCardPreview,
-  ReviewFileCardSourcePlaceholder,
-  ReviewHierarchyDialog,
-  ReviewPathUnit,
-  ReviewRevisionLoadedNotice,
-  ReviewScopeMarker,
-  ReviewUnitViewOptions,
-  rememberAiConversationVisibility,
-  reviewProviderWebUrl,
-  reviewCardMemberForLine,
-  reviewShortcuts,
-  SideBySideUnitDiff,
-  type SideBySideUnitDiffHandle,
-  SplitActionButton,
-  showAiStartError,
-  supportedLanguage,
-  UnitImportContext,
-  withoutDeletedAiQuestions,
-  withoutDeletedLiveAiQuestions,
-} from "./review-workspace-support";
-import { SourceLineWindow } from "./source-line-window";
-import {
-  SymbolPeekCard,
-  SymbolPeekMessage,
-  symbolPeekNotice,
-  useSymbolPeek,
-} from "./symbol-peek";
 
 /** Height a folded block reserves per row: the pane sets `leading-[21px]`. */
 const SOURCE_ROW_HEIGHT_PX = 21;
