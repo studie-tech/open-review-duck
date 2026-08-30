@@ -13,20 +13,27 @@ type IntersectionReport = (entries: Array<{ isIntersecting: boolean }>) => void;
 const observedBlocks: Array<{
   element: Element;
   report: IntersectionReport;
+  root: Element | null;
 }> = [];
 
 /** Stands in for the browser observer so a test drives block mounting itself. */
 class TestIntersectionObserver {
   private readonly callback: IntersectionReport;
 
-  /** Keeps the callback so observed blocks can report through it. */
-  constructor(callback: IntersectionReport) {
+  private readonly root: Element | null;
+
+  /** Keeps the callback and root so observed blocks can report through it. */
+  constructor(
+    callback: IntersectionReport,
+    options: { root: Element | null; rootMargin: string },
+  ) {
     this.callback = callback;
+    this.root = options.root;
   }
 
   /** Records a block in document order for the test to report on. */
   observe(element: Element) {
-    observedBlocks.push({ element, report: this.callback });
+    observedBlocks.push({ element, report: this.callback, root: this.root });
   }
 
   /** Drops every block this observer was watching. */
@@ -50,7 +57,11 @@ afterEach(() => {
 });
 
 /** Renders one identifiable row per line so a test can ask what is mounted. */
-function renderLines(count: number, pinnedLines?: readonly number[]) {
+function renderLines(
+  count: number,
+  pinnedLines?: readonly number[],
+  container?: HTMLElement,
+) {
   return render(
     <SourceLineWindow
       items={Array.from({ length: count }, (_, index) => index)}
@@ -61,6 +72,7 @@ function renderLines(count: number, pinnedLines?: readonly number[]) {
         <div key={lineNumber} data-testid={`line-${lineNumber}`} />
       )}
     />,
+    container ? { container } : undefined,
   );
 }
 
@@ -96,6 +108,20 @@ describe("SourceLineWindow", () => {
     const trailing = observedBlocks.at(-1)?.element;
     expect(trailing).toHaveStyle({ height: "21px" });
     expect(observedBlocks[4]?.element).toHaveStyle({ height: "1050px" });
+  });
+
+  it("watches a block against the pane the source scrolls inside", () => {
+    const pane = document.createElement("div");
+    pane.style.overflowY = "auto";
+    document.body.append(pane);
+    renderLines(WINDOWED_SOURCE_LINE_COUNT + 1, undefined, pane);
+    expect(observedBlocks[0]?.root).toBe(pane);
+    pane.remove();
+  });
+
+  it("watches against the page when no ancestor scrolls", () => {
+    renderLines(WINDOWED_SOURCE_LINE_COUNT + 1);
+    expect(observedBlocks[0]?.root).toBeNull();
   });
 
   it("mounts a block once it comes near the viewport", () => {
