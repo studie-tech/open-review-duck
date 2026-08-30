@@ -57,6 +57,7 @@ describe("ReviewFilesPanel", () => {
       <ReviewFilesPanel
         files={files}
         search=""
+        selectedPath="src/review/workspace.ts"
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
@@ -99,6 +100,7 @@ describe("ReviewFilesPanel", () => {
           ],
         )}
         search=""
+        selectedPath="src/review/constants.ts"
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
@@ -179,6 +181,7 @@ describe("ReviewFilesPanel", () => {
       <ReviewFilesPanel
         files={files}
         search=""
+        selectedPath="src/review/workspace.ts"
         onSelect={onSelect}
         onToggle={onToggle}
       />,
@@ -206,6 +209,7 @@ describe("ReviewFilesPanel", () => {
       <ReviewFilesPanel
         files={files}
         search=""
+        selectedPath="src/review/workspace.ts"
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
@@ -280,6 +284,7 @@ describe("ReviewFilesPanel", () => {
       <ReviewFilesPanel
         files={signedOff}
         search=""
+        selectedPath="src/review/workspace.ts"
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
@@ -314,6 +319,7 @@ describe("ReviewFilesPanel", () => {
       <ReviewFilesPanel
         files={files}
         search=""
+        selectedPath="src/review/workspace.ts"
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
@@ -335,6 +341,7 @@ describe("ReviewFilesPanel", () => {
       <ReviewFilesPanel
         files={files}
         search=""
+        selectedPath="src/review/workspace.ts"
         onSelect={vi.fn()}
         onToggle={vi.fn()}
       />,
@@ -351,7 +358,8 @@ describe("ReviewFilesPanel", () => {
     ).toHaveFocus();
   });
 
-  it("scrolls the selected file row into view when selectedPath changes", () => {
+  it("scrolls the selected file row into view when selectedPath changes", async () => {
+    const user = userEvent.setup();
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     const { rerender } = render(
@@ -364,6 +372,7 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
+    await user.click(screen.getByRole("button", { name: "Expand review" }));
     const workspace = screen
       .getByRole("button", { name: /workspace\.ts/i })
       .closest("[data-review-file-path]");
@@ -384,8 +393,7 @@ describe("ReviewFilesPanel", () => {
     expect(scrollIntoView.mock.instances).toContain(workspace);
   });
 
-  it("expands collapsed ancestors so the selected file can scroll into view", async () => {
-    const user = userEvent.setup();
+  it("expands collapsed ancestors so the selected file can scroll into view", () => {
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     const { rerender } = render(
@@ -398,7 +406,6 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Collapse review" }));
     expect(
       screen.queryByRole("button", { name: /workspace\.ts/i }),
     ).not.toBeInTheDocument();
@@ -420,5 +427,25 @@ describe("ReviewFilesPanel", () => {
     expect(workspace).toBeVisible();
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
     expect(scrollIntoView.mock.instances).toContain(workspace);
+  });
+
+  it("opens only the top-level folders so a large tree stays cheap", () => {
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Collapse src" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Collapse public" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand review" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
   });
 });
