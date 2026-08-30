@@ -52,7 +52,9 @@ function removeLargestProviderSource(heap: RetainedProviderSource[]) {
   return largest;
 }
 
-/** Loads provider files sequentially and retains the smallest sources in budget. */
+const PROVIDER_SOURCE_CONCURRENCY = 8;
+
+/** Loads provider files concurrently and retains the smallest sources in budget. */
 export async function collectProviderSourceFiles<T>(
   values: readonly T[],
   maximumSourceBytes: number | undefined,
@@ -65,8 +67,29 @@ export async function collectProviderSourceFiles<T>(
     maximumSourceBytes === undefined
       ? undefined
       : Math.max(0, maximumSourceBytes);
-  for (const value of values) {
-    const candidate = await load(value);
+  // Loads run in a sliding window rather than a full prefetch: the accounting
+  // below only bounds memory once a candidate has been consumed, so at most
+  // PROVIDER_SOURCE_CONCURRENCY files sit outside the budget at any moment.
+  const remaining = values[Symbol.iterator]();
+  const pending: Promise<ProviderSourceCandidate>[] = [];
+  /** Starts one more load so the window stays full while results are consumed. */
+  const startNextLoad = () => {
+    const next = remaining.next();
+    if (next.done) return;
+    const started = load(next.value);
+    // Candidates are awaited in order, so a later one rejecting first would
+    // otherwise surface as an unhandled rejection.
+    started.catch(() => undefined);
+    pending.push(started);
+  };
+  for (let slot = 0; slot < PROVIDER_SOURCE_CONCURRENCY; slot++) {
+    startNextLoad();
+  }
+  while (true) {
+    const next = pending.shift();
+    if (!next) break;
+    const candidate = await next;
+    startNextLoad();
     const file = candidate.file;
     if (file.isBinary || file.skipReason) {
       files.push(file);
