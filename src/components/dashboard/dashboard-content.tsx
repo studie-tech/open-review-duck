@@ -354,11 +354,15 @@ export function PullRequestsContent({
   };
   const hasManualRepositories =
     (unimportedPullRequests.data?.manualRepositoryCount ?? 0) > 0;
-  const repositorySource = isHistoryView(workView)
-    ? sourceItems
-    : workView === "unimported"
-      ? availableUnimported
-      : [...prioritizedNeedsReview, ...availableUnimported];
+  const repositorySource = useMemo(
+    () =>
+      isHistoryView(workView)
+        ? sourceItems
+        : workView === "unimported"
+          ? availableUnimported
+          : [...prioritizedNeedsReview, ...availableUnimported],
+    [availableUnimported, prioritizedNeedsReview, sourceItems, workView],
+  );
   const repositories = useMemo(
     () =>
       [
