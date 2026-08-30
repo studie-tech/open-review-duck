@@ -1,3 +1,4 @@
+import { mapWithLimit } from "~/lib/concurrency";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   applyCheckRequiredFlags,
@@ -6,7 +7,6 @@ import {
 } from "~/lib/provider-merge-gate";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
-  mapWithConcurrency,
   optionalProviderFetch,
   providerFetch,
   providerResponse,
@@ -795,7 +795,7 @@ export class GitHubProvider implements PullRequestProvider {
           fallbackPaths.push(path);
         }
       }
-      const fallbacks = await mapWithConcurrency(
+      const fallbacks = await mapWithLimit(
         fallbackPaths,
         4,
         async (path): Promise<RepositoryFileContent> => ({
