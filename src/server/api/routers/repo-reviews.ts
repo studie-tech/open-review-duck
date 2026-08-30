@@ -86,6 +86,104 @@ function publicProviderError(provider: ProviderName, cause: unknown) {
   });
 }
 
+/** Loads the newest review snapshot behind each repository monitor. */
+function latestMonitorSnapshots(db: Database, pullRequestIds: string[]) {
+  return db
+    .selectDistinctOn([reviewSnapshots.pullRequestId], {
+      id: reviewSnapshots.id,
+      pullRequestId: reviewSnapshots.pullRequestId,
+      version: reviewSnapshots.version,
+      headSha: reviewSnapshots.headSha,
+      createdAt: reviewSnapshots.createdAt,
+    })
+    .from(reviewSnapshots)
+    .where(inArray(reviewSnapshots.pullRequestId, pullRequestIds))
+    .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
+}
+
+/** Loads the in-flight branch sync run for each repository monitor. */
+function activeMonitorSyncs(db: Database, monitorIds: string[]) {
+  return db
+    .selectDistinctOn([repositoryBranchSyncRuns.monitorId], {
+      id: repositoryBranchSyncRuns.id,
+      monitorId: repositoryBranchSyncRuns.monitorId,
+      status: repositoryBranchSyncRuns.status,
+      progress: repositoryBranchSyncRuns.progress,
+      error: repositoryBranchSyncRuns.error,
+    })
+    .from(repositoryBranchSyncRuns)
+    .where(
+      and(
+        inArray(repositoryBranchSyncRuns.monitorId, monitorIds),
+        inArray(repositoryBranchSyncRuns.status, ["queued", "running"]),
+      ),
+    )
+    .orderBy(
+      repositoryBranchSyncRuns.monitorId,
+      desc(repositoryBranchSyncRuns.createdAt),
+    );
+}
+
+/** Loads the newest code and compliance run of each monitor snapshot. */
+async function latestMonitorRuns(
+  db: Database,
+  userId: string,
+  pullRequestIds: string[],
+  snapshotIds: string[],
+) {
+  if (snapshotIds.length === 0) return [];
+  return await db
+    .selectDistinctOn([aiJobs.pullRequestId, aiJobs.reviewPurpose], {
+      id: aiJobs.id,
+      pullRequestId: aiJobs.pullRequestId,
+      status: aiJobs.status,
+      progress: aiJobs.progress,
+      reviewPurpose: aiJobs.reviewPurpose,
+      createdAt: aiJobs.createdAt,
+      completedAt: aiJobs.completedAt,
+    })
+    .from(aiJobs)
+    .where(
+      and(
+        inArray(aiJobs.pullRequestId, pullRequestIds),
+        inArray(aiJobs.snapshotId, snapshotIds),
+        eq(aiJobs.userId, userId),
+        eq(aiJobs.kind, "review"),
+        eq(aiJobs.reviewScope, "repository_snapshot"),
+        isNull(aiJobs.parentJobId),
+        inArray(aiJobs.reviewPurpose, ["code", "compliance"]),
+      ),
+    )
+    .orderBy(
+      aiJobs.pullRequestId,
+      aiJobs.reviewPurpose,
+      desc(aiJobs.createdAt),
+    );
+}
+
+/** Projects an in-flight sync run onto the shape the cockpit renders. */
+function syncProgressView(
+  run: Awaited<ReturnType<typeof activeMonitorSyncs>>[number] | undefined,
+) {
+  return run
+    ? {
+        id: run.id,
+        status: run.status,
+        progress: run.progress,
+        error: run.error,
+      }
+    : null;
+}
+
+/** Keys the newest run of one monitor snapshot by pull request and purpose. */
+function runsByPullRequestAndPurpose(
+  runs: Awaited<ReturnType<typeof latestMonitorRuns>>,
+) {
+  return new Map(
+    runs.map((run) => [`${run.pullRequestId}:${run.reviewPurpose}`, run]),
+  );
+}
+
 /** Repository-monitor cockpit, rule management, and repository-scoped runs. */
 export const repoReviewsRouter = createTRPCRouter({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -121,17 +219,7 @@ export const repoReviewsRouter = createTRPCRouter({
 
     const pullRequestIds = rows.map(({ pullRequestId }) => pullRequestId);
     const monitorIds = rows.map(({ id }) => id);
-    const snapshots = await ctx.db
-      .selectDistinctOn([reviewSnapshots.pullRequestId], {
-        id: reviewSnapshots.id,
-        pullRequestId: reviewSnapshots.pullRequestId,
-        version: reviewSnapshots.version,
-        headSha: reviewSnapshots.headSha,
-        createdAt: reviewSnapshots.createdAt,
-      })
-      .from(reviewSnapshots)
-      .where(inArray(reviewSnapshots.pullRequestId, pullRequestIds))
-      .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
+    const snapshots = await latestMonitorSnapshots(ctx.db, pullRequestIds);
     const snapshotIds = snapshots.map(({ id }) => id);
     const [units, files, activeSyncs, jobs] = await Promise.all([
       snapshotIds.length
@@ -159,54 +247,8 @@ export const repoReviewsRouter = createTRPCRouter({
             .from(snapshotFiles)
             .where(inArray(snapshotFiles.snapshotId, snapshotIds))
         : Promise.resolve([]),
-      ctx.db
-        .selectDistinctOn([repositoryBranchSyncRuns.monitorId], {
-          id: repositoryBranchSyncRuns.id,
-          monitorId: repositoryBranchSyncRuns.monitorId,
-          status: repositoryBranchSyncRuns.status,
-          progress: repositoryBranchSyncRuns.progress,
-          error: repositoryBranchSyncRuns.error,
-        })
-        .from(repositoryBranchSyncRuns)
-        .where(
-          and(
-            inArray(repositoryBranchSyncRuns.monitorId, monitorIds),
-            inArray(repositoryBranchSyncRuns.status, ["queued", "running"]),
-          ),
-        )
-        .orderBy(
-          repositoryBranchSyncRuns.monitorId,
-          desc(repositoryBranchSyncRuns.createdAt),
-        ),
-      snapshotIds.length
-        ? ctx.db
-            .selectDistinctOn([aiJobs.pullRequestId, aiJobs.reviewPurpose], {
-              id: aiJobs.id,
-              pullRequestId: aiJobs.pullRequestId,
-              status: aiJobs.status,
-              progress: aiJobs.progress,
-              reviewPurpose: aiJobs.reviewPurpose,
-              createdAt: aiJobs.createdAt,
-              completedAt: aiJobs.completedAt,
-            })
-            .from(aiJobs)
-            .where(
-              and(
-                inArray(aiJobs.pullRequestId, pullRequestIds),
-                inArray(aiJobs.snapshotId, snapshotIds),
-                eq(aiJobs.userId, ctx.auth.userId),
-                eq(aiJobs.kind, "review"),
-                eq(aiJobs.reviewScope, "repository_snapshot"),
-                isNull(aiJobs.parentJobId),
-                inArray(aiJobs.reviewPurpose, ["code", "compliance"]),
-              ),
-            )
-            .orderBy(
-              aiJobs.pullRequestId,
-              aiJobs.reviewPurpose,
-              desc(aiJobs.createdAt),
-            )
-        : Promise.resolve([]),
+      activeMonitorSyncs(ctx.db, monitorIds),
+      latestMonitorRuns(ctx.db, ctx.auth.userId, pullRequestIds, snapshotIds),
     ]);
     const signed = snapshotIds.length
       ? await ctx.db
@@ -241,9 +283,7 @@ export const repoReviewsRouter = createTRPCRouter({
     const activeSyncByMonitor = new Map(
       activeSyncs.map((run) => [run.monitorId, run]),
     );
-    const jobsByPullRequestAndPurpose = new Map(
-      jobs.map((job) => [`${job.pullRequestId}:${job.reviewPurpose}`, job]),
-    );
+    const jobsByPullRequestAndPurpose = runsByPullRequestAndPurpose(jobs);
 
     return rows.map((row) => {
       const snapshot = snapshotByPullRequest.get(row.pullRequestId);
@@ -282,14 +322,7 @@ export const repoReviewsRouter = createTRPCRouter({
           reviewableFiles: reviewableFileCount,
           nonReviewableFiles: snapshotFileRows.length - reviewableFileCount,
         },
-        activeSync: activeSync
-          ? {
-              id: activeSync.id,
-              status: activeSync.status,
-              progress: activeSync.progress,
-              error: activeSync.error,
-            }
-          : null,
+        activeSync: syncProgressView(activeSync),
         latestCodeRun:
           jobsByPullRequestAndPurpose.get(`${row.pullRequestId}:code`) ?? null,
         latestComplianceRun:
@@ -297,6 +330,49 @@ export const repoReviewsRouter = createTRPCRouter({
           null,
       };
     });
+  }),
+
+  runProgress: protectedProcedure.query(async ({ ctx }) => {
+    const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+    const monitors = await ctx.db
+      .select({
+        id: repositoryBranchMonitors.id,
+        pullRequestId: repositoryBranchMonitors.pullRequestId,
+      })
+      .from(repositoryBranchMonitors)
+      .where(eq(repositoryBranchMonitors.workspaceId, workspace.id));
+    if (monitors.length === 0) return [];
+
+    const pullRequestIds = monitors.map(({ pullRequestId }) => pullRequestId);
+    const snapshots = await latestMonitorSnapshots(ctx.db, pullRequestIds);
+    const [activeSyncs, jobs] = await Promise.all([
+      activeMonitorSyncs(
+        ctx.db,
+        monitors.map(({ id }) => id),
+      ),
+      latestMonitorRuns(
+        ctx.db,
+        ctx.auth.userId,
+        pullRequestIds,
+        snapshots.map(({ id }) => id),
+      ),
+    ]);
+    const activeSyncByMonitor = new Map(
+      activeSyncs.map((run) => [run.monitorId, run]),
+    );
+    const jobsByPullRequestAndPurpose = runsByPullRequestAndPurpose(jobs);
+
+    return monitors.map((monitor) => ({
+      monitorId: monitor.id,
+      activeSync: syncProgressView(activeSyncByMonitor.get(monitor.id)),
+      latestCodeRun:
+        jobsByPullRequestAndPurpose.get(`${monitor.pullRequestId}:code`) ??
+        null,
+      latestComplianceRun:
+        jobsByPullRequestAndPurpose.get(
+          `${monitor.pullRequestId}:compliance`,
+        ) ?? null,
+    }));
   }),
 
   get: protectedProcedure
