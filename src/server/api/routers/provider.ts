@@ -46,10 +46,8 @@ import { enforceRateLimit } from "~/server/security/rate-limit";
 import { assertSafeRemoteUrl } from "~/server/security/remote-url";
 import { sealVaultSecret } from "~/server/security/vault";
 import { pruneExpiredReviewSnapshots } from "~/server/sync/retention";
-import {
-  ensurePersonalWorkspace,
-  requireWorkspaceAdministrator,
-} from "~/server/workspaces/service";
+import { requirePersonalWorkspaceAdministrator } from "~/server/workspaces/access";
+import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 import {
   connectionIdSchema,
   connectProviderSchema,
@@ -130,10 +128,8 @@ export const providerRouter = createTRPCRouter({
     .input(connectProviderSchema)
     .mutation(async ({ ctx, input }) => {
       const localMode = isLocalDeployment();
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       await enforceRateLimit(
@@ -443,10 +439,8 @@ export const providerRouter = createTRPCRouter({
   disconnect: protectedProcedure
     .input(connectionIdSchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const connection = await ctx.db.query.providerConnections.findFirst({
@@ -540,10 +534,8 @@ export const providerRouter = createTRPCRouter({
   listAvailableRepositories: protectedProcedure
     .input(importRepositorySchema.pick({ connectionId: true }))
     .query(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const connection = await ctx.db.query.providerConnections.findFirst({
@@ -573,10 +565,8 @@ export const providerRouter = createTRPCRouter({
   importRepository: protectedProcedure
     .input(importRepositorySchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const connection = await ctx.db.query.providerConnections.findFirst({
@@ -1007,10 +997,8 @@ export const providerRouter = createTRPCRouter({
   updateRepositoryIntake: protectedProcedure
     .input(repositoryIntakeSchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const repository = await ctx.db.query.repositories.findFirst({
@@ -1125,10 +1113,8 @@ export const providerRouter = createTRPCRouter({
   deleteRepositoryData: protectedProcedure
     .input(repositoryIdSchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const repository = await ctx.db.query.repositories.findFirst({
@@ -1170,10 +1156,8 @@ export const providerRouter = createTRPCRouter({
   updateRepositoryRetention: protectedProcedure
     .input(repositoryRetentionSchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const [updated] = await ctx.db

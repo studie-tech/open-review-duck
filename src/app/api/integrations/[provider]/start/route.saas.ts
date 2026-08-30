@@ -13,10 +13,8 @@ import {
 import { safeOAuthRedirectPath } from "~/server/security/oauth-flow";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { sealVaultSecret } from "~/server/security/vault";
-import {
-  ensurePersonalWorkspace,
-  requireWorkspaceAdministrator,
-} from "~/server/workspaces/service";
+import { requirePersonalWorkspaceAdministrator } from "~/server/workspaces/access";
+import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 
 /** Starts one App/OAuth connection with signed, one-time, PKCE-bound state. */
 export async function POST(
@@ -39,11 +37,7 @@ export async function POST(
   }
   const workspace = await ensurePersonalWorkspace(db, authentication.userId);
   try {
-    await requireWorkspaceAdministrator(
-      db,
-      workspace.id,
-      authentication.userId,
-    );
+    await requirePersonalWorkspaceAdministrator(db, authentication.userId);
     await enforceRateLimit(
       db,
       `provider-oauth-start:${workspace.id}:${authentication.userId}`,

@@ -1,5 +1,6 @@
 import { clerkClient } from "@clerk/nextjs/server";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { cache } from "react";
 import { users, workspaceMembers, workspaces } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
@@ -16,23 +17,20 @@ function slugify(value: string, suffix: string) {
   return `${base || "workspace"}-${suffix.slice(-6).toLowerCase()}`;
 }
 
-/** Creates or returns the authenticated user's personal workspace. */
-export async function ensurePersonalWorkspace(db: Database, userId: string) {
+/** Creates or returns the caller's personal workspace and their role in it. */
+async function resolvePersonalWorkspace(db: Database, userId: string) {
   const membership = await db.query.workspaceMembers.findFirst({
     where: eq(workspaceMembers.userId, userId),
-    with: { workspace: true },
+    with: { workspace: true, user: { columns: { isAdmin: true } } },
   });
   const local = isLocalDeployment();
   if (membership) {
     // Existing local owners predate the admin column, so promote them here
     // rather than only on insert. SaaS stays false unless set by hand.
-    if (local && membership.role === "owner") {
-      await db
-        .update(users)
-        .set({ isAdmin: true })
-        .where(and(eq(users.id, userId), eq(users.isAdmin, false)));
+    if (local && membership.role === "owner" && !membership.user.isAdmin) {
+      await db.update(users).set({ isAdmin: true }).where(eq(users.id, userId));
     }
-    return membership.workspace;
+    return { role: membership.role, workspace: membership.workspace };
   }
   const clerkUser = local
     ? undefined
@@ -71,7 +69,9 @@ export async function ensurePersonalWorkspace(db: Database, userId: string) {
       where: eq(workspaceMembers.userId, userId),
       with: { workspace: true },
     });
-    if (existing) return existing.workspace;
+    if (existing) {
+      return { role: existing.role, workspace: existing.workspace };
+    }
 
     const [workspace] = await tx
       .insert(workspaces)
@@ -85,8 +85,23 @@ export async function ensurePersonalWorkspace(db: Database, userId: string) {
     await tx
       .insert(workspaceMembers)
       .values({ workspaceId: workspace.id, userId, role: "owner" });
-    return workspace;
+    return { role: "owner", workspace };
   });
 }
 
-export { requireWorkspaceAdministrator } from "./access";
+/**
+ * Resolves the caller's personal workspace once per server request.
+ *
+ * Nearly every protected procedure opens by asking for the workspace, and the
+ * tRPC client batches a page's procedures into a single HTTP request, so an
+ * uncached resolver repeats the same member-workspace read for each of them.
+ * React's request cache collapses those into one; outside a request scope
+ * `cache` calls straight through, so worker callers are unaffected.
+ */
+export const personalWorkspace = cache(resolvePersonalWorkspace);
+
+/** Creates or returns the authenticated user's personal workspace. */
+export async function ensurePersonalWorkspace(db: Database, userId: string) {
+  const { workspace } = await personalWorkspace(db, userId);
+  return workspace;
+}
