@@ -80,6 +80,38 @@ describe("hydratePrivateReviewSources", () => {
     expect(result.successfulIndexes).toEqual([0]);
   });
 
+  it("reads the bytes a self-hosted installation serves for itself", async () => {
+    const source = "export const local = true;\n";
+    const digest = createHash("sha256").update(source).digest("base64");
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request) =>
+        new Response(source, { headers: { Digest: `sha-256=${digest}` } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await hydratePrivateReviewSources(
+      [
+        {
+          currentBlobId: "blob",
+          previousBlobId: null,
+          startByte: 0,
+          endByte: Buffer.byteLength(source),
+          previousStartByte: null,
+          previousEndByte: null,
+          path: "src/local.ts",
+        },
+      ],
+      "snapshot",
+      new Map(),
+      1,
+    );
+
+    expect(result.units[0]).toMatchObject({ source });
+    expect(result.failures).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/source/blob");
+  });
+
   it("publishes successful units incrementally and forwards cancellation", async () => {
     const source = "ready\n";
     const digest = createHash("sha256").update(source).digest("hex");

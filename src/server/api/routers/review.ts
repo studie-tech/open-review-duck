@@ -71,7 +71,6 @@ import {
   parseImportReferences,
 } from "~/server/analysis/imports";
 import type { db as database } from "~/server/db";
-import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
 import {
   ProviderError,
@@ -2008,6 +2007,21 @@ async function beginReviewWaits(
   });
 }
 
+/**
+ * Presents stored units without their source ranges.
+ *
+ * The workspace payload is embedded in the review document, so the sources
+ * stay out of it and the client downloads the ranges it is about to show
+ * from the authorized source endpoint.
+ */
+function unitsWithoutSource<Unit>(units: Unit[]) {
+  return units.map((unit) => ({
+    ...unit,
+    source: "",
+    previousSource: null as string | null,
+  }));
+}
+
 export const reviewRouter = createTRPCRouter({
   dashboard: protectedProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
@@ -2225,9 +2239,6 @@ export const reviewRouter = createTRPCRouter({
           fileContexts: [],
           conceptLayout: null,
           concepts: [],
-          sourceDelivery: isLocalDeployment()
-            ? ("inline" as const)
-            : ("direct" as const),
         };
       // The unit list, the reviewer's concept layouts and their sign-offs on
       // earlier revisions depend only on the snapshot, so they are one round.
@@ -2304,13 +2315,7 @@ export const reviewRouter = createTRPCRouter({
         userWaits,
         storedConcepts,
       ] = await Promise.all([
-        isLocalDeployment()
-          ? hydrateReviewUnits(ctx.db, storedUnits)
-          : storedUnits.map((unit) => ({
-              ...unit,
-              source: "",
-              previousSource: null,
-            })),
+        unitsWithoutSource(storedUnits),
         reviewableUnitIds.length
           ? ctx.db
               .select({
@@ -2517,9 +2522,6 @@ export const reviewRouter = createTRPCRouter({
       return {
         pullRequest,
         snapshot,
-        sourceDelivery: isLocalDeployment()
-          ? ("inline" as const)
-          : ("direct" as const),
         previousSnapshot: previousSnapshot
           ? {
               id: previousSnapshot.id,

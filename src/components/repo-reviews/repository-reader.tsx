@@ -128,7 +128,7 @@ export function RepositoryReader({
     newRuleForm(initialData.units[0]?.path ?? "**/*"),
   );
   const [sourceLoading, setSourceLoading] = useState(
-    initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
+    Boolean(initialData.snapshot),
   );
   const [pendingFileId, setPendingFileId] = useState<string>();
   const fileToggleRollback = useRef<Workspace["units"] | undefined>(undefined);
@@ -153,10 +153,7 @@ export function RepositoryReader({
       initialData.units.find(({ status }) => status !== "signed_off")?.id ??
       initialData.units[0]?.id;
     return {
-      snapshotId:
-        initialData.sourceDelivery === "direct"
-          ? initialData.snapshot?.id
-          : undefined,
+      snapshotId: initialData.snapshot?.id,
       units: prioritizePrivateReviewSources(initialData.units, {
         activeId: firstPending,
         activePath: initialData.units.find(({ id }) => id === firstPending)

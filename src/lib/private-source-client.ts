@@ -40,6 +40,25 @@ function hex(bytes: ArrayBuffer) {
     .join("");
 }
 
+/** Reads the hexadecimal digest stated by a `sha-256=` response header. */
+function statedDigest(header: string) {
+  const encoded = header.startsWith("sha-256=")
+    ? atob(header.slice("sha-256=".length))
+    : "";
+  if (!encoded) throw new Error("Private source digest header is invalid");
+  return [...encoded]
+    .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Accepts downloaded bytes only when they hash to the digest claimed for them. */
+async function verified(bytes: ArrayBuffer, digest: string) {
+  if (hex(await crypto.subtle.digest("SHA-256", bytes)) !== digest) {
+    throw new Error("Private source digest verification failed");
+  }
+  return new Uint8Array(bytes);
+}
+
 /** Downloads one authorized private object directly and verifies its digest. */
 async function privateObject(
   blobId: string,
@@ -55,6 +74,12 @@ async function privateObject(
     { cache: "no-store", credentials: "same-origin", signal: requestSignal },
   );
   if (!access.ok) throw new Error("Private source authorization failed");
+  // A self-hosted installation keeps objects on its own disk, so it answers
+  // with the bytes themselves rather than a URL into a private object store.
+  const digestHeader = access.headers.get("Digest");
+  if (digestHeader) {
+    return verified(await access.arrayBuffer(), statedDigest(digestHeader));
+  }
   const metadata = (await access.json()) as {
     digest?: unknown;
     signedUrl?: unknown;
@@ -72,12 +97,7 @@ async function privateObject(
     signal: requestSignal,
   });
   if (!response.ok) throw new Error("Private source download failed");
-  const bytes = await response.arrayBuffer();
-  const digest = hex(await crypto.subtle.digest("SHA-256", bytes));
-  if (digest !== metadata.digest) {
-    throw new Error("Private source digest verification failed");
-  }
-  return new Uint8Array(bytes);
+  return verified(await response.arrayBuffer(), metadata.digest);
 }
 
 /** Decodes one validated UTF-8 byte range. */
