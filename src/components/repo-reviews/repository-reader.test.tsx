@@ -633,6 +633,41 @@ describe("RepositoryReader", () => {
     expect(screen.queryByText(/source of/)).toBeNull();
   });
 
+  it("marks every unit of a file card in the previous revision", async () => {
+    const user = userEvent.setup();
+    const first = makeUnit({
+      path: "src/pair.ts",
+      snapshotFileId: "file-pair",
+      name: "olderFirst",
+      previousSource: "old first\nold first two\n",
+      startLine: 1,
+      endLine: 2,
+    });
+    const second = makeUnit({
+      path: "src/pair.ts",
+      snapshotFileId: "file-pair",
+      name: "olderSecond",
+      previousSource: "old second\n",
+      startLine: 4,
+      endLine: 4,
+    });
+    render(
+      <ShellHarness>
+        <RepositoryReader
+          initialData={makeData([first, second])}
+          monitor={monitor as never}
+        />
+      </ShellHarness>,
+    );
+    await user.click(
+      screen.getByRole("button", { name: /previous revision/i }),
+    );
+    expect(screen.getByText("old first")).toBeVisible();
+    expect(screen.getByText("old second")).toBeVisible();
+    expect(screen.getByText("olderFirst")).toBeVisible();
+    expect(screen.getByText("olderSecond")).toBeVisible();
+  });
+
   it("renders the completion state when no readable units exist", () => {
     render(
       <ShellHarness>
