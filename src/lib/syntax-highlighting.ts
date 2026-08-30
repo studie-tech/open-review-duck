@@ -30,6 +30,7 @@ const languagePromises = new Map<string, Promise<Language>>();
 const HIGHLIGHT_CACHE_LIMIT = 200;
 const highlightPromises = new Map<string, Promise<HighlightedLine[]>>();
 const highlightLines = new Map<string, HighlightedLine[]>();
+const lexicalHighlightLines = new Map<string, HighlightedLine[]>();
 type ClientTreeSitterRuntime = {
   Language: typeof Language;
   Parser: typeof Parser;
@@ -348,6 +349,27 @@ function highlightKey(source: string, language: string) {
   return `${language}\0${source}`;
 }
 
+/**
+ * Returns bounded cached lexical highlighting for source and language.
+ *
+ * Scanning a large file costs tens of milliseconds, and the same fallback is
+ * needed both while the first render paints and when the effect that awaits a
+ * grammar runs, so the result is shared rather than scanned twice.
+ */
+function cachedLexicalLines(source: string, language: string) {
+  const key = highlightKey(source, language);
+  let lines = lexicalHighlightLines.get(key);
+  if (!lines) {
+    lines = lexicalLines(source, language);
+    lexicalHighlightLines.set(key, lines);
+    if (lexicalHighlightLines.size > HIGHLIGHT_CACHE_LIMIT) {
+      const oldest = lexicalHighlightLines.keys().next().value;
+      if (oldest) lexicalHighlightLines.delete(oldest);
+    }
+  }
+  return lines;
+}
+
 /** Returns a bounded cached highlighting operation for source and language. */
 function highlightedSourcePromise(source: string, language: string) {
   const key = highlightKey(source, language);
@@ -379,7 +401,7 @@ export function useHighlightedSource(source: string, language: string) {
   const [lines, setLines] = useState<HighlightedLine[]>(
     () =>
       highlightLines.get(highlightKey(source, language)) ??
-      lexicalLines(source, language),
+      cachedLexicalLines(source, language),
   );
   useEffect(() => {
     const cached = highlightLines.get(highlightKey(source, language));
@@ -388,7 +410,7 @@ export function useHighlightedSource(source: string, language: string) {
       return;
     }
     let current = true;
-    const lexical = lexicalLines(source, language);
+    const lexical = cachedLexicalLines(source, language);
     setLines(lexical);
     void highlightedSourcePromise(source, language)
       .then((highlighted) => {
