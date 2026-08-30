@@ -221,7 +221,7 @@ export const repoReviewsRouter = createTRPCRouter({
     const monitorIds = rows.map(({ id }) => id);
     const snapshots = await latestMonitorSnapshots(ctx.db, pullRequestIds);
     const snapshotIds = snapshots.map(({ id }) => id);
-    const [units, files, activeSyncs, jobs] = await Promise.all([
+    const [units, files, activeSyncs, jobs, signed] = await Promise.all([
       snapshotIds.length
         ? ctx.db
             .select({
@@ -249,21 +249,21 @@ export const repoReviewsRouter = createTRPCRouter({
         : Promise.resolve([]),
       activeMonitorSyncs(ctx.db, monitorIds),
       latestMonitorRuns(ctx.db, ctx.auth.userId, pullRequestIds, snapshotIds),
+      snapshotIds.length
+        ? ctx.db
+            .select({ unitId: signOffs.unitId })
+            .from(signOffs)
+            .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
+            .where(
+              and(
+                eq(signOffs.userId, ctx.auth.userId),
+                inArray(reviewUnits.snapshotId, snapshotIds),
+                ne(reviewUnits.kind, "file"),
+                isNull(signOffs.invalidatedAt),
+              ),
+            )
+        : Promise.resolve([]),
     ]);
-    const signed = snapshotIds.length
-      ? await ctx.db
-          .select({ unitId: signOffs.unitId })
-          .from(signOffs)
-          .innerJoin(reviewUnits, eq(signOffs.unitId, reviewUnits.id))
-          .where(
-            and(
-              eq(signOffs.userId, ctx.auth.userId),
-              inArray(reviewUnits.snapshotId, snapshotIds),
-              ne(reviewUnits.kind, "file"),
-              isNull(signOffs.invalidatedAt),
-            ),
-          )
-      : [];
     const snapshotByPullRequest = new Map(
       snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot]),
     );
