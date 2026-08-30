@@ -135,23 +135,30 @@ function workspaceActivity(
 export function DashboardOverview({
   initialPullRequests,
   initialMonitors,
+  fetchedAt,
 }: {
   initialPullRequests: PullRequests;
   initialMonitors: Monitors;
+  fetchedAt: number;
 }) {
   const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
     refetchInterval: followActiveReviewJobs,
   });
+  // The sidebar prefetches this route eagerly, so the server payload can
+  // predate the navigation. Stamping it with the time it was read lets the
+  // shared stale time decide whether hydration has to refresh it.
   const pullRequestsQuery = api.review.dashboard.useQuery(undefined, {
     initialData: initialPullRequests,
-    refetchOnMount: "always",
+    initialDataUpdatedAt: fetchedAt,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
   });
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
     initialData: initialMonitors,
-    refetchOnMount: "always",
+    initialDataUpdatedAt: fetchedAt,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       query.state.data?.some(({ activeSync }) => activeSync) ? 1_500 : false,

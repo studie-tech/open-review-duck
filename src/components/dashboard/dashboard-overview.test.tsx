@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "~/trpc/react";
 import { DashboardOverview } from "./dashboard-overview";
 
 vi.mock("~/trpc/react", () => ({
@@ -88,6 +89,7 @@ describe("DashboardOverview", () => {
       <DashboardOverview
         initialPullRequests={pullRequests}
         initialMonitors={monitors}
+        fetchedAt={Date.now()}
       />,
     );
 
@@ -107,5 +109,30 @@ describe("DashboardOverview", () => {
     expect(screen.getByText("Latest updates")).toBeVisible();
     expect(screen.getByRole("main")).toHaveClass("w-full");
     expect(screen.getByRole("main").className).not.toMatch(/max-w-/);
+  });
+
+  it("ages the hydrated queries from the server read instead of the mount", () => {
+    const fetchedAt = Date.parse("2026-08-21T12:20:00Z");
+
+    render(
+      <DashboardOverview
+        initialPullRequests={[]}
+        initialMonitors={[]}
+        fetchedAt={fetchedAt}
+      />,
+    );
+
+    for (const useQuery of [
+      api.review.dashboard.useQuery,
+      api.repoReviews.list.useQuery,
+    ]) {
+      expect(useQuery).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          initialDataUpdatedAt: fetchedAt,
+          refetchOnMount: true,
+        }),
+      );
+    }
   });
 });

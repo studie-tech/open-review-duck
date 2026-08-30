@@ -19,6 +19,7 @@ export default async function RepoReviewsPage({
       initialMonitors={monitors}
       initialRepositories={repositories}
       initialMonitorId={typeof monitor === "string" ? monitor : undefined}
+      fetchedAt={Date.now()}
     />
   );
 }

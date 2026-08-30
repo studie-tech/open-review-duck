@@ -32,9 +32,11 @@ const planDetails = {
 export function SaasAiSettings({
   initialConfiguration,
   initialPlanUsage,
+  fetchedAt,
 }: {
   initialConfiguration: Configuration;
   initialPlanUsage: PlanUsage;
+  fetchedAt: number;
 }) {
   const router = useRouter();
   const utils = api.useUtils();
@@ -50,9 +52,12 @@ export function SaasAiSettings({
   // Read from the configuration rather than from `planUsage.subscribed`, so
   // this page and the review workspace gate on exactly one predicate.
   const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
+  // The server payload carries the time it was read, so the shared stale time
+  // refreshes it on mount only when the render actually predates it.
   const planUsage = api.ai.planUsage.useQuery(undefined, {
     initialData: initialPlanUsage,
-    refetchOnMount: "always",
+    initialDataUpdatedAt: fetchedAt,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
   });
   const usage = planUsage.data ?? initialPlanUsage;
