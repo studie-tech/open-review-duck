@@ -5640,13 +5640,22 @@ export function ReviewWorkspace({
         await undoConcept.mutateAsync({ ...target, sessionId });
         return;
       }
-      // A concept whose layout was replaced is given back one unit at a time,
-      // and the reviewer asked for one undo, so only the last of them speaks.
-      for (const [index, unitId] of target.unitIds.entries()) {
-        if (index < target.unitIds.length - 1) {
-          quietUndoUnitIds.current.add(unitId);
-        }
-        await undoSignOff.mutateAsync({ unitId, sessionId });
+      // A step that names several units is one undo to the reviewer, so only
+      // the request for the last of them speaks.
+      for (const unitId of target.unitIds.slice(0, -1)) {
+        quietUndoUnitIds.current.add(unitId);
+      }
+      // The requests name distinct units and do not depend on each other, so
+      // they go out together and the step comes back in one frame. Every one
+      // of them has to settle before the quiet marks are dropped, so a
+      // failure among them cannot let the rest each announce themselves.
+      const undos = await Promise.allSettled(
+        target.unitIds.map((unitId) =>
+          undoSignOff.mutateAsync({ unitId, sessionId }),
+        ),
+      );
+      for (const undo of undos) {
+        if (undo.status === "rejected") throw undo.reason;
       }
     } catch {
       // The mutation owns the user-facing error. The step goes back on the
@@ -5654,8 +5663,8 @@ export function ReviewWorkspace({
       // with a sign-off standing and nothing left to undo it from.
       setSignOffUndoHistory((history) => rememberSignOff(history, entry));
     } finally {
-      // A loop that stopped early would otherwise leave units marked quiet,
-      // and the next undo of one of them would succeed without saying so.
+      // A request that failed leaves its unit marked quiet, and the next undo
+      // of that unit would otherwise succeed without saying so.
       quietUndoUnitIds.current.clear();
       undoInFlight.current = false;
       setUndoPending(false);
