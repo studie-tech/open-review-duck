@@ -36,7 +36,11 @@ import { observeOperation } from "~/server/observability/sentry";
 import { providerForConnection } from "~/server/providers/credentials";
 import { canCarryReviewWait } from "~/server/review/waiting";
 import { reviewSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
-import { persistSourceBlob } from "~/server/storage/source-blobs";
+import {
+  loadSourceBlobsByDigest,
+  persistSourceBlob,
+  sourceDigest,
+} from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "./retention";
 import {
   assertCompleteChangedFileSet,
@@ -215,17 +219,31 @@ export async function syncPullRequest(
       ),
   );
   await options?.onProgress?.(SYNC_PROGRESS.storingSources);
+  const knownBlobs = await loadSourceBlobsByDigest(
+    db,
+    repository.workspaceId,
+    budgetedFiles.flatMap((file) =>
+      file.previousContent === undefined
+        ? [sourceDigest(Buffer.from(file.content))]
+        : [
+            sourceDigest(Buffer.from(file.content)),
+            sourceDigest(Buffer.from(file.previousContent)),
+          ],
+    ),
+  );
   const storedFiles = await mapWithLimit(budgetedFiles, 4, async (file) => {
     const [currentBlob, previousBlob] = await Promise.all([
       persistSourceBlob(db, {
         workspaceId: repository.workspaceId,
         bytes: Buffer.from(file.content),
+        knownBlobs,
       }),
       file.previousContent === undefined
         ? undefined
         : persistSourceBlob(db, {
             workspaceId: repository.workspaceId,
             bytes: Buffer.from(file.previousContent),
+            knownBlobs,
           }),
     ]);
     return { file, currentBlob, previousBlob };

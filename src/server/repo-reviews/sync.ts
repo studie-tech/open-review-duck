@@ -44,8 +44,10 @@ import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
 import { canCarryReviewWait } from "~/server/review/waiting";
 import {
+  loadSourceBlobsByDigest,
   persistSourceBlob,
   readSourceText,
+  sourceDigest,
 } from "~/server/storage/source-blobs";
 import { pruneExpiredReviewSnapshots } from "~/server/sync/retention";
 import {
@@ -550,17 +552,31 @@ export async function syncRepositoryBranch(
   let storedFileCount = 0;
   let lastStorageProgress: number = REPOSITORY_SYNC_PROGRESS.storing;
   let storageProgressWrites = Promise.resolve();
+  const knownBlobs = await loadSourceBlobsByDigest(
+    db,
+    scope.repository.workspaceId,
+    files.flatMap((file) =>
+      file.previousContent === undefined
+        ? [sourceDigest(Buffer.from(file.content))]
+        : [
+            sourceDigest(Buffer.from(file.content)),
+            sourceDigest(Buffer.from(file.previousContent)),
+          ],
+    ),
+  );
   const storedFiles = await mapWithLimit(files, 4, async (file) => {
     const [currentBlob, previousBlob] = await Promise.all([
       persistSourceBlob(db, {
         workspaceId: scope.repository.workspaceId,
         bytes: Buffer.from(file.content),
+        knownBlobs,
       }),
       file.previousContent === undefined
         ? undefined
         : persistSourceBlob(db, {
             workspaceId: scope.repository.workspaceId,
             bytes: Buffer.from(file.previousContent),
+            knownBlobs,
           }),
     ]);
     storedFileCount += 1;
