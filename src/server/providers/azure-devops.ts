@@ -787,10 +787,13 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   ): ProviderPullRequestCheck[] {
     const latestByName = new Map<string, AzurePullStatus>();
     for (const status of statuses) {
-      const key =
-        [status.context?.genre?.trim(), status.context?.name?.trim()]
-          .filter(Boolean)
-          .join("/") || String(status.id);
+      const genre = status.context?.genre?.trim();
+      const name = status.context?.name?.trim();
+      const key = name
+        ? genre
+          ? `${genre}/${name}`
+          : name
+        : String(status.id);
       const existing = latestByName.get(key);
       if (
         !existing ||
