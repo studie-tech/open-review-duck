@@ -13,10 +13,9 @@ export const env = createEnv({
     DEPLOYMENT_MODE: z.enum(["local", "saas"]).default("saas"),
     DATABASE_URL: z.string().url(),
     MIGRATION_DATABASE_URL: z.string().url().optional(),
-    // Sized to the deep reviewer's fan-out rather than to a single agent:
-    // DEEP_REVIEW_EXECUTION_SLOTS files run at once, each holding up to
-    // DEEP_REVIEW_TOOL_SLOTS statements, plus polling, cron, and headroom.
-    // The ceiling guards a shared Postgres max_connections, because every
+    // Raises the floor the runtime derives from DEEP_REVIEW_TOOL_SLOTS, for
+    // deployments that drain whole review lanes inside one process. The
+    // ceiling guards a shared Postgres max_connections, because every
     // concurrent serverless instance carries its own pool.
     DATABASE_POOL_MAX: z.coerce.number().int().min(2).max(50).default(5),
     CLERK_SECRET_KEY: z.string().min(1).optional(),

@@ -20,10 +20,9 @@ import { ensureWorkflowRunLink } from "./run-link";
  * How many files may be under review at the same instant.
  *
  * Coverage is uncapped — every selected file is reviewed — and this bounds only
- * how many of them run concurrently. Budget it against `DATABASE_POOL_MAX`: a
- * file can hold up to `DEEP_REVIEW_TOOL_SLOTS` statements at once, so the
- * product of the two wants to stay under the pool, leaving room for the status
- * polling and the maintenance cron.
+ * how many of them run concurrently. Each turn is its own durable step, so a
+ * deployment that runs several lanes in one process holds that many scouts'
+ * statements at once and wants `DATABASE_POOL_MAX` raised to match.
  */
 const DEEP_REVIEW_EXECUTION_SLOTS = env.DEEP_REVIEW_EXECUTION_SLOTS;
 
