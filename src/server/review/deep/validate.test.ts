@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("~/env", () => ({
@@ -115,6 +117,14 @@ async function openFinding(id: string, ciphertext: string) {
 
 interface RecordedUpdate {
   values: Record<string, unknown>;
+  where: unknown;
+}
+
+const dialect = new PgDialect();
+
+/** Reads the parameters a recorded fragment binds, in the order it binds them. */
+function boundParams(fragment: unknown) {
+  return dialect.sqlToQuery(fragment as SQL).params;
 }
 
 interface EvidenceLink {
@@ -141,8 +151,8 @@ function fakeDatabase(rows: readonly FindingRow[]) {
     }),
     update: () => ({
       set: (values: Record<string, unknown>) => ({
-        where: async () => {
-          updates.push({ values });
+        where: async (predicate: unknown) => {
+          updates.push({ values, where: predicate });
         },
       }),
     }),
@@ -277,7 +287,7 @@ describe("anchoring", () => {
       unitId: "unit-alpha",
     });
     expect(updates).toHaveLength(1);
-    expect(updates[0]?.values).toMatchObject({ state: "anchored" });
+    expect(boundParams(updates[0]?.values.state)).toEqual(["f1", "anchored"]);
   });
 
   it("keeps a snippet that matches nothing, in the file-level bucket", async () => {
@@ -319,6 +329,43 @@ describe("anchoring", () => {
     const result = await validateFileFindings(db, validationInput());
     expect(result.findings).toHaveLength(0);
     expect(updates).toHaveLength(0);
+  });
+
+  it("settles every finding of the file in one guarded statement", async () => {
+    const rows = [
+      await sealFinding({
+        id: "f1",
+        existingCode: "  const value = compute();",
+      }),
+      await sealFinding({ id: "f2", existingCode: "const nowhere = true;" }),
+    ];
+    const { db, updates } = fakeDatabase(rows);
+    const result = await validateFileFindings(db, validationInput());
+    expect(result.findings.map((finding) => finding.state)).toEqual([
+      "anchored",
+      "unanchored",
+    ]);
+    expect(updates).toHaveLength(1);
+    expect(boundParams(updates[0]?.values.state)).toEqual([
+      "f1",
+      "anchored",
+      "f2",
+      "unanchored",
+    ]);
+    expect(boundParams(updates[0]?.values.startLine)).toEqual([
+      "f1",
+      2,
+      "f2",
+      null,
+    ]);
+    expect(boundParams(updates[0]?.values.unitId)).toEqual([
+      "f1",
+      "unit-alpha",
+      "f2",
+      null,
+    ]);
+    expect(updates[0]?.values.encryptedContent).toBeUndefined();
+    expect(boundParams(updates[0]?.where)).toEqual(["f1", "f2", "submitted"]);
   });
 });
 
@@ -488,7 +535,7 @@ describe("relocation", () => {
       relocated: true,
     });
     expect(requests).toHaveLength(2);
-    const resealed = updates[0]?.values.encryptedContent;
+    const resealed = boundParams(updates[0]?.values.encryptedContent)[1];
     expect(typeof resealed).toBe("string");
     expect(await openFinding("f1", String(resealed))).toMatchObject({
       existingCode: "const value = compute();",
@@ -585,10 +632,8 @@ describe("refutation", () => {
     });
     expect(result.findings[0]?.verdictReason).toContain("already returns");
     // The row keeps its anchor and its refutation: an auditable discard.
-    expect(updates[0]?.values).toMatchObject({
-      state: "refuted",
-      startLine: 2,
-    });
+    expect(boundParams(updates[0]?.values.state)).toEqual(["f1", "refuted"]);
+    expect(boundParams(updates[0]?.values.startLine)).toEqual(["f1", 2]);
   });
 
   it("keeps a finding whose refutation cites a path outside the snapshot", async () => {
