@@ -3,6 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewFileEntries } from "~/lib/review-files";
 import { ReviewFilesPanel } from "./review-files-panel";
@@ -50,6 +51,9 @@ const files = reviewFileEntries(
     },
   ],
 );
+
+/** Stable no-op handler so a re-render hands the panel the same props. */
+function noop() {}
 
 describe("ReviewFilesPanel", () => {
   it("shows folder progress, revision attention, and zero-unit files", () => {
@@ -447,5 +451,43 @@ describe("ReviewFilesPanel", () => {
     expect(
       screen.queryByRole("button", { name: /workspace\.ts/i }),
     ).not.toBeInTheDocument();
+  });
+  it("keeps its rows mounted when the view around it renders", async () => {
+    const user = userEvent.setup();
+    let progressReads = 0;
+    const countedFiles = files.map((file) => ({
+      ...file,
+      /** Counts each read a mounted file row makes of its progress. */
+      get reviewedUnits() {
+        progressReads += 1;
+        return 1;
+      },
+    }));
+    /** Stands in for the workspace state that changes above the panel. */
+    function Workspace() {
+      const [renders, setRenders] = useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setRenders(renders + 1)}>
+            Render {renders}
+          </button>
+          <ReviewFilesPanel
+            files={countedFiles}
+            search=""
+            selectedPath="src/review/workspace.ts"
+            onSelect={noop}
+            onToggle={noop}
+          />
+        </>
+      );
+    }
+    render(<Workspace />);
+    expect(progressReads).toBeGreaterThan(0);
+    const mounted = progressReads;
+
+    await user.click(screen.getByRole("button", { name: "Render 0" }));
+
+    expect(screen.getByRole("button", { name: "Render 1" })).toBeVisible();
+    expect(progressReads).toBe(mounted);
   });
 });

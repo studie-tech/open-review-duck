@@ -2403,7 +2403,7 @@ export function ReviewWorkspace({
    * Each return targets its own snapshot file, so returns are tracked per file
    * and every other file stays clickable while one of them saves.
    */
-  function toggleReviewFile(file: ReviewFileEntry) {
+  function applyReviewFileToggle(file: ReviewFileEntry) {
     if (file.totalUnits === 0 || file.waitingUnits > 0) return;
     if (file.state === "reviewed") {
       if (
@@ -2455,6 +2455,18 @@ export function ReviewWorkspace({
       });
     }
   }
+  const applyReviewFileToggleRef = useRef(applyReviewFileToggle);
+  applyReviewFileToggleRef.current = applyReviewFileToggle;
+  /**
+   * Keeps one identity for the file decision across workspace renders.
+   *
+   * The changed-file tree is memoized, and it reads sign-off state that the
+   * surrounding render recomputes on every keystroke and stream chunk, so the
+   * handler reaches it through a ref instead of as a fresh closure.
+   */
+  const toggleReviewFile = useCallback((file: ReviewFileEntry) => {
+    applyReviewFileToggleRef.current(file);
+  }, []);
   /**
    * Opens the composer on a line a reviewer picked in another member's card.
    *
