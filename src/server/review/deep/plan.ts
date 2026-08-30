@@ -22,7 +22,6 @@ import {
 } from "./selection";
 
 type Database = typeof database;
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Reader = { query: Database["query"] };
 type BlobRow = typeof sourceBlobs.$inferSelect;
 type ReviewParentJob = typeof aiJobs.$inferSelect;
@@ -56,8 +55,8 @@ interface CreateReviewChildJobInput {
   parent: ReviewChildJobParent;
   kind: "review_file" | "review_survey";
   ruleConfigDigest: string;
-  /** A caller-chosen id, so an item row can reference the job it creates. */
-  id?: string;
+  /** Chosen by the caller, so an item row can reference the job it names. */
+  id: string;
 }
 
 export interface ReviewItemFingerprintInput {
@@ -110,7 +109,7 @@ interface WaivedPlanFile {
 }
 
 /**
- * Inserts one deep-review child job inside the caller's transaction.
+ * Builds one deep-review child job row for the fan-out's batched insert.
  *
  * Deliberately not `createAiJob`: that opens its own transaction, takes a
  * database rather than a transaction handle, and runs a full snapshot
@@ -119,38 +118,32 @@ interface WaivedPlanFile {
  * the newest snapshot by version and a re-sync mid-run would otherwise split
  * one review across two revisions.
  */
-async function createReviewChildJob(
-  tx: Transaction,
+function reviewChildJobRow(
   input: CreateReviewChildJobInput,
-) {
-  const [job] = await tx
-    .insert(aiJobs)
-    .values({
-      id: input.id ?? randomUUID(),
-      workspaceId: input.parent.workspaceId,
-      pullRequestId: input.parent.pullRequestId,
-      snapshotId: input.parent.snapshotId,
-      unitId: null,
-      userId: input.parent.userId,
-      kind: input.kind,
-      parentJobId: input.parent.id,
-      ruleConfigDigest: input.ruleConfigDigest,
-      reviewScope: input.parent.reviewScope,
-      reviewPurpose: input.parent.reviewPurpose,
-      agentVersion: input.parent.agentVersion,
-      status: "queued",
-      model: input.parent.model,
-      provider: input.parent.provider,
-      // The parent holds the run's only reservation. A child that reserved
-      // quota of its own would multiply one review's reservation by the width
-      // of the fan-out and strand it if the child never runs.
-      reservedInputTokens: 0,
-      reservedOutputTokens: 0,
-      reservedMicroUsd: 0,
-    })
-    .returning();
-  if (!job) throw new Error("Could not create deep review child job");
-  return job;
+): typeof aiJobs.$inferInsert {
+  return {
+    id: input.id,
+    workspaceId: input.parent.workspaceId,
+    pullRequestId: input.parent.pullRequestId,
+    snapshotId: input.parent.snapshotId,
+    unitId: null,
+    userId: input.parent.userId,
+    kind: input.kind,
+    parentJobId: input.parent.id,
+    ruleConfigDigest: input.ruleConfigDigest,
+    reviewScope: input.parent.reviewScope,
+    reviewPurpose: input.parent.reviewPurpose,
+    agentVersion: input.parent.agentVersion,
+    status: "queued",
+    model: input.parent.model,
+    provider: input.parent.provider,
+    // The parent holds the run's only reservation. A child that reserved
+    // quota of its own would multiply one review's reservation by the width
+    // of the fan-out and strand it if the child never runs.
+    reservedInputTokens: 0,
+    reservedOutputTokens: 0,
+    reservedMicroUsd: 0,
+  };
 }
 
 /**
@@ -465,15 +458,40 @@ export async function sealReviewPlan(
         fingerprint,
       });
     };
+    // Ids are generated here rather than returned by the insert, so the whole
+    // fan-out is one round trip while the plan advisory lock is held.
+    const childRows: (typeof aiJobs.$inferInsert)[] = [];
     for (const candidate of selected) {
-      const child = await createReviewChildJob(tx, {
-        parent: current,
-        kind: "review_file",
-        ruleConfigDigest,
-      });
-      addItem(candidate, child.id, null);
+      const childId = randomUUID();
+      childRows.push(
+        reviewChildJobRow({
+          parent: current,
+          kind: "review_file",
+          ruleConfigDigest,
+          id: childId,
+        }),
+      );
+      addItem(candidate, childId, null);
     }
     for (const entry of waived) addItem(entry.file, null, entry.reason);
+    const needsSurvey =
+      selected.length > 0 ||
+      (current.reviewPurpose === "compliance" &&
+        (current.reviewRules ?? []).some(
+          (rule) => rule.scope === "repository",
+        ));
+    const surveyJobId = needsSurvey ? randomUUID() : null;
+    if (surveyJobId) {
+      childRows.push(
+        reviewChildJobRow({
+          parent: current,
+          kind: "review_survey",
+          ruleConfigDigest,
+          id: surveyJobId,
+        }),
+      );
+    }
+    if (childRows.length > 0) await tx.insert(aiJobs).values(childRows);
     if (rows.length > 0) {
       await tx
         .insert(aiReviewItems)
@@ -484,19 +502,6 @@ export async function sealReviewPlan(
           target: [aiReviewItems.parentJobId, aiReviewItems.path],
         });
     }
-    const needsSurvey =
-      selected.length > 0 ||
-      (current.reviewPurpose === "compliance" &&
-        (current.reviewRules ?? []).some(
-          (rule) => rule.scope === "repository",
-        ));
-    const survey = needsSurvey
-      ? await createReviewChildJob(tx, {
-          parent: current,
-          kind: "review_survey",
-          ruleConfigDigest,
-        })
-      : undefined;
     await tx
       .update(aiJobs)
       .set({
@@ -517,7 +522,7 @@ export async function sealReviewPlan(
       ruleConfigDigest,
       skipped: !needsSurvey,
       items,
-      surveyJobId: survey?.id ?? null,
+      surveyJobId,
     });
   });
 }

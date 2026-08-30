@@ -256,7 +256,7 @@ export async function createAiJob(
     /**
      * `review` is the deep-review parent, and the only review row created
      * here: the fan-out's `review_file` and `review_survey` children are
-     * inserted by `createReviewChildJob` inside the seal-plan transaction.
+     * inserted by `sealReviewPlan`.
      */
     kind: "explain" | "review" | "semantic_cluster";
     question?: string;

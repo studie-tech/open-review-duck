@@ -268,6 +268,20 @@ describe("sealReviewPlan", () => {
     expect(plan.items.some((item) => item.path === last)).toBe(true);
   });
 
+  it("writes every child job of the fan-out in one insert", async () => {
+    const fake = createFakeDatabase([
+      { path: "src/a.ts" },
+      { path: "src/b.ts" },
+      { path: "src/c.ts" },
+    ]);
+
+    const plan = await sealReviewPlan(fake.db, PARENT_ID);
+
+    expect(plan.selectedCount).toBe(3);
+    expect(fake.operations.filter((op) => op === "insert:job")).toHaveLength(1);
+    expect(fake.jobs().filter((job) => job.id !== PARENT_ID)).toHaveLength(4);
+  });
+
   it("takes the advisory lock before it writes anything", async () => {
     const fake = createFakeDatabase([{ path: "src/a.ts" }]);
 
