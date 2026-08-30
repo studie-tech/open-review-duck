@@ -28,6 +28,7 @@ import {
   conceptFileCardsInReadingOrder,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
+  InlineCommentComposer,
   nextAnchorableLine,
   ProviderConversation,
   type ProviderConversationActions,
@@ -1224,6 +1225,92 @@ async function flushAnimationFrame() {
       new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   );
 }
+
+describe("InlineCommentComposer", () => {
+  it("keeps typing inside the composer and reports the draft upward", async () => {
+    const change = vi.fn();
+    const post = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineCommentComposer
+        initialDraft=""
+        line={42}
+        path="src/server/queue.ts"
+        pending={false}
+        posting={false}
+        provider="github"
+        onCancel={vi.fn()}
+        onDraftChange={change}
+        onPost={post}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText(
+      "Write an inline GitHub comment\u2026",
+    );
+    expect(input).toHaveFocus();
+    await user.type(input, "Guard");
+
+    expect(input).toHaveValue("Guard");
+    expect(change).toHaveBeenLastCalledWith("Guard");
+    await user.click(screen.getByRole("button", { name: /Post to GitHub/ }));
+    expect(post).toHaveBeenCalledWith("Guard");
+  });
+
+  it("starts from the draft it was handed and posts it with the shortcut", async () => {
+    const post = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineCommentComposer
+        initialDraft="**Unbounded retry**"
+        line={42}
+        path="src/server/queue.ts"
+        pending={false}
+        posting={false}
+        provider="gitlab"
+        onCancel={vi.fn()}
+        onDraftChange={vi.fn()}
+        onPost={post}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText(
+      "Write an inline GitLab comment\u2026",
+    );
+    expect(input).toHaveValue("**Unbounded retry**");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    expect(post).toHaveBeenCalledWith("**Unbounded retry**");
+  });
+
+  it("cancels on Escape and blocks posting while a comment is in flight", async () => {
+    const cancel = vi.fn();
+    const post = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineCommentComposer
+        initialDraft="Guard"
+        line={42}
+        path="src/server/queue.ts"
+        pending
+        posting
+        provider="azure_devops"
+        onCancel={cancel}
+        onDraftChange={vi.fn()}
+        onPost={post}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Posting\u2026/ }),
+    ).toBeDisabled();
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+    expect(post).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+});
 
 describe("InlineAiQuestion", () => {
   it("can restore a saved conversation without stealing keyboard focus", () => {

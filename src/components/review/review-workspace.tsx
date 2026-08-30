@@ -904,6 +904,7 @@ import {
   ExplanationLoader,
   INITIAL_PATH_ITEMS,
   InlineAiQuestion,
+  InlineCommentComposer,
   knownLanguage,
   lineWithinReviewRanges,
   nextAnchorableLine,
@@ -1171,7 +1172,10 @@ export function ReviewWorkspace({
   const [pathPanelCollapsed, setPathPanelCollapsed] = useState(false);
   const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
   const [insightsPanelCollapsed, setInsightsPanelCollapsed] = useState(false);
-  const [feedback, setFeedback] = useState("");
+  // A ref, not state: the composer owns the draft while it is mounted, so
+  // this only carries the text across an unmount the reviewer did not ask
+  // for, such as a wait that failed.
+  const commentDraft = useRef("");
   const [selectedLine, setSelectedLine] = useState<number>();
   const [pendingCommentLine, setPendingCommentLine] = useState<{
     line: number;
@@ -1245,7 +1249,6 @@ export function ReviewWorkspace({
     unitName: string;
     importedName: string;
   }>();
-  const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const pathSearchRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
   const findingsListRef = useRef<HTMLDivElement>(null);
@@ -2205,10 +2208,10 @@ export function ReviewWorkspace({
     importPreview?.language ?? "text",
   );
   /** Opens the provider comment composer for one reviewable diff line. */
-  const openInlineComment = useCallback((line: number) => {
+  const openInlineComment = useCallback((line: number, draft = "") => {
     setKeyboardLine(undefined);
     setSelectedLine(line);
-    setFeedback("");
+    commentDraft.current = draft;
     window.requestAnimationFrame(() =>
       window.requestAnimationFrame(() =>
         document
@@ -3528,7 +3531,7 @@ export function ReviewWorkspace({
     setQueueLimit(INITIAL_PATH_ITEMS);
     setWaitingLimit(INITIAL_PATH_ITEMS);
     setSelectedLine(undefined);
-    setFeedback("");
+    commentDraft.current = "";
     setShowDiff(true);
     setStartedAt(Date.now());
   }
@@ -3547,7 +3550,7 @@ export function ReviewWorkspace({
         searchLimit,
         waitingLimit,
         selectedLine,
-        feedback,
+        commentDraft: commentDraft.current,
         showDiff,
       };
     },
@@ -3573,7 +3576,7 @@ export function ReviewWorkspace({
         setSearchLimit(rollback.searchLimit);
         setWaitingLimit(rollback.waitingLimit);
         setSelectedLine(rollback.selectedLine);
-        setFeedback(rollback.feedback);
+        commentDraft.current = rollback.commentDraft;
         setShowDiff(rollback.showDiff);
         setStartedAt(rollback.startedAt);
       }
@@ -3614,7 +3617,7 @@ export function ReviewWorkspace({
       toast.success("Comment published", {
         description: `Your inline comment is now on ${providerLabel(initialData.pullRequest.provider)}.`,
       });
-      setFeedback("");
+      commentDraft.current = "";
       setSelectedLine(undefined);
       void discussion.refetch();
       void providerConversations.refetch();
@@ -3752,10 +3755,12 @@ export function ReviewWorkspace({
                 })
             : undefined
         }
-        onEdit={() => {
-          setFeedback(`**${finding.title}**\n\n${finding.body}`);
-          openInlineComment(lineNumber);
-        }}
+        onEdit={() =>
+          openInlineComment(
+            lineNumber,
+            `**${finding.title}**\n\n${finding.body}`,
+          )
+        }
         onCollapse={() => collapseFinding(finding.id)}
       />
     );
@@ -4196,93 +4201,30 @@ export function ReviewWorkspace({
           </div>
         ))}
         {selectedLine === lineNumber && (
-          <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl">
-            <div className="flex min-w-0 items-center justify-between gap-3">
-              <p className="text-cloud flex shrink-0 items-center gap-2 text-xs font-medium">
-                <MessageSquareText className="text-cyan size-3.5" />
-                Comment on {providerLabel(initialData.pullRequest.provider)} ·
-                line {lineNumber}
-              </p>
-              <span className="text-fog min-w-0 truncate text-right font-mono text-[9px]">
-                {activeUnit.path}
-              </span>
-            </div>
-            <textarea
-              ref={commentInputRef}
-              value={feedback}
-              onChange={(event) => setFeedback(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setSelectedLine(undefined);
-                  setFeedback("");
-                } else if (
-                  event.key === "Enter" &&
-                  (event.metaKey || event.ctrlKey) &&
-                  feedback.trim() &&
-                  !publishComment.isPending
-                ) {
-                  event.preventDefault();
-                  publishComment.mutate({
-                    unitId: activeUnit.id,
-                    line: lineNumber,
-                    body: feedback,
-                  });
-                }
-              }}
-              placeholder={`Write an inline ${providerLabel(initialData.pullRequest.provider)} comment…`}
-              rows={3}
-              className="bg-surface text-cloud focus:border-cyan/45 mt-3 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none"
-            />
-            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-fog flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] leading-4">
-                <span>
-                  Posts immediately to{" "}
-                  {providerLabel(initialData.pullRequest.provider)}.
-                </span>
-                <span className="flex items-center gap-1">
-                  <ShortcutHint shortcut={reviewShortcuts.postComment} />
-                  post
-                </span>
-                <span>· Esc cancels</span>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setSelectedLine(undefined);
-                    setFeedback("");
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!feedback.trim() || publishComment.isPending}
-                  onClick={() =>
-                    publishComment.mutate({
-                      unitId: activeUnit.id,
-                      line: lineNumber,
-                      body: feedback,
-                    })
-                  }
-                >
-                  {publishComment.isPending &&
-                  publishComment.variables?.body != null ? (
-                    <LoaderCircle className="size-3 animate-spin" />
-                  ) : (
-                    <Send className="size-3" />
-                  )}
-                  {publishComment.isPending &&
-                  publishComment.variables?.body != null
-                    ? "Posting…"
-                    : `Post to ${providerLabel(initialData.pullRequest.provider)}`}
-                </Button>
-              </div>
-            </div>
-          </div>
+          <InlineCommentComposer
+            initialDraft={commentDraft.current}
+            line={lineNumber}
+            path={activeUnit.path}
+            pending={publishComment.isPending}
+            posting={
+              publishComment.isPending && publishComment.variables?.body != null
+            }
+            provider={initialData.pullRequest.provider}
+            onCancel={() => {
+              setSelectedLine(undefined);
+              commentDraft.current = "";
+            }}
+            onDraftChange={(value) => {
+              commentDraft.current = value;
+            }}
+            onPost={(body) =>
+              publishComment.mutate({
+                unitId: activeUnit.id,
+                line: lineNumber,
+                body,
+              })
+            }
+          />
         )}
       </>
     );
@@ -4398,7 +4340,7 @@ export function ReviewWorkspace({
   useEffect(() => {
     if (!activeUnitId) return;
     setSelectedLine(undefined);
-    setFeedback("");
+    commentDraft.current = "";
     setAiQuestionLine(undefined);
     setAiQuestionThreadId(undefined);
     setFocusAiQuestionComposer(false);
@@ -4427,9 +4369,6 @@ export function ReviewWorkspace({
     setPendingAiQuestionLine(undefined);
     openAiQuestionAt(pendingAiQuestionLine.line);
   }, [activeUnitId, pendingAiQuestionLine]);
-  useEffect(() => {
-    if (selectedLine !== undefined) commentInputRef.current?.focus();
-  }, [selectedLine]);
   useEffect(() => {
     if (!importPreview) return;
     importPreviewFocusRef.current?.scrollIntoView({ block: "center" });
@@ -5626,7 +5565,7 @@ export function ReviewWorkspace({
       .sort((left, right) => left - right)[0];
     setKeyboardLine(selectedLine ?? firstChangedLine ?? primaryReviewStart);
     setSelectedLine(undefined);
-    setFeedback("");
+    commentDraft.current = "";
   }
 
   /** Moves keyboard focus to the review-path search field. */
