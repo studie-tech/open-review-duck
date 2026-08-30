@@ -6,8 +6,10 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { SideBySideDiffRow } from "~/lib/side-by-side-diff";
 import { cn } from "~/lib/utils";
@@ -210,6 +212,27 @@ export function ReviewScrollOverview({
   const visibleStart = Math.round(viewport.start * 100);
   const visibleEnd = Math.round(viewport.end * 100);
   const viewportWidth = Math.max(viewport.end - viewport.start, 0.02);
+  // The viewport window re-renders on every scrolled frame; holding the mark
+  // elements by identity lets React skip a file's worth of ticks each time.
+  const markElements = useMemo(
+    () =>
+      marks.map((mark) => (
+        <span
+          key={`${mark.kind}-${mark.start}`}
+          aria-hidden="true"
+          title={MARK_LABELS[mark.kind]}
+          className={cn(
+            "absolute top-0.5 bottom-0.5 rounded-full opacity-90",
+            MARK_COLORS[mark.kind],
+          )}
+          style={{
+            left: `${mark.start * 100}%`,
+            width: `max(2px, ${(mark.end - mark.start) * 100}%)`,
+          }}
+        />
+      )),
+    [marks],
+  );
 
   const seekFromEvent = useCallback(
     (event: Pick<PointerEvent, "clientX">) => {
@@ -304,21 +327,7 @@ export function ReviewScrollOverview({
               }}
             />
           )}
-          {marks.map((mark) => (
-            <span
-              key={`${mark.kind}-${mark.start}`}
-              aria-hidden="true"
-              title={MARK_LABELS[mark.kind]}
-              className={cn(
-                "absolute top-0.5 bottom-0.5 rounded-full opacity-90",
-                MARK_COLORS[mark.kind],
-              )}
-              style={{
-                left: `${mark.start * 100}%`,
-                width: `max(2px, ${(mark.end - mark.start) * 100}%)`,
-              }}
-            />
-          ))}
+          {markElements}
           <span
             aria-hidden="true"
             className="border-cloud/70 bg-cloud/20 absolute inset-y-0 rounded-full border"
@@ -362,19 +371,27 @@ export function ReviewScrollOverview({
   );
 }
 
+export interface ReviewOverviewViewportStore {
+  getViewport: () => ReviewOverviewRange;
+  subscribe: (listener: () => void) => () => void;
+}
+
 /**
  * Keeps the overview viewport in sync with the code pane without a render on
  * every pointer-move of the page — only the pane's own scroll and size.
+ *
+ * The viewport is a continuous fraction that moves on every scrolled frame,
+ * so it is published through a store rather than held as state: the pane's
+ * owner renders again only when the coarse `scrolled` flag flips, and the
+ * ruler subscribes for the per-frame values it alone needs.
  */
 export function useReviewCodeOverview(
   paneRef: { current: HTMLElement | null },
   codeRef: { current: HTMLElement | null },
   resetKey: unknown,
 ) {
-  const [viewport, setViewport] = useState<ReviewOverviewRange>({
-    end: 1,
-    start: 0,
-  });
+  const viewport = useRef<ReviewOverviewRange>({ end: 1, start: 0 });
+  const listeners = useRef(new Set<() => void>());
   const [scrolled, setScrolled] = useState(false);
   const frame = useRef(0);
 
@@ -386,20 +403,13 @@ export function useReviewCodeOverview(
     setScrolled((current) =>
       current === nextScrolled ? current : nextScrolled,
     );
-    if (!code) {
-      setViewport((current) =>
-        current.start === 0 && current.end === 1
-          ? current
-          : { end: 1, start: 0 },
-      );
-      return;
-    }
-    const nextViewport = overviewViewportFromElements(pane, code);
-    setViewport((current) =>
-      current.start === nextViewport.start && current.end === nextViewport.end
-        ? current
-        : nextViewport,
-    );
+    const next = code
+      ? overviewViewportFromElements(pane, code)
+      : { end: 1, start: 0 };
+    const current = viewport.current;
+    if (current.start === next.start && current.end === next.end) return;
+    viewport.current = next;
+    for (const listener of listeners.current) listener();
   }, [codeRef, paneRef]);
 
   const update = useCallback(() => {
@@ -438,5 +448,64 @@ export function useReviewCodeOverview(
     [codeRef, paneRef, update],
   );
 
-  return { scrolled, seek, update, viewport };
+  const store = useMemo<ReviewOverviewViewportStore>(
+    () => ({
+      getViewport: () => viewport.current,
+      subscribe: (listener) => {
+        listeners.current.add(listener);
+        return () => {
+          listeners.current.delete(listener);
+        };
+      },
+    }),
+    [],
+  );
+
+  return { scrolled, seek, update, viewport: store };
+}
+
+/**
+ * Renders the overview ruler against a subscribed viewport.
+ *
+ * The ruler is the only part of the page that needs the viewport at frame
+ * rate, so it subscribes here and leaves the component that owns the code
+ * pane out of the scroll path entirely.
+ */
+export function ReviewScrollOverviewStrip({
+  className,
+  label,
+  marks,
+  onSeek,
+  revealWholeFile,
+  rows,
+  unitRange,
+  viewport,
+}: {
+  className?: string;
+  label?: string;
+  marks: readonly ReviewOverviewMark[];
+  onSeek: (ratio: number) => void;
+  revealWholeFile?: boolean;
+  rows: readonly Pick<SideBySideDiffRow, "kind">[];
+  unitRange?: ReviewOverviewRange;
+  viewport: ReviewOverviewViewportStore;
+}) {
+  const range = useSyncExternalStore(
+    viewport.subscribe,
+    viewport.getViewport,
+    viewport.getViewport,
+  );
+  if (!shouldShowReviewScrollOverview(rows, range, { revealWholeFile })) {
+    return null;
+  }
+  return (
+    <ReviewScrollOverview
+      className={className}
+      label={label}
+      marks={marks}
+      onSeek={onSeek}
+      unitRange={unitRange}
+      viewport={range}
+    />
+  );
 }
