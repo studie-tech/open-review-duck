@@ -61,15 +61,105 @@ export async function reviewSnapshotSourcesAvailable(
   return available;
 }
 
-/** Checks the newest snapshot for one pull request before queue assignment. */
-export async function pullRequestSnapshotSourcesAvailable(
+/** Finds which pull requests can no longer render their newest snapshot. */
+export async function pullRequestsMissingSnapshotSources(
   db: Database,
-  pullRequestId: string,
+  pullRequestIds: string[],
 ) {
-  const snapshot = await db.query.reviewSnapshots.findFirst({
-    where: eq(reviewSnapshots.pullRequestId, pullRequestId),
-    orderBy: [desc(reviewSnapshots.version)],
-    columns: { id: true },
+  const missing = new Set(pullRequestIds);
+  if (missing.size === 0) return missing;
+
+  const snapshots = await db
+    .selectDistinctOn([reviewSnapshots.pullRequestId], {
+      id: reviewSnapshots.id,
+      pullRequestId: reviewSnapshots.pullRequestId,
+    })
+    .from(reviewSnapshots)
+    .where(inArray(reviewSnapshots.pullRequestId, [...missing]))
+    .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
+  if (snapshots.length === 0) return missing;
+
+  const units = await db.query.reviewUnits.findMany({
+    where: inArray(
+      reviewUnits.snapshotId,
+      snapshots.map((snapshot) => snapshot.id),
+    ),
+    columns: { snapshotId: true, currentBlobId: true, previousBlobId: true },
   });
-  return snapshot ? reviewSnapshotSourcesAvailable(db, snapshot.id) : false;
+  const snapshotEntries = new Map(
+    snapshots.map((snapshot) => [
+      snapshot.id,
+      {
+        pullRequestId: snapshot.pullRequestId,
+        unitCount: 0,
+        blobIds: new Set<string>(),
+      },
+    ]),
+  );
+  for (const unit of units) {
+    const entry = snapshotEntries.get(unit.snapshotId);
+    if (!entry) continue;
+    entry.unitCount += 1;
+    if (unit.currentBlobId) entry.blobIds.add(unit.currentBlobId);
+    if (unit.previousBlobId) entry.blobIds.add(unit.previousBlobId);
+  }
+
+  const referencedBlobIds = new Set(
+    [...snapshotEntries.values()].flatMap((entry) => [...entry.blobIds]),
+  );
+  const blobs =
+    referencedBlobIds.size === 0
+      ? []
+      : await db.query.sourceBlobs.findMany({
+          where: inArray(sourceBlobs.id, [...referencedBlobIds]),
+        });
+  const store = await sourceObjectStore();
+  const objectKeyByBlobId = new Map(
+    blobs.flatMap((blob) =>
+      blob.state === "ready" && blob.storage === store.kind && blob.objectKey
+        ? [[blob.id, blob.objectKey] as const]
+        : [],
+    ),
+  );
+
+  const pending: { pullRequestId: string; objectKeys: string[] }[] = [];
+  for (const entry of snapshotEntries.values()) {
+    if (entry.unitCount === 0) {
+      missing.delete(entry.pullRequestId);
+      continue;
+    }
+    const objectKeys = [...entry.blobIds].flatMap((blobId) => {
+      const objectKey = objectKeyByBlobId.get(blobId);
+      return objectKey ? [objectKey] : [];
+    });
+    if (objectKeys.length !== entry.blobIds.size || objectKeys.length === 0) {
+      continue;
+    }
+    pending.push({ pullRequestId: entry.pullRequestId, objectKeys });
+  }
+
+  // Blobs are content-addressed and shared between snapshots, so one probe per
+  // distinct object settles every pull request that references it.
+  const probeKeys = [...new Set(pending.flatMap((entry) => entry.objectKeys))];
+  const presentObjectKeys = new Set(probeKeys);
+  const probe = store.exists?.bind(store);
+  if (probe) {
+    await mapWithLimit(
+      probeKeys,
+      SOURCE_OBJECT_PROBE_CONCURRENCY,
+      async (objectKey) => {
+        try {
+          if (!(await probe(objectKey))) presentObjectKeys.delete(objectKey);
+        } catch {
+          presentObjectKeys.delete(objectKey);
+        }
+      },
+    );
+  }
+  for (const entry of pending) {
+    if (entry.objectKeys.every((key) => presentObjectKeys.has(key))) {
+      missing.delete(entry.pullRequestId);
+    }
+  }
+  return missing;
 }
