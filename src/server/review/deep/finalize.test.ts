@@ -1,5 +1,9 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aiJobs, aiReviewFindings, aiReviewItems } from "@/drizzle/schema";
+
+const dialect = new PgDialect();
 
 const mocks = vi.hoisted(() => ({
   acceptAiJobResult: vi.fn(
@@ -54,6 +58,12 @@ interface FakeState {
 interface RecordedUpdate {
   table: "aiJobs" | "aiReviewItems" | "aiReviewFindings";
   values: Record<string, unknown>;
+  where?: unknown;
+}
+
+/** Renders a drizzle fragment so a test can assert on the SQL it emits. */
+function renderSql(value: unknown) {
+  return dialect.sqlToQuery(value as SQL);
 }
 
 /** Builds the smallest database double the finalize path actually exercises. */
@@ -125,8 +135,14 @@ function createFakeDb(state: FakeState) {
             return { where: () => settled(swept) };
           }
           const name = table === aiJobs ? "aiJobs" : "aiReviewFindings";
-          updates.push({ table: name, values });
-          return { where: () => settled([]) };
+          const recorded: RecordedUpdate = { table: name, values };
+          updates.push(recorded);
+          return {
+            where: (predicate: unknown) => {
+              recorded.where = predicate;
+              return settled([]);
+            },
+          };
         },
       };
     },
@@ -423,6 +439,22 @@ describe("finalizeDeepReview", () => {
     expect(failed.runFailureClass).toBe("provider");
   });
 
+  it("writes no ranking when the run surfaced no findings", async () => {
+    const state: FakeState = {
+      parent,
+      items: [item({ id: "a" })],
+      findings: [],
+      usageRows: [],
+    };
+    const { db, updates } = createFakeDb(state);
+    const result = await finalizeDeepReview(db, "parent-1");
+
+    expect(
+      updates.filter((update) => update.table === "aiReviewFindings"),
+    ).toEqual([]);
+    expect(result.surfacedFindingCount).toBe(0);
+  });
+
   it("freezes orderIndex worst-first before building the projection", async () => {
     const state: FakeState = {
       parent,
@@ -437,11 +469,18 @@ describe("finalizeDeepReview", () => {
     const { db, updates } = createFakeDb(state);
     const result = await finalizeDeepReview(db, "parent-1");
 
-    expect(
-      updates
-        .filter((update) => update.table === "aiReviewFindings")
-        .map((update) => update.values.orderIndex),
-    ).toEqual([0, 1, 2]);
+    const findingUpdates = updates.filter(
+      (update) => update.table === "aiReviewFindings",
+    );
+    expect(findingUpdates).toHaveLength(1);
+    const ranking = renderSql(findingUpdates[0]?.values.orderIndex);
+    expect(ranking.sql).toMatch(/^case .+ end$/);
+    expect(ranking.params).toEqual(["f-crit", 0, "f-high", 1, "f-low", 2]);
+    expect(renderSql(findingUpdates[0]?.where).params).toEqual([
+      "f-crit",
+      "f-high",
+      "f-low",
+    ]);
     expect(result.surfacedFindingCount).toBe(3);
     const [, , projection] = mocks.acceptAiJobResult.mock.calls[0] ?? [];
     expect(projection).toMatchObject({ annotations: [], findings: [] });
