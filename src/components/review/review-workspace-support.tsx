@@ -431,9 +431,7 @@ export function ReviewFileCardHeader({
             Reviewing {members.length} individual{" "}
             {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
             {changedLines} changed lines
-            {sourceBytes
-              ? ` · ${formatReviewSourceBytes(sourceBytes)}`
-              : null}
+            {sourceBytes ? ` · ${formatReviewSourceBytes(sourceBytes)}` : null}
           </>
         }
         meta={
@@ -742,6 +740,7 @@ export function ReviewConceptFileCardPreview({
     language: members[0]?.language,
     lineCount,
     path: members[0]?.path,
+    source: fileSource,
   });
   const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -1563,13 +1562,19 @@ export function rememberAiConversationVisibility(
 }
 
 /** Drops persisted AI questions that a thread delete just removed. */
-export function withoutDeletedAiQuestions<T extends { id: string }>(
+export function withoutDeletedAiQuestions<
+  T extends { id: string; jobId?: string },
+>(
   questions: readonly T[] | undefined,
   jobIds: readonly string[],
 ): T[] | undefined {
   if (!questions) return questions;
   const deleted = new Set(jobIds);
-  return questions.filter((question) => !deleted.has(question.id));
+  return questions.filter(
+    (question) =>
+      !deleted.has(question.id) &&
+      (question.jobId === undefined || !deleted.has(question.jobId)),
+  );
 }
 
 /** Drops optimistic live entries that belonged to a deleted conversation. */
