@@ -181,6 +181,8 @@ type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
+type ProviderConversations = RouterOutputs["review"]["providerConversations"];
+type ProviderConversationThread = ProviderConversations["threads"][number];
 
 // One shared element: every review-unit command renders the same static icon.
 const unitCommandIcon = <FileCode2 className="size-4" />;
@@ -194,6 +196,56 @@ const terminalAiJobStatuses = ["completed", "failed", "cancelled"];
 /** Reports whether an AI job can still change state without a new request. */
 export function aiJobActive(status: string | null | undefined) {
   return Boolean(status) && !terminalAiJobStatuses.includes(status ?? "");
+}
+
+/** One conversation change a reviewer just asked the provider to make. */
+export type ProviderThreadChange = { threadExternalId: string } & (
+  | { kind: "resolution"; resolved: boolean }
+  | { kind: "edit-comment"; commentExternalId: string; body: string }
+  | { kind: "delete-comment"; commentExternalId: string }
+  | { kind: "delete-thread" }
+);
+
+/**
+ * Rewrites the provider conversations as the change in flight will leave them.
+ *
+ * Publishing a conversation change costs a live provider round trip and the
+ * read that reconciles it costs a second one, so the reviewer would otherwise
+ * face the old status long after the control stopped spinning. Every field
+ * here is one the client already decided, which is what makes the guess exact
+ * enough to show before the provider confirms it.
+ */
+export function reshapeProviderThreads(
+  threads: ProviderConversationThread[],
+  change: ProviderThreadChange,
+): ProviderConversationThread[] {
+  if (change.kind === "delete-thread") {
+    return threads.filter(
+      (thread) => thread.externalId !== change.threadExternalId,
+    );
+  }
+  return threads.map((thread) => {
+    if (thread.externalId !== change.threadExternalId) return thread;
+    if (change.kind === "resolution") {
+      return { ...thread, status: change.resolved ? "resolved" : "open" };
+    }
+    if (change.kind === "delete-comment") {
+      return {
+        ...thread,
+        comments: thread.comments.filter(
+          (comment) => comment.externalId !== change.commentExternalId,
+        ),
+      };
+    }
+    return {
+      ...thread,
+      comments: thread.comments.map((comment) =>
+        comment.externalId === change.commentExternalId
+          ? { ...comment, body: change.body }
+          : comment,
+      ),
+    };
+  });
 }
 
 interface RefetchableQuery {
@@ -3653,16 +3705,61 @@ export function ReviewWorkspace({
     },
     onError: (error) => toast.error(error.message),
   });
+  /**
+   * Shows a conversation change before the provider has confirmed it and hands
+   * back the snapshot that undoes it.
+   */
+  async function applyConversationChange(change: ProviderThreadChange) {
+    const key = { pullRequestId: initialData.pullRequest.id };
+    // A refresh already in flight carries the pre-change status and would land
+    // on top of the guess.
+    await utils.review.providerConversations.cancel(key);
+    const previous = utils.review.providerConversations.getData(key);
+    utils.review.providerConversations.setData(
+      key,
+      (current) =>
+        current && {
+          ...current,
+          threads: reshapeProviderThreads(current.threads, change),
+        },
+    );
+    return { previous };
+  }
+
+  /** Puts back the conversations an optimistic change was rolled off. */
+  function restoreCachedConversations(previous?: ProviderConversations) {
+    utils.review.providerConversations.setData(
+      { pullRequestId: initialData.pullRequest.id },
+      previous,
+    );
+  }
+
+  /** Queues the reconciling read of the conversations behind a change. */
+  function reconcileConversations() {
+    return utils.review.providerConversations.invalidate({
+      pullRequestId: initialData.pullRequest.id,
+    });
+  }
+
   const replyToThread = api.review.replyToThread.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Reply published", {
         description: `The conversation was updated on ${providerLabel(initialData.pullRequest.provider)}.`,
       });
-      void providerConversations.refetch();
+      // The provider decides the identity and timestamp the reply is filed
+      // under, so there is nothing to write into the cache ahead of the read.
+      // Awaiting it keeps the composer busy until the reply is on screen.
+      await reconcileConversations();
     },
     onError: (error) => toast.error(error.message),
   });
   const setThreadResolution = api.review.setThreadResolution.useMutation({
+    onMutate: ({ threadExternalId, resolved }) =>
+      applyConversationChange({
+        kind: "resolution",
+        threadExternalId,
+        resolved,
+      }),
     onSuccess: ({ resolved }) => {
       toast.success(
         resolved ? "Conversation resolved" : "Conversation reopened",
@@ -3670,36 +3767,63 @@ export function ReviewWorkspace({
           description: `The change is live on ${providerLabel(initialData.pullRequest.provider)}.`,
         },
       );
-      void providerConversations.refetch();
+      void reconcileConversations();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, context) => {
+      restoreCachedConversations(context?.previous);
+      toast.error(error.message);
+    },
   });
   const editThreadComment = api.review.editThreadComment.useMutation({
+    onMutate: ({ threadExternalId, commentExternalId, body }) =>
+      applyConversationChange({
+        kind: "edit-comment",
+        threadExternalId,
+        commentExternalId,
+        body,
+      }),
     onSuccess: () => {
       toast.success("Comment updated", {
         description: `The new text is live on ${providerLabel(initialData.pullRequest.provider)}.`,
       });
-      void Promise.all([discussion.refetch(), providerConversations.refetch()]);
+      void Promise.all([discussion.refetch(), reconcileConversations()]);
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, context) => {
+      restoreCachedConversations(context?.previous);
+      toast.error(error.message);
+    },
   });
   const deleteThreadComment = api.review.deleteThreadComment.useMutation({
+    onMutate: ({ threadExternalId, commentExternalId }) =>
+      applyConversationChange({
+        kind: "delete-comment",
+        threadExternalId,
+        commentExternalId,
+      }),
     onSuccess: () => {
       toast.success("Comment deleted", {
         description: `It is gone from ${providerLabel(initialData.pullRequest.provider)}.`,
       });
-      void Promise.all([discussion.refetch(), providerConversations.refetch()]);
+      void Promise.all([discussion.refetch(), reconcileConversations()]);
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, context) => {
+      restoreCachedConversations(context?.previous);
+      toast.error(error.message);
+    },
   });
   const deleteThread = api.review.deleteThread.useMutation({
+    onMutate: ({ threadExternalId }) =>
+      applyConversationChange({ kind: "delete-thread", threadExternalId }),
     onSuccess: ({ deleted }) => {
       toast.success("Conversation deleted", {
         description: `${deleted} ${deleted === 1 ? "comment is" : "comments are"} gone from ${providerLabel(initialData.pullRequest.provider)}.`,
       });
-      void Promise.all([discussion.refetch(), providerConversations.refetch()]);
+      void Promise.all([discussion.refetch(), reconcileConversations()]);
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, context) => {
+      restoreCachedConversations(context?.previous);
+      toast.error(error.message);
+    },
   });
   /**
    * Reports that one named conversation is mid-change.

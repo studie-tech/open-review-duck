@@ -11,12 +11,15 @@ import {
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
   groupDeepReviewFindings,
+  reshapeProviderThreads,
   useReviewExitPrefetch,
   useTerminalReviewRefetch,
 } from "./review-workspace";
 
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
+type ProviderConversationThread =
+  RouterOutputs["review"]["providerConversations"]["threads"][number];
 
 /** Builds a surfaced deep-review finding with the fields a test overrides. */
 function finding(
@@ -111,6 +114,118 @@ describe("aiJobActive", () => {
     expect(aiJobActive(undefined)).toBe(false);
     expect(aiJobActive(null)).toBe(false);
     expect(aiJobActive("")).toBe(false);
+  });
+});
+
+describe("reshapeProviderThreads", () => {
+  const threads: ProviderConversationThread[] = [
+    {
+      externalId: "901",
+      path: "src/retry.ts",
+      line: 17,
+      side: "right",
+      status: "open",
+      unitId: "unit-1",
+      comments: [
+        {
+          externalId: "901",
+          author: "reviewer",
+          body: "Could this retain the previous behavior?",
+          createdAt: "2026-07-20T10:00:00Z",
+          publishedByAnotherReviewer: false,
+        },
+        {
+          externalId: "902",
+          author: "reviewer",
+          body: "It does now.",
+          createdAt: "2026-07-20T10:05:00Z",
+          publishedByAnotherReviewer: false,
+        },
+      ],
+    },
+    {
+      externalId: "910",
+      path: "src/retry.ts",
+      line: 42,
+      side: "right",
+      status: "resolved",
+      unitId: "unit-2",
+      comments: [
+        {
+          externalId: "910",
+          author: "reviewer",
+          body: "Handled.",
+          createdAt: "2026-07-20T11:00:00Z",
+          publishedByAnotherReviewer: false,
+        },
+      ],
+    },
+  ];
+
+  it("flips only the named conversation between resolved and open", () => {
+    const resolved = reshapeProviderThreads(threads, {
+      kind: "resolution",
+      threadExternalId: "901",
+      resolved: true,
+    });
+
+    expect(resolved.map(({ status }) => status)).toEqual([
+      "resolved",
+      "resolved",
+    ]);
+    expect(
+      reshapeProviderThreads(resolved, {
+        kind: "resolution",
+        threadExternalId: "910",
+        resolved: false,
+      }).map(({ status }) => status),
+    ).toEqual(["resolved", "open"]);
+  });
+
+  it("puts the edited text on the one comment that was rewritten", () => {
+    const [thread] = reshapeProviderThreads(threads, {
+      kind: "edit-comment",
+      threadExternalId: "901",
+      commentExternalId: "902",
+      body: "It does after the retry cap.",
+    });
+
+    expect(thread?.comments.map(({ body }) => body)).toEqual([
+      "Could this retain the previous behavior?",
+      "It does after the retry cap.",
+    ]);
+  });
+
+  it("removes a deleted comment while keeping its conversation", () => {
+    const [thread] = reshapeProviderThreads(threads, {
+      kind: "delete-comment",
+      threadExternalId: "901",
+      commentExternalId: "901",
+    });
+
+    expect(thread?.comments.map(({ externalId }) => externalId)).toEqual([
+      "902",
+    ]);
+  });
+
+  it("drops a deleted conversation from the list", () => {
+    expect(
+      reshapeProviderThreads(threads, {
+        kind: "delete-thread",
+        threadExternalId: "901",
+      }).map(({ externalId }) => externalId),
+    ).toEqual(["910"]);
+  });
+
+  it("leaves the conversations it was handed untouched", () => {
+    reshapeProviderThreads(threads, {
+      kind: "delete-comment",
+      threadExternalId: "901",
+      commentExternalId: "901",
+    });
+
+    expect(threads[0]?.comments).toHaveLength(2);
+    expect(threads[0]?.status).toBe("open");
   });
 });
 
