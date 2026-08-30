@@ -861,8 +861,8 @@ export const reviewConceptMembers = createTable(
     primaryKey({ columns: [t.conceptId, t.unitId] }),
     uniqueIndex("review_concept_membership_idx").on(t.layoutId, t.unitId),
     index("review_concept_member_order_idx").on(t.conceptId, t.memberOrder),
-    // The membership index leads with layoutId, so deleting a unit could not use
-    // it and scanned every membership row instead.
+    // Deleting a unit filters on unitId alone, which the layoutId-leading
+    // membership index cannot serve.
     index("review_concept_member_unit_idx").on(t.unitId),
     // Membership is the largest child of a snapshot, and snapshot pruning runs
     // inside every sync. No other index leads with snapshotId, so the cascade
