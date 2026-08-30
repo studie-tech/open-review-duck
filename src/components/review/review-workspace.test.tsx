@@ -11,6 +11,7 @@ import {
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
   groupDeepReviewFindings,
+  useReviewExitPrefetch,
   useTerminalReviewRefetch,
 } from "./review-workspace";
 
@@ -155,6 +156,62 @@ describe("useTerminalReviewRefetch", () => {
     rerender({ status: "queued" });
     rerender({ status: "completed" });
     expect(refetch.deepReview).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useReviewExitPrefetch", () => {
+  const router = { prefetch: vi.fn() };
+
+  /** Renders the hook the way the workspace does: with a stable router. */
+  function renderExitPrefetch(destinations: {
+    nextReviewId: string | undefined;
+    reviewEnded: boolean;
+  }) {
+    return renderHook(
+      (current: { nextReviewId: string | undefined; reviewEnded: boolean }) =>
+        useReviewExitPrefetch(router, current),
+      { initialProps: destinations },
+    );
+  }
+
+  it("leaves both exits cold while the review is still under way", () => {
+    renderExitPrefetch({ nextReviewId: "review-2", reviewEnded: false });
+
+    expect(router.prefetch).not.toHaveBeenCalled();
+  });
+
+  it("warms both exits once the review ends", () => {
+    renderExitPrefetch({ nextReviewId: "review-2", reviewEnded: true });
+
+    expect(router.prefetch).toHaveBeenCalledWith("/pullrequests");
+    expect(router.prefetch).toHaveBeenCalledWith("/review/review-2");
+  });
+
+  it("warms the dashboard alone when no pull request is waiting", () => {
+    renderExitPrefetch({ nextReviewId: undefined, reviewEnded: true });
+
+    expect(router.prefetch).toHaveBeenCalledExactlyOnceWith("/pullrequests");
+  });
+
+  it("warms each destination once however often the view rerenders", () => {
+    const { rerender } = renderExitPrefetch({
+      nextReviewId: "review-2",
+      reviewEnded: true,
+    });
+    rerender({ nextReviewId: "review-2", reviewEnded: true });
+    rerender({ nextReviewId: "review-2", reviewEnded: true });
+
+    expect(router.prefetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("follows the queue when the next pull request changes", () => {
+    const { rerender } = renderExitPrefetch({
+      nextReviewId: "review-2",
+      reviewEnded: true,
+    });
+    rerender({ nextReviewId: "review-3", reviewEnded: true });
+
+    expect(router.prefetch).toHaveBeenCalledWith("/review/review-3");
   });
 });
 
