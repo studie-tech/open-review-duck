@@ -316,6 +316,7 @@ export function ReviewFilesPanel({
     });
   }, [selectedPath]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-scroll after ancestor folders expand so the selected row exists
   useLayoutEffect(() => {
     if (!selectedPath) return;
     const row = document
