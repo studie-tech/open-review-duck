@@ -479,25 +479,27 @@ async function readDeepReviewRunUsage(
   db: Database,
   parentJobId: string,
 ): Promise<DeepReviewRunUsage> {
-  const [tools] = await db
-    .select({ calls: sql<string>`count(*)` })
-    .from(aiJobToolCalls)
-    .innerJoin(aiJobs, eq(aiJobToolCalls.jobId, aiJobs.id))
-    .where(eq(aiJobs.parentJobId, parentJobId));
-  const [evidence] = await db
-    .select({
-      bytes: sql<string>`coalesce(sum(${aiJobEvidence.endByte} - ${aiJobEvidence.startByte}), 0)`,
-    })
-    .from(aiJobEvidence)
-    .innerJoin(aiJobs, eq(aiJobEvidence.jobId, aiJobs.id))
-    .where(eq(aiJobs.parentJobId, parentJobId));
-  const [spend] = await db
-    .select({
-      tokens: sql<string>`coalesce(sum(greatest(${aiJobs.totalTokens}, ${aiJobs.inputTokens} + ${aiJobs.outputTokens})), 0)`,
-      microUsd: sql<string>`coalesce(sum(${aiJobs.actualMicroUsd}), 0)`,
-    })
-    .from(aiJobs)
-    .where(eq(aiJobs.parentJobId, parentJobId));
+  const [[tools], [evidence], [spend]] = await Promise.all([
+    db
+      .select({ calls: sql<string>`count(*)` })
+      .from(aiJobToolCalls)
+      .innerJoin(aiJobs, eq(aiJobToolCalls.jobId, aiJobs.id))
+      .where(eq(aiJobs.parentJobId, parentJobId)),
+    db
+      .select({
+        bytes: sql<string>`coalesce(sum(${aiJobEvidence.endByte} - ${aiJobEvidence.startByte}), 0)`,
+      })
+      .from(aiJobEvidence)
+      .innerJoin(aiJobs, eq(aiJobEvidence.jobId, aiJobs.id))
+      .where(eq(aiJobs.parentJobId, parentJobId)),
+    db
+      .select({
+        tokens: sql<string>`coalesce(sum(greatest(${aiJobs.totalTokens}, ${aiJobs.inputTokens} + ${aiJobs.outputTokens})), 0)`,
+        microUsd: sql<string>`coalesce(sum(${aiJobs.actualMicroUsd}), 0)`,
+      })
+      .from(aiJobs)
+      .where(eq(aiJobs.parentJobId, parentJobId)),
+  ]);
   return {
     toolCalls: Number(tools?.calls ?? 0),
     sourceBytes: Number(evidence?.bytes ?? 0),
@@ -674,9 +676,16 @@ async function executeDeepReviewTurn(
   }
   // Both agents find their item the same way, because the survey's item is a
   // sealed row like any file's — with a sentinel path instead of a real one.
-  const item = await db.query.aiReviewItems.findFirst({
-    where: eq(aiReviewItems.childJobId, job.id),
-  });
+  // Everything the gate needs is keyed off the job row alone, so the four
+  // lookups go out together rather than down a chain.
+  const [item, parent, usage, selectedFiles] = await Promise.all([
+    db.query.aiReviewItems.findFirst({
+      where: eq(aiReviewItems.childJobId, job.id),
+    }),
+    db.query.aiJobs.findFirst({ where: eq(aiJobs.id, job.parentJobId) }),
+    readDeepReviewRunUsage(db, job.parentJobId),
+    db.$count(aiReviewItems, eq(aiReviewItems.parentJobId, job.parentJobId)),
+  ]);
   if (!item) throw new Error("Deep review item not found for this child job");
   if (item.state !== "selected") {
     // A replayed step, or a tree the cancel sweep already closed. Either way
@@ -690,19 +699,11 @@ async function executeDeepReviewTurn(
       reason: item.reason,
     };
   }
-  const parent = await db.query.aiJobs.findFirst({
-    where: eq(aiJobs.id, job.parentJobId),
-  });
   if (!parent) throw new Error("Deep review parent job not found");
 
-  const usage = await readDeepReviewRunUsage(db, job.parentJobId);
   // The per-job tool ceiling is shared across every file in the run, so a flat
   // limit would starve the tail of a large pull request. It scales with the
   // sealed denominator instead.
-  const selectedFiles = await db.$count(
-    aiReviewItems,
-    eq(aiReviewItems.parentJobId, job.parentJobId),
-  );
   const stop = deepReviewRunStop({
     parent,
     usage,
