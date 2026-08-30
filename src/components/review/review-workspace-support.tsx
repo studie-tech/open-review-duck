@@ -106,11 +106,11 @@ type ProviderConversationThread =
  * Splits the Markdown renderer out of the review page's first-load bundle.
  *
  * react-markdown pulls in the whole remark/rehype/parse5 closure, and every
- * render site here is behind something the reviewer has to trigger — a
- * finished AI job, a fetched provider conversation, an opened dialog — so
- * nothing renders it before the first diff row is interactive.
+ * render site is behind something the reviewer has to trigger — a finished AI
+ * job, a fetched provider conversation, an opened dialog — so nothing renders
+ * it before the first diff row is interactive.
  */
-const ProviderCommentBody = dynamic(() =>
+export const ProviderCommentBody = dynamic(() =>
   import("./provider-comment-body").then((m) => m.ProviderCommentBody),
 );
 
