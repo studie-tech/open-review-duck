@@ -1,6 +1,5 @@
 "use client";
 
-import { useMachine } from "@xstate/react";
 import {
   ArrowLeft,
   Ban,
@@ -944,7 +943,10 @@ interface LiveAiQuestion {
   threadId: string;
 }
 
-import { reviewSessionMachine } from "./review-session-machine";
+import {
+  initialReviewSessionState,
+  reviewSessionReducer,
+} from "./review-session-machine";
 import {
   ReviewFileCardHeader,
   ReviewFileUnitMarker,
@@ -1093,7 +1095,10 @@ export function ReviewWorkspace({
   const [loadingChanges, startLoadingChanges] = useTransition();
   const [layoutRefreshing, startLayoutRefresh] = useTransition();
   const [, startReviewFileAdvance] = useTransition();
-  const [reviewSession, sendReviewSession] = useMachine(reviewSessionMachine);
+  const [reviewSession, sendReviewSession] = useReducer(
+    reviewSessionReducer,
+    initialReviewSessionState,
+  );
   useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
   const unitsRef = useRef(units);
@@ -1978,7 +1983,7 @@ export function ReviewWorkspace({
     sendReviewSession({
       type: reviewComplete ? "REVIEW_COMPLETED" : "REVIEW_REOPENED",
     });
-  }, [reviewComplete, sendReviewSession]);
+  }, [reviewComplete]);
   useEffect(() => {
     if (reviewComplete && !previousReviewComplete.current) {
       setCompletionOpen(true);
@@ -3432,7 +3437,7 @@ export function ReviewWorkspace({
         waitingCount > 0 ? PROVIDER_CONVERSATION_REFRESH_MS : false,
     },
   );
-  const manualSyncPending = reviewSession.matches("synchronizing");
+  const manualSyncPending = reviewSession === "synchronizing";
   const pollLatestPullRequest = api.review.poll.useMutation({
     onSuccess: (result) => {
       setActiveSyncId(result.syncId);
@@ -3503,7 +3508,6 @@ export function ReviewWorkspace({
     }
   }, [
     activeSyncId,
-    sendReviewSession,
     syncStatus.data,
     utils.review.activeSyncs.invalidate,
     utils.review.dashboard.invalidate,
@@ -4843,7 +4847,7 @@ export function ReviewWorkspace({
 
     document.addEventListener("keydown", dismissEndState);
     return () => document.removeEventListener("keydown", dismissEndState);
-  }, [completionVisible, sendReviewSession, waitingCompletionVisible]);
+  }, [completionVisible, waitingCompletionVisible]);
   const canUseAi =
     aiConfiguration.data?.mode !== "off" &&
     !explanationRunning &&
