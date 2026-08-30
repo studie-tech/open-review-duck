@@ -2920,28 +2920,56 @@ export function ReviewWorkspace({
       signOffDrainRunning.current = false;
     }
   }
+  /**
+   * Returns the named units to the review path before the server answers.
+   *
+   * Sign-off paints through the queue the moment it is pressed, so undo has
+   * to as well: a mark that holds for a round trip reads as the control
+   * doing nothing to the reviewer who signed off by mistake. Only sign-offs
+   * that still stand are taken back, because one undo step can name units
+   * some other action has already given back.
+   */
+  function optimisticallyUndoSignOffs(unitIds: string[]) {
+    const named = new Set(unitIds);
+    const undone = unitsRef.current.filter(
+      (unit) => named.has(unit.id) && unit.status === "signed_off",
+    );
+    if (undone.length === 0) return;
+    const updated = optimisticallyUnreviewReviewUnits(
+      unitsRef.current,
+      undone.map(({ id }) => id),
+    );
+    unitsRef.current = updated;
+    setUnits(updated);
+    setStartedAt(Date.now());
+    return undone;
+  }
+
+  /** Puts back the sign-offs an undo took away but the server kept. */
+  function restoreUndoneSignOffs(undone: ReviewUnit[] | undefined) {
+    if (!undone) return;
+    const restored = new Map(undone.map((unit) => [unit.id, unit]));
+    const updated = unitsRef.current.map(
+      (unit) => restored.get(unit.id) ?? unit,
+    );
+    unitsRef.current = updated;
+    setUnits(updated);
+  }
+
   // Keyed by the unit the request named rather than the one on screen: undo
   // reaches back to a sign-off the reviewer has since moved on from.
   const undoSignOff = api.review.unreview.useMutation({
-    onSuccess: ({ unreviewed }, { unitId }) => {
-      if (!unreviewed) return;
+    onMutate: ({ unitId }) => optimisticallyUndoSignOffs([unitId]),
+    onSuccess: ({ unreviewed }, { unitId }, undone) => {
+      if (!unreviewed) {
+        restoreUndoneSignOffs(undone);
+        return;
+      }
       void Promise.all([
         utils.workspace.guidance.invalidate(),
         utils.review.dashboard.invalidate(),
         utils.review.gamification.invalidate(),
       ]);
-      setUnits((current) =>
-        current.map((unit) =>
-          unit.id === unitId
-            ? {
-                ...unit,
-                status: "pending" as const,
-                changedSinceSignOff: false,
-              }
-            : unit,
-        ),
-      );
-      setStartedAt(Date.now());
       // One undo of a many-unit step is one decision, so only the request
       // that finishes it says so.
       if (quietUndoUnitIds.current.delete(unitId)) return;
@@ -2949,33 +2977,34 @@ export function ReviewWorkspace({
         description: `${units.find(({ id }) => id === unitId)?.name ?? "The unit"} is back in your review queue.`,
       });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, undone) => {
+      restoreUndoneSignOffs(undone);
+      toast.error(error.message);
+    },
   });
   const signOffConcept = api.review.signOffConcept.useMutation();
   const undoConcept = api.review.unreviewConcept.useMutation({
-    onSuccess: ({ unreviewed, unitIds }) => {
-      if (!unreviewed) return;
-      const affected = new Set(unitIds);
-      setUnits((current) =>
-        current.map((unit) =>
-          affected.has(unit.id)
-            ? {
-                ...unit,
-                status: "pending" as const,
-                changedSinceSignOff: false,
-              }
-            : unit,
-        ),
-      );
+    onMutate: ({ conceptId }) => {
+      const concept = initialData.concepts.find(({ id }) => id === conceptId);
+      if (!concept) return;
+      return optimisticallyUndoSignOffs(concept.memberIds);
+    },
+    onSuccess: ({ unreviewed }, _input, undone) => {
+      if (!unreviewed) {
+        restoreUndoneSignOffs(undone);
+        return;
+      }
       void Promise.all([
         utils.workspace.guidance.invalidate(),
         utils.review.dashboard.invalidate(),
         utils.review.gamification.invalidate(),
       ]);
-      setStartedAt(Date.now());
       toast.success("Concept returned to the review path");
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, _input, undone) => {
+      restoreUndoneSignOffs(undone);
+      toast.error(error.message);
+    },
   });
   // Improve, Split, and Move member all funnel into the same layout mutation,
   // so the pressed control is remembered to keep its spinner on that control.
@@ -8285,29 +8314,14 @@ export function ReviewWorkspace({
                       variant="secondary"
                       className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
                       onClick={unreviewActiveUnit}
-                      disabled={undoSignOff.isPending || undoConcept.isPending}
                     >
-                      {undoSignOff.isPending || undoConcept.isPending ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <Undo2 className="size-4" />
-                      )}
-                      <span className="hidden sm:inline">
-                        {undoSignOff.isPending || undoConcept.isPending
-                          ? "Undoing…"
-                          : "Undo concept"}
-                      </span>
-                      <span className="sm:hidden">
-                        {undoSignOff.isPending || undoConcept.isPending
-                          ? "Undoing…"
-                          : "Undo"}
-                      </span>
-                      {!undoSignOff.isPending && !undoConcept.isPending && (
-                        <ShortcutHint
-                          shortcut={reviewShortcuts.undoReview}
-                          className="hidden sm:inline-flex"
-                        />
-                      )}
+                      <Undo2 className="size-4" />
+                      <span className="hidden sm:inline">Undo concept</span>
+                      <span className="sm:hidden">Undo</span>
+                      <ShortcutHint
+                        shortcut={reviewShortcuts.undoReview}
+                        className="hidden sm:inline-flex"
+                      />
                     </Button>
                   )}
                   <Button
@@ -8449,25 +8463,14 @@ export function ReviewWorkspace({
                         variant="secondary"
                         className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
                         onClick={unreviewActiveUnit}
-                        disabled={undoSignOff.isPending}
                       >
-                        {undoSignOff.isPending ? (
-                          <LoaderCircle className="size-4 animate-spin" />
-                        ) : (
-                          <Undo2 className="size-4" />
-                        )}
-                        <span className="hidden sm:inline">
-                          {undoSignOff.isPending ? "Undoing…" : "Undo review"}
-                        </span>
-                        <span className="sm:hidden">
-                          {undoSignOff.isPending ? "Undoing…" : "Undo"}
-                        </span>
-                        {!undoSignOff.isPending && (
-                          <ShortcutHint
-                            shortcut={reviewShortcuts.undoReview}
-                            className="hidden sm:inline-flex"
-                          />
-                        )}
+                        <Undo2 className="size-4" />
+                        <span className="hidden sm:inline">Undo review</span>
+                        <span className="sm:hidden">Undo</span>
+                        <ShortcutHint
+                          shortcut={reviewShortcuts.undoReview}
+                          className="hidden sm:inline-flex"
+                        />
                       </Button>
                     )}
                   {activeWaitStatus === "waiting" ? (
