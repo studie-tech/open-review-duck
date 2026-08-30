@@ -49,7 +49,15 @@ import {
   hydratePrivateReviewSources,
   prioritizePrivateReviewSources,
 } from "~/lib/private-source-client";
-import { type ReviewFileEntry, reviewFileEntries } from "~/lib/review-files";
+import {
+  outstandingReviewFileUnits,
+  type ReviewFileEntry,
+  reviewFileEntries,
+} from "~/lib/review-files";
+import {
+  optimisticallySignOffReviewUnits,
+  optimisticallyUnreviewReviewUnits,
+} from "~/lib/review-navigation";
 import { readerShortcuts } from "~/lib/review-shortcuts";
 import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
 import { api, type RouterOutputs } from "~/trpc/react";
@@ -103,6 +111,7 @@ export function RepositoryReader({
     initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
   );
   const [pendingFileId, setPendingFileId] = useState<string>();
+  const fileToggleRollback = useRef<Workspace["units"] | undefined>(undefined);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
   const ruleInstructionRef = useRef<HTMLTextAreaElement>(null);
@@ -352,6 +361,7 @@ export function RepositoryReader({
   const signOffFile = api.review.signOffFile.useMutation({
     onSuccess: ({ snapshotFileId, signedUnitIds }) => {
       const signedIds = new Set(signedUnitIds);
+      fileToggleRollback.current = undefined;
       setUnits((current) =>
         current.map((unit) =>
           signedIds.has(unit.id)
@@ -372,6 +382,9 @@ export function RepositoryReader({
       });
     },
     onError: (error) => {
+      const rollback = fileToggleRollback.current;
+      fileToggleRollback.current = undefined;
+      if (rollback) setUnits(rollback);
       setPendingFileId(undefined);
       toast.error("Could not save file progress", {
         description: error.message,
@@ -381,6 +394,7 @@ export function RepositoryReader({
   const unreviewFile = api.review.unreviewFile.useMutation({
     onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
       const unreviewedIds = new Set(unreviewedUnitIds);
+      fileToggleRollback.current = undefined;
       setUnits((current) =>
         current.map((unit) =>
           unreviewedIds.has(unit.id)
@@ -401,6 +415,9 @@ export function RepositoryReader({
       toast.success("File returned to review");
     },
     onError: (error) => {
+      const rollback = fileToggleRollback.current;
+      fileToggleRollback.current = undefined;
+      if (rollback) setUnits(rollback);
       setPendingFileId(undefined);
       toast.error("Could not return file to review", {
         description: error.message,
@@ -414,17 +431,32 @@ export function RepositoryReader({
   const toggleReviewFile = useCallback(
     (file: ReviewFileEntry) => {
       if (pendingFileId || file.totalUnits === 0) return;
+      fileToggleRollback.current = units;
       setPendingFileId(file.id);
       if (file.state === "reviewed") {
+        setUnits(
+          optimisticallyUnreviewReviewUnits(
+            units,
+            file.units
+              .filter((unit) => unit.status === "signed_off")
+              .map((unit) => unit.id),
+          ),
+        );
         unreviewFileStart({ snapshotFileId: file.id });
-      } else {
-        signOffFileStart({
-          snapshotFileId: file.id,
-          durationSeconds: 0,
-        });
+        return;
       }
+      setUnits(
+        optimisticallySignOffReviewUnits(
+          units,
+          outstandingReviewFileUnits(file).map((unit) => unit.id),
+        ),
+      );
+      signOffFileStart({
+        snapshotFileId: file.id,
+        durationSeconds: 0,
+      });
     },
-    [pendingFileId, signOffFileStart, unreviewFileStart],
+    [pendingFileId, signOffFileStart, units, unreviewFileStart],
   );
 
   /** Advances to the next unread unit, wrapping once past the end. */

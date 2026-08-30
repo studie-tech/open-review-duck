@@ -1,4 +1,5 @@
 import { builtinTypes, keywords, type SyntaxToken } from "./highlight-tokens";
+import { findImportedDeclarationLine } from "./import-navigation";
 
 /** Longest excerpt a definition preview shows before the reader scrolls it. */
 export const SYMBOL_PEEK_MAXIMUM_LINES = 18;
@@ -91,6 +92,110 @@ export function definitionIsWhereTheNameWasRead(
     read.line >= definition.startLine &&
     read.line <= definition.endLine
   );
+}
+
+/** Lines of context kept above a scanned same-file declaration. */
+const SAME_FILE_PEEK_LEAD_LINES = 2;
+
+/**
+ * Infers the kind badge from the line that declared the name.
+ *
+ * A source scan never produced a review unit, so the declaration's own
+ * keyword is the only kind the card can honestly show.
+ */
+function declarationKindFromLine(line: string) {
+  if (/\b(?:type|interface|enum)\b/.test(line)) return "type";
+  if (/\bclass\b/.test(line)) return "class";
+  if (/\bfunction\b/.test(line)) return "function";
+  if (/\bconst\b/.test(line)) return "constant";
+  return "variable";
+}
+
+/**
+ * Builds a definition card from a same-file binding the analyzer never stored.
+ *
+ * Nested `const` bindings and other locals are not review units, so hovering
+ * one used later in the same file used to look up nothing. The file source is
+ * already in hand; the declaration line is enough to window a preview.
+ */
+export function sameFileDeclarationPeek({
+  language,
+  path,
+  source,
+  startLine = 1,
+  symbol,
+}: {
+  language: string;
+  path: string;
+  source: string;
+  startLine?: number;
+  symbol: string;
+}) {
+  const focusLine = findImportedDeclarationLine(
+    source,
+    symbol,
+    language,
+    startLine,
+  );
+  if (focusLine === undefined) return undefined;
+  const lines = source.split("\n");
+  const offset = Math.min(
+    Math.max(0, focusLine - startLine - SAME_FILE_PEEK_LEAD_LINES),
+    Math.max(0, lines.length - 1),
+  );
+  const excerpt = lines
+    .slice(
+      offset,
+      offset + SYMBOL_PEEK_MAXIMUM_LINES + SAME_FILE_PEEK_LEAD_LINES * 2,
+    )
+    .join("\n");
+  const excerptLines = excerpt.split("\n");
+  return {
+    kind: "definition" as const,
+    endLine: startLine + offset + Math.max(0, excerptLines.length - 1),
+    focusLine,
+    language,
+    name: symbol,
+    path,
+    source: excerpt,
+    startLine: startLine + offset,
+    unitKind: declarationKindFromLine(lines[focusLine - startLine] ?? ""),
+  };
+}
+
+/**
+ * Prefers a parsed unit, then a same-file source scan, when either is elsewhere.
+ *
+ * An analyzed unit that already covers the hovered line is the code on screen,
+ * so it is skipped. A scanned excerpt may still include that line as context,
+ * and must not be silenced for that: only sitting on the declaration itself
+ * is treated as already answered.
+ */
+export function localDefinitionForPeek<
+  T extends { endLine: number; path: string; startLine: number },
+  S extends {
+    endLine: number;
+    focusLine: number;
+    path: string;
+    startLine: number;
+  },
+>(
+  analyzed: T | undefined,
+  scanned: S | undefined,
+  read: { line?: number; path: string },
+) {
+  if (analyzed && !definitionIsWhereTheNameWasRead(analyzed, read)) {
+    return analyzed;
+  }
+  if (
+    scanned &&
+    (read.line === undefined ||
+      scanned.path !== read.path ||
+      read.line !== scanned.focusLine)
+  ) {
+    return scanned;
+  }
+  return undefined;
 }
 
 export interface PeekPlacement {

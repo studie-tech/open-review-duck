@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, GitPullRequest, Loader2 } from "lucide-react";
+import { ExternalLink, GitPullRequest } from "lucide-react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -103,11 +103,11 @@ export function UnimportedPullRequestList({
                 </a>
                 <Button
                   size="sm"
+                  loading={pending}
                   disabled={pending}
                   onClick={() => onPrepare(pullRequest)}
                 >
-                  {pending && <Loader2 className="size-3.5 animate-spin" />}
-                  Add for review
+                  {pending ? "Preparing…" : "Add for review"}
                 </Button>
               </div>
             </article>

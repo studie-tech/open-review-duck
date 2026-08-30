@@ -343,10 +343,10 @@ describe("PullRequestsContent", () => {
       screen.getByRole("combobox", { name: "Filter by provider" }),
       "gitlab",
     );
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Filter by repository" }),
-      "gitlab:payments/api",
+    await user.click(
+      screen.getByRole("button", { name: "Filter by repository" }),
     );
+    await user.click(screen.getByRole("option", { name: "payments/api" }));
     view.rerender(
       <PullRequestsContent
         initialPullRequests={items.filter(({ id }) => id !== "ready")}
@@ -354,8 +354,8 @@ describe("PullRequestsContent", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("combobox", { name: "Filter by repository" }),
-      ).toHaveValue("all"),
+        screen.getByRole("button", { name: "Filter by repository" }),
+      ).toHaveTextContent("All repositories"),
     );
   });
 
@@ -420,17 +420,17 @@ describe("PullRequestsContent", () => {
       screen.getByRole("combobox", { name: "Filter by provider" }),
       "gitlab",
     );
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Filter by repository" }),
-      "gitlab:payments/api",
+    await user.click(
+      screen.getByRole("button", { name: "Filter by repository" }),
     );
+    await user.click(screen.getByRole("option", { name: "payments/api" }));
     await user.type(
       screen.getByRole("searchbox", { name: "Search pull requests" }),
       "sonia",
     );
     expect(dashboardFilters(localStorage)).toEqual({
       provider: "gitlab",
-      repository: "gitlab:payments/api",
+      repositories: ["gitlab:payments/api"],
       search: "sonia",
       showDrafts: true,
     });
@@ -443,8 +443,8 @@ describe("PullRequestsContent", () => {
       ).toHaveValue("gitlab");
     });
     expect(
-      screen.getByRole("combobox", { name: "Filter by repository" }),
-    ).toHaveValue("gitlab:payments/api");
+      screen.getByRole("button", { name: "Filter by repository" }),
+    ).toHaveTextContent("payments/api");
     expect(
       screen.getByRole("searchbox", { name: "Search pull requests" }),
     ).toHaveValue("sonia");
@@ -452,6 +452,58 @@ describe("PullRequestsContent", () => {
     expect(
       screen.queryByText("Inventory improvements"),
     ).not.toBeInTheDocument();
+  });
+
+  it("can keep more than one repository selected in the inbox filter", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    render(
+      <PullRequestsContent
+        initialPullRequests={[
+          pullRequest({
+            id: "ready",
+            number: 102,
+            title: "Retry settlement webhooks",
+            provider: "gitlab",
+            repositoryOwner: "payments",
+            repositoryName: "api",
+          }),
+          pullRequest({
+            id: "continue",
+            number: 101,
+            title: "Inventory improvements",
+            signedUnits: 2,
+          }),
+          pullRequest({
+            id: "other",
+            number: 88,
+            title: "Azure handoff",
+            provider: "azure_devops",
+            repositoryOwner: "ops",
+            repositoryName: "hub",
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Filter by repository" }),
+    );
+    await user.click(
+      screen.getByRole("option", { name: "payments/api · GitLab" }),
+    );
+    await user.click(screen.getByRole("option", { name: "acme/web · GitHub" }));
+
+    expect(
+      screen.getByRole("button", { name: "Filter by repository" }),
+    ).toHaveTextContent("2 repositories");
+    expect(screen.getByText("Retry settlement webhooks")).toBeVisible();
+    expect(screen.getByText("Inventory improvements")).toBeVisible();
+    expect(screen.queryByText("Azure handoff")).not.toBeInTheDocument();
+    expect(dashboardFilters(localStorage).repositories).toEqual([
+      "gitlab:payments/api",
+      "github:acme/web",
+    ]);
   });
 
   it("hides draft pull requests from the inbox when the drafts switch is off", async () => {

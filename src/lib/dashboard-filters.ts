@@ -6,7 +6,7 @@ export type DashboardProviderFilter = "all" | PriorityInboxItem["provider"];
 
 export interface DashboardFilters {
   provider: DashboardProviderFilter;
-  repository: string;
+  repositories: string[];
   search: string;
   showDrafts: boolean;
 }
@@ -20,10 +20,28 @@ const providers = new Set<DashboardProviderFilter>([
 
 export const defaultDashboardFilters: DashboardFilters = {
   provider: "all",
-  repository: "all",
+  repositories: [],
   search: "",
   showDrafts: true,
 };
+
+/** Normalizes a stored repository filter, including the older single-select string. */
+export function normalizeRepositoryFilter(value: unknown) {
+  if (Array.isArray(value)) {
+    return [
+      ...new Set(
+        value.filter(
+          (item): item is string =>
+            typeof item === "string" && item.length > 0 && item !== "all",
+        ),
+      ),
+    ];
+  }
+  if (typeof value === "string" && value.length > 0 && value !== "all") {
+    return [value];
+  }
+  return [];
+}
 
 /** Returns whether a stored provider value is one the inbox can apply. */
 function isProviderFilter(value: unknown): value is DashboardProviderFilter {
@@ -37,13 +55,14 @@ export function dashboardFilters(storage: Pick<Storage, "getItem">) {
   try {
     const stored = storage.getItem(DASHBOARD_FILTERS_STORAGE_KEY);
     if (!stored) return defaultDashboardFilters;
-    const parsed = JSON.parse(stored) as Partial<DashboardFilters>;
+    const parsed = JSON.parse(stored) as Partial<DashboardFilters> & {
+      repository?: unknown;
+    };
     return {
       provider: isProviderFilter(parsed.provider) ? parsed.provider : "all",
-      repository:
-        typeof parsed.repository === "string" && parsed.repository.length > 0
-          ? parsed.repository
-          : "all",
+      repositories: normalizeRepositoryFilter(
+        parsed.repositories ?? parsed.repository,
+      ),
       search: typeof parsed.search === "string" ? parsed.search : "",
       showDrafts: parsed.showDrafts !== false,
     } satisfies DashboardFilters;

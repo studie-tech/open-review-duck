@@ -11,7 +11,6 @@ import {
   Folder,
   FolderOpen,
   List,
-  LoaderCircle,
 } from "lucide-react";
 import {
   type KeyboardEvent,
@@ -52,8 +51,7 @@ function FileReviewCheckbox({
 }) {
   const checked = file.state === "reviewed";
   const mixed = file.state === "partial" || file.state === "waiting";
-  const disabled =
-    pending || file.totalUnits === 0 || (!checked && file.waitingUnits > 0);
+  const disabled = file.totalUnits === 0 || (!checked && file.waitingUnits > 0);
   const action = checked ? "Return" : "Sign off";
   const checkboxRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -89,14 +87,12 @@ function FileReviewCheckbox({
         type="checkbox"
         checked={checked}
         aria-label={`${action} ${file.totalUnits} review ${file.totalUnits === 1 ? "unit" : "units"} in ${file.path}.${waitReason}`}
-        disabled={disabled}
+        disabled={disabled || pending}
         onMouseDown={(event) => event.preventDefault()}
         onChange={() => onToggle(file)}
         className="sr-only"
       />
-      {pending ? (
-        <LoaderCircle className="size-3 animate-spin" />
-      ) : checked ? (
+      {checked ? (
         <Check className="size-3" strokeWidth={3} />
       ) : mixed ? (
         <span className="h-0.5 w-2 rounded-full bg-current" />
@@ -130,7 +126,7 @@ function ReviewFileRow({
       aria-current={selected ? "page" : undefined}
       aria-label={`${file.path}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
       className={cn(
-        "group flex min-w-0 items-start gap-2 rounded-xl py-2 pr-2 transition",
+        "group flex min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 transition",
         selected ? "bg-cyan/[.075]" : "hover:bg-surface-subtle",
       )}
       style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
@@ -140,47 +136,33 @@ function ReviewFileRow({
         type="button"
         id={reviewFileTreeControlId(file.path)}
         onClick={() => onSelect(file)}
-        className="min-w-0 flex-1 text-left"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         title={file.path}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
-          {file.isBinary ? (
-            <FileCode2 className="text-fog size-3 shrink-0" />
-          ) : (
-            <FileDiff className="text-fog size-3 shrink-0" />
-          )}
-          <span className="truncate font-mono text-[10px] text-cloud">
-            {name}
+        {file.isBinary ? (
+          <FileCode2 className="text-fog size-3 shrink-0" />
+        ) : (
+          <FileDiff className="text-fog size-3 shrink-0" />
+        )}
+        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-cloud">
+          {name}
+        </span>
+        {file.waitingUnits > 0 && (
+          <span className="text-cyan flex shrink-0 items-center gap-0.5 text-[8px]">
+            <Clock3 className="size-2.5" />
+            {file.waitingUnits}
           </span>
-          {file.changeType !== "modified" && (
-            <span className="text-fog shrink-0 text-[8px] uppercase">
-              {file.changeType}
-            </span>
-          )}
-        </span>
-        <span className="text-fog mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[8px]">
-          {file.totalUnits > 0 ? (
-            <span>
-              {file.reviewedUnits}/{file.totalUnits} reviewed
-            </span>
-          ) : (
-            <span>No review units</span>
-          )}
-          {file.newUnits > 0 && (
-            <span className="text-cyan">{file.newUnits} new</span>
-          )}
-          {file.updatedUnits > 0 && (
-            <span className="text-amber-700 dark:text-amber-300">
-              {file.updatedUnits} updated
-            </span>
-          )}
-          {file.waitingUnits > 0 && (
-            <span className="text-cyan flex items-center gap-1">
-              <Clock3 className="size-2.5" />
-              {file.waitingUnits} waiting
-            </span>
-          )}
-        </span>
+        )}
+        {file.newUnits + file.updatedUnits > 0 && (
+          <span className="text-cyan shrink-0 text-[8px]">
+            {file.newUnits + file.updatedUnits}
+          </span>
+        )}
+        {file.totalUnits > 0 && (
+          <span className="text-fog shrink-0 text-[8px]">
+            {file.reviewedUnits}/{file.totalUnits}
+          </span>
+        )}
       </button>
     </div>
   );

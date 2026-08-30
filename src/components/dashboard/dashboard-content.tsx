@@ -18,6 +18,7 @@ import {
   DashboardSyncPanel,
 } from "~/components/dashboard/dashboard-panels";
 import { PullRequestList } from "~/components/dashboard/pull-request-list";
+import { RepositoryFilter } from "~/components/dashboard/repository-filter";
 import { UnimportedPullRequestList } from "~/components/dashboard/unimported-pull-request-list";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
@@ -39,6 +40,7 @@ import {
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
 import { partitionReviewQueue } from "~/lib/review-queue";
+import { followActiveReviewJobs } from "~/lib/sync-progress";
 import {
   filterUnimportedPullRequests,
   type UnimportedPullRequest,
@@ -107,15 +109,14 @@ export function PullRequestsContent({
   const [providerFilter, setProviderFilter] = useState<
     "all" | PriorityInboxItem["provider"]
   >("all");
-  const [repositoryFilter, setRepositoryFilter] = useState("all");
+  const [repositoryFilter, setRepositoryFilter] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showDrafts, setShowDrafts] = useState(true);
   const [filtersReady, setFiltersReady] = useState(false);
   const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-    refetchInterval: (query) =>
-      (query.state.data?.length ?? 0) > 0 ? 1_500 : false,
+    refetchInterval: followActiveReviewJobs,
   });
   const recentSyncFailures = api.review.recentSyncFailures.useQuery(undefined, {
     refetchOnMount: "always",
@@ -211,11 +212,12 @@ export function PullRequestsContent({
         description: `Pull request #${input.number} is being prepared in the background.`,
       });
     },
-    onError: (error) =>
+    onError: (error) => {
+      setPendingUnimportedKey(undefined);
       toast.error("Could not prepare review", {
         description: error.message,
-      }),
-    onSettled: () => setPendingUnimportedKey(undefined),
+      });
+    },
   });
 
   useEffect(() => {
@@ -251,6 +253,25 @@ export function PullRequestsContent({
       ),
     [synchronizing],
   );
+  useEffect(() => {
+    if (!pendingUnimportedKey) return;
+    if (syncingUnimportedKeys.has(pendingUnimportedKey)) {
+      setPendingUnimportedKey(undefined);
+      return;
+    }
+    const stillListed = unimportedSource.some(
+      (pullRequest) =>
+        unimportedPullRequestKey(pullRequest) === pendingUnimportedKey,
+    );
+    if (!stillListed && !prepareReview.isPending) {
+      setPendingUnimportedKey(undefined);
+    }
+  }, [
+    pendingUnimportedKey,
+    prepareReview.isPending,
+    syncingUnimportedKeys,
+    unimportedSource,
+  ]);
   const availableUnimported = useMemo(
     () =>
       unimportedSource.filter(
@@ -271,7 +292,7 @@ export function PullRequestsContent({
       filterPriorityInbox(sourceItems, {
         view: "all",
         provider: providerFilter,
-        repository: repositoryFilter,
+        repositories: repositoryFilter,
         search: searchQuery,
         includeDrafts: showDrafts,
       }),
@@ -291,7 +312,7 @@ export function PullRequestsContent({
       filterUnimportedPullRequests(availableUnimported, {
         includeDrafts: showDrafts,
         provider: providerFilter,
-        repository: repositoryFilter,
+        repositories: repositoryFilter,
         search: searchQuery,
       }),
     [
@@ -310,7 +331,7 @@ export function PullRequestsContent({
     filterPriorityInbox(items, {
       view,
       provider: providerFilter,
-      repository: repositoryFilter,
+      repositories: repositoryFilter,
       search: searchQuery,
       includeDrafts: showDrafts,
     });
@@ -365,7 +386,7 @@ export function PullRequestsContent({
   useEffect(() => {
     const stored = dashboardFilters(window.localStorage);
     setProviderFilter(stored.provider);
-    setRepositoryFilter(stored.repository);
+    setRepositoryFilter(stored.repositories);
     setSearchQuery(stored.search);
     setShowDrafts(stored.showDrafts);
     setFiltersReady(true);
@@ -374,23 +395,21 @@ export function PullRequestsContent({
     if (!filtersReady) return;
     rememberDashboardFilters(window.localStorage, {
       provider: providerFilter,
-      repository: repositoryFilter,
+      repositories: repositoryFilter,
       search: searchQuery,
       showDrafts,
     });
   }, [filtersReady, providerFilter, repositoryFilter, searchQuery, showDrafts]);
   useEffect(() => {
-    if (
-      repositoryFilter !== "all" &&
-      !repositories.some((repository) => repository.key === repositoryFilter)
-    ) {
-      setRepositoryFilter("all");
+    const available = new Set(repositories.map((repository) => repository.key));
+    if (repositoryFilter.some((key) => !available.has(key))) {
+      setRepositoryFilter(repositoryFilter.filter((key) => available.has(key)));
     }
   }, [repositories, repositoryFilter]);
   const filtersActive =
     workView !== "all" ||
     providerFilter !== "all" ||
-    repositoryFilter !== "all" ||
+    repositoryFilter.length > 0 ||
     searchQuery.trim().length > 0;
   const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
@@ -419,14 +438,14 @@ export function PullRequestsContent({
       return filterUnimportedPullRequests(availableUnimported, {
         includeDrafts: true,
         provider: providerFilter,
-        repository: repositoryFilter,
+        repositories: repositoryFilter,
         search: searchQuery,
       });
     }
     const matching = filterPriorityInbox(sourceItems, {
       view: "all",
       provider: providerFilter,
-      repository: repositoryFilter,
+      repositories: repositoryFilter,
       search: searchQuery,
       includeDrafts: true,
     });
@@ -452,7 +471,7 @@ export function PullRequestsContent({
           filterUnimportedPullRequests(availableUnimported, {
             includeDrafts: true,
             provider: providerFilter,
-            repository: repositoryFilter,
+            repositories: repositoryFilter,
             search: searchQuery,
           }).some((pullRequest) => pullRequest.state === "draft")));
 
@@ -460,7 +479,7 @@ export function PullRequestsContent({
   function clearFilters() {
     setWorkView("all");
     setProviderFilter("all");
-    setRepositoryFilter("all");
+    setRepositoryFilter([]);
     setSearchQuery("");
   }
 
@@ -496,9 +515,10 @@ export function PullRequestsContent({
         <DashboardFailurePanel
           failedSyncs={failedSyncs}
           retryingKey={
-            prepareReview.isPending
+            pendingUnimportedKey ??
+            (prepareReview.isPending
               ? `${prepareReview.variables?.repositoryId}:${prepareReview.variables?.number}`
-              : undefined
+              : undefined)
           }
           onRetry={(sync) =>
             prepareReview.mutate({
@@ -672,7 +692,6 @@ export function PullRequestsContent({
                             | "all"
                             | PriorityInboxItem["provider"],
                         );
-                        setRepositoryFilter("all");
                       }}
                       className="bg-ink/35 h-9 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-36"
                     >
@@ -685,24 +704,12 @@ export function PullRequestsContent({
                         ),
                       )}
                     </select>
-                    <select
-                      aria-label="Filter by repository"
-                      value={repositoryFilter}
-                      onChange={(event) =>
-                        setRepositoryFilter(event.currentTarget.value)
-                      }
-                      className="bg-ink/35 h-9 min-w-0 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-52"
-                    >
-                      <option value="all">All repositories</option>
-                      {repositories.map((repository) => (
-                        <option key={repository.key} value={repository.key}>
-                          {repository.label}
-                          {providerFilter === "all"
-                            ? ` · ${providerLabel[repository.provider]}`
-                            : ""}
-                        </option>
-                      ))}
-                    </select>
+                    <RepositoryFilter
+                      onChange={setRepositoryFilter}
+                      providerFilter={providerFilter}
+                      repositories={repositories}
+                      selected={repositoryFilter}
+                    />
                     <button
                       type="button"
                       role="switch"

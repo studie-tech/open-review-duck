@@ -64,7 +64,7 @@ export function filterUnimportedPullRequests<T extends UnimportedPullRequest>(
   filters: {
     includeDrafts?: boolean;
     provider: "all" | PriorityInboxItem["provider"];
-    repository: "all" | string;
+    repositories: readonly string[];
     search: string;
   },
 ) {
@@ -72,7 +72,7 @@ export function filterUnimportedPullRequests<T extends UnimportedPullRequest>(
     filterPriorityInbox(pullRequests.map(asPriorityInboxItem), {
       includeDrafts: filters.includeDrafts,
       provider: filters.provider,
-      repository: filters.repository,
+      repositories: filters.repositories,
       search: filters.search,
       view: "all",
     }).map((pullRequest) => pullRequest.id),

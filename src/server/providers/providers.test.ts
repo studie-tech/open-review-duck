@@ -1839,6 +1839,348 @@ describe("provider normalization", () => {
     });
   });
 
+  it("normalizes GitHub checks and merges the reviewed commit", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/pulls/12")) {
+          return jsonResponse({
+            id: 12,
+            number: 12,
+            title: "Checks",
+            body: null,
+            state: "open",
+            html_url: "https://github.com/acme/review/pull/12",
+            user: { id: 9, login: "author", avatar_url: "" },
+            head: { ref: "feature", sha: "head-sha" },
+            base: { ref: "main", sha: "base-sha" },
+            mergeable: true,
+            mergeable_state: "unstable",
+          });
+        }
+        if (url.includes("/check-runs")) {
+          return jsonResponse({
+            check_runs: [
+              {
+                id: 1,
+                name: "ci / test",
+                status: "completed",
+                conclusion: "success",
+                html_url: "https://github.com/acme/review/actions/1",
+                output: { title: "12 passed" },
+              },
+              {
+                id: 2,
+                name: "lint",
+                status: "completed",
+                conclusion: "failure",
+                output: { title: "Process completed with exit code 1" },
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/status")) {
+          return jsonResponse({
+            statuses: [
+              {
+                id: 9,
+                context: "ci / test",
+                state: "success",
+                description: "duplicate",
+              },
+              {
+                id: 10,
+                context: "coverage",
+                state: "pending",
+                description: "Uploading",
+                target_url: "https://codecov.example/10",
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/merge") && init?.method === "PUT") {
+          return jsonResponse({ merged: true, sha: "merge-sha" });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      checks: [
+        {
+          id: "check-1",
+          name: "ci / test",
+          state: "success",
+          description: "12 passed",
+          webUrl: "https://github.com/acme/review/actions/1",
+        },
+        {
+          id: "check-2",
+          name: "lint",
+          state: "failure",
+          description: "Process completed with exit code 1",
+          webUrl: undefined,
+        },
+        {
+          id: "status-10",
+          name: "coverage",
+          state: "in_progress",
+          description: "Uploading",
+          webUrl: "https://codecov.example/10",
+        },
+      ],
+      summary: "failing",
+      pullRequestState: "open",
+      headSha: "head-sha",
+      mergeable: true,
+      canMerge: true,
+      mergeBlockedReason: undefined,
+      mergeActionLabel: "Merge",
+    });
+    await provider.mergePullRequest({
+      repositoryExternalId: "42",
+      pullRequestNumber: 12,
+      headSha: "head-sha",
+    });
+    const mergeRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestUrl(input).endsWith("/merge") && init?.method === "PUT",
+    );
+    expect(JSON.parse(String(mergeRequest?.[1]?.body))).toEqual({
+      sha: "head-sha",
+      merge_method: "merge",
+    });
+  });
+
+  it("surfaces GitLab pipeline failures and merge blockers", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/merge_requests/12")) {
+          return jsonResponse({
+            id: 12,
+            iid: 12,
+            title: "Pipelines",
+            description: null,
+            state: "opened",
+            draft: false,
+            web_url: "https://gitlab.com/acme/review/-/merge_requests/12",
+            source_branch: "feature",
+            target_branch: "main",
+            sha: "head-sha",
+            diff_refs: { base_sha: "base-sha", head_sha: "head-sha" },
+            author: { id: 9, username: "author", avatar_url: null },
+            detailed_merge_status: "ci_must_pass",
+          });
+        }
+        if (url.includes("/pipelines?") && !url.includes("/jobs")) {
+          return jsonResponse([
+            {
+              id: 80,
+              status: "failed",
+              name: "merge request",
+              web_url: "https://gitlab.com/acme/review/-/pipelines/80",
+            },
+            {
+              id: 70,
+              status: "success",
+              name: "merge request",
+              web_url: "https://gitlab.com/acme/review/-/pipelines/70",
+            },
+          ]);
+        }
+        if (url.includes("/pipelines/80/jobs")) {
+          return jsonResponse([
+            {
+              id: 3,
+              name: "test",
+              stage: "verify",
+              status: "failed",
+              failure_reason: "script_failure",
+              web_url: "https://gitlab.com/acme/review/-/jobs/3",
+            },
+            {
+              id: 4,
+              name: "optional",
+              status: "failed",
+              allow_failure: true,
+              failure_reason: "script_failure",
+            },
+          ]);
+        }
+        if (url.endsWith("/merge") && init?.method === "PUT") {
+          return jsonResponse({
+            id: 12,
+            iid: 12,
+            title: "Pipelines",
+            description: null,
+            state: "merged",
+            draft: false,
+            web_url: "https://gitlab.com/acme/review/-/merge_requests/12",
+            source_branch: "feature",
+            target_branch: "main",
+            sha: "head-sha",
+            diff_refs: { base_sha: "base-sha", head_sha: "head-sha" },
+            author: { id: 9, username: "author", avatar_url: null },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitLabProvider("token");
+
+    await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      checks: [
+        {
+          id: "pipeline-80",
+          name: "merge request",
+          state: "failure",
+          webUrl: "https://gitlab.com/acme/review/-/pipelines/80",
+        },
+        {
+          id: "job-3",
+          name: "verify / test",
+          state: "failure",
+          description: "Script failed",
+          webUrl: "https://gitlab.com/acme/review/-/jobs/3",
+        },
+        {
+          id: "job-4",
+          name: "optional",
+          state: "skipped",
+          description: "Script failed",
+          webUrl: undefined,
+        },
+      ],
+      summary: "failing",
+      pullRequestState: "open",
+      headSha: "head-sha",
+      mergeable: null,
+      canMerge: false,
+      mergeBlockedReason: "Pipeline must succeed before this can be merged",
+      mergeActionLabel: "Merge",
+    });
+    await provider.mergePullRequest({
+      repositoryExternalId: "42",
+      pullRequestNumber: 12,
+      headSha: "head-sha",
+    });
+    const mergeRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestUrl(input).endsWith("/merge") && init?.method === "PUT",
+    );
+    expect(JSON.parse(String(mergeRequest?.[1]?.body))).toEqual({
+      sha: "head-sha",
+      should_remove_source_branch: false,
+    });
+  });
+
+  it("normalizes Azure statuses and completes the reviewed commit", async () => {
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.includes("/statuses?")) {
+          return jsonResponse({
+            value: [
+              {
+                id: 1,
+                state: "failed",
+                description: "Build failed",
+                context: { name: "Build" },
+                targetUrl: "https://dev.azure.com/acme/build/1",
+                creationDate: "2026-08-30T08:00:00Z",
+              },
+              {
+                id: 2,
+                state: "succeeded",
+                description: "Build recovered",
+                context: { name: "Build" },
+                creationDate: "2026-08-30T09:00:00Z",
+              },
+            ],
+          });
+        }
+        if (url.includes("/pullRequests/12?") && init?.method === "PATCH") {
+          return jsonResponse({
+            pullRequestId: 12,
+            title: "Checks",
+            status: "completed",
+            isDraft: false,
+            sourceRefName: "refs/heads/feature",
+            targetRefName: "refs/heads/main",
+            lastMergeSourceCommit: { commitId: "head-sha" },
+            lastMergeTargetCommit: { commitId: "base-sha" },
+            repository: { webUrl: "https://dev.azure.com/acme/repo" },
+            createdBy: { id: "author-1", displayName: "Author" },
+          });
+        }
+        if (url.includes("/pullRequests/12?")) {
+          return jsonResponse({
+            pullRequestId: 12,
+            title: "Checks",
+            status: "active",
+            isDraft: false,
+            mergeStatus: "succeeded",
+            sourceRefName: "refs/heads/feature",
+            targetRefName: "refs/heads/main",
+            lastMergeSourceCommit: { commitId: "head-sha" },
+            lastMergeTargetCommit: { commitId: "base-sha" },
+            repository: { webUrl: "https://dev.azure.com/acme/repo" },
+            createdBy: { id: "author-1", displayName: "Author" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    );
+
+    await expect(provider.getPullRequestLifecycle("repo", 12)).resolves.toEqual(
+      {
+        checks: [
+          {
+            id: "status-2",
+            name: "Build",
+            state: "success",
+            description: "Build recovered",
+            webUrl: undefined,
+          },
+        ],
+        summary: "passing",
+        pullRequestState: "open",
+        headSha: "head-sha",
+        mergeable: true,
+        canMerge: true,
+        mergeBlockedReason: undefined,
+        mergeActionLabel: "Complete",
+      },
+    );
+    await provider.mergePullRequest({
+      repositoryExternalId: "repo",
+      pullRequestNumber: 12,
+      headSha: "head-sha",
+    });
+    const completeRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestUrl(input).includes("/pullRequests/12?") &&
+        init?.method === "PATCH",
+    );
+    expect(JSON.parse(String(completeRequest?.[1]?.body))).toEqual({
+      status: "completed",
+      lastMergeSourceCommit: { commitId: "head-sha" },
+      completionOptions: {
+        mergeStrategy: "noFastForward",
+        deleteSourceBranch: false,
+      },
+    });
+  });
+
   it("resolves a GitHub conversation through its review-thread node", async () => {
     const requests: Array<{ url: string; body?: string }> = [];
     const fetchMock = vi.fn(async (input: string | URL | Request, init) => {

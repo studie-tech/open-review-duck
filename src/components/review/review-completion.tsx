@@ -6,7 +6,6 @@ import {
   CheckCheck,
   GitPullRequest,
   Sparkles,
-  X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { ShortcutHint } from "~/components/command-center";
@@ -34,6 +33,7 @@ interface ReviewCompletionProps {
   dismissShortcut: KeyboardShortcut;
   nextReview?: ReviewCompletionCandidate;
   nextReviewShortcut: KeyboardShortcut;
+  lifecycle?: ReactNode;
   providerReview: ReactNode;
   queueLoading: boolean;
   onDashboard: () => void;
@@ -133,7 +133,7 @@ export function findNextReview<T extends ReviewCompletionCandidate>(
   );
 }
 
-/** Presents a completed review as a clear end state with useful next actions. */
+/** Presents a completed review as the workspace page with useful next actions. */
 export function ReviewCompletion({
   completedFiles,
   completedUnits,
@@ -141,43 +141,29 @@ export function ReviewCompletion({
   dismissShortcut,
   nextReview,
   nextReviewShortcut,
+  lifecycle,
   providerReview,
   queueLoading,
   onDashboard,
   onDismiss,
   onNextReview,
 }: ReviewCompletionProps) {
-  const { dialogRef, initialFocusRef } = useReviewDialogFocus();
   const { pending: navigationPending } = usePendingNavigation();
   const nextReviewProgress = nextReview
     ? Math.round((nextReview.signedUnits / nextReview.totalUnits) * 100)
     : 0;
 
   return (
-    <div className="bg-ink/90 absolute inset-0 z-30 grid place-items-center overflow-y-auto p-4 font-sans backdrop-blur-[3px] sm:p-8">
+    <div className="bg-ink absolute inset-0 z-20 grid place-items-center overflow-y-auto p-4 font-sans sm:p-8">
       <section
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
         aria-labelledby="review-completion-title"
         aria-describedby="review-completion-description"
-        tabIndex={-1}
-        className="bg-panel relative my-auto w-full max-w-3xl overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
+        className="bg-panel relative my-auto w-full max-w-4xl overflow-hidden rounded-3xl border border-line-strong shadow-[0_28px_100px_var(--app-shadow)]"
       >
         <div
           aria-hidden="true"
           className="from-lime/12 via-cyan/[.035] absolute inset-x-0 top-0 h-48 bg-gradient-to-b to-transparent"
         />
-        <button
-          ref={initialFocusRef}
-          type="button"
-          aria-label="Close summary and browse reviewed files"
-          title="Browse reviewed files (Escape)"
-          onClick={onDismiss}
-          className="text-mist hover:text-cloud hover:bg-surface-subtle absolute top-4 right-4 z-10 grid size-9 place-items-center rounded-full border border-transparent transition hover:border-line"
-        >
-          <X className="size-4" />
-        </button>
 
         <div className="relative px-5 pt-8 pb-5 sm:px-8 sm:pt-10">
           <div className="border-lime/25 bg-lime/10 text-lime grid size-14 place-items-center rounded-2xl border shadow-[0_10px_36px_var(--app-shadow)]">
@@ -198,8 +184,9 @@ export function ReviewCompletion({
             className="text-mist mt-3 max-w-xl text-sm leading-6"
           >
             You made it through every review unit. Your sign-offs are saved and
-            this pull request is fully reviewed at its current revision. Close
-            this summary to browse the reviewed files.
+            this pull request is fully reviewed at its current revision. Check
+            the pipelines, merge when they are ready, or continue to the next
+            pull request.
           </p>
 
           <dl className="mt-7 grid grid-cols-3 overflow-hidden rounded-2xl border border-line bg-surface/55">
@@ -229,70 +216,73 @@ export function ReviewCompletion({
         </div>
 
         <div className="relative border-t border-line bg-surface/35 px-5 py-5 sm:px-8 sm:py-6">
-          <div className="grid items-start gap-4 sm:grid-cols-[minmax(0,1.45fr)_minmax(14rem,.75fr)]">
-            {providerReview}
+          <div className="space-y-4">
+            {lifecycle}
+            <div className="grid items-start gap-4 sm:grid-cols-[minmax(0,1.45fr)_minmax(14rem,.75fr)]">
+              {providerReview}
 
-            {nextReview ? (
-              <div>
-                <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
-                  Ready next
-                </p>
-                <button
-                  type="button"
-                  disabled={navigationPending}
-                  aria-busy={navigationPending || undefined}
-                  onClick={onNextReview}
-                  className="hover:border-cyan/25 hover:bg-cyan/[.035] mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/70 p-4 text-left transition disabled:pointer-events-none"
+              {nextReview ? (
+                <div>
+                  <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
+                    Ready next
+                  </p>
+                  <button
+                    type="button"
+                    disabled={navigationPending}
+                    aria-busy={navigationPending || undefined}
+                    onClick={onNextReview}
+                    className="hover:border-cyan/25 hover:bg-cyan/[.035] mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/70 p-4 text-left transition disabled:pointer-events-none"
+                  >
+                    <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
+                      <GitPullRequest className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-cloud">
+                        {nextReview.title}
+                      </span>
+                      <span className="text-fog mt-1 block truncate text-[10px]">
+                        {nextReview.repositoryOwner}/{nextReview.repositoryName}{" "}
+                        #{nextReview.number} · {nextReview.signedUnits}/
+                        {nextReview.totalUnits} reviewed
+                      </span>
+                      <span className="bg-surface-subtle mt-2 block h-1 overflow-hidden rounded-full">
+                        <span
+                          className="bg-cyan block h-full rounded-full"
+                          style={{ width: `${nextReviewProgress}%` }}
+                        />
+                      </span>
+                    </span>
+                    {navigationPending ? (
+                      <Spinner className="text-mist size-4 shrink-0" />
+                    ) : (
+                      <ArrowRight className="text-mist size-4 shrink-0" />
+                    )}
+                  </button>
+                </div>
+              ) : queueLoading ? (
+                <div
+                  role="status"
+                  className="text-mist flex h-full min-h-[74px] items-center justify-center rounded-2xl border border-dashed border-line px-4 text-center text-xs"
                 >
-                  <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
-                    <GitPullRequest className="size-4" />
+                  Checking your review queue…
+                </div>
+              ) : (
+                <div className="flex h-full min-h-[74px] items-center gap-3 rounded-2xl border border-lime/15 bg-lime/[.035] p-4">
+                  <span className="bg-lime/10 text-lime grid size-10 shrink-0 place-items-center rounded-xl">
+                    <Check className="size-4" />
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-cloud">
-                      {nextReview.title}
+                  <span>
+                    <span className="block text-sm font-medium text-cloud">
+                      Your review queue is clear
                     </span>
-                    <span className="text-fog mt-1 block truncate text-[10px]">
-                      {nextReview.repositoryOwner}/{nextReview.repositoryName} #
-                      {nextReview.number} · {nextReview.signedUnits}/
-                      {nextReview.totalUnits} reviewed
-                    </span>
-                    <span className="bg-surface-subtle mt-2 block h-1 overflow-hidden rounded-full">
-                      <span
-                        className="bg-cyan block h-full rounded-full"
-                        style={{ width: `${nextReviewProgress}%` }}
-                      />
+                    <span className="text-mist mt-1 block text-[10px] leading-4">
+                      There are no other prepared pull requests waiting for
+                      review.
                     </span>
                   </span>
-                  {navigationPending ? (
-                    <Spinner className="text-mist size-4 shrink-0" />
-                  ) : (
-                    <ArrowRight className="text-mist size-4 shrink-0" />
-                  )}
-                </button>
-              </div>
-            ) : queueLoading ? (
-              <div
-                role="status"
-                className="text-mist flex h-full min-h-[74px] items-center justify-center rounded-2xl border border-dashed border-line px-4 text-center text-xs"
-              >
-                Checking your review queue…
-              </div>
-            ) : (
-              <div className="flex h-full min-h-[74px] items-center gap-3 rounded-2xl border border-lime/15 bg-lime/[.035] p-4">
-                <span className="bg-lime/10 text-lime grid size-10 shrink-0 place-items-center rounded-xl">
-                  <Check className="size-4" />
-                </span>
-                <span>
-                  <span className="block text-sm font-medium text-cloud">
-                    Your review queue is clear
-                  </span>
-                  <span className="text-mist mt-1 block text-[10px] leading-4">
-                    There are no other prepared pull requests waiting for
-                    review.
-                  </span>
-                </span>
-              </div>
-            )}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">

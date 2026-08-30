@@ -63,7 +63,7 @@ describe("priority inbox", () => {
       {
         view: "continue",
         provider: "gitlab",
-        repository: priorityInboxRepositoryKey(target),
+        repositories: [priorityInboxRepositoryKey(target)],
         search: "payments/api Settlement #42 SONIA",
       },
     );
@@ -73,7 +73,7 @@ describe("priority inbox", () => {
       filterPriorityInbox([target], {
         view: "continue",
         provider: "gitlab",
-        repository: priorityInboxRepositoryKey(target),
+        repositories: [priorityInboxRepositoryKey(target)],
         search: "settlement",
       }),
     ).toEqual([target]);
@@ -81,10 +81,18 @@ describe("priority inbox", () => {
       filterPriorityInbox([target], {
         view: "all",
         provider: "all",
-        repository: "all",
+        repositories: [],
         search: "42",
       }),
     ).toEqual([target]);
+    expect(
+      filterPriorityInbox([target, item({ id: "other", signedUnits: 1 })], {
+        view: "all",
+        provider: "all",
+        repositories: [priorityInboxRepositoryKey(target), "github:acme/web"],
+        search: "",
+      }).map(({ id }) => id),
+    ).toEqual(["target", "other"]);
   });
 
   it("can hide draft pull requests while keeping other filters", () => {
@@ -99,7 +107,7 @@ describe("priority inbox", () => {
       filterPriorityInbox([draft, open], {
         view: "all",
         provider: "all",
-        repository: "all",
+        repositories: [],
         search: "settlement",
         includeDrafts: false,
       }),
@@ -108,7 +116,7 @@ describe("priority inbox", () => {
       filterPriorityInbox([draft, open], {
         view: "all",
         provider: "all",
-        repository: "all",
+        repositories: [],
         search: "settlement",
       }),
     ).toEqual([draft, open]);

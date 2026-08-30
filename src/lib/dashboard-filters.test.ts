@@ -28,7 +28,7 @@ describe("dashboardFilters", () => {
         memoryStorage({
           [DASHBOARD_FILTERS_STORAGE_KEY]: JSON.stringify({
             provider: "gitlab",
-            repository: "gitlab:payments/api",
+            repositories: ["gitlab:payments/api", "github:acme/web"],
             search: "sonia",
             showDrafts: false,
           }),
@@ -36,10 +36,25 @@ describe("dashboardFilters", () => {
       ),
     ).toEqual({
       provider: "gitlab",
-      repository: "gitlab:payments/api",
+      repositories: ["gitlab:payments/api", "github:acme/web"],
       search: "sonia",
       showDrafts: false,
     });
+  });
+
+  it("migrates the older single-repository filter string", () => {
+    expect(
+      dashboardFilters(
+        memoryStorage({
+          [DASHBOARD_FILTERS_STORAGE_KEY]: JSON.stringify({
+            provider: "gitlab",
+            repository: "gitlab:payments/api",
+            search: "",
+            showDrafts: true,
+          }),
+        }),
+      ).repositories,
+    ).toEqual(["gitlab:payments/api"]);
   });
 
   it("keeps drafts visible when older stored filters omit the toggle", () => {
@@ -48,7 +63,7 @@ describe("dashboardFilters", () => {
         memoryStorage({
           [DASHBOARD_FILTERS_STORAGE_KEY]: JSON.stringify({
             provider: "github",
-            repository: "all",
+            repositories: [],
             search: "",
           }),
         }),
@@ -81,13 +96,13 @@ describe("rememberDashboardFilters", () => {
     const storage = memoryStorage();
     rememberDashboardFilters(storage, {
       provider: "github",
-      repository: "github:acme/web",
+      repositories: ["github:acme/web", "gitlab:payments/api"],
       search: "inventory",
       showDrafts: false,
     });
     expect(dashboardFilters(storage)).toEqual({
       provider: "github",
-      repository: "github:acme/web",
+      repositories: ["github:acme/web", "gitlab:payments/api"],
       search: "inventory",
       showDrafts: false,
     });

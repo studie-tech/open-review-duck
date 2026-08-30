@@ -97,7 +97,7 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
   filters: {
     includeDrafts?: boolean;
     provider: "all" | PriorityInboxItem["provider"];
-    repository: "all" | string;
+    repositories: readonly string[];
     search: string;
     view: PriorityInboxView;
   },
@@ -125,8 +125,8 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
       return false;
     }
     if (
-      filters.repository !== "all" &&
-      priorityInboxRepositoryKey(pullRequest) !== filters.repository
+      filters.repositories.length > 0 &&
+      !filters.repositories.includes(priorityInboxRepositoryKey(pullRequest))
     ) {
       return false;
     }

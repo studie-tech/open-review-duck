@@ -93,14 +93,14 @@ describe("unimported pull requests", () => {
       filterUnimportedPullRequests([draft, open], {
         includeDrafts: false,
         provider: "all",
-        repository: "all",
+        repositories: [],
         search: "",
       }),
     ).toEqual([open]);
     expect(
       filterUnimportedPullRequests([draft, open], {
         provider: "gitlab",
-        repository: unimportedRepositoryKey(open),
+        repositories: [unimportedRepositoryKey(open)],
         search: "payments/api #22",
       }),
     ).toEqual([open]);

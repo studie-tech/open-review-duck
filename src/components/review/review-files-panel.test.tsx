@@ -60,14 +60,55 @@ describe("ReviewFilesPanel", () => {
     );
 
     expect(screen.getByRole("tree", { name: "Changed files" })).toBeVisible();
-    expect(screen.getByText("1/2 reviewed")).toBeVisible();
-    expect(screen.getByText("1 updated")).toBeVisible();
-    expect(screen.getByText("No review units")).toBeVisible();
+    expect(screen.getAllByText("1/2")).not.toHaveLength(0);
+    expect(screen.queryByText("1/2 reviewed")).not.toBeInTheDocument();
+    expect(screen.queryByText("No review units")).not.toBeInTheDocument();
     expect(
       screen.getByRole("checkbox", {
         name: /Sign off 2 review units in src\/review\/workspace.ts/i,
       }),
     ).toBePartiallyChecked();
+  });
+
+  it("keeps added files on one line without an Added label", () => {
+    render(
+      <ReviewFilesPanel
+        files={reviewFileEntries(
+          [
+            {
+              id: "added-file",
+              path: "src/review/constants.ts",
+              previousPath: null,
+              changeType: "added",
+              additions: 4,
+              deletions: 0,
+              isBinary: false,
+              skipReason: null,
+            },
+          ],
+          [
+            {
+              id: "fresh",
+              path: "src/review/constants.ts",
+              status: "pending",
+              revisionState: "new",
+            },
+          ],
+        )}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("constants.ts")).toBeVisible();
+    expect(screen.getAllByText("0/1").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^added$/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("treeitem", {
+        name: "src/review/constants.ts, 0 of 1 review units reviewed",
+      }),
+    ).toHaveClass("items-center", "py-1.5");
   });
 
   it("keeps opening a file separate from signing it off", async () => {

@@ -1,5 +1,7 @@
+import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
+  optionalProviderFetch,
   providerFetch,
   providerResponse,
   providerText,
@@ -8,6 +10,8 @@ import {
 import { collectProviderSourceFiles } from "./source-budget";
 import type {
   ChangedFilesOptions,
+  ProviderCheckState,
+  ProviderPullRequestLifecycle,
   ProviderPullRequestReviewState,
   ProviderReviewAction,
   PullRequestListOptions,
@@ -44,6 +48,9 @@ interface GitLabMergeRequest {
   diff_refs: { base_sha: string; head_sha: string };
   author: { id: number; username: string; avatar_url: string | null };
   changes_count?: string;
+  merge_status?: string;
+  detailed_merge_status?: string;
+  has_conflicts?: boolean;
 }
 interface GitLabApprovals {
   approvals_required: number;
@@ -67,6 +74,22 @@ interface GitLabBranch {
   name: string;
   web_url: string;
   commit: { id: string };
+}
+interface GitLabPipeline {
+  id: number;
+  status: string;
+  source?: string;
+  name?: string | null;
+  web_url?: string;
+}
+interface GitLabJob {
+  id: number;
+  name: string;
+  status: string;
+  stage?: string;
+  web_url?: string;
+  failure_reason?: string | null;
+  allow_failure?: boolean;
 }
 interface GitLabProjectHook {
   id: number;
@@ -349,6 +372,99 @@ export class GitLabProvider implements PullRequestProvider {
       body: JSON.stringify({ sha: input.headSha }),
     });
   }
+  /** Fetches GitLab pipelines, failed jobs, and mergeability. */
+  async getPullRequestLifecycle(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestLifecycle> {
+    const project = encodeURIComponent(repositoryExternalId);
+    const [mergeRequest, pipelines] = await Promise.all([
+      providerFetch<GitLabMergeRequest>(
+        this.name,
+        `${this.apiUrl}/projects/${project}/merge_requests/${number}`,
+        { headers: this.headers },
+      ),
+      optionalProviderFetch<GitLabPipeline[]>(
+        this.name,
+        `${this.apiUrl}/projects/${project}/merge_requests/${number}/pipelines?per_page=100`,
+        { headers: this.headers },
+      ),
+    ]);
+    const latestPipelines = this.latestPipelines(pipelines ?? []);
+    const latest = latestPipelines[0];
+    const jobs =
+      latest &&
+      (latest.status === "failed" ||
+        latest.status === "running" ||
+        latest.status === "pending")
+        ? ((
+            await optionalProviderFetch<GitLabJob[]>(
+              this.name,
+              `${this.apiUrl}/projects/${project}/pipelines/${latest.id}/jobs?per_page=100`,
+              { headers: this.headers },
+            )
+          )?.filter((job) => this.interestingJob(job)) ?? [])
+        : [];
+    const checks = [
+      ...latestPipelines.map((pipeline) => ({
+        id: `pipeline-${pipeline.id}`,
+        name:
+          pipeline.name?.trim() ||
+          pipeline.source ||
+          `Pipeline #${pipeline.id}`,
+        state: this.pipelineState(pipeline.status),
+        webUrl: pipeline.web_url,
+      })),
+      ...jobs.map((job) => ({
+        id: `job-${job.id}`,
+        name: job.stage ? `${job.stage} / ${job.name}` : job.name,
+        state: this.jobState(job),
+        description: this.jobDescription(job),
+        webUrl: job.web_url,
+      })),
+    ];
+    const merge = this.mergeState(mergeRequest);
+    return buildProviderLifecycle({
+      checks,
+      pullRequestState:
+        mergeRequest.state === "merged"
+          ? "merged"
+          : mergeRequest.state === "closed"
+            ? "closed"
+            : mergeRequest.draft
+              ? "draft"
+              : "open",
+      headSha: mergeRequest.diff_refs?.head_sha ?? mergeRequest.sha,
+      mergeable: merge.mergeable,
+      canMerge: merge.canMerge,
+      mergeBlockedReason: merge.mergeBlockedReason,
+      mergeActionLabel: "Merge",
+    });
+  }
+
+  /** Merges the merge request at the exact reviewed GitLab commit. */
+  async mergePullRequest(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
+  }) {
+    await providerFetch<GitLabMergeRequest>(
+      this.name,
+      `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}/merge`,
+      {
+        method: "PUT",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sha: input.headSha,
+          should_remove_source_branch: false,
+        }),
+      },
+    );
+  }
+
   /** Fetches the changed source files required for static analysis. */
   async getChangedFiles(
     repositoryExternalId: string,
@@ -623,6 +739,115 @@ export class GitLabProvider implements PullRequestProvider {
       maximumBytes,
     );
   }
+  /** Keeps the newest pipeline for each named workflow. */
+  private latestPipelines(pipelines: GitLabPipeline[]) {
+    const latestByName = new Map<string, GitLabPipeline>();
+    for (const pipeline of [...pipelines].sort(
+      (left, right) => right.id - left.id,
+    )) {
+      const key =
+        pipeline.name?.trim() || pipeline.source || String(pipeline.id);
+      if (!latestByName.has(key)) latestByName.set(key, pipeline);
+    }
+    return [...latestByName.values()].slice(0, 12);
+  }
+
+  /** Limits job rows to the checks that still need attention. */
+  private interestingJob(job: GitLabJob) {
+    return (
+      job.status === "failed" ||
+      job.status === "running" ||
+      job.status === "pending" ||
+      job.status === "created"
+    );
+  }
+
+  /** Maps a GitLab pipeline status onto the shared check model. */
+  private pipelineState(status: string): ProviderCheckState {
+    if (status === "success") return "success";
+    if (status === "failed") return "failure";
+    if (status === "canceled" || status === "cancelled") return "cancelled";
+    if (status === "skipped") return "skipped";
+    if (status === "manual") return "neutral";
+    if (
+      status === "created" ||
+      status === "waiting_for_resource" ||
+      status === "preparing" ||
+      status === "pending" ||
+      status === "scheduled"
+    ) {
+      return "queued";
+    }
+    return "in_progress";
+  }
+
+  /** Maps a GitLab job, treating allowed failures as skipped. */
+  private jobState(job: GitLabJob): ProviderCheckState {
+    if (job.status === "failed" && job.allow_failure) return "skipped";
+    return this.pipelineState(job.status);
+  }
+
+  /** Returns a short reason when a GitLab job failed. */
+  private jobDescription(job: GitLabJob) {
+    if (job.status !== "failed" || !job.failure_reason) return undefined;
+    if (job.failure_reason === "script_failure") return "Script failed";
+    if (
+      job.failure_reason === "stuck_or_timeout_failure" ||
+      job.failure_reason === "job_execution_timeout"
+    ) {
+      return "Timed out";
+    }
+    if (job.failure_reason === "runner_system_failure") return "Runner failed";
+    return job.failure_reason.replaceAll("_", " ");
+  }
+
+  /** Interprets GitLab merge status for the completion-page merge button. */
+  private mergeState(mergeRequest: GitLabMergeRequest) {
+    if (mergeRequest.state === "merged") {
+      return {
+        mergeable: true,
+        canMerge: false,
+        mergeBlockedReason: "Already merged",
+      };
+    }
+    if (mergeRequest.state === "closed") {
+      return {
+        mergeable: false,
+        canMerge: false,
+        mergeBlockedReason: "This merge request is closed",
+      };
+    }
+    const status =
+      mergeRequest.detailed_merge_status ?? mergeRequest.merge_status;
+    if (status === "mergeable" || status === "can_be_merged") {
+      return { mergeable: true, canMerge: true };
+    }
+    const reasons: Record<string, string> = {
+      conflict: "Has merge conflicts",
+      cannot_be_merged: "Has merge conflicts",
+      discussions_not_resolved: "Unresolved discussions must be resolved",
+      draft_status: "Draft merge requests cannot be merged",
+      ci_must_pass: "Pipeline must succeed before this can be merged",
+      ci_still_running: "Pipeline is still running",
+      not_approved: "Required approvals are missing",
+      requested_changes: "Requested changes must be addressed",
+      need_rebase: "Branch must be rebased onto the target",
+      checking: "Mergeability is still being computed",
+      unchecked: "Mergeability is still being computed",
+      not_open: "This merge request is no longer open",
+      locked_paths: "Locked files must be unlocked",
+    };
+    const mergeable =
+      status === "conflict" || mergeRequest.has_conflicts ? false : null;
+    return {
+      mergeable,
+      canMerge: false,
+      mergeBlockedReason:
+        (status && reasons[status]) ||
+        "This merge request cannot be merged yet",
+    };
+  }
+
   /** Converts a provider-specific pull request into ReviewDuck's normalized model. */
   private normalize(item: GitLabMergeRequest): PullRequestSummary {
     return {

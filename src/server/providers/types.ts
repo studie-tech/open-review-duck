@@ -100,6 +100,38 @@ export interface ProviderPullRequestReviewState {
   unavailableReason?: string;
 }
 
+export type ProviderCheckState =
+  | "queued"
+  | "in_progress"
+  | "success"
+  | "failure"
+  | "cancelled"
+  | "skipped"
+  | "neutral";
+
+export type ProviderCheckSummary = "empty" | "passing" | "failing" | "pending";
+
+/** One CI check, pipeline, or status reported against the reviewed revision. */
+export interface ProviderPullRequestCheck {
+  id: string;
+  name: string;
+  state: ProviderCheckState;
+  description?: string;
+  webUrl?: string;
+}
+
+/** Live checks and mergeability for the pull request being reviewed. */
+export interface ProviderPullRequestLifecycle {
+  checks: ProviderPullRequestCheck[];
+  summary: ProviderCheckSummary;
+  pullRequestState: "open" | "draft" | "merged" | "closed";
+  headSha: string;
+  mergeable: boolean | null;
+  canMerge: boolean;
+  mergeBlockedReason?: string;
+  mergeActionLabel: string;
+}
+
 export interface PullRequestProvider {
   readonly name: ProviderName;
   /** Fetches the account identity associated with the configured credential. */
@@ -151,6 +183,17 @@ export interface PullRequestProvider {
     headSha: string;
     action: ProviderReviewAction;
     body?: string;
+  }): Promise<void>;
+  /** Fetches live CI checks and mergeability for the reviewed pull request. */
+  getPullRequestLifecycle(
+    repositoryExternalId: string,
+    number: number,
+  ): Promise<ProviderPullRequestLifecycle>;
+  /** Merges or completes the pull request at the reviewed revision. */
+  mergePullRequest(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    headSha: string;
   }): Promise<void>;
   /** Fetches the changed source files required for static analysis. */
   getChangedFiles(

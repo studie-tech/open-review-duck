@@ -81,6 +81,7 @@ import {
   hydratePrivateReviewSources,
   prioritizePrivateReviewSources,
 } from "~/lib/private-source-client";
+import { followPendingProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   FILES_VIEWER_PAGE_SIZE,
   FILES_VIEWER_PREFETCH_RADIUS,
@@ -103,6 +104,8 @@ import {
   nextPendingReviewIndex,
   nextPendingReviewIndexPreferring,
   optimisticallySignOffReviewUnits,
+  optimisticallyUnreviewReviewUnits,
+  resetSignedOffReviewUnits,
   restoreReviewUnitAfterFailedSignOff,
   reviewAvailability,
   reviewPathSearchMatches,
@@ -149,6 +152,7 @@ import { useSettledValue } from "~/lib/use-settled-value";
 import { cn } from "~/lib/utils";
 import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
 import { ProviderCommentBody } from "./provider-comment-body";
+import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
 import { ReviewFilesPanel } from "./review-files-panel";
@@ -870,6 +874,7 @@ import {
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
   ConceptMoveDialog,
+  CopyRepositoryUrlButton,
   conceptFileCardsInReadingOrder,
   conceptMembersInReadingOrder,
   ExplanationLoader,
@@ -924,6 +929,7 @@ export function ReviewWorkspace({
   const router = useRouter();
   const { navigate, pending: navigationPending } = usePendingNavigation();
   const [loadingChanges, startLoadingChanges] = useTransition();
+  const [, startReviewFileAdvance] = useTransition();
   const [reviewSession, sendReviewSession] = useMachine(reviewSessionMachine);
   useLayoutEffect(() => lockDocumentScroll(document), []);
   const [units, setUnits] = useState(initialData.units);
@@ -1119,6 +1125,7 @@ export function ReviewWorkspace({
   );
   const [completedBrowsing, setCompletedBrowsing] = useState(false);
   const [pendingFileId, setPendingFileId] = useState<string>();
+  const unreviewRollback = useRef<ReviewUnit[] | undefined>(undefined);
   const [showDiff, setShowDiff] = useState(true);
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
@@ -1707,6 +1714,9 @@ export function ReviewWorkspace({
           utils.review.providerReviewState.invalidate({
             pullRequestId: initialData.pullRequest.id,
           }),
+          utils.review.providerLifecycle.invalidate({
+            pullRequestId: initialData.pullRequest.id,
+          }),
           utils.review.dashboard.invalidate(),
         ]);
         toast.success(
@@ -1727,6 +1737,48 @@ export function ReviewWorkspace({
           description: error.message,
         }),
     });
+  const providerLifecycle = api.review.providerLifecycle.useQuery(
+    { pullRequestId: initialData.pullRequest.id },
+    {
+      enabled: reviewComplete,
+      retry: false,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      staleTime: 0,
+      refetchInterval: followPendingProviderLifecycle,
+    },
+  );
+  const mergePullRequest = api.review.mergePullRequest.useMutation({
+    onSuccess: (state) => {
+      utils.review.providerLifecycle.setData(
+        { pullRequestId: initialData.pullRequest.id },
+        state,
+      );
+      void Promise.all([
+        utils.review.providerLifecycle.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+        utils.review.providerReviewState.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+        utils.review.dashboard.invalidate(),
+      ]);
+      toast.success(
+        state.pullRequestState === "merged"
+          ? state.provider === "azure_devops"
+            ? "Pull request completed"
+            : "Pull request merged"
+          : "Merge submitted",
+        {
+          description: `${providerLabel(state.provider)} is now synchronized with this review.`,
+        },
+      );
+    },
+    onError: (error) =>
+      toast.error("Pull request was not merged", {
+        description: error.message,
+      }),
+  });
   const nextReview = useMemo(
     () => findNextReview(reviewQueue.data, initialData.pullRequest.id),
     [initialData.pullRequest.id, reviewQueue.data],
@@ -2135,6 +2187,7 @@ export function ReviewWorkspace({
       const index = units.findIndex(({ id }) => id === member.id);
       if (index < 0) return;
       setCompletedBrowsing(false);
+      setCompletionOpen(false);
       selectUnit(index);
     },
     [selectUnit, units],
@@ -2156,6 +2209,15 @@ export function ReviewWorkspace({
       ) {
         return;
       }
+      const signedIds = file.units
+        .filter((unit) => unit.status === "signed_off")
+        .map((unit) => unit.id);
+      unreviewRollback.current = units.filter((unit) =>
+        signedIds.includes(unit.id),
+      );
+      const updated = optimisticallyUnreviewReviewUnits(units, signedIds);
+      unitsRef.current = updated;
+      setUnits(updated);
       setPendingFileId(file.id);
       unreviewFile.mutate({
         snapshotFileId: file.id,
@@ -2168,14 +2230,23 @@ export function ReviewWorkspace({
     const nextFile = nextOutstandingReviewFile(reviewFiles, file.path);
     const activeDuration = Math.round((Date.now() - startedAt) / 1000);
     setCompletedBrowsing(false);
+    // Paint the checkbox first. Opening the next file hydrates and highlights
+    // its source, and doing that in the same turn left the mark invisible
+    // until that work finished.
     optimisticallyQueueSignOffs(
       outstanding.map((unit) => ({
         unitId: unit.id,
         sessionId,
         durationSeconds: unit.id === activeUnit?.id ? activeDuration : 0,
       })),
-      nextFile ? (unit) => unit.path === nextFile.path : undefined,
+      undefined,
+      { advance: false },
     );
+    if (nextFile) {
+      startReviewFileAdvance(() => {
+        selectReviewFile(nextFile);
+      });
+    }
   }
   /**
    * Opens the composer on a line a reviewer picked in another member's card.
@@ -2488,6 +2559,7 @@ export function ReviewWorkspace({
   const unreviewFile = api.review.unreviewFile.useMutation({
     onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
       const unreviewed = new Set(unreviewedUnitIds);
+      unreviewRollback.current = undefined;
       setUnits((current) =>
         current.map((unit) =>
           unreviewed.has(unit.id)
@@ -2516,6 +2588,14 @@ export function ReviewWorkspace({
       });
     },
     onError: (error) => {
+      const rollback = unreviewRollback.current;
+      unreviewRollback.current = undefined;
+      if (rollback) {
+        const restored = new Map(rollback.map((unit) => [unit.id, unit]));
+        setUnits((current) =>
+          current.map((unit) => restored.get(unit.id) ?? unit),
+        );
+      }
       setPendingFileId(undefined);
       toast.error("File could not be returned to review", {
         description: error.message,
@@ -3121,6 +3201,9 @@ export function ReviewWorkspace({
         utils.review.providerReviewState.invalidate({
           pullRequestId: initialData.pullRequest.id,
         }),
+        utils.review.providerLifecycle.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
       ]);
       sendReviewSession({ type: "SYNC_FINISHED" });
       toast.success("Pull request synchronized", {
@@ -3146,6 +3229,7 @@ export function ReviewWorkspace({
     utils.review.dashboard.invalidate,
     utils.review.gamification.invalidate,
     utils.review.providerConversations.invalidate,
+    utils.review.providerLifecycle.invalidate,
     utils.review.providerReviewState.invalidate,
     initialData.pullRequest.id,
     initialData.snapshot,
@@ -3157,6 +3241,18 @@ export function ReviewWorkspace({
     ["queued", "running"].includes(syncStatus.data?.status ?? "");
   const resetReview = api.review.reset.useMutation({
     onSuccess: (result) => {
+      const updated = resetSignedOffReviewUnits(unitsRef.current);
+      unitsRef.current = updated;
+      setUnits(updated);
+      queuedSignOffs.current = [];
+      dispatchSignOffQueue({ type: "synchronize", unitIds: [] });
+      setPendingConceptSignOffIds(new Set());
+      setSignOffUndoHistory([]);
+      const nextIndex = nextPendingReviewIndex(updated);
+      if (nextIndex >= 0) setActiveIndex(nextIndex);
+      setCompletedBrowsing(false);
+      setCompletionOpen(false);
+      setWaitingCompletionOpen(false);
       setActiveSyncId(result.syncId);
       setResetDialogOpen(false);
       void Promise.all([
@@ -4319,7 +4415,7 @@ export function ReviewWorkspace({
     if (mode === "path") setCompletedBrowsing(false);
   }
 
-  /** Leaves the modal at a completed-review browsing surface without persisting Files mode. */
+  /** Leaves the completion page so the reviewer can inspect signed-off files. */
   function browseCompletedReview() {
     setReviewMode("files");
     setCompletionOpen(false);
@@ -6454,15 +6550,20 @@ export function ReviewWorkspace({
           <p className="truncate text-sm font-medium">
             {initialData.pullRequest.title}
           </p>
-          <a
-            href={initialData.pullRequest.repositoryWebUrl}
-            target="_blank"
-            rel="noreferrer"
-            title={initialData.pullRequest.repositoryWebUrl}
-            className="text-fog hover:text-mist block truncate text-[10px] hover:underline"
-          >
-            {initialData.pullRequest.repositoryWebUrl}
-          </a>
+          <div className="flex min-w-0 items-center gap-1">
+            <a
+              href={initialData.pullRequest.repositoryWebUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={initialData.pullRequest.repositoryWebUrl}
+              className="text-fog hover:text-mist min-w-0 truncate text-[10px] hover:underline"
+            >
+              {initialData.pullRequest.repositoryWebUrl}
+            </a>
+            <CopyRepositoryUrlButton
+              url={initialData.pullRequest.repositoryWebUrl}
+            />
+          </div>
         </div>
         <div className="hidden items-center gap-3 sm:flex">
           <span className="text-mist text-xs">
@@ -7093,6 +7194,20 @@ export function ReviewWorkspace({
               dismissShortcut={[{ key: "Escape" }]}
               nextReview={nextReview}
               nextReviewShortcut={reviewShortcuts.nextReview}
+              lifecycle={
+                <ProviderLifecycle
+                  state={providerLifecycle.data}
+                  error={providerLifecycle.error?.message}
+                  loading={providerLifecycle.isFetching}
+                  mutationPending={mergePullRequest.isPending}
+                  onRefresh={() => void providerLifecycle.refetch()}
+                  onMerge={() =>
+                    mergePullRequest.mutate({
+                      pullRequestId: initialData.pullRequest.id,
+                    })
+                  }
+                />
+              }
               providerReview={
                 <ProviderReviewDecision
                   state={providerReviewState.data}
@@ -7116,43 +7231,6 @@ export function ReviewWorkspace({
               onDismiss={browseCompletedReview}
               onNextReview={openNextReview}
             />
-          )}
-          {completedBrowsing && !completionVisible && (
-            <section className="bg-ink absolute inset-0 z-30 grid place-items-center overflow-y-auto p-6 font-sans">
-              <div className="w-full max-w-xl rounded-3xl border border-lime/20 bg-panel p-8 text-center shadow-[0_24px_90px_var(--app-shadow)] sm:p-10">
-                <span className="border-lime/25 bg-lime/10 text-lime mx-auto grid size-14 place-items-center rounded-2xl border">
-                  <CheckCheck className="size-7" />
-                </span>
-                <p className="text-lime mt-6 text-[10px] font-semibold tracking-[.16em] uppercase">
-                  Completed review
-                </p>
-                <h1 className="font-editorial mt-2 text-3xl text-cloud">
-                  All files reviewed.
-                </h1>
-                <p className="text-mist mx-auto mt-3 max-w-md text-sm leading-6">
-                  Every semantic review unit is signed off at this revision.
-                  Select a file from the tree to inspect the completed review.
-                </p>
-                <div className="mt-7 grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-line bg-surface/50 px-4 py-3">
-                    <span className="text-fog block text-[9px] uppercase">
-                      Files
-                    </span>
-                    <span className="mt-1 block font-mono text-lg text-cloud">
-                      {completedFileCount}
-                    </span>
-                  </div>
-                  <div className="rounded-xl border border-line bg-surface/50 px-4 py-3">
-                    <span className="text-fog block text-[9px] uppercase">
-                      Units
-                    </span>
-                    <span className="mt-1 block font-mono text-lg text-cloud">
-                      {signedCount}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </section>
           )}
           <div
             className={cn(
