@@ -20,6 +20,7 @@ import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   CopyReviewPathButton,
+  ReviewFileCardHeader,
   ReviewFileUnitMarker,
   actionableReviewCardMember,
   reviewCardRanges,
@@ -41,7 +42,6 @@ import {
   PullRequestDetailsDialog,
   REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
-  ReviewConceptFileCardHeader,
   ReviewConceptFileCardPreview,
   ReviewConceptMemberPreview,
   ReviewRevisionLoadedNotice,
@@ -814,7 +814,7 @@ describe("same-file concept cards", () => {
 
   it("excludes waiting members from the card action count", () => {
     render(
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={[units[0], { ...units[2], status: "waiting" }] as never}
         index={0}
         count={1}
@@ -828,7 +828,7 @@ describe("same-file concept cards", () => {
 
   it("does not show Reviewed when a new-since-sync unit is still outstanding", () => {
     render(
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={
           [
             { ...units[0], status: "signed_off", revisionState: "unchanged" },
@@ -847,7 +847,7 @@ describe("same-file concept cards", () => {
 
   it("can label a files-mode card as a file in the stack", () => {
     render(
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={[units[0]] as never}
         index={3}
         count={12}
@@ -878,7 +878,7 @@ describe("same-file concept cards", () => {
 
   it("shows the file size on a binary file card header", () => {
     render(
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={
           [
             {
@@ -908,7 +908,7 @@ describe("same-file concept cards", () => {
 
   it("omits file size from the card subtitle when the size is unknown", () => {
     render(
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={[units[0]] as never}
         index={0}
         count={1}
@@ -932,7 +932,7 @@ describe("same-file concept cards", () => {
     });
     const onSelect = vi.fn();
     render(
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={[units[0]] as never}
         index={0}
         count={1}

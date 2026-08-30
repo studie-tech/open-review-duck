@@ -189,9 +189,6 @@ export function reviewCardMemberForLine(
   });
 }
 
-/** Backwards-compatible name for concept cards; both modes use one file header. */
-export const ReviewConceptFileCardHeader = ReviewFileCardHeader;
-
 /**
  * Replaces mounted source on a folded file card.
  *
@@ -457,7 +454,7 @@ export function ReviewConceptFileCardPreview({
           : "border-line bg-surface/30",
       )}
     >
-      <ReviewConceptFileCardHeader
+      <ReviewFileCardHeader
         members={members}
         index={index}
         count={count}
