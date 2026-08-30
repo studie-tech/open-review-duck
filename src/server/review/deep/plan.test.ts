@@ -8,14 +8,29 @@ import {
 } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 
-const { sources } = vi.hoisted(() => ({ sources: new Map<string, string>() }));
+const { sources, reads } = vi.hoisted(() => ({
+  sources: new Map<string, string>(),
+  reads: {
+    active: 0,
+    maximumActive: 0,
+    /** Set by a test to hold every read open until it resolves. */
+    hold: null as Promise<void> | null,
+  },
+}));
 
 vi.mock("~/server/storage/source-blobs", () => ({
   /** Serves the fixture text a blob digest stands for. */
   readSourceText: async (blob: { digest: string }) => {
-    const source = sources.get(blob.digest);
-    if (source === undefined) throw new Error("blob is unreadable");
-    return source;
+    reads.active += 1;
+    reads.maximumActive = Math.max(reads.maximumActive, reads.active);
+    try {
+      if (reads.hold) await reads.hold;
+      const source = sources.get(blob.digest);
+      if (source === undefined) throw new Error("blob is unreadable");
+      return source;
+    } finally {
+      reads.active -= 1;
+    }
   },
 }));
 
@@ -503,6 +518,43 @@ describe("sealReviewPlan", () => {
       state: "waived",
       reason: "no_source",
     });
+  });
+
+  it("reads source policy decisions in a bounded wave", async () => {
+    const files = Array.from({ length: 20 }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      source:
+        index % 3 === 0
+          ? 'const key = "sk-abcdefghijklmnopqrstuv";'
+          : "const value = 1;\n",
+    }));
+    const fake = createFakeDatabase(files);
+    /** Stands in until the executor supplies the real resolver. */
+    let release = () => {};
+    reads.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    reads.maximumActive = 0;
+
+    const sealing = sealReviewPlan(fake.db, PARENT_ID);
+    await vi.waitFor(() => expect(reads.active).toBe(8));
+    release();
+    const plan = await sealing;
+    reads.hold = null;
+
+    expect(reads.maximumActive).toBe(8);
+    expect(
+      Object.fromEntries(
+        plan.items.map((item) => [item.path, item.reason ?? "selected"]),
+      ),
+    ).toEqual(
+      Object.fromEntries(
+        files.map((file, index) => [
+          file.path,
+          index % 3 === 0 ? "secret_detected" : "selected",
+        ]),
+      ),
+    );
   });
 
   it("refuses to seal a plan for a job that is not a review", async () => {

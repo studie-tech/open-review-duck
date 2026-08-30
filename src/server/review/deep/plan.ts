@@ -9,6 +9,7 @@ import {
   snapshotFiles,
   sourceBlobs,
 } from "@/drizzle/schema";
+import { mapWithLimit } from "~/lib/concurrency";
 import { sourcePolicyDecision } from "~/server/ai/source-policy";
 import type { db as database } from "~/server/db";
 import { applicableRepositoryRules } from "~/server/repo-reviews/rules";
@@ -35,6 +36,12 @@ type ReviewParentJob = typeof aiJobs.$inferSelect;
  * on its own.
  */
 const DEFAULT_MAX_SOURCE_BYTES = 2 << 20;
+
+// Every selected file is read once before the parent job can leave the queued
+// state the UI polls on, and a hosted read is a signed URL plus a fetch. The
+// window hides that latency across a wide pull request while keeping the bytes
+// held at a handful of files.
+const SOURCE_POLICY_CONCURRENCY = 8;
 
 /** The parent columns a child job copies instead of re-resolving. */
 type ReviewChildJobParent = Pick<
@@ -397,12 +404,20 @@ export async function sealReviewPlan(
     })),
   ];
   const selected: ReviewCandidateFile[] = [];
-  // Read outside the transaction and one file at a time: the source is object
-  // storage I/O, which has no business holding a database transaction open,
-  // and only the decision is kept so peak memory stays at one file.
-  for (const candidate of selection.selected) {
-    const file = byPath.get(candidate.path);
-    const reason = file ? await sourcePolicyReason(file) : "no_source";
+  // Read outside the transaction: the source is object storage I/O, which has
+  // no business holding a database transaction open. Only the decision is
+  // kept, so the bytes in flight are bounded by the window rather than by the
+  // size of the pull request.
+  const decisions = await mapWithLimit(
+    selection.selected,
+    SOURCE_POLICY_CONCURRENCY,
+    async (candidate) => {
+      const file = byPath.get(candidate.path);
+      const reason = file ? await sourcePolicyReason(file) : "no_source";
+      return { candidate, reason };
+    },
+  );
+  for (const { candidate, reason } of decisions) {
     if (reason) waived.push({ file: candidate, reason });
     else selected.push(candidate);
   }
