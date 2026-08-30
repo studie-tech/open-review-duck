@@ -854,6 +854,10 @@ export const reviewConceptMembers = createTable(
     // The membership index leads with layoutId, so deleting a unit could not use
     // it and scanned every membership row instead.
     index("review_concept_member_unit_idx").on(t.unitId),
+    // Membership is the largest child of a snapshot, and snapshot pruning runs
+    // inside every sync. No other index leads with snapshotId, so the cascade
+    // would scan the whole table once per pruned snapshot.
+    index("review_concept_member_snapshot_idx").on(t.snapshotId),
     // Reaching the concept through the layout the row already claims keeps the
     // membership uniqueness above from being enforced against the wrong layout.
     foreignKey({
