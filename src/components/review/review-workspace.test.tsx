@@ -12,6 +12,7 @@ import {
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
   groupDeepReviewFindings,
+  releaseWaitingUnits,
   reshapeProviderThreads,
   useReviewExitPrefetch,
   useTerminalReviewRefetch,
@@ -19,6 +20,7 @@ import {
 
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
+type WorkspaceUnit = RouterOutputs["review"]["workspace"]["units"][number];
 type ProviderConversationThread =
   RouterOutputs["review"]["providerConversations"]["threads"][number];
 
@@ -796,5 +798,46 @@ describe("DeepReviewFindingRow", () => {
 
     await user.click(row);
     expect(onOpen).toHaveBeenCalledOnce();
+  });
+});
+
+describe("releaseWaitingUnits", () => {
+  /** Builds the wait-bearing fields of a workspace unit a release reads. */
+  const unit = (id: string, waiting: boolean): WorkspaceUnit =>
+    ({
+      id,
+      status: waiting ? "waiting" : "pending",
+      waitingSince: waiting ? new Date(Date.UTC(2026, 7, 30, 10)) : null,
+    }) as WorkspaceUnit;
+
+  it("returns every named wait to the actionable path at once", () => {
+    const released = releaseWaitingUnits(
+      [unit("a", true), unit("b", true), unit("c", true)],
+      ["a", "c"],
+    );
+
+    expect(
+      released.map(({ id, status, waitingSince }) => ({
+        id,
+        status,
+        waitingSince,
+      })),
+    ).toEqual([
+      { id: "a", status: "pending", waitingSince: null },
+      {
+        id: "b",
+        status: "waiting",
+        waitingSince: new Date(Date.UTC(2026, 7, 30, 10)),
+      },
+      { id: "c", status: "pending", waitingSince: null },
+    ]);
+  });
+
+  it("keeps the units it was handed untouched", () => {
+    const units = [unit("a", true), unit("b", true)];
+    const released = releaseWaitingUnits(units, ["a"]);
+
+    expect(units[0]?.status).toBe("waiting");
+    expect(released[1]).toBe(units[1]);
   });
 });

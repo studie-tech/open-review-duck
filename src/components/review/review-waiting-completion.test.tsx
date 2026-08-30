@@ -288,7 +288,7 @@ describe("ReviewWaitingCompletion", () => {
     expect(onStopWaiting).toHaveBeenCalledWith("unit-2");
   });
 
-  it("allows only one waiting unit release at a time", async () => {
+  it("releases each waiting unit without waiting on the others", async () => {
     const onStopWaiting = vi.fn();
     const user = userEvent.setup();
     render(
@@ -297,7 +297,6 @@ describe("ReviewWaitingCompletion", () => {
         units={[waitingUnit(1), waitingUnit(2)]}
         providerName="GitHub"
         queueLoading={false}
-        releasingUnitId="unit-1"
         reviewedConcepts={10}
         totalConcepts={12}
         onDashboard={vi.fn()}
@@ -309,13 +308,13 @@ describe("ReviewWaitingCompletion", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /View 2 units/i }));
-    const resuming = screen.getByRole("button", { name: "Resuming…" });
-    const otherRelease = screen.getByRole("button", { name: "Stop waiting" });
-    expect(resuming).toBeDisabled();
-    expect(resuming.querySelector(".animate-spin")).toBeInTheDocument();
-    expect(otherRelease).toBeDisabled();
+    const releases = screen.getAllByRole("button", { name: "Stop waiting" });
+    expect(releases).toHaveLength(2);
+    for (const release of releases) {
+      expect(release).toBeEnabled();
+      await user.click(release);
+    }
 
-    await user.click(otherRelease);
-    expect(onStopWaiting).not.toHaveBeenCalled();
+    expect(onStopWaiting.mock.calls).toEqual([["unit-1"], ["unit-2"]]);
   });
 });

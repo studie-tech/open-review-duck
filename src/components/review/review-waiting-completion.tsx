@@ -42,7 +42,6 @@ interface ReviewWaitingCompletionProps {
   nextReviewShortcut: KeyboardShortcut;
   providerName: string;
   queueLoading: boolean;
-  releasingUnitId?: string;
   reviewedConcepts: number;
   totalConcepts: number;
   units: WaitingReviewUnit[];
@@ -107,7 +106,6 @@ export function ReviewWaitingCompletion({
   nextReviewShortcut,
   providerName,
   queueLoading,
-  releasingUnitId,
   reviewedConcepts,
   totalConcepts,
   units,
@@ -292,21 +290,14 @@ export function ReviewWaitingCompletion({
                             type="button"
                             size="sm"
                             variant={unit.answered ? "primary" : "secondary"}
-                            disabled={Boolean(releasingUnitId)}
                             onClick={() => onStopWaiting(unit.id)}
                           >
-                            {releasingUnitId === unit.id ? (
-                              <LoaderCircle className="size-3.5 animate-spin" />
-                            ) : unit.answered ? (
+                            {unit.answered ? (
                               <MessageSquareText className="size-3.5" />
                             ) : (
                               <Clock3 className="size-3.5" />
                             )}
-                            {releasingUnitId === unit.id
-                              ? "Resuming…"
-                              : unit.answered
-                                ? "Resume review"
-                                : "Stop waiting"}
+                            {unit.answered ? "Resume review" : "Stop waiting"}
                           </Button>
                         </div>
                       </div>
