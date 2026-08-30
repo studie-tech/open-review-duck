@@ -2,7 +2,6 @@ import "server-only";
 
 import { and, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import {
-  providerConnections,
   pullRequests,
   repositories,
   reviewQueueItems,
@@ -15,7 +14,7 @@ import { assignPullRequestToQueue } from "~/server/review/queue";
 import { pullRequestsMissingSnapshotSources } from "~/server/storage/snapshot-sources";
 import { startPullRequestSync } from "../workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
-import { providerForConnection } from "./credentials";
+import { type ConnectionAccess, connectionAccess } from "./credentials";
 import {
   automaticSyncSlots,
   shouldRetryFailedAutomaticSync,
@@ -24,6 +23,7 @@ import {
 import { refreshRepositoryPullRequestStates } from "./pull-request-state";
 
 type Database = typeof database;
+type Repository = typeof repositories.$inferSelect;
 
 const AUTOMATIC_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 const MAX_REPOSITORIES_PER_PASS = 10;
@@ -48,6 +48,21 @@ export async function reconcileRepositoryIntake(
     ),
   });
   if (!repository) throw new Error("Repository not found");
+  return reconcileIntakeForRepository(
+    db,
+    repository,
+    connectionAccess(db, repository.connectionId),
+    input,
+  );
+}
+
+/** Reconciles intake for a repository row and connection the caller already holds. */
+async function reconcileIntakeForRepository(
+  db: Database,
+  repository: Repository,
+  access: ConnectionAccess,
+  options: { force?: boolean; retryFailed?: boolean },
+) {
   if (repository.reviewIntakeMode === "manual") {
     return {
       mode: "manual" as const,
@@ -61,7 +76,7 @@ export async function reconcileRepositoryIntake(
   }
 
   const now = new Date();
-  if (!input.force) {
+  if (!options.force) {
     const dueBefore = new Date(
       now.getTime() - AUTOMATIC_RECONCILIATION_INTERVAL_MS,
     );
@@ -97,10 +112,7 @@ export async function reconcileRepositoryIntake(
       .where(eq(repositories.id, repository.id));
   }
 
-  const connection = await db.query.providerConnections.findFirst({
-    where: eq(providerConnections.id, repository.connectionId),
-  });
-  if (!connection) throw new Error("Provider connection not found");
+  const connection = await access.connection();
   if (
     repository.reviewIntakeMode === "assigned" &&
     !supportsAssignedIntake(connection)
@@ -114,7 +126,7 @@ export async function reconcileRepositoryIntake(
   }
 
   try {
-    const provider = await providerForConnection(db, connection);
+    const provider = await access.provider();
     const candidates = await provider.listOpenPullRequests(
       repository.externalId,
       repository.reviewIntakeMode === "assigned"
@@ -217,7 +229,7 @@ export async function reconcileRepositoryIntake(
       (candidate) =>
         !activeNumbers.has(candidate.number) && differsFromKnown(candidate),
     );
-    const retryFailed = shouldRetryFailedAutomaticSync(input);
+    const retryFailed = shouldRetryFailedAutomaticSync(options);
     const eligible = retryFailed
       ? changedCandidates
       : changedCandidates.filter(
@@ -312,18 +324,21 @@ export async function reconcileWorkspaceIntake(
   const workspaceRepositories = await db.query.repositories.findMany({
     where: eq(repositories.workspaceId, workspaceId),
     limit: MAX_REPOSITORIES_PER_PASS,
-    columns: { id: true, reviewIntakeMode: true },
   });
   const passes = await mapWithLimit(
     workspaceRepositories,
     REPOSITORY_PASS_CONCURRENCY,
     async (repository) => {
       const pass = { checked: 0, queued: 0, stateChanges: 0 };
+      // Both passes over a repository read the same connection and credential,
+      // so they share one lazily resolved provider.
+      const access = connectionAccess(db, repository.connectionId);
       try {
-        const stateResult = await refreshRepositoryPullRequestStates(db, {
-          workspaceId,
-          repositoryId: repository.id,
-        });
+        const stateResult = await refreshRepositoryPullRequestStates(
+          db,
+          repository,
+          access,
+        );
         pass.stateChanges = stateResult.changed;
         pass.queued = stateResult.queued;
       } catch {
@@ -331,10 +346,12 @@ export async function reconcileWorkspaceIntake(
       }
       if (repository.reviewIntakeMode === "manual") return pass;
       try {
-        const result = await reconcileRepositoryIntake(db, {
-          workspaceId,
-          repositoryId: repository.id,
-        });
+        const result = await reconcileIntakeForRepository(
+          db,
+          repository,
+          access,
+          {},
+        );
         if (!result.skipped) pass.checked = 1;
         pass.queued += result.queued;
       } catch {

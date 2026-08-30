@@ -1,68 +1,43 @@
 import "server-only";
 
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
-import {
-  providerConnections,
-  pullRequests,
-  repositories,
-} from "@/drizzle/schema";
+import { pullRequests, repositories } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { startPullRequestSync } from "~/server/workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
-import { providerForConnection } from "./credentials";
+import type { ConnectionAccess } from "./credentials";
 
 type Database = typeof database;
+type Repository = typeof repositories.$inferSelect;
 const STATE_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 
 /** Refreshes tracked PR metadata and queues analysis only when an open revision changed. */
 export async function refreshRepositoryPullRequestStates(
   db: Database,
-  input: {
-    workspaceId: string;
-    repositoryId: string;
-    force?: boolean;
-  },
+  repository: Repository,
+  access: ConnectionAccess,
 ) {
-  const repository = await db.query.repositories.findFirst({
-    where: and(
-      eq(repositories.id, input.repositoryId),
-      eq(repositories.workspaceId, input.workspaceId),
-    ),
-  });
-  if (!repository) throw new Error("Repository not found");
   const now = new Date();
-  if (!input.force) {
-    const dueBefore = new Date(
-      now.getTime() - STATE_RECONCILIATION_INTERVAL_MS,
-    );
-    const [claimed] = await db
-      .update(repositories)
-      .set({ pullRequestStateLastCheckedAt: now })
-      .where(
-        and(
-          eq(repositories.id, repository.id),
-          or(
-            isNull(repositories.pullRequestStateLastCheckedAt),
-            lt(repositories.pullRequestStateLastCheckedAt, dueBefore),
-          ),
+  const dueBefore = new Date(now.getTime() - STATE_RECONCILIATION_INTERVAL_MS);
+  const [claimed] = await db
+    .update(repositories)
+    .set({ pullRequestStateLastCheckedAt: now })
+    .where(
+      and(
+        eq(repositories.id, repository.id),
+        or(
+          isNull(repositories.pullRequestStateLastCheckedAt),
+          lt(repositories.pullRequestStateLastCheckedAt, dueBefore),
         ),
-      )
-      .returning({ id: repositories.id });
-    if (!claimed) return { checked: false, changed: 0, queued: 0 };
-  } else {
-    await db
-      .update(repositories)
-      .set({ pullRequestStateLastCheckedAt: now })
-      .where(eq(repositories.id, repository.id));
-  }
+      ),
+    )
+    .returning({ id: repositories.id });
+  if (!claimed) return { checked: false, changed: 0, queued: 0 };
   // The connection is only needed once the throttle claim succeeds, so the
   // frequent no-op pass costs a single round-trip.
-  const connection = await db.query.providerConnections.findFirst({
-    where: eq(providerConnections.id, repository.connectionId),
-  });
-  if (!connection) throw new Error("Provider connection not found");
+  const connection = await access.connection();
   try {
-    const provider = await providerForConnection(db, connection);
+    const provider = await access.provider();
     const [openPullRequests, tracked] = await Promise.all([
       provider.listOpenPullRequests(repository.externalId),
       db.query.pullRequests.findMany({

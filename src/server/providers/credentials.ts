@@ -424,3 +424,42 @@ export async function providerForConnection(
     connection.credentialKind,
   );
 }
+
+/** A connection row and provider client shared by the passes over one repository. */
+export interface ConnectionAccess {
+  connection: () => Promise<typeof providerConnections.$inferSelect>;
+  provider: () => Promise<PullRequestProvider>;
+}
+
+/**
+ * Resolves a connection and its provider client at most once. Both reads stay
+ * lazy so a pass that throttles itself never pays for them.
+ */
+export function connectionAccess(
+  db: Database,
+  connectionId: string,
+): ConnectionAccess {
+  let connectionRow:
+    | Promise<typeof providerConnections.$inferSelect>
+    | undefined;
+  let providerClient: Promise<PullRequestProvider> | undefined;
+  /** Reads the connection row on first use. */
+  const connection = () => {
+    connectionRow ??= (async () => {
+      const row = await db.query.providerConnections.findFirst({
+        where: eq(providerConnections.id, connectionId),
+      });
+      if (!row) throw new Error("Provider connection not found");
+      return row;
+    })();
+    return connectionRow;
+  };
+  /** Opens the provider client on first use. */
+  const provider = () => {
+    providerClient ??= connection().then((row) =>
+      providerForConnection(db, row),
+    );
+    return providerClient;
+  };
+  return { connection, provider };
+}
