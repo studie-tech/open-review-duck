@@ -25,9 +25,9 @@ const WINDOW_BLOCK_LINES = 50;
 const WINDOW_INITIAL_BLOCKS = 4;
 
 /**
- * Distance from the viewport at which a block mounts its rows.
+ * Distance from the scrolling pane at which a block mounts its rows.
  *
- * Roughly a viewport of lead time either way, so a fast scroll lands on
+ * Roughly a paneful of lead time either way, so a fast scroll lands on
  * source rather than on a spacer that has yet to fill.
  */
 const WINDOW_MOUNT_MARGIN_PX = 1500;
@@ -135,7 +135,10 @@ function SourceLineBlock({
     if (!element) return;
     const observer = new IntersectionObserver(
       (entries) => setNear(entries.some((entry) => entry.isIntersecting)),
-      { rootMargin: `${WINDOW_MOUNT_MARGIN_PX}px 0px` },
+      {
+        root: scrollingAncestor(element),
+        rootMargin: `${WINDOW_MOUNT_MARGIN_PX}px 0px`,
+      },
     );
     observer.observe(element);
     return () => observer.disconnect();
@@ -155,4 +158,19 @@ function SourceLineBlock({
       {mounted ? render() : null}
     </div>
   );
+}
+
+/**
+ * Finds the container a block scrolls inside, or null for the page itself.
+ *
+ * Intersection clips a target against every scroll container between it and
+ * the root before the root margin is applied, so the margin only buys lead
+ * time when the root is the pane the source actually scrolls in.
+ */
+function scrollingAncestor(element: Element) {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return null;
 }
