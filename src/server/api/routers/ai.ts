@@ -41,10 +41,8 @@ import {
 } from "~/server/security/remote-url";
 import { sealVaultSecret } from "~/server/security/vault";
 import { cancelWorkflowRun } from "~/server/workflows/service";
-import {
-  ensurePersonalWorkspace,
-  requireWorkspaceAdministrator,
-} from "~/server/workspaces/service";
+import { requirePersonalWorkspaceAdministrator } from "~/server/workspaces/access";
+import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 import {
   aiJobLookupSchema,
   deleteAiQuestionThreadSchema,
@@ -224,13 +222,8 @@ export const aiRouter = createTRPCRouter({
         };
       }
       try {
-        const workspace = await ensurePersonalWorkspace(
+        const workspace = await requirePersonalWorkspaceAdministrator(
           ctx.db,
-          ctx.auth.userId,
-        );
-        await requireWorkspaceAdministrator(
-          ctx.db,
-          workspace.id,
           ctx.auth.userId,
         );
         const existing = await ctx.db.query.localAiConfigurations.findFirst({
@@ -297,10 +290,8 @@ export const aiRouter = createTRPCRouter({
   saveConfiguration: protectedProcedure
     .input(saveAiConfigurationSchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-      await requireWorkspaceAdministrator(
+      const workspace = await requirePersonalWorkspaceAdministrator(
         ctx.db,
-        workspace.id,
         ctx.auth.userId,
       );
       const local = isLocalDeployment();

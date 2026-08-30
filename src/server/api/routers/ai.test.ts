@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   settleAiJobQuota: vi.fn(async () => {
     mocks.order.push("settleAiJobQuota");
   }),
-  ensurePersonalWorkspace: vi.fn(async () => ({
+  personalWorkspace: vi.fn(async () => ({
     id: "workspace-1",
     aiMode: "on_demand" as const,
     aiReviewEnabled: true,
@@ -34,8 +34,10 @@ vi.mock("~/server/review/deep/cancel", () => ({
   cancelDeepReviewTree: mocks.cancelDeepReviewTree,
 }));
 vi.mock("~/server/workspaces/service", () => ({
-  ensurePersonalWorkspace: mocks.ensurePersonalWorkspace,
-  requireWorkspaceAdministrator: vi.fn(async () => undefined),
+  ensurePersonalWorkspace: mocks.personalWorkspace,
+}));
+vi.mock("~/server/workspaces/access", () => ({
+  requirePersonalWorkspaceAdministrator: mocks.personalWorkspace,
 }));
 vi.mock("~/server/ai/plan", () => ({
   PAID_AI_FEATURE: "paid_ai_models",
@@ -136,7 +138,7 @@ beforeEach(() => {
   mocks.order.length = 0;
   vi.clearAllMocks();
   mocks.isLocalDeployment.mockReturnValue(false);
-  mocks.ensurePersonalWorkspace.mockResolvedValue({
+  mocks.personalWorkspace.mockResolvedValue({
     id: "workspace-1",
     aiMode: "on_demand",
     aiReviewEnabled: true,

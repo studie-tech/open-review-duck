@@ -29,7 +29,7 @@ import {
   githubInstallationId,
 } from "~/server/security/oauth-flow";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
-import { requireWorkspaceAdministrator } from "~/server/workspaces/service";
+import { requireWorkspaceAdministrator } from "~/server/workspaces/access";
 
 class InstallationClaimedError extends Error {
   override name = "InstallationClaimedError";
