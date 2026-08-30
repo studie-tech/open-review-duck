@@ -513,6 +513,12 @@ export const pullRequests = createTable(
   (t) => [
     uniqueIndex("pull_request_external_idx").on(t.repositoryId, t.externalId),
     index("pull_request_state_idx").on(t.repositoryId, t.state),
+    /**
+     * Every sync, webhook delivery and queue join looks a pull request up by
+     * its provider number. The pair is not unique because each monitored
+     * repository branch stores a synthetic pull request numbered zero.
+     */
+    index("pull_request_number_idx").on(t.repositoryId, t.number),
   ],
 );
 
