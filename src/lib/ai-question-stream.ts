@@ -66,3 +66,49 @@ export async function consumeAiQuestionStream(
     if (done) return lastUpdate;
   }
 }
+
+/** Milliseconds a streamed answer update waits for a later one to supersede it. */
+export const AI_QUESTION_STREAM_FLUSH_MS = 100;
+
+/**
+ * Throttles streamed answer updates onto one flush window.
+ *
+ * The stream route emits one event per persisted chunk and every update lands
+ * in workspace-level state, so applying each chunk on its own re-renders the
+ * whole review tree many times per answer. Each update carries the answer text
+ * so far, which makes dropping a superseded one lossless, and terminal updates
+ * skip the window so a finished answer lands without delay.
+ */
+export function coalesceAiQuestionStreamUpdates(
+  onUpdate: (update: AiQuestionStreamUpdate) => void,
+  flushMs: number = AI_QUESTION_STREAM_FLUSH_MS,
+) {
+  let pending: AiQuestionStreamUpdate | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Closes the open window and applies the update waiting in it. */
+  function flush() {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    const waiting = pending;
+    pending = undefined;
+    if (waiting) onUpdate(waiting);
+  }
+  return {
+    /** Drops the update waiting, for a stream nobody listens to any more. */
+    cancel() {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+      pending = undefined;
+    },
+    flush,
+    /** Queues one update, applying it at once when it ends the stream. */
+    push(update: AiQuestionStreamUpdate) {
+      pending = update;
+      if (update.status === "completed" || update.status === "failed") {
+        flush();
+        return;
+      }
+      if (timer === undefined) timer = setTimeout(flush, flushMs);
+    },
+  };
+}

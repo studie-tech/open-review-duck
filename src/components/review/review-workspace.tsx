@@ -67,6 +67,7 @@ import {
 import { aiErrorPresentation } from "~/lib/ai-errors";
 import {
   type AiQuestionStreamUpdate,
+  coalesceAiQuestionStreamUpdates,
   consumeAiQuestionStream,
 } from "~/lib/ai-question-stream";
 import { conceptStatusFromMembers } from "~/lib/concept-progress";
@@ -5135,6 +5136,9 @@ export function ReviewWorkspace({
     aiQuestionStreams.current.set(optimisticId, controller);
     let cursor = -1;
     let reconnects = 0;
+    const answerUpdates = coalesceAiQuestionStreamUpdates((update) =>
+      updateLiveAiQuestion(optimisticId, update),
+    );
     try {
       while (!controller.signal.aborted) {
         try {
@@ -5147,7 +5151,7 @@ export function ReviewWorkspace({
             response,
             (update) => {
               if (update.cursor !== undefined) cursor = update.cursor;
-              updateLiveAiQuestion(optimisticId, update);
+              answerUpdates.push(update);
             },
           );
           if (
@@ -5159,6 +5163,9 @@ export function ReviewWorkspace({
           throw new Error("AI answer stream ended before completion");
         } catch {
           if (controller.signal.aborted) return;
+          // The answer text read so far survives the drop-out, so it lands
+          // before the reconnect notice replaces the progress line.
+          answerUpdates.flush();
           reconnects += 1;
           if (reconnects > 5) break;
           setLiveAiQuestions((questions) =>
@@ -5193,6 +5200,7 @@ export function ReviewWorkspace({
         );
       }
     } finally {
+      answerUpdates.cancel();
       if (aiQuestionStreams.current.get(optimisticId) === controller) {
         aiQuestionStreams.current.delete(optimisticId);
       }

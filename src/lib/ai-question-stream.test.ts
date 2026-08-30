@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import { consumeAiQuestionStream } from "./ai-question-stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  coalesceAiQuestionStreamUpdates,
+  consumeAiQuestionStream,
+} from "./ai-question-stream";
 
 describe("consumeAiQuestionStream", () => {
   it("decodes updates split across network chunks", async () => {
@@ -42,5 +45,76 @@ describe("consumeAiQuestionStream", () => {
       status: "completed",
       text: "Complete",
     });
+  });
+});
+
+describe("coalesceAiQuestionStreamUpdates", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("applies only the latest chunk of a burst once the window closes", () => {
+    vi.useFakeTimers();
+    const apply = vi.fn();
+    const updates = coalesceAiQuestionStreamUpdates(apply, 100);
+
+    for (const text of ["A", "AB", "ABC"]) {
+      updates.push({ progress: "Writing", status: "streaming", text });
+    }
+    expect(apply).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(100);
+
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledWith({
+      progress: "Writing",
+      status: "streaming",
+      text: "ABC",
+    });
+  });
+
+  it("applies a terminal update immediately and only once", () => {
+    vi.useFakeTimers();
+    const apply = vi.fn();
+    const updates = coalesceAiQuestionStreamUpdates(apply, 100);
+
+    updates.push({ progress: "Writing", status: "streaming", text: "A" });
+    updates.push({
+      progress: "Answer complete",
+      status: "completed",
+      text: "AB",
+    });
+
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledWith({
+      progress: "Answer complete",
+      status: "completed",
+      text: "AB",
+    });
+
+    vi.advanceTimersByTime(100);
+
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes the waiting chunk on request and drops it on cancel", () => {
+    vi.useFakeTimers();
+    const apply = vi.fn();
+    const updates = coalesceAiQuestionStreamUpdates(apply, 100);
+
+    updates.push({ progress: "Writing", status: "streaming", text: "A" });
+    updates.flush();
+
+    expect(apply).toHaveBeenCalledWith({
+      progress: "Writing",
+      status: "streaming",
+      text: "A",
+    });
+
+    updates.push({ progress: "Writing", status: "streaming", text: "AB" });
+    updates.cancel();
+    vi.advanceTimersByTime(100);
+
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 });
