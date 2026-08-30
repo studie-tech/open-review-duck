@@ -165,6 +165,29 @@ describe("ai.configuration deep review availability", () => {
       deepReviewAvailable: true,
     });
   });
+
+  it("issues the preference, provider and account reads together", async () => {
+    mocks.isLocalDeployment.mockReturnValue(true);
+    let inFlight = 0;
+    let peak = 0;
+    /** Counts overlapping lookups by suspending before it resolves. */
+    const lookup = async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return undefined;
+    };
+    const db = {
+      query: {
+        aiPreferences: { findFirst: lookup },
+        localAiConfigurations: { findFirst: lookup },
+        users: { findFirst: lookup },
+      },
+    } as unknown as Database;
+    await caller(db).configuration();
+    expect(peak).toBe(3);
+  });
 });
 
 describe("ai.start deep review refusal", () => {
