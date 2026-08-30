@@ -91,6 +91,10 @@ import {
   reviewCardRanges,
   reviewedFileCard,
 } from "./review-file-card";
+import { SourceLineWindow } from "./source-line-window";
+
+/** Height a folded block reserves per row: the pane sets `leading-[21px]`. */
+const SOURCE_ROW_HEIGHT_PX = 21;
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
@@ -248,48 +252,52 @@ function ReviewConceptFileCardFallbackMember({
   const lines = useHighlightedSource(member.source, member.language);
   return (
     <div className="border-b border-line/60 last:border-b-0">
-      {lines.map((line, lineIndex) => {
-        const lineNumber = member.startLine + lineIndex;
-        const owner = reviewCardMemberForLine([member], lineNumber);
-        return (
-          <div
-            key={`${member.id}-${lineNumber}`}
-            className={cn(
-              "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
-              !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-              owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
-            )}
-          >
-            {owner && onCommentLine ? (
-              <button
-                type="button"
-                aria-label={`Comment on line ${lineNumber} of ${member.name}`}
-                onClick={() => onCommentLine(member.id, lineNumber)}
-                className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
-              >
-                <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                <span>{lineNumber}</span>
-              </button>
-            ) : (
-              <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-                {lineNumber}
-              </span>
-            )}
-            <pre className="syntax-code overflow-visible text-cloud">
-              {line.tokens.length
-                ? line.tokens.map((token, tokenIndex) => (
-                    <span
-                      key={`${tokenIndex}-${token.text.length}`}
-                      className={token.className || undefined}
-                    >
-                      {token.text}
-                    </span>
-                  ))
-                : " "}
-            </pre>
-          </div>
-        );
-      })}
+      <SourceLineWindow
+        items={lines}
+        rowHeight={SOURCE_ROW_HEIGHT_PX}
+        startLine={member.startLine}
+        renderLine={(line, lineNumber) => {
+          const owner = reviewCardMemberForLine([member], lineNumber);
+          return (
+            <div
+              key={`${member.id}-${lineNumber}`}
+              className={cn(
+                "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
+                owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+              )}
+            >
+              {owner && onCommentLine ? (
+                <button
+                  type="button"
+                  aria-label={`Comment on line ${lineNumber} of ${member.name}`}
+                  onClick={() => onCommentLine(member.id, lineNumber)}
+                  className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                >
+                  <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span>{lineNumber}</span>
+                </button>
+              ) : (
+                <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                  {lineNumber}
+                </span>
+              )}
+              <pre className="syntax-code overflow-visible text-cloud">
+                {line.tokens.length
+                  ? line.tokens.map((token, tokenIndex) => (
+                      <span
+                        key={`${tokenIndex}-${token.text.length}`}
+                        className={token.className || undefined}
+                      >
+                        {token.text}
+                      </span>
+                    ))
+                  : " "}
+              </pre>
+            </div>
+          );
+        }}
+      />
     </div>
   );
 }
@@ -339,9 +347,12 @@ function ReviewConceptFileCardSource({
   }, [members]);
   return (
     <div className="overflow-x-auto py-2">
-      {fileSource
-        ? lines.map((line, lineIndex) => {
-            const lineNumber = startLine + lineIndex;
+      {fileSource ? (
+        <SourceLineWindow
+          items={lines}
+          rowHeight={SOURCE_ROW_HEIGHT_PX}
+          startLine={startLine}
+          renderLine={(line, lineNumber) => {
             const owner = ownerByLine.get(lineNumber);
             return (
               <div
@@ -381,14 +392,17 @@ function ReviewConceptFileCardSource({
                 </pre>
               </div>
             );
-          })
-        : members.map((member) => (
-            <ReviewConceptFileCardFallbackMember
-              key={member.id}
-              member={member}
-              onCommentLine={onCommentLine}
-            />
-          ))}
+          }}
+        />
+      ) : (
+        members.map((member) => (
+          <ReviewConceptFileCardFallbackMember
+            key={member.id}
+            member={member}
+            onCommentLine={onCommentLine}
+          />
+        ))
+      )}
     </div>
   );
 }
@@ -712,45 +726,49 @@ function ReviewConceptMemberSource({
     // concept is left and takes two gestures to read one unit. Only long lines
     // scroll, and only sideways.
     <div className="overflow-x-auto py-2">
-      {lines.map((line, lineIndex) => {
-        const lineNumber = unit.startLine + lineIndex;
-        const commentable =
-          Boolean(onCommentLine) && memberCommentableLine(unit, lineNumber);
-        return (
-          <div
-            key={`${unit.id}-${lineIndex}`}
-            className="group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
-          >
-            {commentable ? (
-              <button
-                type="button"
-                aria-label={`Comment on line ${lineNumber} of ${unit.name}`}
-                onClick={() => onCommentLine?.(lineNumber)}
-                className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
-              >
-                <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                <span>{lineNumber}</span>
-              </button>
-            ) : (
-              <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-                {lineNumber}
-              </span>
-            )}
-            <pre className="syntax-code overflow-visible text-cloud">
-              {line.tokens.length
-                ? line.tokens.map((token, tokenIndex) => (
-                    <span
-                      key={`${tokenIndex}-${token.text.length}`}
-                      className={token.className || undefined}
-                    >
-                      {token.text}
-                    </span>
-                  ))
-                : " "}
-            </pre>
-          </div>
-        );
-      })}
+      <SourceLineWindow
+        items={lines}
+        rowHeight={SOURCE_ROW_HEIGHT_PX}
+        startLine={unit.startLine}
+        renderLine={(line, lineNumber) => {
+          const commentable =
+            Boolean(onCommentLine) && memberCommentableLine(unit, lineNumber);
+          return (
+            <div
+              key={`${unit.id}-${lineNumber}`}
+              className="group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle"
+            >
+              {commentable ? (
+                <button
+                  type="button"
+                  aria-label={`Comment on line ${lineNumber} of ${unit.name}`}
+                  onClick={() => onCommentLine?.(lineNumber)}
+                  className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                >
+                  <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span>{lineNumber}</span>
+                </button>
+              ) : (
+                <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                  {lineNumber}
+                </span>
+              )}
+              <pre className="syntax-code overflow-visible text-cloud">
+                {line.tokens.length
+                  ? line.tokens.map((token, tokenIndex) => (
+                      <span
+                        key={`${tokenIndex}-${token.text.length}`}
+                        className={token.className || undefined}
+                      >
+                        {token.text}
+                      </span>
+                    ))
+                  : " "}
+              </pre>
+            </div>
+          );
+        }}
+      />
     </div>
   );
 }
