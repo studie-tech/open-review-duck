@@ -40,16 +40,6 @@ import {
 
 type Database = typeof database;
 
-/**
- * The cost guard a caller may impose on relocation, shared across one run.
- *
- * §6.6 argues against capping at all — a run-wide cap silently degrades the
- * late findings of a large pull request while the early ones get the full
- * treatment — so `validateFileFindings` relocates without limit unless a
- * budget is passed in. The constant exists for callers that want the guard.
- */
-const DEEP_REVIEW_RELOCATION_LIMIT = env.DEEP_REVIEW_RELOCATION_LIMIT;
-
 const RELOCATION_CONCURRENCY = 4;
 const MAX_RELOCATE_OUTPUT_TOKENS = 1_024;
 const MAX_REFUTE_OUTPUT_TOKENS = 4_096;
@@ -63,10 +53,6 @@ type DeepReviewFindingState =
   | "out_of_scope"
   | "ungrounded"
   | "refuted";
-
-export interface DeepReviewRelocationBudget {
-  remaining: number;
-}
 
 /** The unit fields anchoring needs, so validation never loads a whole unit. */
 export interface DeepReviewValidationUnit {
@@ -116,7 +102,6 @@ export interface ValidateFileFindingsInput {
   snapshotPaths: readonly string[];
   /** Absent disables relocation and refutation; both then fail open. */
   model?: DeepReviewValidationModel;
-  relocationBudget?: DeepReviewRelocationBudget;
   promptBodies?: DeepReviewPromptBodies;
   relocateSystemPrompt?: string;
   refuteSystemPrompt?: string;
@@ -167,15 +152,6 @@ interface PreparedFinding {
 interface RelocatableFinding {
   id: string;
   content: FindingContent;
-}
-
-/** Creates the optional run-wide relocation guard, defaulting to §6.6's cap. */
-export function createRelocationBudget(
-  limit: number = DEEP_REVIEW_RELOCATION_LIMIT,
-): DeepReviewRelocationBudget {
-  return {
-    remaining: Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0,
-  };
 }
 
 /** Reads a sealed finding payload, tolerating anything that is not our shape. */
@@ -549,14 +525,9 @@ async function readFindingContent(
   }
 }
 
-/** Returns whether a relocation attempt is both configured and still affordable. */
+/** Returns whether relocation is configured for this run. */
 function mayRelocate(input: ValidateFileFindingsInput): boolean {
-  if (!input.model) return false;
-  const budget = input.relocationBudget;
-  if (!budget) return true;
-  if (budget.remaining <= 0) return false;
-  budget.remaining -= 1;
-  return true;
+  return Boolean(input.model);
 }
 
 /**
