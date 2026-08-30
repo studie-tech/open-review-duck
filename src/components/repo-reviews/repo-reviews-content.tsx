@@ -1359,6 +1359,7 @@ function Findings({
 /** Manages versioned file and repository compliance rules. */
 function Rules({ monitor }: { monitor: Monitors[number] }) {
   const rules = api.repoReviews.rules.useQuery({ monitorId: monitor.id });
+  const utils = api.useUtils();
   const [editingId, setEditingId] = useState<string>();
   const [form, setForm] = useState({
     title: "",
@@ -1388,13 +1389,21 @@ function Rules({ monitor }: { monitor: Monitors[number] }) {
       toast.error("Could not save rule", { description: error.message }),
   });
   const update = api.repoReviews.updateRule.useMutation({
-    onSuccess: () => {
+    onMutate: ({ monitorId: _monitorId, ruleId, ...changes }) =>
+      utils.repoReviews.rules.setData({ monitorId: monitor.id }, (current) =>
+        current?.map((rule) =>
+          rule.id === ruleId ? { ...rule, ...changes } : rule,
+        ),
+      ),
+    onSuccess: (_result, { ruleId }) => {
       toast.success("Compliance rule updated");
-      reset();
-      void rules.refetch();
+      if (editingId === ruleId) reset();
+      void utils.repoReviews.rules.invalidate({ monitorId: monitor.id });
     },
-    onError: (error) =>
-      toast.error("Could not update rule", { description: error.message }),
+    onError: (error) => {
+      void utils.repoReviews.rules.invalidate({ monitorId: monitor.id });
+      toast.error("Could not update rule", { description: error.message });
+    },
   });
   const archive = api.repoReviews.archiveRule.useMutation({
     onSuccess: (_result, { ruleId }) => {
