@@ -410,14 +410,13 @@ export function useHighlightedSource(source: string, language: string) {
       return;
     }
     let current = true;
-    const lexical = cachedLexicalLines(source, language);
-    setLines(lexical);
+    setLines(cachedLexicalLines(source, language));
     void highlightedSourcePromise(source, language)
       .then((highlighted) => {
         if (current) setLines(highlighted);
       })
       .catch(() => {
-        if (current) setLines(lexical);
+        // The lexical lines painted above stand when no grammar arrives.
       });
     return () => {
       current = false;
