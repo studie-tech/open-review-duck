@@ -152,7 +152,6 @@ function makeData(units: ReturnType<typeof makeUnit>[]): ReaderData {
   return {
     units,
     fileContexts: [],
-    sourceDelivery: "embedded",
     snapshot: null,
   } as unknown as ReaderData;
 }
@@ -312,11 +311,10 @@ describe("RepositoryReader", () => {
     });
   });
 
-  it("hydrates full-file context only for the active direct-source path", async () => {
+  it("hydrates full-file context only for the active source path", async () => {
     const first = makeUnit({ path: "src/one.ts" });
     const second = makeUnit({ path: "src/two.ts" });
     const data = makeData([first, second]);
-    data.sourceDelivery = "direct";
     data.snapshot = {
       id: "snapshot-1",
       headSha: "abcdef1234567890",

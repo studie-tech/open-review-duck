@@ -979,24 +979,12 @@ export function ReviewWorkspace({
     ),
   );
   const [hydratedUnitIds, setHydratedUnitIds] = useState(
-    () =>
-      new Set(
-        initialData.sourceDelivery === "direct"
-          ? []
-          : initialData.units.map(({ id }) => id),
-      ),
+    () => new Set<string>(),
   );
   const [sourceHydrationPending, setSourceHydrationPending] = useState(
-    initialData.sourceDelivery === "direct" && Boolean(initialData.snapshot),
+    Boolean(initialData.snapshot),
   );
-  const [settledUnitIds, setSettledUnitIds] = useState(
-    () =>
-      new Set(
-        initialData.sourceDelivery === "direct"
-          ? []
-          : initialData.units.map(({ id }) => id),
-      ),
-  );
+  const [settledUnitIds, setSettledUnitIds] = useState(() => new Set<string>());
   const sourceSnapshotId = initialData.snapshot?.id;
   // A snapshot is immutable. Keep its first source manifest stable so a
   // same-snapshot router refresh can update server state without aborting and
@@ -1013,7 +1001,7 @@ export function ReviewWorkspace({
     [sourceSnapshotId],
   );
   useEffect(() => {
-    if (initialData.sourceDelivery !== "direct" || !sourceSnapshotId) return;
+    if (!sourceSnapshotId) return;
     const sourceUnits = sourceHydrationInput.units;
     const sourceFileContexts = sourceHydrationInput.fileContexts;
     const visibleUnit =
@@ -1145,7 +1133,7 @@ export function ReviewWorkspace({
       controller.abort();
       cache.clear();
     };
-  }, [initialData.sourceDelivery, sourceHydrationInput, sourceSnapshotId]);
+  }, [sourceHydrationInput, sourceSnapshotId]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
   const [filesViewerAbove, setFilesViewerAbove] = useState(
@@ -1439,9 +1427,7 @@ export function ReviewWorkspace({
     ? deletedFilePaths.has(activeUnit.path)
     : false;
   const activeSourceAvailable = Boolean(
-    activeUnit &&
-      (initialData.sourceDelivery !== "direct" ||
-        hydratedUnitIds.has(activeUnit.id)),
+    activeUnit && hydratedUnitIds.has(activeUnit.id),
   );
   const activeSourceHydrationPending = Boolean(
     sourceHydrationPending && activeUnit && !settledUnitIds.has(activeUnit.id),
@@ -1899,10 +1885,7 @@ export function ReviewWorkspace({
   const activeFileCardSourceAvailable =
     activeFileCardMembers.length > 0 &&
     activeFileCardMembers.every(
-      (member) =>
-        member.kind === "binary" ||
-        initialData.sourceDelivery !== "direct" ||
-        hydratedUnitIds.has(member.id),
+      (member) => member.kind === "binary" || hydratedUnitIds.has(member.id),
     );
   const diffAvailable = Boolean(
     activeSourceAvailable &&
@@ -4496,10 +4479,8 @@ export function ReviewWorkspace({
   const activeSignOffPending = activeUnit
     ? signOffQueue.ids.has(activeUnit.id) || activeConceptSignOffPending
     : false;
-  const activeConceptSourcesAvailable = activeConceptMembers.every((unit) =>
-    initialData.sourceDelivery === "direct"
-      ? unit.kind === "binary" || hydratedUnitIds.has(unit.id)
-      : true,
+  const activeConceptSourcesAvailable = activeConceptMembers.every(
+    (unit) => unit.kind === "binary" || hydratedUnitIds.has(unit.id),
   );
   const deletedUnitsToSignOff = useMemo(
     () => deletedFileSignOffUnits(units, fileContexts),
@@ -4508,11 +4489,7 @@ export function ReviewWorkspace({
   const canSignOffDeletedFiles =
     activeFileIsDeleted &&
     deletedUnitsToSignOff.length > 0 &&
-    deletedUnitsToSignOff.every((unit) =>
-      initialData.sourceDelivery === "direct"
-        ? hydratedUnitIds.has(unit.id)
-        : true,
-    ) &&
+    deletedUnitsToSignOff.every((unit) => hydratedUnitIds.has(unit.id)) &&
     !resetReview.isPending;
   const pendingSignOffCount =
     signOffQueue.ids.size + pendingConceptSignOffIds.size;
