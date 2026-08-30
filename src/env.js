@@ -140,13 +140,6 @@ export const env = createEnv({
       .min(1)
       .max(10_000)
       .default(50),
-    // Optional run-wide guard on finding relocation, in re-extraction calls.
-    DEEP_REVIEW_RELOCATION_LIMIT: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(1_000)
-      .default(20),
     // Surviving findings required before one clustering call is worth making;
     // below it the deterministic collapse has already done the work.
     DEEP_REVIEW_DEDUPE_MIN: z.coerce.number().int().min(2).max(100).default(3),
@@ -224,7 +217,6 @@ export const env = createEnv({
     DEEP_REVIEW_FILE_MAX_TURNS: process.env.DEEP_REVIEW_FILE_MAX_TURNS,
     DEEP_REVIEW_PLAN_LINE_THRESHOLD:
       process.env.DEEP_REVIEW_PLAN_LINE_THRESHOLD,
-    DEEP_REVIEW_RELOCATION_LIMIT: process.env.DEEP_REVIEW_RELOCATION_LIMIT,
     DEEP_REVIEW_DEDUPE_MIN: process.env.DEEP_REVIEW_DEDUPE_MIN,
     ALLOW_PRIVATE_PROVIDER_HOSTS: process.env.ALLOW_PRIVATE_PROVIDER_HOSTS,
     ALLOW_PRIVATE_AI_HOSTS: process.env.ALLOW_PRIVATE_AI_HOSTS,

@@ -24,7 +24,6 @@ vi.mock("ai", () => ({
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { DEEP_REVIEW_REFUTE_SYSTEM_PROMPT } from "./review-prompts";
 import {
-  createRelocationBudget,
   type DeepReviewValidationEvidence,
   type DeepReviewValidationModel,
   type DeepReviewValidationModelRequest,
@@ -614,27 +613,6 @@ describe("relocation", () => {
       "f2",
       "f3",
       "f4",
-    ]);
-  });
-
-  it("stops relocating once a shared run budget is spent", async () => {
-    const rows = [
-      await sealFinding({ id: "f1", existingCode: "const missingOne = 1;" }),
-      await sealFinding({ id: "f2", existingCode: "const missingTwo = 2;" }),
-    ];
-    const { db } = fakeDatabase(rows);
-    const { model, requests } = stubModel({ relocate: "```\nnope\n```" });
-    const budget = createRelocationBudget(1);
-    const result = await validateFileFindings(
-      db,
-      validationInput({ model, relocationBudget: budget }),
-    );
-    expect(result.relocationsAttempted).toBe(1);
-    expect(requests).toHaveLength(1);
-    expect(budget.remaining).toBe(0);
-    expect(result.findings.map((finding) => finding.state)).toEqual([
-      "unanchored",
-      "unanchored",
     ]);
   });
 });
