@@ -122,6 +122,11 @@ import {
   shortRevision,
 } from "~/lib/review-revision";
 import {
+  isHeavyReviewSource,
+  reviewFileCardStartsExpanded,
+  reviewSourceByteLength,
+} from "~/lib/review-source-display";
+import {
   currentChangedLineIndexes,
   sideBySideDiff,
   sourceByteOffsetLine,
@@ -892,6 +897,7 @@ import {
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
   ReviewFileCardHeader,
+  ReviewFileCardSourcePlaceholder,
   ReviewFileUnitMarker,
   ReviewHierarchyDialog,
   ReviewPathUnit,
@@ -902,6 +908,7 @@ import {
   rememberAiConversationVisibility,
   reviewCardMemberForLine,
   reviewCardRanges,
+  reviewedFileCard,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
@@ -909,6 +916,8 @@ import {
   showAiStartError,
   supportedLanguage,
   UnitImportContext,
+  withoutDeletedAiQuestions,
+  withoutDeletedLiveAiQuestions,
 } from "./review-workspace-support";
 import {
   SymbolPeekCard,
@@ -1116,13 +1125,18 @@ export function ReviewWorkspace({
     };
   }, [initialData.sourceDelivery, sourceHydrationInput, sourceSnapshotId]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [reviewMode, setReviewMode] = useState<ReviewMode>("path");
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
   const [filesViewerAbove, setFilesViewerAbove] = useState(
     FILES_VIEWER_PAGE_SIZE,
   );
   const [filesViewerBelow, setFilesViewerBelow] = useState(
     FILES_VIEWER_PAGE_SIZE,
   );
+  const [fileSourceReveal, setFileSourceReveal] = useState<{
+    expanded: boolean;
+    path: string;
+    reviewed: boolean;
+  }>();
   const [completedBrowsing, setCompletedBrowsing] = useState(false);
   const [pendingFileId, setPendingFileId] = useState<string>();
   const unreviewRollback = useRef<ReviewUnit[] | undefined>(undefined);
@@ -1423,23 +1437,25 @@ export function ReviewWorkspace({
     const pane = codeScrollRef.current;
     const card = reviewUnitStartRef.current;
     if (!pane || !card) {
-      setSelectedCardStuck(false);
+      setSelectedCardStuck((current) => (current ? false : current));
       return;
     }
     // The stuck chrome is only for when this card has scrolled under its own
     // sticky header. Landing on a later file must keep a complete card top,
     // even if earlier cards left the pane scrolled.
-    setSelectedCardStuck(
-      card.getBoundingClientRect().top < pane.getBoundingClientRect().top - 1,
-    );
+    const next =
+      card.getBoundingClientRect().top < pane.getBoundingClientRect().top - 1;
+    setSelectedCardStuck((current) => (current === next ? current : next));
   }, []);
-  const selectedCardPinKey = `${reviewMode}:${activeConceptCardIndex}:${activeUnit?.id ?? ""}`;
+  const selectedCardPinKey = `${reviewMode}:${activeConceptCardIndex}:${activeUnit?.id ?? ""}:${activeUnit?.startLine ?? ""}`;
   useLayoutEffect(() => {
     if (!activeUnit?.id || !selectedCardPinKey) return;
     const pane = codeScrollRef.current;
     if (!pane) return;
+    const focusLine = activeUnit.startLine;
+    const focusUnitId = activeUnit.id;
 
-    /** Scrolls the selected file card just below the pane top. */
+    /** Scrolls remaining work into view, not the top of an already-read file. */
     const pinSelectedCard = () => {
       const card = reviewUnitStartRef.current;
       if (!card) {
@@ -1447,12 +1463,32 @@ export function ReviewWorkspace({
         setSelectedCardStuck(false);
         return;
       }
+      const unitStart = card.querySelector(
+        `[data-review-unit-start="${focusUnitId}"]`,
+      );
+      const unitLine = document.getElementById(`review-line-${focusLine}`);
+      const target =
+        unitStart instanceof HTMLElement
+          ? unitStart
+          : unitLine instanceof HTMLElement
+            ? unitLine
+            : card;
       const paneTop = pane.getBoundingClientRect().top;
-      const cardTop = card.getBoundingClientRect().top;
+      const targetTop = target.getBoundingClientRect().top;
+      const stickyHeader =
+        target === card ? null : card.querySelector(".sticky");
+      const stickyOffset =
+        stickyHeader instanceof HTMLElement
+          ? stickyHeader.getBoundingClientRect().height
+          : 0;
       pane.scrollTo({
         top: Math.max(
           0,
-          pane.scrollTop + cardTop - paneTop - SELECTED_REVIEW_CARD_GUTTER_PX,
+          pane.scrollTop +
+            targetTop -
+            paneTop -
+            stickyOffset -
+            SELECTED_REVIEW_CARD_GUTTER_PX,
         ),
         behavior: "auto",
       });
@@ -1471,7 +1507,13 @@ export function ReviewWorkspace({
       observer.disconnect();
       window.clearTimeout(settleId);
     };
-  }, [activeUnit?.id, selectedCardPinKey, updateSelectedCardChrome]);
+  }, [
+    activeFileCardHydrationPending,
+    activeUnit?.id,
+    activeUnit?.startLine,
+    selectedCardPinKey,
+    updateSelectedCardChrome,
+  ]);
   useLayoutEffect(() => {
     if (aiQuestionLine === undefined) {
       aiQuestionMoveAnchor.current = undefined;
@@ -1888,6 +1930,28 @@ export function ReviewWorkspace({
       ),
     [activeFileCardMembers, activeModule?.previousSource],
   );
+  const cardStartLine =
+    currentCardRanges.at(0)?.startLine ?? activeUnit?.startLine;
+  const cardEndLine = currentCardRanges.at(-1)?.endLine ?? activeUnit?.endLine;
+  const activeFileCardReviewed = reviewedFileCard(activeFileCardMembers);
+  const activeFileCardLineCount =
+    cardStartLine !== undefined && cardEndLine !== undefined
+      ? Math.max(0, cardEndLine - cardStartLine + 1)
+      : 0;
+  const activeFileCardHeavy = isHeavyReviewSource({
+    language: activeUnit?.language,
+    lineCount: activeFileCardLineCount,
+    path: activeUnit?.path,
+  });
+  const selectedFileSourceExpanded =
+    fileSourceReveal &&
+    fileSourceReveal.path === (activeUnit?.path ?? "") &&
+    fileSourceReveal.reviewed === activeFileCardReviewed
+      ? fileSourceReveal.expanded
+      : reviewFileCardStartsExpanded({
+          reviewed: activeFileCardReviewed,
+          heavy: activeFileCardHeavy,
+        });
   const firstCurrentReviewLine =
     currentRelatedRanges?.at(0)?.startLine ?? activeUnit?.startLine ?? 1;
   const primaryReviewRanges =
@@ -1923,6 +1987,7 @@ export function ReviewWorkspace({
   );
   const overviewEnabled =
     Boolean(activeUnit) &&
+    selectedFileSourceExpanded &&
     activeSourceAvailable &&
     activeUnit?.kind !== "binary" &&
     overviewLineCount >= 24;
@@ -1967,18 +2032,17 @@ export function ReviewWorkspace({
   } = useReviewCodeOverview(
     codeScrollRef,
     codeOverviewRef,
-    `${activeUnit?.id ?? ""}:${sideBySideVisible}:${overviewLineCount}`,
+    `${activeUnit?.id ?? ""}:${sideBySideVisible}:${overviewLineCount}:${fullFileVisible}`,
   );
   const showScrollOverview =
     overviewEnabled &&
-    shouldShowReviewScrollOverview(overviewRows, overviewViewport);
+    shouldShowReviewScrollOverview(overviewRows, overviewViewport, {
+      revealWholeFile: fullFileVisible,
+    });
   const fullFileLines = useMemo(
     () => activeModule?.source.split("\n") ?? [],
     [activeModule?.source],
   );
-  const cardStartLine =
-    currentCardRanges.at(0)?.startLine ?? activeUnit?.startLine;
-  const cardEndLine = currentCardRanges.at(-1)?.endLine ?? activeUnit?.endLine;
   const contextAvailable = Boolean(
     activeUnit &&
       activeModule &&
@@ -2052,7 +2116,7 @@ export function ReviewWorkspace({
     visibleStartLine,
   ]);
   const lines = useHighlightedSource(
-    displayedSource,
+    selectedFileSourceExpanded ? displayedSource : "",
     activeUnit?.language ?? "text",
   );
   const previousRewriteSource =
@@ -2062,7 +2126,7 @@ export function ReviewWorkspace({
       ? activeUnit.previousSource
       : "";
   const highlightedPreviousRewrite = useHighlightedSource(
-    previousRewriteSource,
+    selectedFileSourceExpanded ? previousRewriteSource : "",
     activeUnit?.language ?? "text",
   );
   const previousRewriteLines = useMemo(() => {
@@ -2088,11 +2152,11 @@ export function ReviewWorkspace({
     peekHandlers,
   } = useSymbolPeek(activeSourceAvailable);
   const importReferences = useImportReferences(
-    displayedSource,
+    selectedFileSourceExpanded ? displayedSource : "",
     activeUnit?.language ?? "text",
   );
   const fileImportReferences = useImportReferences(
-    activeModule?.source ?? "",
+    selectedFileSourceExpanded ? (activeModule?.source ?? "") : "",
     activeUnit?.language ?? "text",
   );
   // The name may be bound by an import statement the diff does not show, so
@@ -2170,10 +2234,7 @@ export function ReviewWorkspace({
   /** Opens a file at its first actionable unit without expanding to the full file. */
   const selectReviewFile = useCallback(
     (file: ReviewFileEntry) => {
-      const member =
-        file.units.find(
-          ({ status }) => status !== "signed_off" && status !== "waiting",
-        ) ?? file.units[0];
+      const member = actionableReviewCardMember(file.units);
       if (!member) {
         toast.info("This file has no semantic review units", {
           description:
@@ -2305,6 +2366,7 @@ export function ReviewWorkspace({
         const firstActionable = actionableReviewCardMember(card.members);
         const fileContext = fileContexts.find(({ path }) => path === card.path);
         const itemLabel = reviewMode === "files" ? "File" : "Card";
+        const sourceBytes = reviewSourceByteLength(fileContext);
         /** Opens this file card at its first remaining review unit. */
         const openCard = () =>
           selectUnit(
@@ -2329,6 +2391,7 @@ export function ReviewWorkspace({
                 selected={false}
                 itemLabel={itemLabel}
                 onSelect={openCard}
+                sourceBytes={sourceBytes}
               />
             </article>
           );
@@ -2343,6 +2406,7 @@ export function ReviewWorkspace({
             itemLabel={itemLabel}
             onSelect={openCard}
             onCommentLine={commentOnMemberLine}
+            sourceBytes={sourceBytes}
           />
         );
       }),
@@ -3715,15 +3779,17 @@ export function ReviewWorkspace({
     );
   }
 
+  /** Units that open on this line when Files mode is showing more than one. */
+  function fileUnitsStartingAt(lineNumber: number) {
+    if (reviewMode !== "files" || activeFileCardMembers.length <= 1) return [];
+    return activeFileCardMembers.filter(
+      (member) => member.startLine === lineNumber,
+    );
+  }
+
   /** Renders every review artifact attached to one source line in either code view. */
   function renderReviewLineDetails(lineNumber: number) {
     if (!activeUnit) return null;
-    const fileUnitsStartingHere =
-      reviewMode === "files"
-        ? activeFileCardMembers.filter(
-            (member) => member.startLine === lineNumber,
-          )
-        : [];
     const endingExplanations = explanationAnnotations.filter(
       (annotation) =>
         lineNumber >= annotation.line &&
@@ -3815,9 +3881,6 @@ export function ReviewWorkspace({
 
     return (
       <>
-        {fileUnitsStartingHere.map((member) => (
-          <ReviewFileUnitMarker key={member.id} member={member} />
-        ))}
         {endingExplanations.map((annotation) => {
           const annotationIndex = explanationAnnotations.indexOf(annotation);
           const endLine = annotation.endLine ?? annotation.line;
@@ -3883,12 +3946,34 @@ export function ReviewWorkspace({
             }}
             onDeleteThread={async (jobIds) => {
               if (jobIds.length === 0) return;
+              const questionInputs = [
+                ...new Set(
+                  [settledActiveUnitId, activeUnit.id].filter(
+                    (unitId): unitId is string => Boolean(unitId),
+                  ),
+                ),
+              ].map((unitId) => ({
+                pullRequestId: initialData.pullRequest.id,
+                unitId,
+              }));
+              // A poll started before the delete can land after refetch and
+              // put the discarded thread back until the next full reload.
+              await Promise.all(
+                questionInputs.map((input) => utils.ai.questions.cancel(input)),
+              );
               await deleteAiQuestionThread.mutateAsync({
                 pullRequestId: initialData.pullRequest.id,
                 unitId: activeUnit.id,
                 jobIds,
               });
-              await aiQuestions.refetch();
+              for (const input of questionInputs) {
+                utils.ai.questions.setData(input, (current) =>
+                  withoutDeletedAiQuestions(current, jobIds),
+                );
+              }
+              setLiveAiQuestions((questions) =>
+                withoutDeletedLiveAiQuestions(questions, jobIds),
+              );
               dismissedAiQuestionUnits.current.add(activeUnit.id);
               rememberAiConversationVisibility(
                 window.localStorage,
@@ -3905,6 +3990,9 @@ export function ReviewWorkspace({
                 description:
                   "Previously published pull-request comments were preserved.",
               });
+              for (const input of questionInputs) {
+                void utils.ai.questions.invalidate(input);
+              }
             }}
             onMove={moveAiQuestion}
             onPreview={setAiQuestionPreviewLine}
@@ -4401,6 +4489,7 @@ export function ReviewWorkspace({
     reviewComplete && completionOpen && footerSaveState === "idle";
   const waitingCompletionVisible =
     reviewCaughtUp && waitingCompletionOpen && footerSaveState === "idle";
+  const completionChromeHidden = completionVisible || waitingCompletionVisible;
   const openPullRequests = useCallback(
     () => navigate("/pullrequests"),
     [navigate],
@@ -6753,19 +6842,21 @@ export function ReviewWorkspace({
       <div
         className={cn(
           "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
-          insightsPanelCollapsed
-            ? "xl:grid-cols-[minmax(0,1fr)]"
-            : "xl:grid-cols-[minmax(0,1fr)_320px]",
-          pathPanelCollapsed && insightsPanelCollapsed
-            ? "2xl:grid-cols-[minmax(0,1fr)]"
-            : pathPanelCollapsed
-              ? "2xl:grid-cols-[minmax(0,1fr)_320px]"
-              : insightsPanelCollapsed
-                ? "2xl:grid-cols-[250px_minmax(0,1fr)]"
-                : "2xl:grid-cols-[250px_minmax(0,1fr)_320px]",
+          !completionChromeHidden &&
+            (insightsPanelCollapsed
+              ? "xl:grid-cols-[minmax(0,1fr)]"
+              : "xl:grid-cols-[minmax(0,1fr)_320px]"),
+          !completionChromeHidden &&
+            (pathPanelCollapsed && insightsPanelCollapsed
+              ? "2xl:grid-cols-[minmax(0,1fr)]"
+              : pathPanelCollapsed
+                ? "2xl:grid-cols-[minmax(0,1fr)_320px]"
+                : insightsPanelCollapsed
+                  ? "2xl:grid-cols-[250px_minmax(0,1fr)]"
+                  : "2xl:grid-cols-[250px_minmax(0,1fr)_320px]"),
         )}
       >
-        {pathPanelOpen && (
+        {pathPanelOpen && !completionChromeHidden && (
           <button
             type="button"
             aria-label={`Close ${reviewMode === "path" ? "review path" : "changed files"}`}
@@ -6773,7 +6864,7 @@ export function ReviewWorkspace({
             className="fixed top-16 right-0 bottom-0 left-0 z-30 bg-black/55 backdrop-blur-[2px] 2xl:hidden"
           />
         )}
-        {insightsPanelOpen && (
+        {insightsPanelOpen && !completionChromeHidden && (
           <button
             type="button"
             aria-label="Close AI assistance"
@@ -6786,12 +6877,15 @@ export function ReviewWorkspace({
           aria-label={reviewMode === "path" ? "Review path" : "Changed files"}
           className={cn(
             "min-h-0 flex-col overflow-hidden border-r border-line bg-panel",
-            pathPanelOpen
-              ? "fixed top-16 bottom-0 left-0 z-40 flex w-[min(320px,calc(100vw-3rem))] shadow-2xl"
-              : "hidden",
-            pathPanelCollapsed
-              ? "2xl:hidden"
-              : "2xl:static 2xl:flex 2xl:w-auto 2xl:shadow-none",
+            completionChromeHidden
+              ? "hidden"
+              : pathPanelOpen
+                ? "fixed top-16 bottom-0 left-0 z-40 flex w-[min(320px,calc(100vw-3rem))] shadow-2xl"
+                : "hidden",
+            !completionChromeHidden &&
+              (pathPanelCollapsed
+                ? "2xl:hidden"
+                : "2xl:static 2xl:flex 2xl:w-auto 2xl:shadow-none"),
           )}
         >
           <div className="shrink-0 border-b border-line px-4 py-4">
@@ -7234,334 +7328,873 @@ export function ReviewWorkspace({
           )}
           <div
             className={cn(
-              "bg-panel sticky top-0 z-20 shrink-0 border-b border-line",
-              codePaneScrolled &&
-                "shadow-[0_10px_24px_color-mix(in_srgb,var(--app-shadow)_55%,transparent)]",
+              "flex min-h-0 flex-1 flex-col overflow-hidden",
+              completionChromeHidden && "hidden",
             )}
           >
-            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-3 py-3 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4 lg:px-7">
-              <button
-                type="button"
-                aria-label={`Show ${reviewMode === "path" ? "review path" : "changed files"}`}
-                aria-controls="review-path-panel"
-                aria-expanded={pathPanelOpen}
-                title={`Show ${reviewMode === "path" ? "review path" : "changed files"}`}
-                onClick={showPathPanel}
-                className={cn(
-                  "text-mist hover:text-cyan h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-cyan/25 hover:bg-cyan/[.05]",
-                  pathPanelCollapsed ? "flex" : "flex 2xl:hidden",
-                )}
-              >
-                <PanelLeftOpen className="size-3.5" />
-                <span className="hidden text-[10px] sm:inline">
-                  {reviewMode === "path" ? "Review path" : "Files"}
-                </span>
-                <ShortcutHint
-                  shortcut={reviewShortcuts.togglePathPanel}
-                  className="hidden lg:inline-flex"
-                />
-              </button>
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <h1
-                    className="truncate text-sm font-medium"
-                    title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
-                  >
-                    {reviewMode === "files"
-                      ? (activeUnit.path.split("/").at(-1) ?? activeUnit.path)
-                      : (activeConcept?.title ?? activeUnit.name)}
-                  </h1>
-                  {activeWaitStatus === "waiting" &&
-                    (activeUnitAnswered ? (
-                      <Badge className="border-lime/25 bg-lime/10 text-lime">
-                        <MessageSquareText className="size-3" />
-                        Response received
-                      </Badge>
-                    ) : (
-                      <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
-                        <Clock3 className="size-3" />
-                        Waiting for response
-                      </Badge>
-                    ))}
-                  {activeUnit.changedSinceSignOff && (
-                    <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
-                      Changed
-                    </Badge>
-                  )}
-                  {reviewMode === "files" &&
-                    activeReviewFile &&
-                    activeReviewFile.newUnits > 0 && (
-                      <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
-                        {activeReviewFile.newUnits} new
-                      </Badge>
-                    )}
-                  {reviewMode === "files" &&
-                    activeReviewFile &&
-                    activeReviewFile.updatedUnits > 0 && (
-                      <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
-                        {activeReviewFile.updatedUnits} updated
-                      </Badge>
-                    )}
-                  {reviewMode === "path" &&
-                    activeUnit.revisionState === "new" && (
-                      <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
-                        New
-                      </Badge>
-                    )}
-                  {reviewMode === "path" &&
-                    activeUnit.revisionState === "updated" &&
-                    !activeUnit.changedSinceSignOff && (
-                      <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
-                        Updated
-                      </Badge>
-                    )}
-                  {activeUnit.changeType !== "modified" && (
-                    <Badge
-                      className={cn(
-                        "capitalize",
-                        activeUnit.changeType === "deleted" &&
-                          "border-red-500/25 bg-red-400/10 text-red-700 dark:border-red-300/20 dark:text-red-200",
-                      )}
-                    >
-                      {activeUnit.changeType}
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
-                  <span className="text-mist font-mono">{activeUnit.path}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="shrink-0">
-                    {reviewMode === "files"
-                      ? `File ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} ${activeFileCardMembers.length === 1 ? "unit" : "units"}`
-                      : activeFileCardMembers.length > 1
-                        ? `Card ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} individual units`
-                        : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
-                  </span>
-                  {reviewMode === "path" && activeConcept && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="shrink-0">
-                        {activeConcept.changedLineCount} changed lines in{" "}
-                        {activeConcept.fileCount}{" "}
-                        {activeConcept.fileCount === 1 ? "file" : "files"}
-                      </span>
-                    </>
-                  )}
-                </p>
-              </div>
-              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                {sourceHydrationPending && (
-                  <span
-                    role="status"
-                    aria-label="Loading private review source"
-                    className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
-                    title="Loading and verifying review source in the background"
-                  >
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                    <span className="hidden lg:inline">Loading source…</span>
-                  </span>
-                )}
-                {initialData.conceptLayout && !conceptLayoutLocked && (
-                  <button
-                    type="button"
-                    onClick={() => setConceptGroupingDialogOpen(true)}
-                    disabled={
-                      improveConceptGrouping.isPending ||
-                      replaceConceptLayout.isPending
-                    }
-                    aria-label={improveGroupingLabel}
-                    className="text-violet hover:bg-violet/[.06] grid size-8 shrink-0 place-items-center rounded-lg border border-violet/20 transition disabled:cursor-wait disabled:opacity-60"
-                    title={improveGroupingLabel}
-                  >
-                    {groupingImproving ? (
-                      <LoaderCircle className="size-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="size-3.5" />
-                    )}
-                  </button>
-                )}
-                {initialData.conceptLayout &&
-                  !conceptLayoutLocked &&
-                  activeConceptMembers.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setSplitConceptDialogOpen(true)}
-                      disabled={replaceConceptLayout.isPending}
-                      className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
-                      title="Split this concept"
-                    >
-                      {replaceConceptLayout.isPending &&
-                        conceptLayoutAction === "split" && (
-                          <LoaderCircle className="size-3.5 animate-spin" />
-                        )}
-                      {replaceConceptLayout.isPending &&
-                      conceptLayoutAction === "split"
-                        ? "Splitting…"
-                        : "Split"}
-                    </button>
-                  )}
-                {initialData.conceptLayout &&
-                  !conceptLayoutLocked &&
-                  initialData.concepts.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setMoveMemberDialogOpen(true)}
-                      disabled={replaceConceptLayout.isPending}
-                      aria-label={moveMemberLabel}
-                      title={moveMemberLabel}
-                      className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05] disabled:opacity-50"
-                    >
-                      {movingMember ? (
-                        <LoaderCircle className="size-3.5 animate-spin" />
-                      ) : (
-                        <FolderInput className="size-3.5" />
-                      )}
-                    </button>
-                  )}
+            <div
+              className={cn(
+                "bg-panel sticky top-0 z-20 shrink-0 border-b border-line",
+                codePaneScrolled &&
+                  "shadow-[0_10px_24px_color-mix(in_srgb,var(--app-shadow)_55%,transparent)]",
+              )}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-3 py-3 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4 lg:px-7">
                 <button
                   type="button"
-                  aria-label="Open review hierarchy"
-                  title="Review hierarchy"
-                  onClick={() => setHierarchyOpen(true)}
-                  className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05]"
-                >
-                  <GitBranch className="size-3.5" />
-                </button>
-                {diffAvailable && (
-                  <ReviewCodeViewSwitch
-                    diffVisible={sideBySideVisible}
-                    onChange={(diffVisible) => {
-                      if (diffVisible === sideBySideVisible) return;
-                      setShowDiff(diffVisible);
-                      setContextBefore(0);
-                      setContextAfter(0);
-                    }}
-                  />
-                )}
-                <button
-                  type="button"
-                  aria-label="Show AI assistance"
-                  aria-controls="code-explanation-panel"
-                  aria-expanded={insightsPanelOpen}
-                  title="Show AI assistance"
-                  onClick={showInsightsPanel}
+                  aria-label={`Show ${reviewMode === "path" ? "review path" : "changed files"}`}
+                  aria-controls="review-path-panel"
+                  aria-expanded={pathPanelOpen}
+                  title={`Show ${reviewMode === "path" ? "review path" : "changed files"}`}
+                  onClick={showPathPanel}
                   className={cn(
-                    "text-mist hover:text-violet h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-violet/25 hover:bg-violet/[.05]",
-                    insightsPanelCollapsed ? "flex" : "flex xl:hidden",
+                    "text-mist hover:text-cyan h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-cyan/25 hover:bg-cyan/[.05]",
+                    pathPanelCollapsed ? "flex" : "flex 2xl:hidden",
                   )}
                 >
-                  <PanelRightOpen className="size-3.5" />
-                  <span className="hidden text-[10px] sm:inline">Details</span>
+                  <PanelLeftOpen className="size-3.5" />
+                  <span className="hidden text-[10px] sm:inline">
+                    {reviewMode === "path" ? "Review path" : "Files"}
+                  </span>
                   <ShortcutHint
-                    shortcut={reviewShortcuts.toggleInsightsPanel}
+                    shortcut={reviewShortcuts.togglePathPanel}
                     className="hidden lg:inline-flex"
                   />
                 </button>
-                <Badge className="hidden h-8 py-0 capitalize sm:inline-flex">
-                  {activeUnit.kind}
-                </Badge>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h1
+                      className="truncate text-sm font-medium"
+                      title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                    >
+                      {reviewMode === "files"
+                        ? (activeUnit.path.split("/").at(-1) ?? activeUnit.path)
+                        : (activeConcept?.title ?? activeUnit.name)}
+                    </h1>
+                    {activeWaitStatus === "waiting" &&
+                      (activeUnitAnswered ? (
+                        <Badge className="border-lime/25 bg-lime/10 text-lime">
+                          <MessageSquareText className="size-3" />
+                          Response received
+                        </Badge>
+                      ) : (
+                        <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                          <Clock3 className="size-3" />
+                          Waiting for response
+                        </Badge>
+                      ))}
+                    {activeUnit.changedSinceSignOff && (
+                      <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+                        Changed
+                      </Badge>
+                    )}
+                    {reviewMode === "files" &&
+                      activeReviewFile &&
+                      activeReviewFile.newUnits > 0 && (
+                        <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                          {activeReviewFile.newUnits} new
+                        </Badge>
+                      )}
+                    {reviewMode === "files" &&
+                      activeReviewFile &&
+                      activeReviewFile.updatedUnits > 0 && (
+                        <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+                          {activeReviewFile.updatedUnits} updated
+                        </Badge>
+                      )}
+                    {reviewMode === "path" &&
+                      activeUnit.revisionState === "new" && (
+                        <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+                          New
+                        </Badge>
+                      )}
+                    {reviewMode === "path" &&
+                      activeUnit.revisionState === "updated" &&
+                      !activeUnit.changedSinceSignOff && (
+                        <Badge className="border-amber-600/25 bg-amber-400/10 text-amber-800 dark:border-amber-300/20 dark:text-amber-200">
+                          Updated
+                        </Badge>
+                      )}
+                    {activeUnit.changeType !== "modified" && (
+                      <Badge
+                        className={cn(
+                          "capitalize",
+                          activeUnit.changeType === "deleted" &&
+                            "border-red-500/25 bg-red-400/10 text-red-700 dark:border-red-300/20 dark:text-red-200",
+                        )}
+                      >
+                        {activeUnit.changeType}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
+                    <span className="text-mist font-mono">
+                      {activeUnit.path}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span className="shrink-0">
+                      {reviewMode === "files"
+                        ? `File ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} ${activeFileCardMembers.length === 1 ? "unit" : "units"}`
+                        : activeFileCardMembers.length > 1
+                          ? `Card ${activeConceptCardIndex + 1}/${activeConceptFileCards.length} · ${activeFileCardMembers.length} individual units`
+                          : `Lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                    </span>
+                    {reviewMode === "path" && activeConcept && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="shrink-0">
+                          {activeConcept.changedLineCount} changed lines in{" "}
+                          {activeConcept.fileCount}{" "}
+                          {activeConcept.fileCount === 1 ? "file" : "files"}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                </div>
+                <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                  {sourceHydrationPending && (
+                    <span
+                      role="status"
+                      aria-label="Loading private review source"
+                      className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
+                      title="Loading and verifying review source in the background"
+                    >
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                      <span className="hidden lg:inline">Loading source…</span>
+                    </span>
+                  )}
+                  {initialData.conceptLayout && !conceptLayoutLocked && (
+                    <button
+                      type="button"
+                      onClick={() => setConceptGroupingDialogOpen(true)}
+                      disabled={
+                        improveConceptGrouping.isPending ||
+                        replaceConceptLayout.isPending
+                      }
+                      aria-label={improveGroupingLabel}
+                      className="text-violet hover:bg-violet/[.06] grid size-8 shrink-0 place-items-center rounded-lg border border-violet/20 transition disabled:cursor-wait disabled:opacity-60"
+                      title={improveGroupingLabel}
+                    >
+                      {groupingImproving ? (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="size-3.5" />
+                      )}
+                    </button>
+                  )}
+                  {initialData.conceptLayout &&
+                    !conceptLayoutLocked &&
+                    activeConceptMembers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setSplitConceptDialogOpen(true)}
+                        disabled={replaceConceptLayout.isPending}
+                        className="text-mist hover:text-cyan flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[10px] transition disabled:opacity-50"
+                        title="Split this concept"
+                      >
+                        {replaceConceptLayout.isPending &&
+                          conceptLayoutAction === "split" && (
+                            <LoaderCircle className="size-3.5 animate-spin" />
+                          )}
+                        {replaceConceptLayout.isPending &&
+                        conceptLayoutAction === "split"
+                          ? "Splitting…"
+                          : "Split"}
+                      </button>
+                    )}
+                  {initialData.conceptLayout &&
+                    !conceptLayoutLocked &&
+                    initialData.concepts.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setMoveMemberDialogOpen(true)}
+                        disabled={replaceConceptLayout.isPending}
+                        aria-label={moveMemberLabel}
+                        title={moveMemberLabel}
+                        className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05] disabled:opacity-50"
+                      >
+                        {movingMember ? (
+                          <LoaderCircle className="size-3.5 animate-spin" />
+                        ) : (
+                          <FolderInput className="size-3.5" />
+                        )}
+                      </button>
+                    )}
+                  <button
+                    type="button"
+                    aria-label="Open review hierarchy"
+                    title="Review hierarchy"
+                    onClick={() => setHierarchyOpen(true)}
+                    className="text-mist hover:text-cyan grid size-8 shrink-0 place-items-center rounded-lg border border-line transition hover:border-cyan/25 hover:bg-cyan/[.05]"
+                  >
+                    <GitBranch className="size-3.5" />
+                  </button>
+                  {diffAvailable && (
+                    <ReviewCodeViewSwitch
+                      diffVisible={sideBySideVisible}
+                      onChange={(diffVisible) => {
+                        if (diffVisible === sideBySideVisible) return;
+                        setShowDiff(diffVisible);
+                        setContextBefore(0);
+                        setContextAfter(0);
+                      }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    aria-label="Show AI assistance"
+                    aria-controls="code-explanation-panel"
+                    aria-expanded={insightsPanelOpen}
+                    title="Show AI assistance"
+                    onClick={showInsightsPanel}
+                    className={cn(
+                      "text-mist hover:text-violet h-8 shrink-0 items-center gap-2 rounded-lg border border-line px-2 transition hover:border-violet/25 hover:bg-violet/[.05]",
+                      insightsPanelCollapsed ? "flex" : "flex xl:hidden",
+                    )}
+                  >
+                    <PanelRightOpen className="size-3.5" />
+                    <span className="hidden text-[10px] sm:inline">
+                      Details
+                    </span>
+                    <ShortcutHint
+                      shortcut={reviewShortcuts.toggleInsightsPanel}
+                      className="hidden lg:inline-flex"
+                    />
+                  </button>
+                  <Badge className="hidden h-8 py-0 capitalize sm:inline-flex">
+                    {activeUnit.kind}
+                  </Badge>
+                </div>
               </div>
             </div>
-            {showScrollOverview && (
-              <ReviewScrollOverview
-                label={
-                  activeUnit
-                    ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
-                    : undefined
-                }
-                marks={overviewMarks}
-                unitRange={overviewUnitRange}
-                viewport={overviewViewport}
-                onSeek={seekCodeOverview}
-              />
+            {activeUnit.changedSinceSignOff && !activeUnit.previousSource && (
+              <div className="border-cyan/15 bg-cyan/[.035] text-cyan border-b px-5 py-2 text-[10px] sm:px-7">
+                This source is unchanged, but a dependency it relies on changed.
+              </div>
             )}
-          </div>
-          {activeUnit.changedSinceSignOff && !activeUnit.previousSource && (
-            <div className="border-cyan/15 bg-cyan/[.035] text-cyan border-b px-5 py-2 text-[10px] sm:px-7">
-              This source is unchanged, but a dependency it relies on changed.
-            </div>
-          )}
-          {providerConversations.isError && (
-            <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-400/[.06] px-5 py-2 sm:px-7">
-              <p className="text-[10px] text-amber-800 dark:text-amber-200">
-                {providerConversations.error.message}
-              </p>
-              <button
-                type="button"
-                onClick={() => void providerConversations.refetch()}
-                className="shrink-0 text-[10px] font-medium text-amber-800 hover:underline dark:text-amber-200"
-              >
-                Try again
-              </button>
-            </div>
-          )}
-          {importReturn && (
-            <div className="border-cyan/15 bg-cyan/[.035] flex items-center justify-between gap-3 border-b px-5 py-2 sm:px-7">
-              <p className="text-mist min-w-0 truncate text-[10px]">
-                Followed{" "}
-                <span className="text-cloud font-mono">
-                  {importReturn.importedName}
-                </span>{" "}
-                from{" "}
-                <span className="text-cloud font-mono">
-                  {importReturn.unitName}
-                </span>
-              </p>
-              <button
-                type="button"
-                onClick={() => selectUnit(importReturn.index)}
-                className="text-cyan hover:bg-cyan/[.07] flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[10px] transition"
-              >
-                <CornerUpLeft className="size-3" />
-                Return
-              </button>
-            </div>
-          )}
-          <div
-            ref={codeScrollRef}
-            data-code-scroll-pane
-            onScroll={() => {
-              closeSymbolPeek();
-              updateCodeOverview();
-              updateSelectedCardChrome();
-            }}
-            {...peekHandlers}
-            className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-xs leading-[21px] font-medium [overflow-anchor:none]"
-          >
-            <div aria-hidden="true" className="h-5" />
-            {keyboardLine !== undefined && (
+            {providerConversations.isError && (
+              <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-400/[.06] px-5 py-2 sm:px-7">
+                <p className="text-[10px] text-amber-800 dark:text-amber-200">
+                  {providerConversations.error.message}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void providerConversations.refetch()}
+                  className="shrink-0 text-[10px] font-medium text-amber-800 hover:underline dark:text-amber-200"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {importReturn && (
+              <div className="border-cyan/15 bg-cyan/[.035] flex items-center justify-between gap-3 border-b px-5 py-2 sm:px-7">
+                <p className="text-mist min-w-0 truncate text-[10px]">
+                  Followed{" "}
+                  <span className="text-cloud font-mono">
+                    {importReturn.importedName}
+                  </span>{" "}
+                  from{" "}
+                  <span className="text-cloud font-mono">
+                    {importReturn.unitName}
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => selectUnit(importReturn.index)}
+                  className="text-cyan hover:bg-cyan/[.07] flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[10px] transition"
+                >
+                  <CornerUpLeft className="size-3" />
+                  Return
+                </button>
+              </div>
+            )}
+            <div
+              ref={codeScrollRef}
+              data-code-scroll-pane
+              onScroll={() => {
+                closeSymbolPeek();
+                updateCodeOverview();
+                updateSelectedCardChrome();
+              }}
+              {...peekHandlers}
+              className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-xs leading-[21px] font-medium [overflow-anchor:none]"
+            >
+              <div aria-hidden="true" className="h-5" />
+              {keyboardLine !== undefined && (
+                <div
+                  role="status"
+                  className="border-cyan/20 bg-panel/95 text-mist sticky top-0 z-30 mx-4 mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 font-sans text-[10px] shadow-xl backdrop-blur"
+                >
+                  <span className="text-cloud flex items-center gap-2 font-medium">
+                    <MessageSquareText className="text-cyan size-3.5" />
+                    Choose a line to comment on
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <ShortcutHint
+                      shortcut={[{ key: "ArrowUp" }, { key: "ArrowDown" }]}
+                    />
+                    move
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <ShortcutHint shortcut={[{ key: "Enter" }]} />
+                    select
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <ShortcutHint shortcut={[{ key: "Escape" }]} />
+                    cancel
+                  </span>
+                </div>
+              )}
+              <div ref={reviewCardsAboveRef}>
+                {reviewMode === "files" && viewerCardWindow.hiddenAbove > 0 && (
+                  <div className="mb-4 flex items-center gap-3 px-4 font-sans">
+                    <span className="h-px flex-1 bg-line" />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFilesViewerAbove(
+                          (current) => current + FILES_VIEWER_PAGE_SIZE,
+                        )
+                      }
+                      className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                    >
+                      Show{" "}
+                      {Math.min(
+                        FILES_VIEWER_PAGE_SIZE,
+                        viewerCardWindow.hiddenAbove,
+                      )}{" "}
+                      more files above
+                    </button>
+                    <span className="h-px flex-1 bg-line" />
+                  </div>
+                )}
+                {viewerCardWindow.cards
+                  .slice(0, selectedWindowOffset)
+                  .map((card, windowIndex) => (
+                    <div key={card.path} className="mb-4">
+                      {conceptFileCardPreviews[windowIndex]}
+                    </div>
+                  ))}
+              </div>
+              {/* Inside the scroller, so it scrolls away with the source it
+                could not be anchored to instead of pinning above it. */}
+              {renderDetachedFindingCard()}
               <div
-                role="status"
-                className="border-cyan/20 bg-panel/95 text-mist sticky top-0 z-30 mx-4 mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 font-sans text-[10px] shadow-xl backdrop-blur"
+                ref={reviewUnitStartRef}
+                data-review-member-id={activeUnit.id}
+                data-selected="true"
+                className="mx-4 scroll-mt-5"
               >
-                <span className="text-cloud flex items-center gap-2 font-medium">
-                  <MessageSquareText className="text-cyan size-3.5" />
-                  Choose a line to comment on
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <ShortcutHint
-                    shortcut={[{ key: "ArrowUp" }, { key: "ArrowDown" }]}
+                <div className="sticky top-0 z-20">
+                  <div
+                    aria-hidden="true"
+                    className={cn(
+                      "bg-code pointer-events-none absolute inset-x-[-1rem] bottom-full h-5",
+                      !selectedCardStuck && "hidden",
+                    )}
                   />
-                  move
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <ShortcutHint shortcut={[{ key: "Enter" }]} />
-                  select
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <ShortcutHint shortcut={[{ key: "Escape" }]} />
-                  cancel
-                </span>
+                  <div
+                    className={cn(
+                      "overflow-hidden border-x border-b border-cyan/35 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]",
+                      selectedCardStuck
+                        ? "rounded-none border-t-0"
+                        : "rounded-t-xl border-t",
+                    )}
+                  >
+                    <ReviewFileCardHeader
+                      members={activeFileCardMembers}
+                      index={activeConceptCardIndex}
+                      count={activeConceptFileCards.length}
+                      itemLabel={reviewMode === "files" ? "File" : "Card"}
+                      selected
+                      sourceBytes={reviewSourceByteLength(activeModule)}
+                      expanded={selectedFileSourceExpanded}
+                      onToggleExpanded={() => {
+                        setFileSourceReveal({
+                          path: activeUnit.path,
+                          reviewed: activeFileCardReviewed,
+                          expanded: !selectedFileSourceExpanded,
+                        });
+                      }}
+                      actions={
+                        selectedFileSourceExpanded &&
+                        activeUnit.kind !== "binary" ? (
+                          <ReviewUnitViewOptions
+                            importsVisible={importsVisible}
+                            fullFileVisible={fullFileVisible}
+                            importsDisabled={!activeModule}
+                            fullFileDisabled={!contextAvailable}
+                            onToggleImports={() =>
+                              setImportContextUnitIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(activeUnit.id))
+                                  next.delete(activeUnit.id);
+                                else next.add(activeUnit.id);
+                                return next;
+                              })
+                            }
+                            onToggleFullFile={() =>
+                              setFullFileUnitIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(activeUnit.id))
+                                  next.delete(activeUnit.id);
+                                else next.add(activeUnit.id);
+                                return next;
+                              })
+                            }
+                          />
+                        ) : undefined
+                      }
+                    />
+                    {showScrollOverview && (
+                      <ReviewScrollOverview
+                        className="px-3 py-2 sm:px-3 lg:px-3"
+                        label={
+                          activeUnit
+                            ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
+                            : undefined
+                        }
+                        marks={overviewMarks}
+                        unitRange={overviewUnitRange}
+                        viewport={overviewViewport}
+                        onSeek={seekCodeOverview}
+                      />
+                    )}
+                  </div>
+                </div>
+                <div
+                  ref={codeOverviewRef}
+                  className={cn(
+                    "-mt-px",
+                    !sideBySideVisible &&
+                      "overflow-hidden rounded-b-xl border-x border-b border-line bg-code",
+                  )}
+                >
+                  {!selectedFileSourceExpanded &&
+                  activeFileCardSourceAvailable ? (
+                    <ReviewFileCardSourcePlaceholder
+                      itemLabel={reviewMode === "files" ? "file" : "card"}
+                      language={activeUnit.language}
+                      lineCount={activeFileCardLineCount}
+                      onShow={() =>
+                        setFileSourceReveal({
+                          path: activeUnit.path,
+                          reviewed: activeFileCardReviewed,
+                          expanded: true,
+                        })
+                      }
+                      path={activeUnit.path}
+                      reviewed={activeFileCardReviewed}
+                      sourceBytes={reviewSourceByteLength(activeModule)}
+                    />
+                  ) : null}
+                  {selectedFileSourceExpanded && sideBySideVisible && (
+                    <SideBySideUnitDiff
+                      key={activeUnit.id}
+                      ref={diffContextRef}
+                      previousSource={diffPreviousSource}
+                      currentSource={diffCurrentSource}
+                      language={activeUnit.language}
+                      previousStartLine={1}
+                      currentStartLine={1}
+                      previousFocusRanges={previousCardRanges}
+                      currentFocusRanges={currentCardRanges}
+                      previousFocusStartLine={
+                        activeUnit.changeType === "added"
+                          ? null
+                          : (previousCardRanges.at(0)?.startLine ??
+                            previousUnitStartLine)
+                      }
+                      previousFocusEndLine={
+                        activeUnit.changeType === "added"
+                          ? null
+                          : (previousCardRanges.at(-1)?.endLine ??
+                            previousUnitEndLine)
+                      }
+                      currentFocusStartLine={
+                        activeUnit.changeType === "deleted"
+                          ? null
+                          : (cardStartLine ?? activeUnit.startLine)
+                      }
+                      currentFocusEndLine={
+                        activeUnit.changeType === "deleted"
+                          ? null
+                          : (cardEndLine ?? activeUnit.endLine)
+                      }
+                      selectedLine={selectedLine}
+                      keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
+                      findingLine={findingLine}
+                      expanded={fullFileVisible}
+                      onSelectReviewLine={commentOnCardLine}
+                      onAskReviewLine={askAboutCardLine}
+                      renderBeforeLine={(lineNumber) =>
+                        fileUnitsStartingAt(lineNumber).map((member) => (
+                          <ReviewFileUnitMarker
+                            key={member.id}
+                            member={member}
+                          />
+                        ))
+                      }
+                      renderLineDetails={renderReviewLineDetails}
+                    />
+                  )}
+                  {activeFileCardHydrationPending &&
+                    !activeFileCardSourceAvailable && (
+                      <div
+                        className="min-h-72 animate-pulse bg-surface/10 px-5 py-6 font-sans"
+                        aria-live="polite"
+                      >
+                        <span className="sr-only">
+                          Loading and verifying private source…
+                        </span>
+                        <div aria-hidden="true" className="space-y-3">
+                          <div className="bg-line-strong h-2 w-2/5 rounded-full" />
+                          <div className="bg-line h-2 w-4/5 rounded-full" />
+                          <div className="bg-line h-2 w-3/5 rounded-full" />
+                          <div className="bg-line h-2 w-11/12 rounded-full" />
+                          <div className="bg-line h-2 w-2/3 rounded-full" />
+                        </div>
+                      </div>
+                    )}
+                  {!activeFileCardHydrationPending &&
+                    !activeFileCardSourceAvailable && (
+                      <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
+                        <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
+                          <FileCode2
+                            className="text-fog mx-auto size-6"
+                            aria-hidden="true"
+                          />
+                          <p className="text-cloud mt-4 text-sm font-medium">
+                            Source unavailable
+                          </p>
+                          <p className="text-mist mt-2 text-xs leading-5">
+                            This private source could not be verified and
+                            loaded. Reload the review before signing off this
+                            unit.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  {selectedFileSourceExpanded &&
+                    importsVisible &&
+                    !sideBySideVisible &&
+                    activeFileCardSourceAvailable &&
+                    activeModule && (
+                      <UnitImportContext
+                        key={activeUnit.id}
+                        fileSource={activeModule.source}
+                        previousFileSource={
+                          activeModule.previousSource ?? undefined
+                        }
+                        unitSource={activeUnit.source}
+                        language={activeUnit.language}
+                        unitId={activeUnit.id}
+                        visibleStartLine={visibleStartLine}
+                        visibleEndLine={visibleEndLine}
+                        previousVisibleStartLine={previousUnitStartLine}
+                        previousVisibleEndLine={previousUnitEndLine}
+                        resolvingImport={resolvingImport}
+                        onFollow={(reference) => void followImport(reference)}
+                      />
+                    )}
+                  {selectedFileSourceExpanded &&
+                    !sideBySideVisible &&
+                    activeFileCardSourceAvailable &&
+                    contextAvailable &&
+                    !fullFileVisible &&
+                    contextBefore < availableBefore && (
+                      <div className="mb-3 flex items-center gap-3 px-4 font-sans">
+                        <span className="h-px flex-1 bg-line" />
+                        <button
+                          type="button"
+                          onClick={revealContextAbove}
+                          className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                        >
+                          <ChevronDown className="size-3 rotate-180" />
+                          Show{" "}
+                          {Math.min(
+                            CONTEXT_PAGE_LINES,
+                            availableBefore - contextBefore,
+                          )}{" "}
+                          {contextBefore > 0 ? "more " : ""}lines above
+                          <ShortcutHint
+                            shortcut={reviewShortcuts.revealContextAbove}
+                            className="ml-1"
+                          />
+                        </button>
+                        <span className="h-px flex-1 bg-line" />
+                      </div>
+                    )}
+                  {selectedFileSourceExpanded &&
+                    activeFileCardSourceAvailable &&
+                    activeUnit.kind === "binary" && (
+                      <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
+                        <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
+                          <span className="bg-cyan/10 text-cyan mx-auto grid size-11 place-items-center rounded-xl">
+                            <FileCode2 className="size-5" aria-hidden="true" />
+                          </span>
+                          <p className="text-cloud mt-4 text-sm font-medium">
+                            Binary file
+                          </p>
+                          <p className="text-mist mt-2 text-xs leading-5">
+                            ReviewDuck detected binary content. Its bytes are
+                            not displayed, sent to AI, or available for line
+                            comments.
+                          </p>
+                          <p className="text-fog mt-3 truncate font-mono text-[10px]">
+                            {activeUnit.path}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  {selectedFileSourceExpanded &&
+                    !sideBySideVisible &&
+                    activeFileCardSourceAvailable &&
+                    activeUnit.kind !== "binary" &&
+                    lines.map((line, index) => {
+                      const lineNumber = visibleStartLine + index;
+                      const isUnitLine = isPrimaryReviewLine(lineNumber);
+                      const isChangedLine =
+                        isUnitLine && changedCurrentLines.has(lineNumber);
+                      const isContextLine = !isUnitLine;
+                      const coveringExplanations = isUnitLine
+                        ? explanationAnnotations.filter(
+                            (annotation) =>
+                              lineNumber >= annotation.line &&
+                              lineNumber <=
+                                (annotation.endLine ?? annotation.line),
+                          )
+                        : [];
+                      return (
+                        <Fragment key={`${activeUnit.id}-${index}`}>
+                          {fileUnitsStartingAt(lineNumber).map((member) => (
+                            <ReviewFileUnitMarker
+                              key={member.id}
+                              member={member}
+                            />
+                          ))}
+                          {contextBefore > 0 &&
+                            lineNumber === cardStartLine &&
+                            cardStartLine && (
+                              <ReviewScopeMarker
+                                edge="start"
+                                line={cardStartLine}
+                              />
+                            )}
+                          {lineNumber === activeUnit.startLine &&
+                            previousRewriteLines.map((line, previousIndex) => {
+                              const previousLineNumber =
+                                previousUnitStartLine + previousIndex;
+                              return (
+                                <div
+                                  key={`${activeUnit.id}-previous-${previousIndex}`}
+                                  className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
+                                >
+                                  <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
+                                    {previousLineNumber}
+                                  </span>
+                                  <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
+                                    {line.tokens.length
+                                      ? line.tokens.map((token, tokenIndex) => (
+                                          <span
+                                            key={`${tokenIndex}-${token.text.length}`}
+                                            className={
+                                              token.className || undefined
+                                            }
+                                          >
+                                            {token.text}
+                                          </span>
+                                        ))
+                                      : " "}
+                                  </pre>
+                                </div>
+                              );
+                            })}
+                          <div
+                            id={`review-line-${lineNumber}`}
+                            className={cn(
+                              "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
+                              contextVisible &&
+                                isUnitLine &&
+                                "border-l-cyan/35 bg-cyan/[.012]",
+                              isChangedLine &&
+                                "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
+                              isContextLine &&
+                                "bg-surface-subtle/15 opacity-55 hover:opacity-80",
+                              coveringExplanations.length > 0 &&
+                                "bg-violet/[.025] shadow-[inset_2px_0_0_var(--app-ai)]",
+                              // Amber already means "AI review finding" in this
+                              // file, and is the one tint not already spoken for by
+                              // the line picker, the composer, additions or
+                              // deletions. Both of those still win over it below.
+                              findingLine === lineNumber &&
+                                "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+                              selectedLine === lineNumber && "bg-violet/[.055]",
+                              keyboardLine === lineNumber &&
+                                "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                              aiQuestionPreviewLine === lineNumber &&
+                                "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
+                            )}
+                          >
+                            {isUnitLine && activeUnit.kind !== "binary" ? (
+                              <span
+                                className={cn(
+                                  "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
+                                  isChangedLine &&
+                                    "bg-addition/20 text-addition",
+                                )}
+                              >
+                                <AskAiLineButton
+                                  line={lineNumber}
+                                  onAsk={askAboutCardLine}
+                                  visible={aiQuestionLine === lineNumber}
+                                />
+                                <button
+                                  type="button"
+                                  aria-label={`Comment on line ${lineNumber}`}
+                                  aria-pressed={selectedLine === lineNumber}
+                                  onClick={() => commentOnCardLine(lineNumber)}
+                                  className="hover:text-violet flex items-center gap-1 transition"
+                                >
+                                  <MessageSquareText
+                                    className={cn(
+                                      "size-3 transition-opacity",
+                                      selectedLine === lineNumber ||
+                                        keyboardLine === lineNumber
+                                        ? "text-cyan opacity-100"
+                                        : "opacity-0 group-hover:opacity-100",
+                                    )}
+                                  />
+                                  <span>{lineNumber}</span>
+                                </button>
+                              </span>
+                            ) : (
+                              <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
+                                {lineNumber}
+                              </span>
+                            )}
+                            <pre className="syntax-code overflow-visible text-cloud">
+                              {line.tokens.length
+                                ? line.tokens.map((token, tokenIndex) => {
+                                    const importReference =
+                                      importReferences.find(
+                                        (reference) =>
+                                          reference.from >= token.from &&
+                                          reference.to <= token.to,
+                                      );
+                                    const resolutionKey = importReference
+                                      ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
+                                      : undefined;
+                                    return importReference ? (
+                                      <button
+                                        type="button"
+                                        key={`${tokenIndex}-${token.text.length}`}
+                                        aria-label={`Open ${importReference.local} from ${importReference.specifier}`}
+                                        title={`Open ${importReference.specifier}`}
+                                        disabled={
+                                          resolvingImport === resolutionKey
+                                        }
+                                        onClick={() =>
+                                          void followImport(importReference)
+                                        }
+                                        {...symbolPeekAttributes(
+                                          importReference.local,
+                                          lineNumber,
+                                        )}
+                                        className={cn(
+                                          "text-cyan decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
+                                          token.className,
+                                          resolvingImport === resolutionKey &&
+                                            "animate-pulse cursor-wait",
+                                        )}
+                                      >
+                                        {token.text}
+                                      </button>
+                                    ) : isPeekableToken(token) ? (
+                                      <span
+                                        key={`${tokenIndex}-${token.text.length}`}
+                                        {...symbolPeekAttributes(
+                                          token.text,
+                                          lineNumber,
+                                        )}
+                                        className={cn(
+                                          "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
+                                          token.className,
+                                        )}
+                                      >
+                                        {token.text}
+                                      </span>
+                                    ) : (
+                                      <span
+                                        key={`${tokenIndex}-${token.text.length}`}
+                                        className={token.className || undefined}
+                                      >
+                                        {token.text}
+                                      </span>
+                                    );
+                                  })
+                                : " "}
+                            </pre>
+                          </div>
+                          {isUnitLine && renderReviewLineDetails(lineNumber)}
+                          {contextAfter > 0 &&
+                            lineNumber === cardEndLine &&
+                            cardEndLine && (
+                              <ReviewScopeMarker
+                                edge="end"
+                                line={cardEndLine}
+                              />
+                            )}
+                        </Fragment>
+                      );
+                    })}
+                  {selectedFileSourceExpanded &&
+                    !sideBySideVisible &&
+                    contextAvailable &&
+                    !fullFileVisible &&
+                    contextAfter < availableAfter && (
+                      <div className="mt-3 flex items-center gap-3 px-4 font-sans">
+                        <span className="h-px flex-1 bg-line" />
+                        <button
+                          type="button"
+                          onClick={revealContextBelow}
+                          className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
+                        >
+                          <ChevronDown className="size-3" />
+                          Show{" "}
+                          {Math.min(
+                            CONTEXT_PAGE_LINES,
+                            availableAfter - contextAfter,
+                          )}{" "}
+                          {contextAfter > 0 ? "more " : ""}lines below
+                          <ShortcutHint
+                            shortcut={reviewShortcuts.revealContextBelow}
+                            className="ml-1"
+                          />
+                        </button>
+                        <span className="h-px flex-1 bg-line" />
+                      </div>
+                    )}
+                </div>
               </div>
-            )}
-            <div ref={reviewCardsAboveRef}>
-              {reviewMode === "files" && viewerCardWindow.hiddenAbove > 0 && (
-                <div className="mb-4 flex items-center gap-3 px-4 font-sans">
+              {viewerCardWindow.cards
+                .slice(selectedWindowOffset + 1)
+                .map((card, cardOffset) => (
+                  <div key={card.path} className="mt-4">
+                    {
+                      conceptFileCardPreviews[
+                        selectedWindowOffset + cardOffset + 1
+                      ]
+                    }
+                  </div>
+                ))}
+              {reviewMode === "files" && viewerCardWindow.hiddenBelow > 0 && (
+                <div className="mt-4 flex items-center gap-3 px-4 font-sans">
                   <span className="h-px flex-1 bg-line" />
                   <button
                     type="button"
                     onClick={() =>
-                      setFilesViewerAbove(
+                      setFilesViewerBelow(
                         (current) => current + FILES_VIEWER_PAGE_SIZE,
                       )
                     }
@@ -7570,771 +8203,141 @@ export function ReviewWorkspace({
                     Show{" "}
                     {Math.min(
                       FILES_VIEWER_PAGE_SIZE,
-                      viewerCardWindow.hiddenAbove,
+                      viewerCardWindow.hiddenBelow,
                     )}{" "}
-                    more files above
+                    more files below
                   </button>
                   <span className="h-px flex-1 bg-line" />
                 </div>
               )}
-              {viewerCardWindow.cards
-                .slice(0, selectedWindowOffset)
-                .map((card, windowIndex) => (
-                  <div key={card.path} className="mb-4">
-                    {conceptFileCardPreviews[windowIndex]}
-                  </div>
-                ))}
             </div>
-            {/* Inside the scroller, so it scrolls away with the source it
-                could not be anchored to instead of pinning above it. */}
-            {renderDetachedFindingCard()}
-            <div
-              ref={reviewUnitStartRef}
-              data-review-member-id={activeUnit.id}
-              data-selected="true"
-              className="mx-4 scroll-mt-5"
-            >
-              <div className="sticky top-0 z-20">
-                <div
-                  aria-hidden="true"
-                  className={cn(
-                    "bg-code pointer-events-none absolute inset-x-[-1rem] bottom-full h-5",
-                    !selectedCardStuck && "hidden",
-                  )}
+            {aiStatus.data?.status === "completed" && aiStatus.data.result && (
+              <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                  <span className="text-violet flex min-w-0 items-center gap-2 text-xs font-medium">
+                    <Sparkles className="size-3.5 shrink-0" />
+                    <span className="truncate">Overall explanation</span>
+                  </span>
+                  <span className="text-fog flex shrink-0 items-center gap-2 text-[9px]">
+                    {explanationAnnotations.length > 0 &&
+                      `${explanationAnnotations.length} inline ${explanationAnnotations.length === 1 ? "note" : "notes"}`}
+                    <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
+                  </span>
+                </summary>
+                <ProviderCommentBody
+                  body={aiStatus.data.result.summary}
+                  className="mt-0 max-w-none border-t border-violet/10 px-4 py-3 text-xs leading-5"
                 />
-                <div
-                  className={cn(
-                    "overflow-hidden border-x border-b border-cyan/35 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]",
-                    selectedCardStuck
-                      ? "rounded-none border-t-0"
-                      : "rounded-t-xl border-t",
-                  )}
-                >
-                  <ReviewFileCardHeader
-                    members={activeFileCardMembers}
-                    index={activeConceptCardIndex}
-                    count={activeConceptFileCards.length}
-                    itemLabel={reviewMode === "files" ? "File" : "Card"}
-                    selected
-                    actions={
-                      activeUnit.kind !== "binary" ? (
-                        <ReviewUnitViewOptions
-                          importsVisible={importsVisible}
-                          fullFileVisible={fullFileVisible}
-                          importsDisabled={!activeModule}
-                          fullFileDisabled={!contextAvailable}
-                          onToggleImports={() =>
-                            setImportContextUnitIds((current) => {
-                              const next = new Set(current);
-                              if (next.has(activeUnit.id))
-                                next.delete(activeUnit.id);
-                              else next.add(activeUnit.id);
-                              return next;
-                            })
-                          }
-                          onToggleFullFile={() =>
-                            setFullFileUnitIds((current) => {
-                              const next = new Set(current);
-                              if (next.has(activeUnit.id))
-                                next.delete(activeUnit.id);
-                              else next.add(activeUnit.id);
-                              return next;
-                            })
-                          }
-                        />
-                      ) : undefined
-                    }
-                  />
-                </div>
-              </div>
-              <div
-                ref={codeOverviewRef}
-                className={cn(
-                  "-mt-px",
-                  !sideBySideVisible &&
-                    "overflow-hidden rounded-b-xl border-x border-b border-line bg-code",
-                )}
-              >
-                {sideBySideVisible && (
-                  <SideBySideUnitDiff
-                    key={activeUnit.id}
-                    ref={diffContextRef}
-                    previousSource={diffPreviousSource}
-                    currentSource={diffCurrentSource}
-                    language={activeUnit.language}
-                    previousStartLine={1}
-                    currentStartLine={1}
-                    previousFocusRanges={previousCardRanges}
-                    currentFocusRanges={currentCardRanges}
-                    previousFocusStartLine={
-                      activeUnit.changeType === "added"
-                        ? null
-                        : (previousCardRanges.at(0)?.startLine ??
-                          previousUnitStartLine)
-                    }
-                    previousFocusEndLine={
-                      activeUnit.changeType === "added"
-                        ? null
-                        : (previousCardRanges.at(-1)?.endLine ??
-                          previousUnitEndLine)
-                    }
-                    currentFocusStartLine={
-                      activeUnit.changeType === "deleted"
-                        ? null
-                        : (cardStartLine ?? activeUnit.startLine)
-                    }
-                    currentFocusEndLine={
-                      activeUnit.changeType === "deleted"
-                        ? null
-                        : (cardEndLine ?? activeUnit.endLine)
-                    }
-                    selectedLine={selectedLine}
-                    keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
-                    findingLine={findingLine}
-                    expanded={fullFileVisible}
-                    onSelectReviewLine={commentOnCardLine}
-                    onAskReviewLine={askAboutCardLine}
-                    renderLineDetails={renderReviewLineDetails}
-                  />
-                )}
-                {activeFileCardHydrationPending &&
-                  !activeFileCardSourceAvailable && (
-                    <div
-                      className="min-h-72 animate-pulse bg-surface/10 px-5 py-6 font-sans"
-                      aria-live="polite"
-                    >
-                      <span className="sr-only">
-                        Loading and verifying private source…
-                      </span>
-                      <div aria-hidden="true" className="space-y-3">
-                        <div className="bg-line-strong h-2 w-2/5 rounded-full" />
-                        <div className="bg-line h-2 w-4/5 rounded-full" />
-                        <div className="bg-line h-2 w-3/5 rounded-full" />
-                        <div className="bg-line h-2 w-11/12 rounded-full" />
-                        <div className="bg-line h-2 w-2/3 rounded-full" />
-                      </div>
-                    </div>
-                  )}
-                {!activeFileCardHydrationPending &&
-                  !activeFileCardSourceAvailable && (
-                    <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
-                      <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
-                        <FileCode2
-                          className="text-fog mx-auto size-6"
-                          aria-hidden="true"
-                        />
-                        <p className="text-cloud mt-4 text-sm font-medium">
-                          Source unavailable
-                        </p>
-                        <p className="text-mist mt-2 text-xs leading-5">
-                          This private source could not be verified and loaded.
-                          Reload the review before signing off this unit.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                {importsVisible &&
-                  !sideBySideVisible &&
-                  activeFileCardSourceAvailable &&
-                  activeModule && (
-                    <UnitImportContext
-                      key={activeUnit.id}
-                      fileSource={activeModule.source}
-                      previousFileSource={
-                        activeModule.previousSource ?? undefined
-                      }
-                      unitSource={activeUnit.source}
-                      language={activeUnit.language}
-                      unitId={activeUnit.id}
-                      visibleStartLine={visibleStartLine}
-                      visibleEndLine={visibleEndLine}
-                      previousVisibleStartLine={previousUnitStartLine}
-                      previousVisibleEndLine={previousUnitEndLine}
-                      resolvingImport={resolvingImport}
-                      onFollow={(reference) => void followImport(reference)}
-                    />
-                  )}
-                {!sideBySideVisible &&
-                  activeFileCardSourceAvailable &&
-                  contextAvailable &&
-                  !fullFileVisible &&
-                  contextBefore < availableBefore && (
-                    <div className="mb-3 flex items-center gap-3 px-4 font-sans">
-                      <span className="h-px flex-1 bg-line" />
-                      <button
-                        type="button"
-                        onClick={revealContextAbove}
-                        className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
-                      >
-                        <ChevronDown className="size-3 rotate-180" />
-                        Show{" "}
-                        {Math.min(
-                          CONTEXT_PAGE_LINES,
-                          availableBefore - contextBefore,
-                        )}{" "}
-                        {contextBefore > 0 ? "more " : ""}lines above
-                        <ShortcutHint
-                          shortcut={reviewShortcuts.revealContextAbove}
-                          className="ml-1"
-                        />
-                      </button>
-                      <span className="h-px flex-1 bg-line" />
-                    </div>
-                  )}
-                {activeFileCardSourceAvailable &&
-                  activeUnit.kind === "binary" && (
-                    <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
-                      <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
-                        <span className="bg-cyan/10 text-cyan mx-auto grid size-11 place-items-center rounded-xl">
-                          <FileCode2 className="size-5" aria-hidden="true" />
-                        </span>
-                        <p className="text-cloud mt-4 text-sm font-medium">
-                          Binary file
-                        </p>
-                        <p className="text-mist mt-2 text-xs leading-5">
-                          ReviewDuck detected binary content. Its bytes are not
-                          displayed, sent to AI, or available for line comments.
-                        </p>
-                        <p className="text-fog mt-3 truncate font-mono text-[10px]">
-                          {activeUnit.path}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                {!sideBySideVisible &&
-                  activeFileCardSourceAvailable &&
-                  activeUnit.kind !== "binary" &&
-                  lines.map((line, index) => {
-                    const lineNumber = visibleStartLine + index;
-                    const isUnitLine = isPrimaryReviewLine(lineNumber);
-                    const isChangedLine =
-                      isUnitLine && changedCurrentLines.has(lineNumber);
-                    const isContextLine = !isUnitLine;
-                    const coveringExplanations = isUnitLine
-                      ? explanationAnnotations.filter(
-                          (annotation) =>
-                            lineNumber >= annotation.line &&
-                            lineNumber <=
-                              (annotation.endLine ?? annotation.line),
-                        )
-                      : [];
-                    return (
-                      <Fragment key={`${activeUnit.id}-${index}`}>
-                        {contextBefore > 0 &&
-                          lineNumber === cardStartLine &&
-                          cardStartLine && (
-                            <ReviewScopeMarker
-                              edge="start"
-                              line={cardStartLine}
-                            />
-                          )}
-                        {lineNumber === activeUnit.startLine &&
-                          previousRewriteLines.map((line, previousIndex) => {
-                            const previousLineNumber =
-                              previousUnitStartLine + previousIndex;
-                            return (
-                              <div
-                                key={`${activeUnit.id}-previous-${previousIndex}`}
-                                className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
-                              >
-                                <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
-                                  {previousLineNumber}
-                                </span>
-                                <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
-                                  {line.tokens.length
-                                    ? line.tokens.map((token, tokenIndex) => (
-                                        <span
-                                          key={`${tokenIndex}-${token.text.length}`}
-                                          className={
-                                            token.className || undefined
-                                          }
-                                        >
-                                          {token.text}
-                                        </span>
-                                      ))
-                                    : " "}
-                                </pre>
-                              </div>
-                            );
-                          })}
-                        <div
-                          id={`review-line-${lineNumber}`}
-                          className={cn(
-                            "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
-                            contextVisible &&
-                              isUnitLine &&
-                              "border-l-cyan/35 bg-cyan/[.012]",
-                            isChangedLine &&
-                              "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
-                            isContextLine &&
-                              "bg-surface-subtle/15 opacity-55 hover:opacity-80",
-                            coveringExplanations.length > 0 &&
-                              "bg-violet/[.025] shadow-[inset_2px_0_0_var(--app-ai)]",
-                            // Amber already means "AI review finding" in this
-                            // file, and is the one tint not already spoken for by
-                            // the line picker, the composer, additions or
-                            // deletions. Both of those still win over it below.
-                            findingLine === lineNumber &&
-                              "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
-                            selectedLine === lineNumber && "bg-violet/[.055]",
-                            keyboardLine === lineNumber &&
-                              "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                            aiQuestionPreviewLine === lineNumber &&
-                              "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
-                          )}
-                        >
-                          {isUnitLine && activeUnit.kind !== "binary" ? (
-                            <span
-                              className={cn(
-                                "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
-                                isChangedLine && "bg-addition/20 text-addition",
-                              )}
-                            >
-                              <AskAiLineButton
-                                line={lineNumber}
-                                onAsk={askAboutCardLine}
-                                visible={aiQuestionLine === lineNumber}
-                              />
-                              <button
-                                type="button"
-                                aria-label={`Comment on line ${lineNumber}`}
-                                aria-pressed={selectedLine === lineNumber}
-                                onClick={() => commentOnCardLine(lineNumber)}
-                                className="hover:text-violet flex items-center gap-1 transition"
-                              >
-                                <MessageSquareText
-                                  className={cn(
-                                    "size-3 transition-opacity",
-                                    selectedLine === lineNumber ||
-                                      keyboardLine === lineNumber
-                                      ? "text-cyan opacity-100"
-                                      : "opacity-0 group-hover:opacity-100",
-                                  )}
-                                />
-                                <span>{lineNumber}</span>
-                              </button>
-                            </span>
-                          ) : (
-                            <span className="flex items-center justify-end pr-3 text-right text-fog select-none">
-                              {lineNumber}
-                            </span>
-                          )}
-                          <pre className="syntax-code overflow-visible text-cloud">
-                            {line.tokens.length
-                              ? line.tokens.map((token, tokenIndex) => {
-                                  const importReference = importReferences.find(
-                                    (reference) =>
-                                      reference.from >= token.from &&
-                                      reference.to <= token.to,
-                                  );
-                                  const resolutionKey = importReference
-                                    ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
-                                    : undefined;
-                                  return importReference ? (
-                                    <button
-                                      type="button"
-                                      key={`${tokenIndex}-${token.text.length}`}
-                                      aria-label={`Open ${importReference.local} from ${importReference.specifier}`}
-                                      title={`Open ${importReference.specifier}`}
-                                      disabled={
-                                        resolvingImport === resolutionKey
-                                      }
-                                      onClick={() =>
-                                        void followImport(importReference)
-                                      }
-                                      {...symbolPeekAttributes(
-                                        importReference.local,
-                                        lineNumber,
-                                      )}
-                                      className={cn(
-                                        "text-cyan decoration-cyan/55 hover:bg-cyan/[.09] cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 transition",
-                                        token.className,
-                                        resolvingImport === resolutionKey &&
-                                          "animate-pulse cursor-wait",
-                                      )}
-                                    >
-                                      {token.text}
-                                    </button>
-                                  ) : isPeekableToken(token) ? (
-                                    <span
-                                      key={`${tokenIndex}-${token.text.length}`}
-                                      {...symbolPeekAttributes(
-                                        token.text,
-                                        lineNumber,
-                                      )}
-                                      className={cn(
-                                        "hover:decoration-cyan/45 rounded-sm hover:underline hover:decoration-dotted hover:underline-offset-4",
-                                        token.className,
-                                      )}
-                                    >
-                                      {token.text}
-                                    </span>
-                                  ) : (
-                                    <span
-                                      key={`${tokenIndex}-${token.text.length}`}
-                                      className={token.className || undefined}
-                                    >
-                                      {token.text}
-                                    </span>
-                                  );
-                                })
-                              : " "}
-                          </pre>
-                        </div>
-                        {isUnitLine && renderReviewLineDetails(lineNumber)}
-                        {contextAfter > 0 &&
-                          lineNumber === cardEndLine &&
-                          cardEndLine && (
-                            <ReviewScopeMarker edge="end" line={cardEndLine} />
-                          )}
-                      </Fragment>
-                    );
-                  })}
-                {!sideBySideVisible &&
-                  contextAvailable &&
-                  !fullFileVisible &&
-                  contextAfter < availableAfter && (
-                    <div className="mt-3 flex items-center gap-3 px-4 font-sans">
-                      <span className="h-px flex-1 bg-line" />
-                      <button
-                        type="button"
-                        onClick={revealContextBelow}
-                        className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
-                      >
-                        <ChevronDown className="size-3" />
-                        Show{" "}
-                        {Math.min(
-                          CONTEXT_PAGE_LINES,
-                          availableAfter - contextAfter,
-                        )}{" "}
-                        {contextAfter > 0 ? "more " : ""}lines below
-                        <ShortcutHint
-                          shortcut={reviewShortcuts.revealContextBelow}
-                          className="ml-1"
-                        />
-                      </button>
-                      <span className="h-px flex-1 bg-line" />
-                    </div>
-                  )}
-              </div>
-            </div>
-            {viewerCardWindow.cards
-              .slice(selectedWindowOffset + 1)
-              .map((card, cardOffset) => (
-                <div key={card.path} className="mt-4">
-                  {
-                    conceptFileCardPreviews[
-                      selectedWindowOffset + cardOffset + 1
-                    ]
-                  }
-                </div>
-              ))}
-            {reviewMode === "files" && viewerCardWindow.hiddenBelow > 0 && (
-              <div className="mt-4 flex items-center gap-3 px-4 font-sans">
-                <span className="h-px flex-1 bg-line" />
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFilesViewerBelow(
-                      (current) => current + FILES_VIEWER_PAGE_SIZE,
-                    )
-                  }
-                  className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
-                >
-                  Show{" "}
-                  {Math.min(
-                    FILES_VIEWER_PAGE_SIZE,
-                    viewerCardWindow.hiddenBelow,
-                  )}{" "}
-                  more files below
-                </button>
-                <span className="h-px flex-1 bg-line" />
-              </div>
+              </details>
             )}
-          </div>
-          {aiStatus.data?.status === "completed" && aiStatus.data.result && (
-            <details className="group border-violet/15 bg-violet/[.025] border-t xl:hidden">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-                <span className="text-violet flex min-w-0 items-center gap-2 text-xs font-medium">
-                  <Sparkles className="size-3.5 shrink-0" />
-                  <span className="truncate">Overall explanation</span>
-                </span>
-                <span className="text-fog flex shrink-0 items-center gap-2 text-[9px]">
-                  {explanationAnnotations.length > 0 &&
-                    `${explanationAnnotations.length} inline ${explanationAnnotations.length === 1 ? "note" : "notes"}`}
-                  <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
-                </span>
-              </summary>
-              <ProviderCommentBody
-                body={aiStatus.data.result.summary}
-                className="mt-0 max-w-none border-t border-violet/10 px-4 py-3 text-xs leading-5"
-              />
-            </details>
-          )}
-          <div className="border-violet/15 bg-violet/[.025] flex items-center justify-end gap-2 border-t px-3 py-3 sm:px-4 xl:hidden">
-            {renderAiActionButtons()}
-            {renderPullRequestDetailsButton({
-              className: "size-11 border border-line",
-            })}
-          </div>
-          <div className="bg-panel/45 flex items-center justify-end gap-2 border-t border-line px-3 py-3 sm:gap-3 sm:px-7 sm:py-4">
-            <div className="text-fog mr-auto hidden min-w-0 items-center gap-4 text-[9px] sm:flex">
-              {reviewComplete ? (
+            <div className="border-violet/15 bg-violet/[.025] flex items-center justify-end gap-2 border-t px-3 py-3 sm:px-4 xl:hidden">
+              {renderAiActionButtons()}
+              {renderPullRequestDetailsButton({
+                className: "size-11 border border-line",
+              })}
+            </div>
+            <div className="bg-panel/45 flex items-center justify-end gap-2 border-t border-line px-3 py-3 sm:gap-3 sm:px-7 sm:py-4">
+              <div className="text-fog mr-auto hidden min-w-0 items-center gap-4 text-[9px] sm:flex">
+                {reviewComplete ? (
+                  <span
+                    role="status"
+                    className="text-lime flex items-center gap-2 whitespace-nowrap"
+                  >
+                    <CheckCheck className="size-3.5" />
+                    All {signedCount} units reviewed
+                  </span>
+                ) : reviewCaughtUp ? (
+                  <span
+                    role="status"
+                    className={cn(
+                      "flex items-center gap-2 whitespace-nowrap",
+                      answeredWaitCount > 0 ? "text-lime" : "text-cyan",
+                    )}
+                  >
+                    {answeredWaitCount > 0 ? (
+                      <MessageSquareText className="size-3.5" />
+                    ) : (
+                      <Clock3 className="size-3.5" />
+                    )}
+                    {answeredWaitCount > 0
+                      ? `All available work reviewed · ${answeredWaitCount} ${answeredWaitCount === 1 ? "response" : "responses"} ready`
+                      : `All available work reviewed · ${waitingCount} waiting`}
+                  </span>
+                ) : (
+                  <span className="hidden items-center gap-3 xl:flex">
+                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                      <ShortcutAlternatives
+                        shortcut={reviewShortcuts.scrollUp}
+                        alternateShortcut={reviewShortcuts.scrollDown}
+                      />
+                      {aiQuestionLine === undefined
+                        ? "Scroll"
+                        : "Move question"}
+                    </span>
+                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                      <ShortcutAlternatives
+                        shortcut={reviewShortcuts.previousUnit}
+                        alternateShortcut={reviewShortcuts.nextUnit}
+                      />
+                      Card
+                    </span>
+                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                      <ShortcutAlternatives
+                        shortcut={reviewShortcuts.previousConcept}
+                        alternateShortcut={reviewShortcuts.nextConcept}
+                      />
+                      Concept
+                    </span>
+                  </span>
+                )}
+              </div>
+              {footerSaveState === "background" && (
                 <span
                   role="status"
-                  className="text-lime flex items-center gap-2 whitespace-nowrap"
+                  aria-label={`Saving reviews, ${backgroundSaveProgress}`}
+                  className="border-line-strong bg-surface text-mist flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 text-[10px] shadow-[0_8px_24px_var(--app-shadow)] sm:h-10 sm:px-3"
                 >
-                  <CheckCheck className="size-3.5" />
-                  All {signedCount} units reviewed
-                </span>
-              ) : reviewCaughtUp ? (
-                <span
-                  role="status"
-                  className={cn(
-                    "flex items-center gap-2 whitespace-nowrap",
-                    answeredWaitCount > 0 ? "text-lime" : "text-cyan",
-                  )}
-                >
-                  {answeredWaitCount > 0 ? (
-                    <MessageSquareText className="size-3.5" />
-                  ) : (
-                    <Clock3 className="size-3.5" />
-                  )}
-                  {answeredWaitCount > 0
-                    ? `All available work reviewed · ${answeredWaitCount} ${answeredWaitCount === 1 ? "response" : "responses"} ready`
-                    : `All available work reviewed · ${waitingCount} waiting`}
-                </span>
-              ) : (
-                <span className="hidden items-center gap-3 xl:flex">
-                  <span className="flex items-center gap-1.5 whitespace-nowrap">
-                    <ShortcutAlternatives
-                      shortcut={reviewShortcuts.scrollUp}
-                      alternateShortcut={reviewShortcuts.scrollDown}
-                    />
-                    {aiQuestionLine === undefined ? "Scroll" : "Move question"}
-                  </span>
-                  <span className="flex items-center gap-1.5 whitespace-nowrap">
-                    <ShortcutAlternatives
-                      shortcut={reviewShortcuts.previousUnit}
-                      alternateShortcut={reviewShortcuts.nextUnit}
-                    />
-                    Card
-                  </span>
-                  <span className="flex items-center gap-1.5 whitespace-nowrap">
-                    <ShortcutAlternatives
-                      shortcut={reviewShortcuts.previousConcept}
-                      alternateShortcut={reviewShortcuts.nextConcept}
-                    />
-                    Concept
+                  <LoaderCircle className="size-3 animate-spin" />
+                  <span className="hidden sm:inline">Saving</span>
+                  <span className="font-mono text-cloud">
+                    {backgroundSaveProgress}
                   </span>
                 </span>
               )}
-            </div>
-            {footerSaveState === "background" && (
-              <span
-                role="status"
-                aria-label={`Saving reviews, ${backgroundSaveProgress}`}
-                className="border-line-strong bg-surface text-mist flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 text-[10px] shadow-[0_8px_24px_var(--app-shadow)] sm:h-10 sm:px-3"
-              >
-                <LoaderCircle className="size-3 animate-spin" />
-                <span className="hidden sm:inline">Saving</span>
-                <span className="font-mono text-cloud">
-                  {backgroundSaveProgress}
-                </span>
-              </span>
-            )}
-            {footerSaveState === "finalizing" ? (
-              <Button
-                className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
-                disabled
-                aria-label={`Finishing review, ${backgroundSaveProgress}`}
-              >
-                <LoaderCircle className="size-4 animate-spin" />
-                Finishing {backgroundSaveProgress}…
-              </Button>
-            ) : reviewComplete ? (
-              <div className="flex min-w-0 items-center justify-end gap-2">
-                {activeConceptProgress?.status === "signed_off" && (
-                  <Button
-                    variant="secondary"
-                    className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                    onClick={unreviewActiveUnit}
-                    disabled={undoSignOff.isPending || undoConcept.isPending}
-                  >
-                    {undoSignOff.isPending || undoConcept.isPending ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <Undo2 className="size-4" />
-                    )}
-                    <span className="hidden sm:inline">
-                      {undoSignOff.isPending || undoConcept.isPending
-                        ? "Undoing…"
-                        : "Undo concept"}
-                    </span>
-                    <span className="sm:hidden">
-                      {undoSignOff.isPending || undoConcept.isPending
-                        ? "Undoing…"
-                        : "Undo"}
-                    </span>
-                    {!undoSignOff.isPending && !undoConcept.isPending && (
-                      <ShortcutHint
-                        shortcut={reviewShortcuts.undoReview}
-                        className="hidden sm:inline-flex"
-                      />
-                    )}
-                  </Button>
-                )}
+              {footerSaveState === "finalizing" ? (
                 <Button
-                  variant="secondary"
-                  className="h-10 px-3 sm:h-11 sm:px-4"
-                  onClick={() => setCompletionOpen(true)}
+                  className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
+                  disabled
+                  aria-label={`Finishing review, ${backgroundSaveProgress}`}
                 >
-                  {providerReviewState.data?.decision === "approved" ? (
-                    <CheckCircle2 className="size-4 text-lime" />
-                  ) : providerReviewState.isFetching ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <ShieldCheck className="size-4" />
-                  )}
-                  <span className="hidden sm:inline">
-                    {providerReviewState.data?.decision === "approved"
-                      ? "Approved"
-                      : "Provider approval"}
-                  </span>
+                  <LoaderCircle className="size-4 animate-spin" />
+                  Finishing {backgroundSaveProgress}…
                 </Button>
-                {nextReview ? (
-                  <Button
-                    className="h-10 px-3 sm:h-11 sm:px-5"
-                    loading={navigationPending}
-                    onClick={openNextReview}
-                  >
-                    Next review
-                    {!navigationPending && <ChevronRight className="size-4" />}
-                    <ShortcutHint
-                      shortcut={reviewShortcuts.nextReview}
-                      className="hidden sm:inline-flex"
-                    />
-                  </Button>
-                ) : (
-                  <Button
-                    className="h-10 px-3 sm:h-11 sm:px-5"
-                    loading={navigationPending}
-                    onClick={openPullRequests}
-                  >
-                    {!navigationPending && <ArrowLeft className="size-4" />}
-                    Pull requests
-                    <ShortcutHint
-                      shortcut={reviewShortcuts.dashboard}
-                      className="hidden sm:inline-flex"
-                    />
-                  </Button>
-                )}
-              </div>
-            ) : reviewCaughtUp ? (
-              <div className="flex min-w-0 items-center justify-end gap-2">
-                {activeWaitStatus === "waiting" && (
-                  <Button
-                    variant={activeUnitAnswered ? "primary" : "secondary"}
-                    className="h-10 px-3 sm:h-11 sm:px-4"
-                    onClick={stopWaitingOnActive}
-                    disabled={!canStopWaiting}
-                  >
-                    {releaseReviewWaits.isPending ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : activeUnitAnswered ? (
-                      <MessageSquareText className="size-4" />
-                    ) : (
-                      <Clock3 className="size-4" />
-                    )}
-                    <span className="hidden sm:inline">
-                      {releaseReviewWaits.isPending
-                        ? "Resuming…"
-                        : activeUnitAnswered
-                          ? "Resume review"
-                          : "Stop waiting"}
-                    </span>
-                  </Button>
-                )}
-                <Button
-                  variant="secondary"
-                  className="h-10 px-3 sm:h-11 sm:px-4"
-                  onClick={() => setWaitingCompletionOpen(true)}
-                >
-                  {answeredWaitCount > 0 ? (
-                    <MessageSquareText className="text-lime size-4" />
-                  ) : (
-                    <Clock3 className="text-cyan size-4" />
-                  )}
-                  <span className="hidden sm:inline">
-                    {answeredWaitCount > 0
-                      ? `View ${answeredWaitCount} ${answeredWaitCount === 1 ? "response" : "responses"}`
-                      : `View ${waitingCount} waiting`}
-                  </span>
-                  <span className="sm:hidden">
-                    {answeredWaitCount > 0 ? "Responses" : "Waiting"}
-                  </span>
-                </Button>
-                {nextReview ? (
-                  <Button
-                    className="h-10 px-3 sm:h-11 sm:px-5"
-                    onClick={openNextReview}
-                  >
-                    Next review
-                    <ChevronRight className="size-4" />
-                  </Button>
-                ) : (
-                  <Button
-                    className="h-10 px-3 sm:h-11 sm:px-5"
-                    onClick={openPullRequests}
-                  >
-                    <ArrowLeft className="size-4" />
-                    Pull requests
-                    <ShortcutHint
-                      shortcut={reviewShortcuts.dashboard}
-                      className="hidden sm:inline-flex"
-                    />
-                  </Button>
-                )}
-              </div>
-            ) : (
-              <div className="flex min-w-0 items-center justify-end gap-2">
-                {canSignOffDeletedFiles && footerSaveState !== "active" && (
-                  <Button
-                    variant="secondary"
-                    className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                    title={`Sign off ${deletedUnitsToSignOff.length} remaining ${deletedUnitsToSignOff.length === 1 ? "unit" : "units"} from files deleted in this pull request`}
-                    onClick={signOffDeletedFiles}
-                  >
-                    <CheckCheck className="size-4" />
-                    <span className="hidden sm:inline">Sign off deletes</span>
-                    <span className="sm:hidden">Deletes</span>
-                    <ShortcutHint
-                      shortcut={reviewShortcuts.signOffDeletions}
-                      className="hidden sm:inline-flex"
-                    />
-                  </Button>
-                )}
-                {activeUnit.status === "signed_off" &&
-                  activeWaitStatus !== "waiting" &&
-                  footerSaveState !== "active" && (
+              ) : reviewComplete ? (
+                <div className="flex min-w-0 items-center justify-end gap-2">
+                  {activeConceptProgress?.status === "signed_off" && (
                     <Button
                       variant="secondary"
                       className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
                       onClick={unreviewActiveUnit}
-                      disabled={undoSignOff.isPending}
+                      disabled={undoSignOff.isPending || undoConcept.isPending}
                     >
-                      {undoSignOff.isPending ? (
+                      {undoSignOff.isPending || undoConcept.isPending ? (
                         <LoaderCircle className="size-4 animate-spin" />
                       ) : (
                         <Undo2 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {undoSignOff.isPending ? "Undoing…" : "Undo review"}
+                        {undoSignOff.isPending || undoConcept.isPending
+                          ? "Undoing…"
+                          : "Undo concept"}
                       </span>
                       <span className="sm:hidden">
-                        {undoSignOff.isPending ? "Undoing…" : "Undo"}
+                        {undoSignOff.isPending || undoConcept.isPending
+                          ? "Undoing…"
+                          : "Undo"}
                       </span>
-                      {!undoSignOff.isPending && (
+                      {!undoSignOff.isPending && !undoConcept.isPending && (
                         <ShortcutHint
                           shortcut={reviewShortcuts.undoReview}
                           className="hidden sm:inline-flex"
@@ -8342,147 +8345,310 @@ export function ReviewWorkspace({
                       )}
                     </Button>
                   )}
-                {activeWaitStatus === "waiting" ? (
-                  // The header already says this unit is waiting, so the
-                  // footer spends the slot on the way out of it instead of
-                  // repeating the state as a button nobody can press.
                   <Button
-                    variant={activeUnitAnswered ? "primary" : "secondary"}
-                    className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                    title={
-                      activeUnitAnswered
-                        ? "The conversation has a response — return this work to your review path"
-                        : "Take back the wait and return this work to your review path"
-                    }
-                    onClick={stopWaitingOnActive}
-                    disabled={!canStopWaiting}
+                    variant="secondary"
+                    className="h-10 px-3 sm:h-11 sm:px-4"
+                    onClick={() => setCompletionOpen(true)}
                   >
-                    {releaseReviewWaits.isPending ? (
+                    {providerReviewState.data?.decision === "approved" ? (
+                      <CheckCircle2 className="size-4 text-lime" />
+                    ) : providerReviewState.isFetching ? (
                       <LoaderCircle className="size-4 animate-spin" />
-                    ) : activeUnitAnswered ? (
-                      <MessageSquareText className="size-4" />
                     ) : (
-                      <Clock3 className="size-4" />
+                      <ShieldCheck className="size-4" />
                     )}
                     <span className="hidden sm:inline">
-                      {releaseReviewWaits.isPending
-                        ? "Resuming…"
-                        : activeUnitAnswered
-                          ? "Resume review"
-                          : "Stop waiting"}
+                      {providerReviewState.data?.decision === "approved"
+                        ? "Approved"
+                        : "Provider approval"}
                     </span>
-                    <span className="sm:hidden">
-                      {releaseReviewWaits.isPending ? "Resuming…" : "Resume"}
-                    </span>
-                    {!releaseReviewWaits.isPending && (
+                  </Button>
+                  {nextReview ? (
+                    <Button
+                      className="h-10 px-3 sm:h-11 sm:px-5"
+                      loading={navigationPending}
+                      onClick={openNextReview}
+                    >
+                      Next review
+                      {!navigationPending && (
+                        <ChevronRight className="size-4" />
+                      )}
                       <ShortcutHint
-                        shortcut={reviewShortcuts.undoReview}
+                        shortcut={reviewShortcuts.nextReview}
                         className="hidden sm:inline-flex"
                       />
-                    )}
-                  </Button>
-                ) : (
-                  hasLiveConversation &&
-                  footerSaveState !== "active" && (
+                    </Button>
+                  ) : (
                     <Button
-                      variant="secondary"
-                      className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
-                      title={`Pause this unit until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
-                      onClick={awaitActiveResponse}
-                      disabled={!canAwaitUnit}
+                      className="h-10 px-3 sm:h-11 sm:px-5"
+                      loading={navigationPending}
+                      onClick={openPullRequests}
                     >
-                      {awaitPending ? (
+                      {!navigationPending && <ArrowLeft className="size-4" />}
+                      Pull requests
+                      <ShortcutHint
+                        shortcut={reviewShortcuts.dashboard}
+                        className="hidden sm:inline-flex"
+                      />
+                    </Button>
+                  )}
+                </div>
+              ) : reviewCaughtUp ? (
+                <div className="flex min-w-0 items-center justify-end gap-2">
+                  {activeWaitStatus === "waiting" && (
+                    <Button
+                      variant={activeUnitAnswered ? "primary" : "secondary"}
+                      className="h-10 px-3 sm:h-11 sm:px-4"
+                      onClick={stopWaitingOnActive}
+                      disabled={!canStopWaiting}
+                    >
+                      {releaseReviewWaits.isPending ? (
                         <LoaderCircle className="size-4 animate-spin" />
+                      ) : activeUnitAnswered ? (
+                        <MessageSquareText className="size-4" />
                       ) : (
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {awaitPending ? "Saving…" : "Await response"}
+                        {releaseReviewWaits.isPending
+                          ? "Resuming…"
+                          : activeUnitAnswered
+                            ? "Resume review"
+                            : "Stop waiting"}
                       </span>
-                      <span className="sm:hidden">
-                        {awaitPending ? "Saving…" : "Await"}
-                      </span>
-                      {!awaitPending && (
-                        <ShortcutHint
-                          shortcut={reviewShortcuts.awaitResponse}
-                          className="hidden sm:inline-flex"
-                        />
-                      )}
                     </Button>
-                  )
-                )}
-                {(!primaryIsContinue || hasNextActionableUnit) &&
-                  (conceptActionAvailable && !primaryIsContinue ? (
-                    <SplitActionButton
-                      icon={<Check className="size-4" />}
-                      label={primaryActionLabel}
-                      mobileLabel={
-                        activeSignOffPending ? signOffQueueProgress : "Sign off"
-                      }
-                      menuLabel="Choose what to sign off"
-                      pending={activeSignOffPending}
-                      primary={{
-                        disabled: !canUsePrimaryAction,
-                        label: primaryActionLabel,
-                        onSelect: runPrimaryAction,
-                        shortcut: reviewShortcuts.signOff,
-                      }}
-                      options={[
-                        {
-                          description:
-                            reviewMode === "files" && activeReviewFile
-                              ? `Record all ${activeFileOutstandingUnits} outstanding units in this file`
-                              : cardActionAvailable
-                                ? `Record all ${outstandingCardMembers.length} outstanding units represented by this file card`
-                                : "Record this unit and open the next card in the concept",
-                          disabled:
-                            reviewMode === "files"
-                              ? !canSignOffActiveFile
-                              : cardActionAvailable
-                                ? !canSignOffCard
-                                : !canSignOffUnit,
-                          label:
-                            reviewMode === "files"
-                              ? "Sign off file"
-                              : cardActionAvailable
-                                ? "Sign off card"
-                                : "Sign off unit",
-                          onSelect:
-                            reviewMode === "files" && activeReviewFile
-                              ? () => toggleReviewFile(activeReviewFile)
-                              : cardActionAvailable
-                                ? signOffActiveCard
-                                : signOffActiveUnit,
-                          shortcut: reviewShortcuts.signOff,
-                        },
-                        {
-                          description: `Record all ${activeConceptMembers.length} units of this concept at once`,
-                          disabled: !canSignOffConcept,
-                          label: "Sign off concept",
-                          onSelect: signOffActiveConcept,
-                          shortcut: reviewShortcuts.signOffConcept,
-                        },
-                      ]}
-                    />
+                  )}
+                  <Button
+                    variant="secondary"
+                    className="h-10 px-3 sm:h-11 sm:px-4"
+                    onClick={() => setWaitingCompletionOpen(true)}
+                  >
+                    {answeredWaitCount > 0 ? (
+                      <MessageSquareText className="text-lime size-4" />
+                    ) : (
+                      <Clock3 className="text-cyan size-4" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {answeredWaitCount > 0
+                        ? `View ${answeredWaitCount} ${answeredWaitCount === 1 ? "response" : "responses"}`
+                        : `View ${waitingCount} waiting`}
+                    </span>
+                    <span className="sm:hidden">
+                      {answeredWaitCount > 0 ? "Responses" : "Waiting"}
+                    </span>
+                  </Button>
+                  {nextReview ? (
+                    <Button
+                      className="h-10 px-3 sm:h-11 sm:px-5"
+                      onClick={openNextReview}
+                    >
+                      Next review
+                      <ChevronRight className="size-4" />
+                    </Button>
                   ) : (
                     <Button
-                      className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
-                      onClick={runPrimaryAction}
-                      disabled={!canUsePrimaryAction}
+                      className="h-10 px-3 sm:h-11 sm:px-5"
+                      onClick={openPullRequests}
                     >
-                      <Check className="size-4" />
-                      {primaryActionLabel}
-                      {!activeSignOffPending && (
+                      <ArrowLeft className="size-4" />
+                      Pull requests
+                      <ShortcutHint
+                        shortcut={reviewShortcuts.dashboard}
+                        className="hidden sm:inline-flex"
+                      />
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex min-w-0 items-center justify-end gap-2">
+                  {canSignOffDeletedFiles && footerSaveState !== "active" && (
+                    <Button
+                      variant="secondary"
+                      className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
+                      title={`Sign off ${deletedUnitsToSignOff.length} remaining ${deletedUnitsToSignOff.length === 1 ? "unit" : "units"} from files deleted in this pull request`}
+                      onClick={signOffDeletedFiles}
+                    >
+                      <CheckCheck className="size-4" />
+                      <span className="hidden sm:inline">Sign off deletes</span>
+                      <span className="sm:hidden">Deletes</span>
+                      <ShortcutHint
+                        shortcut={reviewShortcuts.signOffDeletions}
+                        className="hidden sm:inline-flex"
+                      />
+                    </Button>
+                  )}
+                  {activeUnit.status === "signed_off" &&
+                    activeWaitStatus !== "waiting" &&
+                    footerSaveState !== "active" && (
+                      <Button
+                        variant="secondary"
+                        className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
+                        onClick={unreviewActiveUnit}
+                        disabled={undoSignOff.isPending}
+                      >
+                        {undoSignOff.isPending ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <Undo2 className="size-4" />
+                        )}
+                        <span className="hidden sm:inline">
+                          {undoSignOff.isPending ? "Undoing…" : "Undo review"}
+                        </span>
+                        <span className="sm:hidden">
+                          {undoSignOff.isPending ? "Undoing…" : "Undo"}
+                        </span>
+                        {!undoSignOff.isPending && (
+                          <ShortcutHint
+                            shortcut={reviewShortcuts.undoReview}
+                            className="hidden sm:inline-flex"
+                          />
+                        )}
+                      </Button>
+                    )}
+                  {activeWaitStatus === "waiting" ? (
+                    // The header already says this unit is waiting, so the
+                    // footer spends the slot on the way out of it instead of
+                    // repeating the state as a button nobody can press.
+                    <Button
+                      variant={activeUnitAnswered ? "primary" : "secondary"}
+                      className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
+                      title={
+                        activeUnitAnswered
+                          ? "The conversation has a response — return this work to your review path"
+                          : "Take back the wait and return this work to your review path"
+                      }
+                      onClick={stopWaitingOnActive}
+                      disabled={!canStopWaiting}
+                    >
+                      {releaseReviewWaits.isPending ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : activeUnitAnswered ? (
+                        <MessageSquareText className="size-4" />
+                      ) : (
+                        <Clock3 className="size-4" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {releaseReviewWaits.isPending
+                          ? "Resuming…"
+                          : activeUnitAnswered
+                            ? "Resume review"
+                            : "Stop waiting"}
+                      </span>
+                      <span className="sm:hidden">
+                        {releaseReviewWaits.isPending ? "Resuming…" : "Resume"}
+                      </span>
+                      {!releaseReviewWaits.isPending && (
                         <ShortcutHint
-                          shortcut={reviewShortcuts.signOff}
+                          shortcut={reviewShortcuts.undoReview}
                           className="hidden sm:inline-flex"
                         />
                       )}
-                      <ChevronRight className="size-3.5" />
                     </Button>
-                  ))}
-              </div>
-            )}
+                  ) : (
+                    hasLiveConversation &&
+                    footerSaveState !== "active" && (
+                      <Button
+                        variant="secondary"
+                        className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
+                        title={`Pause this unit until ${providerLabel(initialData.pullRequest.provider)} receives a reply or the code changes`}
+                        onClick={awaitActiveResponse}
+                        disabled={!canAwaitUnit}
+                      >
+                        {awaitPending ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <Clock3 className="size-4" />
+                        )}
+                        <span className="hidden sm:inline">
+                          {awaitPending ? "Saving…" : "Await response"}
+                        </span>
+                        <span className="sm:hidden">
+                          {awaitPending ? "Saving…" : "Await"}
+                        </span>
+                        {!awaitPending && (
+                          <ShortcutHint
+                            shortcut={reviewShortcuts.awaitResponse}
+                            className="hidden sm:inline-flex"
+                          />
+                        )}
+                      </Button>
+                    )
+                  )}
+                  {(!primaryIsContinue || hasNextActionableUnit) &&
+                    (conceptActionAvailable && !primaryIsContinue ? (
+                      <SplitActionButton
+                        icon={<Check className="size-4" />}
+                        label={primaryActionLabel}
+                        mobileLabel={
+                          activeSignOffPending
+                            ? signOffQueueProgress
+                            : "Sign off"
+                        }
+                        menuLabel="Choose what to sign off"
+                        pending={activeSignOffPending}
+                        primary={{
+                          disabled: !canUsePrimaryAction,
+                          label: primaryActionLabel,
+                          onSelect: runPrimaryAction,
+                          shortcut: reviewShortcuts.signOff,
+                        }}
+                        options={[
+                          {
+                            description:
+                              reviewMode === "files" && activeReviewFile
+                                ? `Record all ${activeFileOutstandingUnits} outstanding units in this file`
+                                : cardActionAvailable
+                                  ? `Record all ${outstandingCardMembers.length} outstanding units represented by this file card`
+                                  : "Record this unit and open the next card in the concept",
+                            disabled:
+                              reviewMode === "files"
+                                ? !canSignOffActiveFile
+                                : cardActionAvailable
+                                  ? !canSignOffCard
+                                  : !canSignOffUnit,
+                            label:
+                              reviewMode === "files"
+                                ? "Sign off file"
+                                : cardActionAvailable
+                                  ? "Sign off card"
+                                  : "Sign off unit",
+                            onSelect:
+                              reviewMode === "files" && activeReviewFile
+                                ? () => toggleReviewFile(activeReviewFile)
+                                : cardActionAvailable
+                                  ? signOffActiveCard
+                                  : signOffActiveUnit,
+                            shortcut: reviewShortcuts.signOff,
+                          },
+                          {
+                            description: `Record all ${activeConceptMembers.length} units of this concept at once`,
+                            disabled: !canSignOffConcept,
+                            label: "Sign off concept",
+                            onSelect: signOffActiveConcept,
+                            shortcut: reviewShortcuts.signOffConcept,
+                          },
+                        ]}
+                      />
+                    ) : (
+                      <Button
+                        className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-5"
+                        onClick={runPrimaryAction}
+                        disabled={!canUsePrimaryAction}
+                      >
+                        <Check className="size-4" />
+                        {primaryActionLabel}
+                        {!activeSignOffPending && (
+                          <ShortcutHint
+                            shortcut={reviewShortcuts.signOff}
+                            className="hidden sm:inline-flex"
+                          />
+                        )}
+                        <ChevronRight className="size-3.5" />
+                      </Button>
+                    ))}
+                </div>
+              )}
+            </div>
           </div>
         </main>
         <aside
@@ -8490,12 +8656,15 @@ export function ReviewWorkspace({
           aria-label="AI assistance"
           className={cn(
             "bg-panel min-h-0 flex-col overflow-hidden border-l border-line",
-            insightsPanelOpen
-              ? "fixed top-16 right-0 bottom-0 z-40 flex w-[min(360px,calc(100vw-3rem))] shadow-2xl"
-              : "hidden",
-            insightsPanelCollapsed
-              ? "xl:hidden"
-              : "xl:static xl:flex xl:w-auto xl:bg-panel/30 xl:shadow-none",
+            completionChromeHidden
+              ? "hidden"
+              : insightsPanelOpen
+                ? "fixed top-16 right-0 bottom-0 z-40 flex w-[min(360px,calc(100vw-3rem))] shadow-2xl"
+                : "hidden",
+            !completionChromeHidden &&
+              (insightsPanelCollapsed
+                ? "xl:hidden"
+                : "xl:static xl:flex xl:w-auto xl:bg-panel/30 xl:shadow-none"),
           )}
         >
           <div className="border-violet/15 bg-panel z-10 flex shrink-0 flex-col gap-2.5 border-b px-4 py-4">

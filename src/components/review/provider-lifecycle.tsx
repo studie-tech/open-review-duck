@@ -50,11 +50,22 @@ export function ProviderLifecycle({
   const merged = state?.pullRequestState === "merged";
   const closed = state?.pullRequestState === "closed";
   const summary = state?.summary ?? "empty";
+  const optionalPending = Boolean(
+    state?.checks.some(
+      (check) =>
+        check.required === false &&
+        (check.state === "queued" || check.state === "in_progress"),
+    ),
+  );
+  const mergeReady = Boolean(state?.canMerge && !merged && !closed);
   const summaryLabel = providerLifecycleSummaryLabel(
     summary,
     state?.checks.length ?? 0,
+    { canMerge: state?.canMerge, optionalPending },
   );
   const mergeLabel = state?.mergeActionLabel ?? "Merge";
+  const badgeReady =
+    merged || (summary !== "failing" && (summary === "passing" || mergeReady));
 
   useEffect(() => {
     if (mutationPending || !confirming) return;
@@ -82,7 +93,7 @@ export function ProviderLifecycle({
               {state && (
                 <Badge
                   className={cn(
-                    merged || summary === "passing"
+                    badgeReady
                       ? "border-addition/30 bg-addition/10 text-addition"
                       : summary === "failing"
                         ? "border-coral/25 bg-coral/10 text-coral"
@@ -95,10 +106,10 @@ export function ProviderLifecycle({
                     <CheckCircle2 className="size-3" />
                   ) : summary === "failing" ? (
                     <XCircle className="size-3" />
+                  ) : mergeReady || summary === "passing" ? (
+                    <CheckCircle2 className="size-3" />
                   ) : summary === "pending" ? (
                     <LoaderCircle className="size-3 animate-spin" />
-                  ) : summary === "passing" ? (
-                    <CheckCircle2 className="size-3" />
                   ) : (
                     <CircleDashed className="size-3" />
                   )}
@@ -154,10 +165,11 @@ export function ProviderLifecycle({
                 {state.mergeBlockedReason}
               </p>
             )}
-            {summary === "failing" && state.canMerge && (
+            {(summary === "failing" || optionalPending) && state.canMerge && (
               <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
-                Some checks have not passed. {providerName} still allows merging
-                this revision.
+                {summary === "failing"
+                  ? `Some checks have not passed. ${providerName} still allows merging this revision.`
+                  : `Some checks haven't completed yet. ${providerName} still allows merging this revision.`}
               </p>
             )}
 

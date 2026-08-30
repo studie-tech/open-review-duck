@@ -1,4 +1,9 @@
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
+import {
+  type AzurePolicyEvaluationGate,
+  azureMergeGate,
+  azurePolicyCheckState,
+} from "~/lib/provider-merge-gate";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
@@ -47,7 +52,7 @@ interface AzurePull {
     id?: string;
     name?: string;
     webUrl?: string;
-    project?: { name?: string };
+    project?: { id?: string; name?: string };
   };
   _links?: { web?: { href?: string } };
   createdBy: {
@@ -64,6 +69,18 @@ interface AzurePullStatus {
   creationDate?: string;
   targetUrl?: string;
   context?: { name?: string; genre?: string };
+}
+interface AzurePolicyEvaluation {
+  evaluationId?: string;
+  status?: string;
+  configuration?: {
+    id?: string;
+    isEnabled?: boolean;
+    isBlocking?: boolean;
+    isDeleted?: boolean;
+    type?: { displayName?: string };
+    settings?: { displayName?: string; statusName?: string };
+  };
 }
 interface AzureReviewer {
   id: string;
@@ -407,19 +424,31 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     number: number,
   ): Promise<ProviderPullRequestLifecycle> {
     const endpoint = `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullRequests/${number}`;
-    const [pull, statuses] = await Promise.all([
-      providerFetch<AzurePull>(this.name, `${endpoint}?api-version=7.1`, {
-        headers: this.headers,
-      }),
+    const pull = await providerFetch<AzurePull>(
+      this.name,
+      `${endpoint}?api-version=7.1`,
+      { headers: this.headers },
+    );
+    const [statuses, evaluations] = await Promise.all([
       optionalProviderFetch<{ value: AzurePullStatus[] }>(
         this.name,
         `${endpoint}/statuses?api-version=7.1`,
         { headers: this.headers },
       ),
+      this.policyEvaluations(pull, number),
     ]);
-    const merge = this.mergeState(pull);
+    const policies = this.normalizePolicies(evaluations);
+    const merge = azureMergeGate({
+      status: pull.status,
+      isDraft: pull.isDraft,
+      mergeStatus: pull.mergeStatus,
+      policies,
+    });
     return buildProviderLifecycle({
-      checks: this.normalizeStatuses(statuses?.value ?? []),
+      checks: [
+        ...this.normalizeStatuses(statuses?.value ?? [], policies.length > 0),
+        ...this.policyChecks(evaluations),
+      ],
       pullRequestState:
         pull.status === "completed"
           ? "merged"
@@ -781,9 +810,71 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       maximumBytes,
     );
   }
+  /** Reads blocking Azure branch-policy evaluations for this pull request. */
+  private async policyEvaluations(pull: AzurePull, number: number) {
+    const projectId = pull.repository.project?.id;
+    const projectName = pull.repository.project?.name;
+    if (!projectId || !projectName) return [];
+    const artifactId = `vstfs:///CodeReview/PullRequestId/${projectId}/${number}`;
+    const response = await optionalProviderFetch<{
+      value: AzurePolicyEvaluation[];
+    }>(
+      this.name,
+      `${this.organizationUrl}/${encodeURIComponent(projectName)}/_apis/policy/evaluations?artifactId=${encodeURIComponent(artifactId)}&api-version=7.1-preview.1`,
+      { headers: this.headers },
+    );
+    return response?.value ?? [];
+  }
+
+  /** Maps Azure policy evaluations onto the shared merge-gate model. */
+  private normalizePolicies(
+    evaluations: AzurePolicyEvaluation[],
+  ): AzurePolicyEvaluationGate[] {
+    return evaluations.map((evaluation) => ({
+      enabled: evaluation.configuration?.isEnabled,
+      blocking: evaluation.configuration?.isBlocking,
+      deleted: evaluation.configuration?.isDeleted,
+      status: evaluation.status,
+      name:
+        evaluation.configuration?.type?.displayName ??
+        evaluation.configuration?.settings?.displayName ??
+        evaluation.configuration?.settings?.statusName,
+    }));
+  }
+
+  /** Surfaces enabled policy evaluations as checks on the completion page. */
+  private policyChecks(
+    evaluations: AzurePolicyEvaluation[],
+  ): ProviderPullRequestCheck[] {
+    return evaluations.flatMap((evaluation) => {
+      const configuration = evaluation.configuration;
+      if (
+        !configuration ||
+        configuration.isDeleted ||
+        !configuration.isEnabled
+      ) {
+        return [];
+      }
+      const name =
+        configuration.type?.displayName?.trim() ||
+        configuration.settings?.displayName?.trim() ||
+        configuration.settings?.statusName?.trim() ||
+        "Policy";
+      return [
+        {
+          id: `policy-${configuration.id ?? evaluation.evaluationId ?? name}`,
+          name,
+          state: azurePolicyCheckState(evaluation.status ?? ""),
+          required: Boolean(configuration.isBlocking),
+        },
+      ];
+    });
+  }
+
   /** Keeps the newest status for each Azure policy or check context. */
   private normalizeStatuses(
     statuses: AzurePullStatus[],
+    statusesAreOptional = false,
   ): ProviderPullRequestCheck[] {
     const latestByName = new Map<string, AzurePullStatus>();
     for (const status of statuses) {
@@ -808,6 +899,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       state: this.statusState(status.state),
       description: status.description?.trim() || undefined,
       webUrl: status.targetUrl,
+      required: statusesAreOptional ? false : undefined,
     }));
   }
 
@@ -817,67 +909,6 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     if (state === "failed" || state === "error") return "failure";
     if (state === "pending") return "in_progress";
     return "neutral";
-  }
-
-  /** Interprets Azure mergeStatus for the completion-page complete button. */
-  private mergeState(pull: AzurePull) {
-    if (pull.status === "completed") {
-      return {
-        mergeable: true,
-        canMerge: false,
-        mergeBlockedReason: "Already completed",
-      };
-    }
-    if (pull.status === "abandoned") {
-      return {
-        mergeable: false,
-        canMerge: false,
-        mergeBlockedReason: "This pull request is abandoned",
-      };
-    }
-    if (pull.isDraft) {
-      return {
-        mergeable: null,
-        canMerge: false,
-        mergeBlockedReason: "Draft pull requests cannot be completed",
-      };
-    }
-    if (pull.mergeStatus === "conflicts") {
-      return {
-        mergeable: false,
-        canMerge: false,
-        mergeBlockedReason: "Has merge conflicts",
-      };
-    }
-    if (pull.mergeStatus === "rejectedByPolicy") {
-      return {
-        mergeable: null,
-        canMerge: false,
-        mergeBlockedReason: "Branch policies are not satisfied",
-      };
-    }
-    if (pull.mergeStatus === "failure") {
-      return {
-        mergeable: false,
-        canMerge: false,
-        mergeBlockedReason: "The merge could not be completed",
-      };
-    }
-    if (pull.mergeStatus === "queued") {
-      return {
-        mergeable: true,
-        canMerge: false,
-        mergeBlockedReason: "A merge is already queued",
-      };
-    }
-    if (pull.mergeStatus === "succeeded") {
-      return { mergeable: true, canMerge: true };
-    }
-    return {
-      mergeable: null,
-      canMerge: false,
-      mergeBlockedReason: "Mergeability is still being computed",
-    };
   }
 
   /** Converts a provider-specific pull request into ReviewDuck's normalized model. */

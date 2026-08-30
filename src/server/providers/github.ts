@@ -1,4 +1,9 @@
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
+import {
+  applyCheckRequiredFlags,
+  type GitHubReviewDecision,
+  githubMergeGate,
+} from "~/lib/provider-merge-gate";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   mapWithConcurrency,
@@ -172,6 +177,26 @@ interface GitHubReviewThreadsResponse {
     node?: {
       pullRequest?: {
         reviewThreads: GitHubReviewThreadsConnection;
+      } | null;
+    } | null;
+  };
+  errors?: { message: string }[];
+}
+interface GitHubStatusCheckNode {
+  __typename?: string;
+  databaseId?: number | null;
+  name?: string;
+  context?: string;
+  isRequired?: boolean;
+}
+interface GitHubMergeGateResponse {
+  data?: {
+    repository?: {
+      pullRequest?: {
+        reviewDecision?: GitHubReviewDecision | null;
+        statusCheckRollup?: {
+          contexts?: { nodes?: Array<GitHubStatusCheckNode | null> };
+        } | null;
       } | null;
     } | null;
   };
@@ -476,7 +501,7 @@ export class GitHubProvider implements PullRequestProvider {
       { headers: this.headers },
     );
     const sha = pull.head.sha;
-    const [checkRuns, combined] = await Promise.all([
+    const [checkRuns, combined, gate] = await Promise.all([
       optionalProviderFetch<GitHubCheckRuns>(
         this.name,
         `${this.apiUrl}/repositories/${repositoryExternalId}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`,
@@ -487,12 +512,25 @@ export class GitHubProvider implements PullRequestProvider {
         `${this.apiUrl}/repositories/${repositoryExternalId}/commits/${encodeURIComponent(sha)}/status`,
         { headers: this.headers },
       ),
+      this.mergeGateContext(repositoryExternalId, number),
     ]);
-    const checks = this.normalizeChecks(
-      checkRuns?.check_runs ?? [],
-      combined?.statuses ?? [],
+    const checks = applyCheckRequiredFlags(
+      this.normalizeChecks(
+        checkRuns?.check_runs ?? [],
+        combined?.statuses ?? [],
+      ),
+      gate?.requiredByName ?? new Map(),
+      gate?.requiredById,
     );
-    const merge = this.mergeState(pull);
+    const merge = githubMergeGate({
+      merged: Boolean(pull.merged_at),
+      closed: pull.state === "closed",
+      draft: pull.draft,
+      mergeable: pull.mergeable ?? null,
+      mergeableState: pull.mergeable_state,
+      reviewDecision: gate?.reviewDecision,
+      checks,
+    });
     return buildProviderLifecycle({
       checks,
       pullRequestState: pull.merged_at
@@ -1287,73 +1325,55 @@ export class GitHubProvider implements PullRequestProvider {
     );
   }
 
-  /** Interprets GitHub mergeable_state for the completion-page merge button. */
-  private mergeState(pull: GitHubPull) {
-    if (pull.merged_at) {
+  /**
+   * Loads GraphQL required-check flags and reviewDecision.
+   * REST mergeable_state is "blocked" while optional checks are still queued,
+   * so these fields are what let merge follow GitHub's own required-only rule.
+   */
+  private async mergeGateContext(repositoryExternalId: string, number: number) {
+    try {
+      const repository = await this.repository(repositoryExternalId);
+      const [owner, ...nameParts] = repository.full_name.split("/");
+      const name = nameParts.join("/");
+      if (!owner || !name) return undefined;
+      const response = await providerFetch<GitHubMergeGateResponse>(
+        this.name,
+        this.graphqlUrl(),
+        {
+          method: "POST",
+          headers: {
+            ...this.headers,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query:
+              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired } ... on StatusContext { context isRequired } } } } } } }",
+            variables: { owner, name, number },
+          }),
+        },
+      );
+      if (response.errors?.length || !response.data?.repository?.pullRequest) {
+        return undefined;
+      }
+      const pullRequest = response.data.repository.pullRequest;
+      const requiredByName = new Map<string, boolean>();
+      const requiredById = new Map<string, boolean>();
+      for (const node of pullRequest.statusCheckRollup?.contexts?.nodes ?? []) {
+        if (!node || typeof node.isRequired !== "boolean") continue;
+        if (node.databaseId != null) {
+          requiredById.set(`check-${node.databaseId}`, node.isRequired);
+        }
+        if (node.name) requiredByName.set(node.name, node.isRequired);
+        if (node.context) requiredByName.set(node.context, node.isRequired);
+      }
       return {
-        mergeable: true,
-        canMerge: false,
-        mergeBlockedReason: "Already merged",
+        reviewDecision: pullRequest.reviewDecision ?? null,
+        requiredByName,
+        requiredById,
       };
+    } catch {
+      return undefined;
     }
-    if (pull.state === "closed") {
-      return {
-        mergeable: false,
-        canMerge: false,
-        mergeBlockedReason: "This pull request is closed",
-      };
-    }
-    if (pull.draft) {
-      return {
-        mergeable: pull.mergeable ?? null,
-        canMerge: false,
-        mergeBlockedReason: "Draft pull requests cannot be merged",
-      };
-    }
-    const mergeable = pull.mergeable ?? null;
-    const mergeableState = pull.mergeable_state ?? "unknown";
-    if (mergeableState === "dirty" || mergeable === false) {
-      return {
-        mergeable: false,
-        canMerge: false,
-        mergeBlockedReason: "Has merge conflicts",
-      };
-    }
-    if (mergeableState === "blocked") {
-      return {
-        mergeable,
-        canMerge: false,
-        mergeBlockedReason: "Required checks or reviews are not satisfied",
-      };
-    }
-    if (mergeableState === "behind") {
-      return {
-        mergeable,
-        canMerge: false,
-        mergeBlockedReason: "Branch is behind the target and must be updated",
-      };
-    }
-    if (mergeableState === "unknown" || mergeable === null) {
-      return {
-        mergeable: null,
-        canMerge: false,
-        mergeBlockedReason: "Mergeability is still being computed",
-      };
-    }
-    if (
-      mergeableState === "clean" ||
-      mergeableState === "unstable" ||
-      mergeableState === "has_hooks"
-    ) {
-      return { mergeable: true, canMerge: true };
-    }
-    return {
-      mergeable,
-      canMerge: Boolean(mergeable),
-      mergeBlockedReason: mergeable
-        ? undefined
-        : "This pull request cannot be merged yet",
-    };
   }
 
   /** Maps a GitHub file status to a normalized change type. */

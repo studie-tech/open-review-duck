@@ -5,8 +5,8 @@ import type { ReviewMode } from "~/lib/review-files";
 import { cn } from "~/lib/utils";
 
 const options = [
-  { icon: Route, label: "Guided", value: "path" },
   { icon: Files, label: "Files", value: "files" },
+  { icon: Route, label: "Guided", value: "path" },
 ] as const;
 
 /** Compact, reusable navigation switch for the two projections of a review. */

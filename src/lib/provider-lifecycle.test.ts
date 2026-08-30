@@ -28,6 +28,19 @@ describe("providerCheckSummary", () => {
         { state: "neutral" },
       ]),
     ).toBe("passing");
+    expect(
+      providerCheckSummary([
+        { state: "success", required: true },
+        { state: "queued", required: false },
+        { state: "skipped", required: false },
+      ]),
+    ).toBe("passing");
+    expect(
+      providerCheckSummary([
+        { state: "queued", required: true },
+        { state: "success", required: false },
+      ]),
+    ).toBe("pending");
   });
 });
 
@@ -43,6 +56,12 @@ describe("provider lifecycle labels", () => {
     );
     expect(providerLifecycleSummaryLabel("failing", 1)).toBe("1 check failed");
     expect(providerLifecycleSummaryLabel("pending", 2)).toBe("Checks running");
+    expect(
+      providerLifecycleSummaryLabel("pending", 2, { canMerge: true }),
+    ).toBe("Checked & ready");
+    expect(
+      providerLifecycleSummaryLabel("passing", 3, { optionalPending: true }),
+    ).toBe("Checked & ready");
   });
 });
 

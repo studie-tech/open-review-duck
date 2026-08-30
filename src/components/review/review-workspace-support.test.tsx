@@ -23,6 +23,7 @@ import {
   aiConversationVisibility,
   ConceptMoveDialog,
   CopyRepositoryUrlButton,
+  CopyReviewPathButton,
   conceptFileCardsInReadingOrder,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
@@ -36,15 +37,20 @@ import {
   ReviewConceptFileCardHeader,
   ReviewConceptFileCardPreview,
   ReviewConceptMemberPreview,
+  ReviewFileUnitMarker,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   rememberAiConversationVisibility,
+  reviewCardFocusStartLine,
   reviewCardMemberForLine,
   reviewCardRanges,
+  reviewedFileCard,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
   SplitActionButton,
+  withoutDeletedAiQuestions,
+  withoutDeletedLiveAiQuestions,
 } from "./review-workspace-support";
 
 vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
@@ -226,12 +232,49 @@ describe("ReviewConceptMemberPreview", () => {
     );
 
     expect(screen.queryByText("Open diff")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("example · 2 changed lines · 33 B snippet"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Copy file path" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
     expect(screen.getByRole("article")).toHaveTextContent("return answer;");
     await userEvent.click(
       screen.getByRole("button", { name: "Select example" }),
     );
     expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it("shows the file size on a member card when the file size is known", () => {
+    render(
+      <ReviewConceptMemberPreview
+        unit={
+          {
+            id: "unit-1",
+            path: "src/example.ts",
+            name: "example",
+            changedLineCount: 2,
+            changeType: "added",
+            previousSource: null,
+            source: "const answer = 42;",
+            startLine: 10,
+            language: "typescript",
+            kind: "function",
+          } as never
+        }
+        index={1}
+        count={3}
+        sourceAvailable
+        sourceBytes={12_288}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("example · 2 changed lines · 12 KB"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/snippet/)).not.toBeInTheDocument();
   });
 
   it("uses a quiet loading state while private source is still pending", () => {
@@ -553,6 +596,57 @@ describe("same-file concept cards", () => {
     ).toBe("next");
   });
 
+  it("opens a new unit added after a revision in a partially reviewed card", () => {
+    const members = [
+      {
+        id: "old",
+        status: "signed_off",
+        revisionState: "unchanged",
+        startLine: 1,
+      },
+      {
+        id: "added",
+        status: "pending",
+        revisionState: "new",
+        startLine: 84,
+      },
+    ];
+
+    expect(actionableReviewCardMember(members)?.id).toBe("added");
+    expect(reviewedFileCard(members)).toBe(false);
+    expect(reviewCardFocusStartLine(members)).toBe(84);
+  });
+
+  it("opens an updated unit that needs re-review before signed-off siblings", () => {
+    expect(
+      actionableReviewCardMember([
+        { id: "old", status: "signed_off", revisionState: "unchanged" },
+        { id: "rewritten", status: "changed", revisionState: "updated" },
+      ])?.id,
+    ).toBe("rewritten");
+    expect(
+      reviewedFileCard([
+        { status: "signed_off", revisionState: "unchanged" },
+        { status: "changed", revisionState: "updated" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("does not treat a signed-off new unit as still outstanding", () => {
+    expect(
+      reviewedFileCard([
+        { status: "signed_off", revisionState: "unchanged" },
+        { status: "signed_off", revisionState: "new" },
+      ]),
+    ).toBe(true);
+    expect(
+      actionableReviewCardMember([
+        { id: "old", status: "signed_off", revisionState: "unchanged" },
+        { id: "added", status: "signed_off", revisionState: "new" },
+      ])?.id,
+    ).toBe("old");
+  });
+
   it("keeps the gap visible but outside both atomic review ranges", () => {
     const sameFile = [units[0], units[2]] as never;
 
@@ -670,6 +764,25 @@ describe("same-file concept cards", () => {
     expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
   });
 
+  it("does not show Reviewed when a new-since-sync unit is still outstanding", () => {
+    render(
+      <ReviewConceptFileCardHeader
+        members={
+          [
+            { ...units[0], status: "signed_off", revisionState: "unchanged" },
+            { ...units[2], status: "pending", revisionState: "new" },
+          ] as never
+        }
+        index={0}
+        count={1}
+        selected
+      />,
+    );
+
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+    expect(screen.getByText("1 remaining")).toBeInTheDocument();
+  });
+
   it("can label a files-mode card as a file in the stack", () => {
     render(
       <ReviewConceptFileCardHeader
@@ -678,6 +791,7 @@ describe("same-file concept cards", () => {
         count={12}
         selected={false}
         itemLabel="File"
+        sourceBytes={2_048}
       />,
     );
 
@@ -686,10 +800,310 @@ describe("same-file concept cards", () => {
     expect(screen.getByText(/in this file/)).toBeInTheDocument();
     expect(screen.queryByText(/in this card/)).not.toBeInTheDocument();
     expect(
+      screen.getByText(
+        "Reviewing 1 individual unit in this file · 1 changed lines · 2 KB",
+      ),
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole("button", {
         name: "Select review file for src/preview.ts",
       }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Copy file path" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the file size on a binary file card header", () => {
+    render(
+      <ReviewConceptFileCardHeader
+        members={
+          [
+            {
+              ...units[0],
+              path: "assets/farming/farm-background-v2.png",
+              name: "farm-background-v2.png",
+              kind: "binary",
+              language: "text",
+              source: "Binary file — content is not displayed.",
+            },
+          ] as never
+        }
+        index={0}
+        count={4}
+        selected
+        itemLabel="File"
+        sourceBytes={1_200_000}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Reviewing 1 individual unit in this file · 1 changed lines · 1.1 MB",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("omits file size from the card subtitle when the size is unknown", () => {
+    render(
+      <ReviewConceptFileCardHeader
+        members={[units[0]] as never}
+        index={0}
+        count={1}
+        selected={false}
+        itemLabel="File"
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Reviewing 1 individual unit in this file · 1 changed lines",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("copies the card path without selecting the card", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const onSelect = vi.fn();
+    render(
+      <ReviewConceptFileCardHeader
+        members={[units[0]] as never}
+        index={0}
+        count={1}
+        selected={false}
+        itemLabel="File"
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("src/preview.ts");
+    });
+    expect(
+      screen.getByRole("button", { name: "File path copied" }),
+    ).toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("opens a signed-off file card closed and leaves an unreviewed one open", () => {
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={[{ ...units[0], status: "signed_off" }] as never}
+        index={0}
+        count={1}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reviewed")).toBeInTheDocument();
+    expect(screen.getByRole("article")).not.toHaveTextContent(
+      "const configuration = true;",
+    );
+    expect(screen.getByText(/Folded after review/)).toBeInTheDocument();
+    expect(highlight).not.toHaveBeenCalled();
+
+    cleanup();
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={[units[0]] as never}
+        index={0}
+        count={1}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("article")).toHaveTextContent(
+      "const configuration = true;",
+    );
+    expect(highlight).toHaveBeenCalled();
+  });
+
+  it("keeps a card open when a new unit arrives after older units were signed off", () => {
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            { ...units[0], status: "signed_off", revisionState: "unchanged" },
+            { ...units[2], status: "pending", revisionState: "new" },
+          ] as never
+        }
+        index={0}
+        count={1}
+        fileSource={[
+          "// setup",
+          "const configuration = true;",
+          "const contextA = true;",
+          "const contextB = true;",
+          "const main = true;",
+        ].join("\n")}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+    expect(screen.getByRole("article")).toHaveTextContent("const main = true;");
+    expect(screen.queryByText(/Folded after review/)).not.toBeInTheDocument();
+  });
+
+  it("hides a large JSON card until the reviewer asks to see it", async () => {
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    const jsonLines = Array.from(
+      { length: 80 },
+      (_, index) => `  "row_${index}": ${index},`,
+    );
+    const fileSource = ["{", ...jsonLines, "}"].join("\n");
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "snapshot",
+              path: "app/drizzle/migrations/meta/0039_snapshot.json",
+              name: "0039_snapshot.json",
+              changedLineCount: 82,
+              changeType: "added",
+              previousSource: null,
+              source: fileSource,
+              startLine: 1,
+              endLine: 82,
+              language: "json",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        fileSource={fileSource}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("82 lines of json hidden")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Hidden so the review stays responsive/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Reviewing 1 individual unit in this file · 82 changed lines · \d+ KB/,
+      ),
+    ).toBeInTheDocument();
+    expect(highlight).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show file" }));
+    expect(screen.getByRole("article")).toHaveTextContent('"row_0": 0');
+    expect(highlight).toHaveBeenCalled();
+  });
+
+  it("lets the reviewer fold a file card back up after opening it", async () => {
+    render(
+      <ReviewConceptFileCardPreview
+        members={[{ ...units[0], status: "signed_off" }] as never}
+        index={0}
+        count={1}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Expand preview.ts" }),
+    );
+    expect(screen.getByRole("article")).toHaveTextContent(
+      "const configuration = true;",
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Collapse preview.ts" }),
+    );
+    expect(screen.getByRole("article")).not.toHaveTextContent(
+      "const configuration = true;",
+    );
+  });
+});
+
+describe("CopyReviewPathButton", () => {
+  /** Installs a clipboard the jsdom navigator does not expose. */
+  function mockClipboard(writeText: ReturnType<typeof vi.fn>) {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+  }
+
+  it("puts the file path on the clipboard", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    mockClipboard(writeText);
+    render(
+      <CopyReviewPathButton path="app/public/layouts/farming/farm-background-v2.png" />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "app/public/layouts/farming/farm-background-v2.png",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "File path copied" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when the clipboard refuses the path", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
+    mockClipboard(writeText);
+    render(<CopyReviewPathButton path="src/preview.ts" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+
+    await waitFor(() => {
+      expect(error).toHaveBeenCalledWith("Could not copy the file path");
+    });
+    expect(
+      screen.getByRole("button", { name: "Copy file path" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("ReviewFileUnitMarker", () => {
+  it("labels the unit as a section with its line span instead of a card title", () => {
+    render(
+      <ReviewFileUnitMarker
+        member={
+          {
+            id: "type-plot",
+            name: "TypePlot",
+            startLine: 9908,
+            endLine: 9936,
+            status: "pending",
+            revisionState: "unchanged",
+          } as never
+        }
+      />,
+    );
+
+    expect(screen.queryByText("Review unit")).not.toBeInTheDocument();
+    expect(screen.getByText("TypePlot")).toBeInTheDocument();
+    expect(screen.getByText("L9908–9936")).toBeInTheDocument();
+    expect(screen.getByText("Not reviewed")).toBeInTheDocument();
+    expect(
+      screen.getByText("TypePlot").closest("[data-review-unit-start]"),
+    ).toHaveAttribute("data-review-unit-start", "type-plot");
   });
 });
 
@@ -1168,6 +1582,37 @@ describe("AI conversation visibility", () => {
     expect(
       aiConversationVisibility(localStorage, "pr-invalid", "unit-1"),
     ).toBeUndefined();
+  });
+});
+
+describe("deleted AI conversation cache", () => {
+  it("removes the discarded jobs from the persisted question list", () => {
+    expect(
+      withoutDeletedAiQuestions(
+        [
+          { id: "keep", question: "Still here" },
+          { id: "gone", question: "Delete me" },
+        ],
+        ["gone"],
+      ),
+    ).toEqual([{ id: "keep", question: "Still here" }]);
+  });
+
+  it("leaves an unloaded question query untouched", () => {
+    expect(withoutDeletedAiQuestions(undefined, ["gone"])).toBeUndefined();
+  });
+
+  it("drops live entries keyed by either the row id or the job id", () => {
+    expect(
+      withoutDeletedLiveAiQuestions(
+        [
+          { id: "live-1", jobId: "job-1" },
+          { id: "job-2" },
+          { id: "live-3", jobId: "job-3" },
+        ],
+        ["job-1", "job-2"],
+      ),
+    ).toEqual([{ id: "live-3", jobId: "job-3" }]);
   });
 });
 
@@ -1778,6 +2223,29 @@ describe("SideBySideUnitDiff", () => {
     unchangedLine.focus();
     await user.keyboard("{Enter}");
     expect(selectLine).toHaveBeenLastCalledWith(13);
+  });
+
+  it("renders a file-mode unit label before the line it opens", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={'export const TypePlot = pgTable(\n  "type_plot",\n);'}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={9908}
+        currentFocusStartLine={9908}
+        currentFocusEndLine={9910}
+        onSelectReviewLine={vi.fn()}
+        renderBeforeLine={(line) =>
+          line === 9908 ? <div>TypePlot section</div> : null
+        }
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Added code diff" });
+    expect(diff.textContent?.indexOf("TypePlot section")).toBeLessThan(
+      diff.textContent?.indexOf("export const TypePlot") ?? -1,
+    );
   });
 
   it("uses one full-width pull-request pane for pure additions", async () => {

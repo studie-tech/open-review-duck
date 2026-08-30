@@ -19,6 +19,7 @@ export function HighlightedSourceLines({
   selectedRange,
   onSelectLine,
   renderAfterLine,
+  renderBeforeLine,
 }: {
   lines: HighlightedLine[];
   startLine: number;
@@ -28,6 +29,7 @@ export function HighlightedSourceLines({
   selectedRange?: { startLine: number; endLine: number };
   onSelectLine?: (line: number, extend: boolean) => void;
   renderAfterLine?: (line: number) => ReactNode;
+  renderBeforeLine?: (line: number) => ReactNode;
 }) {
   const reviewedRanges =
     focusRanges ?? (focusRange === undefined ? [] : [focusRange]);
@@ -54,6 +56,7 @@ export function HighlightedSourceLines({
         );
         return (
           <Fragment key={lineNumber}>
+            {renderBeforeLine?.(lineNumber)}
             <div
               data-source-line={lineNumber}
               className={cn(

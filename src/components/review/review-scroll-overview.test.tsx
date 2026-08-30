@@ -132,6 +132,25 @@ describe("shouldShowReviewScrollOverview", () => {
       true,
     );
   });
+
+  it("keeps a mixed file mapped after the reviewer opens the whole file", () => {
+    expect(
+      shouldShowReviewScrollOverview(
+        mixed,
+        { end: 1, start: 0 },
+        {
+          revealWholeFile: true,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowReviewScrollOverview(
+        [{ kind: "added" }, { kind: "added" }],
+        { end: 1, start: 0 },
+        { revealWholeFile: true },
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("seekOverviewRatio", () => {

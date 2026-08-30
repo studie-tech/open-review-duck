@@ -1,3 +1,4 @@
+import { checkIsPending, mergeGatingChecks } from "~/lib/provider-merge-gate";
 import type {
   ProviderCheckState,
   ProviderCheckSummary,
@@ -5,20 +6,15 @@ import type {
   ProviderPullRequestLifecycle,
 } from "~/server/providers/types";
 
-const PENDING_CHECK_STATES = new Set<ProviderCheckState>([
-  "queued",
-  "in_progress",
-]);
-
 /** Rolls individual check states into the badge shown after a review. */
 export function providerCheckSummary(
-  checks: readonly Pick<ProviderPullRequestCheck, "state">[],
+  checks: readonly Pick<ProviderPullRequestCheck, "state" | "required">[],
 ): ProviderCheckSummary {
   if (checks.length === 0) return "empty";
+  const gating = mergeGatingChecks(checks);
+  if (gating.some((check) => check.state === "failure")) return "failing";
   if (checks.some((check) => check.state === "failure")) return "failing";
-  if (checks.some((check) => PENDING_CHECK_STATES.has(check.state))) {
-    return "pending";
-  }
+  if (gating.some((check) => checkIsPending(check.state))) return "pending";
   return "passing";
 }
 
@@ -53,12 +49,16 @@ export function providerCheckStateLabel(state: ProviderCheckState) {
 export function providerLifecycleSummaryLabel(
   summary: ProviderCheckSummary,
   checkCount: number,
+  options?: { canMerge?: boolean; optionalPending?: boolean },
 ) {
   if (summary === "failing") {
     return checkCount === 1 ? "1 check failed" : "Checks failed";
   }
-  if (summary === "pending") return "Checks running";
+  if (summary === "pending") {
+    return options?.canMerge ? "Checked & ready" : "Checks running";
+  }
   if (summary === "passing") {
+    if (options?.optionalPending) return "Checked & ready";
     return checkCount === 1 ? "Check passed" : "All checks passed";
   }
   return "No checks reported";

@@ -78,6 +78,42 @@ describe("ProviderLifecycle", () => {
     expect(onMerge).toHaveBeenCalledOnce();
   });
 
+  it("keeps merge enabled while only optional checks are still queued", () => {
+    render(
+      <ProviderLifecycle
+        state={{
+          ...githubLifecycle,
+          canMerge: true,
+          summary: "passing",
+          checks: [
+            {
+              id: "check-1",
+              name: "ci / test",
+              state: "success",
+              required: true,
+            },
+            {
+              id: "check-2",
+              name: "deploy preview",
+              state: "queued",
+              required: false,
+            },
+          ],
+        }}
+        loading={false}
+        mutationPending={false}
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Checked & ready")).toBeVisible();
+    expect(
+      screen.getByText(/still allows merging this revision/i),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled();
+  });
+
   it("disables merge when the provider is blocked and explains why", () => {
     render(
       <ProviderLifecycle
