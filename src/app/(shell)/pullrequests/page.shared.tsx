@@ -6,6 +6,9 @@ import { api } from "~/trpc/server";
 export default async function PullRequestsPage() {
   await protectApplicationRoute();
   return (
-    <PullRequestsContent initialPullRequests={await api.review.dashboard()} />
+    <PullRequestsContent
+      initialPullRequests={await api.review.dashboard()}
+      fetchedAt={Date.now()}
+    />
   );
 }
