@@ -65,7 +65,7 @@ import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
-type Monitor = RouterOutputs["repoReviews"]["list"][number];
+type Monitor = RouterOutputs["repoReviews"]["get"];
 type RuleSeverity = "critical" | "high" | "medium" | "low";
 const CONTEXT_PAGE_LINES = 20;
 
@@ -904,7 +904,7 @@ export function RepositoryReader({
             <GitBranch className="size-3" /> {monitor.branch}
             <span>·</span>
             <span className="font-mono">
-              {monitor.snapshot?.headSha.slice(0, 7)}
+              {initialData.snapshot?.headSha.slice(0, 7)}
             </span>
           </div>
         </div>

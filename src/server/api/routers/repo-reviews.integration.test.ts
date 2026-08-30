@@ -234,3 +234,20 @@ describe("repository report deletion", () => {
     ).resolves.toMatchObject({ status: "running" });
   });
 });
+
+describe("repoReviews.get", () => {
+  it("returns one monitor to its workspace and hides it from everyone else", async () => {
+    await expect(
+      caller(fixture.userId).get({ monitorId: fixture.monitorId }),
+    ).resolves.toEqual({
+      id: fixture.monitorId,
+      branch: "main",
+      pullRequestId: fixture.pullRequestId,
+      repositoryOwner: "reviewduck",
+      repositoryName: "report-deletion",
+    });
+    await expect(
+      caller(fixture.otherUserId).get({ monitorId: fixture.monitorId }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
