@@ -1345,7 +1345,7 @@ describe("InlineCommentComposer", () => {
 });
 
 describe("InlineAiQuestion", () => {
-  it("can restore a saved conversation without stealing keyboard focus", () => {
+  it("can restore a saved conversation without stealing keyboard focus", async () => {
     const priorControl = document.createElement("button");
     document.body.append(priorControl);
     priorControl.focus();
@@ -1375,7 +1375,9 @@ describe("InlineAiQuestion", () => {
       />,
     );
 
-    expect(screen.getByText("It narrows the retry boundary.")).toBeVisible();
+    expect(
+      await screen.findByText("It narrows the retry boundary."),
+    ).toBeVisible();
     expect(priorControl).toHaveFocus();
     priorControl.remove();
   });
@@ -1411,7 +1413,7 @@ describe("InlineAiQuestion", () => {
 
     expect(screen.getByText("Ask AI about line 17")).toBeInTheDocument();
     expect(
-      screen.getByText("The PR adds a bounded retry guard."),
+      await screen.findByText("The PR adds a bounded retry guard."),
     ).toBeInTheDocument();
     const input = screen.getByRole("textbox", {
       name: "Ask AI about line 17",

@@ -26,6 +26,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   Fragment,
@@ -83,7 +84,6 @@ import {
 import { useImportStatements } from "~/lib/tree-sitter-import-navigation";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
-import { ProviderCommentBody } from "./provider-comment-body";
 import {
   ReviewCardPathTitle,
   ReviewFileCardHeader,
@@ -97,6 +97,18 @@ type ReviewUnit = WorkspaceData["units"][number];
 
 type ProviderConversationThread =
   RouterOutputs["review"]["providerConversations"]["threads"][number];
+
+/**
+ * Splits the Markdown renderer out of the review page's first-load bundle.
+ *
+ * react-markdown pulls in the whole remark/rehype/parse5 closure, and every
+ * render site here is behind something the reviewer has to trigger — a
+ * finished AI job, a fetched provider conversation, an opened dialog — so
+ * nothing renders it before the first diff row is interactive.
+ */
+const ProviderCommentBody = dynamic(() =>
+  import("./provider-comment-body").then((m) => m.ProviderCommentBody),
+);
 
 export const INITIAL_PATH_ITEMS = 10;
 export const PATH_PAGE_SIZE = 20;
