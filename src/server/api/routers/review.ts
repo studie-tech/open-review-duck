@@ -5422,10 +5422,9 @@ export const reviewRouter = createTRPCRouter({
     ),
 
   gamification: protectedProcedure.query(async ({ ctx }) => {
-    const user = await ctx.db.query.users.findFirst({
-      where: eq(users.id, ctx.auth.userId),
-    });
-    const reviewEvents = await ctx.db
+    // A reviewer signs the same semantic hash off once per revision, so the
+    // distinct triple is the unit of review activity the totals count.
+    const reviewEvents = ctx.db
       .selectDistinct({
         semanticHash: signOffs.semanticHash,
         signedOffAt: signOffs.signedOffAt,
@@ -5437,16 +5436,25 @@ export const reviewRouter = createTRPCRouter({
           eq(signOffs.userId, ctx.auth.userId),
           isNull(signOffs.invalidatedAt),
         ),
-      );
+      )
+      .as("review_events");
+    const [user, [totals]] = await Promise.all([
+      ctx.db.query.users.findFirst({
+        where: eq(users.id, ctx.auth.userId),
+      }),
+      ctx.db
+        .select({
+          signOffCount: sql<number>`count(*)`,
+          reviewSeconds: sql<number>`coalesce(sum(${reviewEvents.durationSeconds}), 0)`,
+        })
+        .from(reviewEvents),
+    ]);
     return {
       currentStreak: user?.currentStreak ?? 0,
       longestStreak: user?.longestStreak ?? 0,
       experiencePoints: user?.experiencePoints ?? 0,
-      totalSignOffs: reviewEvents.length,
-      reviewSeconds: reviewEvents.reduce(
-        (total, event) => total + event.durationSeconds,
-        0,
-      ),
+      totalSignOffs: Number(totals?.signOffCount ?? 0),
+      reviewSeconds: Number(totals?.reviewSeconds ?? 0),
     };
   }),
 });
