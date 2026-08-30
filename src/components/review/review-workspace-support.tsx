@@ -3465,14 +3465,44 @@ export function providerLabel(
 }
 
 /**
- * Copies the repository URL from the review title without leaving the review.
+ * Provider page for this pull request, or the repository when that is all we have.
+ *
+ * GitHub, GitLab, and Azure already store the PR/MR web URL on the pull
+ * request. The header must not invent a second URL scheme.
+ */
+export function reviewProviderWebUrl(input: {
+  repositoryWebUrl: string;
+  webUrl?: string | null;
+}) {
+  const pullRequestUrl = input.webUrl?.trim();
+  return pullRequestUrl || input.repositoryWebUrl;
+}
+
+/**
+ * Copies the provider URL from the review title without leaving the review.
  *
  * The full URL is easy to miss in a truncated title line, and opening the
  * provider just to copy it is the expensive part. A check replaces the icon
  * once the clipboard has it, so the click does not need a toast to confirm.
  */
-export function CopyRepositoryUrlButton({ url }: { url: string }) {
+export function CopyRepositoryUrlButton({
+  kind = "repository",
+  url,
+}: {
+  kind?: "pull-request" | "repository";
+  url: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const copyLabel =
+    kind === "pull-request" ? "Copy pull request URL" : "Copy repository URL";
+  const copiedLabel =
+    kind === "pull-request"
+      ? "Pull request URL copied"
+      : "Repository URL copied";
+  const copyError =
+    kind === "pull-request"
+      ? "Could not copy the pull request URL"
+      : "Could not copy the repository URL";
 
   useEffect(() => {
     if (!copied) return;
@@ -3480,21 +3510,21 @@ export function CopyRepositoryUrlButton({ url }: { url: string }) {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  /** Puts the repository URL on the clipboard. */
+  /** Puts the provider URL on the clipboard. */
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
     } catch {
-      toast.error("Could not copy the repository URL");
+      toast.error(copyError);
     }
   }
 
   return (
     <button
       type="button"
-      aria-label={copied ? "Repository URL copied" : "Copy repository URL"}
-      title={copied ? "Copied" : "Copy repository URL"}
+      aria-label={copied ? copiedLabel : copyLabel}
+      title={copied ? "Copied" : copyLabel}
       onClick={() => void copy()}
       className="text-fog hover:text-mist grid size-5 shrink-0 place-items-center rounded transition hover:bg-surface-subtle"
     >

@@ -906,6 +906,7 @@ import {
   ReviewUnitViewOptions,
   relatedReviewRanges,
   rememberAiConversationVisibility,
+  reviewProviderWebUrl,
   reviewCardMemberForLine,
   reviewCardRanges,
   reviewedFileCard,
@@ -1448,6 +1449,7 @@ export function ReviewWorkspace({
     setSelectedCardStuck((current) => (current === next ? current : next));
   }, []);
   const selectedCardPinKey = `${reviewMode}:${activeConceptCardIndex}:${activeUnit?.id ?? ""}:${activeUnit?.startLine ?? ""}`;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-pin after the selected file hydrates so the card has its real height
   useLayoutEffect(() => {
     if (!activeUnit?.id || !selectedCardPinKey) return;
     const pane = codeScrollRef.current;
@@ -6618,6 +6620,11 @@ export function ReviewWorkspace({
     );
   }
 
+  const reviewHeaderUrl = reviewProviderWebUrl(initialData.pullRequest);
+  const reviewHeaderCopiesPullRequest = Boolean(
+    initialData.pullRequest.webUrl?.trim(),
+  );
+
   return (
     // `overflow: clip` rather than `hidden`: hidden still forms a scroll
     // port, so focusing a visually-hidden file checkbox can scroll this
@@ -6642,16 +6649,19 @@ export function ReviewWorkspace({
           </p>
           <div className="flex min-w-0 items-center gap-1">
             <a
-              href={initialData.pullRequest.repositoryWebUrl}
+              href={reviewHeaderUrl}
               target="_blank"
               rel="noreferrer"
-              title={initialData.pullRequest.repositoryWebUrl}
+              title={reviewHeaderUrl}
               className="text-fog hover:text-mist min-w-0 truncate text-[10px] hover:underline"
             >
-              {initialData.pullRequest.repositoryWebUrl}
+              {reviewHeaderUrl}
             </a>
             <CopyRepositoryUrlButton
-              url={initialData.pullRequest.repositoryWebUrl}
+              kind={
+                reviewHeaderCopiesPullRequest ? "pull-request" : "repository"
+              }
+              url={reviewHeaderUrl}
             />
           </div>
         </div>

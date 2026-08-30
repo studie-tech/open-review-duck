@@ -42,6 +42,7 @@ import {
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   rememberAiConversationVisibility,
+  reviewProviderWebUrl,
   reviewCardFocusStartLine,
   reviewCardMemberForLine,
   reviewCardRanges,
@@ -2929,6 +2930,38 @@ describe("SplitActionButton", () => {
   });
 });
 
+describe("reviewProviderWebUrl", () => {
+  it("prefers the stored GitHub, GitLab, and Azure pull-request pages", () => {
+    expect(
+      reviewProviderWebUrl({
+        repositoryWebUrl: "https://github.com/studie-tech/TheNinjaRPG",
+        webUrl: "https://github.com/studie-tech/TheNinjaRPG/pull/79",
+      }),
+    ).toBe("https://github.com/studie-tech/TheNinjaRPG/pull/79");
+    expect(
+      reviewProviderWebUrl({
+        repositoryWebUrl: "https://gitlab.com/acme/app",
+        webUrl: "https://gitlab.com/acme/app/-/merge_requests/123",
+      }),
+    ).toBe("https://gitlab.com/acme/app/-/merge_requests/123");
+    expect(
+      reviewProviderWebUrl({
+        repositoryWebUrl: "https://dev.azure.com/acme/project/_git/app",
+        webUrl: "https://dev.azure.com/acme/project/_git/app/pullrequest/456",
+      }),
+    ).toBe("https://dev.azure.com/acme/project/_git/app/pullrequest/456");
+  });
+
+  it("falls back to the repository URL when the pull request has no page", () => {
+    expect(
+      reviewProviderWebUrl({
+        repositoryWebUrl: "https://github.com/studie-tech/TheNinjaRPG",
+        webUrl: "  ",
+      }),
+    ).toBe("https://github.com/studie-tech/TheNinjaRPG");
+  });
+});
+
 describe("CopyRepositoryUrlButton", () => {
   /** Installs a clipboard the jsdom navigator does not expose. */
   function mockClipboard(writeText: ReturnType<typeof vi.fn>) {
@@ -2956,6 +2989,30 @@ describe("CopyRepositoryUrlButton", () => {
     });
     expect(
       screen.getByRole("button", { name: "Repository URL copied" }),
+    ).toBeInTheDocument();
+  });
+
+  it("puts the pull request URL on the clipboard", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    mockClipboard(writeText);
+    render(
+      <CopyRepositoryUrlButton
+        kind="pull-request"
+        url="https://github.com/studie-tech/TheNinjaRPG/pull/79"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy pull request URL" }),
+    );
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "https://github.com/studie-tech/TheNinjaRPG/pull/79",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Pull request URL copied" }),
     ).toBeInTheDocument();
   });
 
