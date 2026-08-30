@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./index", () => ({ sourceObjectStore: mocks.sourceObjectStore }));
 
 import {
+  loadSourceBlobsByDigest,
   persistSourceBlob,
   pruneOrphanSourceBlobs,
   sourceDigest,
@@ -82,6 +83,93 @@ describe("source blob pruning", () => {
     expect(set).not.toHaveBeenCalled();
     expect(mocks.read).not.toHaveBeenCalled();
     expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("reuses a prefetched ready blob without its own dedup query", async () => {
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    const bytes = new TextEncoder().encode("prefetched");
+    const digest = sourceDigest(bytes);
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/prefetched",
+      digest,
+      updatedAt: new Date(),
+    };
+    const findFirst = vi.fn(async () => existing);
+    const database = { query: { sourceBlobs: { findFirst } } };
+
+    await expect(
+      persistSourceBlob(database as never, {
+        workspaceId: "workspace",
+        bytes,
+        knownBlobs: new Map([[digest, existing as never]]),
+      }),
+    ).resolves.toBe(existing);
+
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("still revalidates when the prefetched row is old", async () => {
+    mocks.put.mockReset();
+    mocks.read.mockReset();
+    const bytes = new TextEncoder().encode("stale prefetch");
+    mocks.read.mockResolvedValue(bytes);
+    const digest = sourceDigest(bytes);
+    const existing = {
+      id: "blob-id",
+      state: "ready",
+      storage: "local",
+      objectKey: "objects/stale",
+      digest,
+      updatedAt: new Date(0),
+    };
+    const returning = vi.fn(async () => [
+      { ...existing, updatedAt: new Date() },
+    ]);
+    const set = vi.fn(() => ({ where: vi.fn(() => ({ returning })) }));
+    const findFirst = vi.fn(async () => existing);
+    const database = {
+      query: { sourceBlobs: { findFirst } },
+      update: vi.fn(() => ({ set })),
+    };
+
+    await persistSourceBlob(database as never, {
+      workspaceId: "workspace",
+      bytes,
+      knownBlobs: new Map([[digest, existing as never]]),
+    });
+
+    expect(findFirst).toHaveBeenCalledOnce();
+    expect(mocks.read).toHaveBeenCalledOnce();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("loads every prefetched digest in one query per chunk", async () => {
+    const encoder = new TextEncoder();
+    const stored = sourceDigest(encoder.encode("stored"));
+    const missing = sourceDigest(encoder.encode("missing"));
+    const alsoStored = sourceDigest(encoder.encode("also stored"));
+    const findMany = vi.fn(async () => [
+      { digest: stored, id: "first" },
+      { digest: alsoStored, id: "third" },
+    ]);
+    const database = { query: { sourceBlobs: { findMany } } };
+
+    const blobs = await loadSourceBlobsByDigest(
+      database as never,
+      "workspace",
+      [stored, missing, alsoStored, stored],
+    );
+
+    expect(findMany).toHaveBeenCalledOnce();
+    expect(blobs.get(stored)?.id).toBe("first");
+    expect(blobs.get(missing)).toBeUndefined();
+    expect(blobs.get(alsoStored)?.id).toBe("third");
   });
 
   it("revalidates and refreshes an old deduplicated blob", async () => {

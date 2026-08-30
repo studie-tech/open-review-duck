@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { and, eq, lt, or, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { sourceBlobs } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
@@ -14,10 +14,64 @@ const DELETION_LEASE_MILLISECONDS = 15 * 60_000;
 const CONCURRENT_UPLOAD_POLL_MILLISECONDS = 250;
 const CONCURRENT_UPLOAD_WAIT_MILLISECONDS = 30_000;
 const READY_BLOB_REVALIDATE_MILLISECONDS = 24 * 60 * 60_000;
+/**
+ * Keeps one `inArray` under PostgreSQL's 65,535 bind-parameter ceiling.
+ *
+ * A full monorepo snapshot carries more digests than that in a single query,
+ * which would fail the whole synchronization, so they are bound in chunks.
+ */
+const DIGEST_LOOKUP_CHUNK_SIZE = 10_000;
 
 /** Returns the SHA-256 content identity used for source object deduplication. */
 export function sourceDigest(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Reports whether a ready row's object was verified recently enough to trust. */
+function readyBlobIsUsable(
+  blob: typeof sourceBlobs.$inferSelect,
+  storeKind: string,
+) {
+  return (
+    blob.state === "ready" &&
+    blob.storage === storeKind &&
+    Boolean(blob.objectKey) &&
+    Date.now() - blob.updatedAt.getTime() < READY_BLOB_REVALIDATE_MILLISECONDS
+  );
+}
+
+/**
+ * Loads the workspace rows already holding any of these content digests.
+ *
+ * A synchronization stores every file of the branch, and nearly all of them
+ * are unchanged content the workspace already holds. One batched lookup lets
+ * those calls skip the per-object dedup query and its round trip.
+ */
+export async function loadSourceBlobsByDigest(
+  db: Database,
+  workspaceId: string,
+  digests: readonly string[],
+) {
+  const unique = [...new Set(digests)];
+  const rows: (typeof sourceBlobs.$inferSelect)[] = [];
+  for (
+    let offset = 0;
+    offset < unique.length;
+    offset += DIGEST_LOOKUP_CHUNK_SIZE
+  ) {
+    rows.push(
+      ...(await db.query.sourceBlobs.findMany({
+        where: and(
+          eq(sourceBlobs.workspaceId, workspaceId),
+          inArray(
+            sourceBlobs.digest,
+            unique.slice(offset, offset + DIGEST_LOOKUP_CHUNK_SIZE),
+          ),
+        ),
+      })),
+    );
+  }
+  return new Map(rows.map((row) => [row.digest, row]));
 }
 
 /** Persists one immutable workspace-scoped object exactly once. */
@@ -28,6 +82,7 @@ export async function persistSourceBlob(
     bytes: Uint8Array;
     encoding?: string;
     mediaType?: string;
+    knownBlobs?: ReadonlyMap<string, typeof sourceBlobs.$inferSelect>;
   },
 ) {
   const digest = sourceDigest(input.bytes);
@@ -66,12 +121,7 @@ export async function persistSourceBlob(
     // pruning never removes a referenced ready row. Trust a recent successful
     // verification so a large repository sync does not make one provider
     // request and one database write for every unchanged file on every run.
-    if (
-      Date.now() - blob.updatedAt.getTime() <
-      READY_BLOB_REVALIDATE_MILLISECONDS
-    ) {
-      return blob;
-    }
+    if (readyBlobIsUsable(blob, store.kind)) return blob;
     // Presence is the only thing in doubt here, and this runs for every
     // deduplicated file of every sync. readSourceBlob would transfer and
     // rehash the whole object; it still verifies the digest on real reads.
@@ -139,6 +189,12 @@ export async function persistSourceBlob(
       .returning();
     return reclaimed;
   };
+  const prefetched = input.knownBlobs?.get(digest);
+  // Only the branch that already trusts a recent verification reads a row it
+  // did not just fetch. Every claim below still writes against the database's
+  // own view, so a prefetched row cannot decide a race.
+  if (prefetched && readyBlobIsUsable(prefetched, store.kind))
+    return prefetched;
   const existing = await db.query.sourceBlobs.findFirst({
     where: and(
       eq(sourceBlobs.workspaceId, input.workspaceId),
