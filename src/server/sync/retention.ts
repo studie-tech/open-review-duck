@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 import { pullRequests, repositories, reviewSnapshots } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 
@@ -65,6 +65,20 @@ export async function pruneExpiredReviewSnapshots(
   repositoryId?: string,
   deadline?: number,
 ) {
+  const boundaries = db
+    .select({
+      pullRequestId: reviewSnapshots.pullRequestId,
+      snapshotCount: sql<number>`count(*)`.as("snapshot_count"),
+      oldestCreatedAt: sql<Date>`min(${reviewSnapshots.createdAt})`.as(
+        "oldest_created_at",
+      ),
+    })
+    .from(reviewSnapshots)
+    .groupBy(reviewSnapshots.pullRequestId)
+    .as("snapshot_boundaries");
+  // Every scope below costs a transaction that takes an advisory lock, so
+  // Postgres narrows the walk to the pull requests that can lose a snapshot at
+  // all: one outside the age boundary, or one beyond the count boundary.
   const scopes = await db
     .select({
       repositoryId: repositories.id,
@@ -75,7 +89,19 @@ export async function pruneExpiredReviewSnapshots(
     })
     .from(repositories)
     .innerJoin(pullRequests, eq(pullRequests.repositoryId, repositories.id))
-    .where(repositoryId ? eq(repositories.id, repositoryId) : undefined);
+    .innerJoin(boundaries, eq(boundaries.pullRequestId, pullRequests.id))
+    .where(
+      and(
+        repositoryId ? eq(repositories.id, repositoryId) : undefined,
+        or(
+          gt(boundaries.snapshotCount, repositories.sourceRetentionSnapshots),
+          lt(
+            boundaries.oldestCreatedAt,
+            sql`now() - ${repositories.sourceRetentionDays} * interval '24 hours'`,
+          ),
+        ),
+      ),
+    );
   let deleted = 0;
   for (const scope of scopes) {
     const remainingMilliseconds = deadline
