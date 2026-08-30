@@ -19,12 +19,18 @@ import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
-  AI_QUICK_QUESTIONS,
+  CopyReviewPathButton,
+  ReviewFileUnitMarker,
   actionableReviewCardMember,
+  reviewCardFocusStartLine,
+  reviewCardRanges,
+  reviewedFileCard,
+} from "./review-file-card";
+import {
+  AI_QUICK_QUESTIONS,
   aiConversationVisibility,
   ConceptMoveDialog,
   CopyRepositoryUrlButton,
-  CopyReviewPathButton,
   conceptFileCardsInReadingOrder,
   conceptMembersInReadingOrder,
   InlineAiQuestion,
@@ -39,15 +45,11 @@ import {
   ReviewConceptFileCardHeader,
   ReviewConceptFileCardPreview,
   ReviewConceptMemberPreview,
-  ReviewFileUnitMarker,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   rememberAiConversationVisibility,
   reviewProviderWebUrl,
-  reviewCardFocusStartLine,
   reviewCardMemberForLine,
-  reviewCardRanges,
-  reviewedFileCard,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,

@@ -42,7 +42,7 @@ import {
   ReviewFileUnitMarker,
   actionableReviewCardMember,
   reviewCardRanges,
-} from "~/components/review/review-workspace-support";
+} from "~/components/review/review-file-card";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
