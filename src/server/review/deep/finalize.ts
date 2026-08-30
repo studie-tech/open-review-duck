@@ -347,11 +347,26 @@ export async function finalizeDeepReview(
       items.map((item) => item.id),
     );
     const ordered = orderFindings(surfaced);
-    for (const [orderIndex, finding] of ordered.entries()) {
+    if (ordered.length > 0) {
+      // The tree lock above is held until this transaction commits, so the
+      // whole ranking is frozen in one statement to keep that hold short.
       await tx
         .update(aiReviewFindings)
-        .set({ orderIndex })
-        .where(eq(aiReviewFindings.id, finding.id));
+        .set({
+          orderIndex: sql`case ${aiReviewFindings.id} ${sql.join(
+            ordered.map(
+              (finding, orderIndex) =>
+                sql`when ${finding.id} then ${orderIndex}::integer`,
+            ),
+            sql` `,
+          )} end`,
+        })
+        .where(
+          inArray(
+            aiReviewFindings.id,
+            ordered.map((finding) => finding.id),
+          ),
+        );
     }
 
     const usage = await rollUpTreeUsage(tx, parentJobId);
