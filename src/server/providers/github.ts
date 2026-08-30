@@ -33,6 +33,9 @@ interface GitHubRepository {
   private: boolean;
   html_url: string;
   default_branch: string;
+  allow_merge_commit?: boolean;
+  allow_squash_merge?: boolean;
+  allow_rebase_merge?: boolean;
 }
 interface GitHubUser {
   id: number;
@@ -513,6 +516,7 @@ export class GitHubProvider implements PullRequestProvider {
     pullRequestNumber: number;
     headSha: string;
   }) {
+    const repository = await this.repository(input.repositoryExternalId);
     await providerFetch<{ merged?: boolean }>(
       this.name,
       `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/${input.pullRequestNumber}/merge`,
@@ -524,7 +528,7 @@ export class GitHubProvider implements PullRequestProvider {
         },
         body: JSON.stringify({
           sha: input.headSha,
-          merge_method: "merge",
+          merge_method: this.mergeMethod(repository),
         }),
       },
     );
@@ -1270,6 +1274,17 @@ export class GitHubProvider implements PullRequestProvider {
     if (state === "pending") return "in_progress";
     if (state === "failure" || state === "error") return "failure";
     return "neutral";
+  }
+
+  /** Picks a merge method the repository still allows. */
+  private mergeMethod(repository: GitHubRepository) {
+    if (repository.allow_merge_commit !== false) return "merge" as const;
+    if (repository.allow_squash_merge !== false) return "squash" as const;
+    if (repository.allow_rebase_merge !== false) return "rebase" as const;
+    throw new ProviderError(
+      this.name,
+      "No merge method is enabled for this repository",
+    );
   }
 
   /** Interprets GitHub mergeable_state for the completion-page merge button. */

@@ -1898,6 +1898,19 @@ describe("provider normalization", () => {
             ],
           });
         }
+        if (url.endsWith("/repositories/42")) {
+          return jsonResponse({
+            id: 42,
+            name: "review",
+            full_name: "acme/review",
+            private: false,
+            html_url: "https://github.com/acme/review",
+            default_branch: "main",
+            allow_merge_commit: false,
+            allow_squash_merge: true,
+            allow_rebase_merge: false,
+          });
+        }
         if (url.endsWith("/merge") && init?.method === "PUT") {
           return jsonResponse({ merged: true, sha: "merge-sha" });
         }
@@ -1950,7 +1963,7 @@ describe("provider normalization", () => {
     );
     expect(JSON.parse(String(mergeRequest?.[1]?.body))).toEqual({
       sha: "head-sha",
-      merge_method: "merge",
+      merge_method: "squash",
     });
   });
 
@@ -2100,6 +2113,13 @@ describe("provider normalization", () => {
                 context: { name: "Build" },
                 creationDate: "2026-08-30T09:00:00Z",
               },
+              {
+                id: 3,
+                state: "succeeded",
+                description: "Policy succeeded",
+                context: { genre: "policy", name: "Build" },
+                creationDate: "2026-08-30T09:30:00Z",
+              },
             ],
           });
         }
@@ -2149,6 +2169,13 @@ describe("provider normalization", () => {
             name: "Build",
             state: "success",
             description: "Build recovered",
+            webUrl: undefined,
+          },
+          {
+            id: "status-3",
+            name: "Build",
+            state: "success",
+            description: "Policy succeeded",
             webUrl: undefined,
           },
         ],

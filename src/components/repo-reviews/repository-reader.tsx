@@ -67,6 +67,24 @@ type Monitor = RouterOutputs["repoReviews"]["list"][number];
 type RuleSeverity = "critical" | "high" | "medium" | "low";
 const CONTEXT_PAGE_LINES = 20;
 
+/** Restores optimistic file-review fields without dropping later source hydration. */
+function restoreFileToggleReviewState(
+  current: Workspace["units"],
+  rollback: Workspace["units"],
+) {
+  const previousById = new Map(rollback.map((unit) => [unit.id, unit]));
+  return current.map((unit) => {
+    const previous = previousById.get(unit.id);
+    if (!previous) return unit;
+    return {
+      ...unit,
+      status: previous.status,
+      changedSinceSignOff: previous.changedSinceSignOff,
+      signOffOrigin: previous.signOffOrigin,
+    };
+  });
+}
+
 /** Starts a file-scoped compliance rule beside the code that inspired it. */
 function newRuleForm(path: string) {
   return {
@@ -384,7 +402,9 @@ export function RepositoryReader({
     onError: (error) => {
       const rollback = fileToggleRollback.current;
       fileToggleRollback.current = undefined;
-      if (rollback) setUnits(rollback);
+      if (rollback) {
+        setUnits((current) => restoreFileToggleReviewState(current, rollback));
+      }
       setPendingFileId(undefined);
       toast.error("Could not save file progress", {
         description: error.message,
@@ -417,7 +437,9 @@ export function RepositoryReader({
     onError: (error) => {
       const rollback = fileToggleRollback.current;
       fileToggleRollback.current = undefined;
-      if (rollback) setUnits(rollback);
+      if (rollback) {
+        setUnits((current) => restoreFileToggleReviewState(current, rollback));
+      }
       setPendingFileId(undefined);
       toast.error("Could not return file to review", {
         description: error.message,

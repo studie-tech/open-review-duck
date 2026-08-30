@@ -58,6 +58,27 @@ describe("a definition worth showing", () => {
       definitionIsWhereTheNameWasRead(definition, { path: definition.path }),
     ).toBe(false);
   });
+
+  it("treats a scanned excerpt as the declaration only on its focus line", () => {
+    const scanned = {
+      endLine: 7,
+      focusLine: 3,
+      path: "quests.ts",
+      startLine: 1,
+    };
+    expect(
+      definitionIsWhereTheNameWasRead(scanned, {
+        line: 6,
+        path: scanned.path,
+      }),
+    ).toBe(false);
+    expect(
+      definitionIsWhereTheNameWasRead(scanned, {
+        line: 3,
+        path: scanned.path,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("a same-file constant the analyzer never stored", () => {

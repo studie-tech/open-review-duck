@@ -83,15 +83,19 @@ export function symbolPeekAttributes(symbol: string, line?: number) {
  * has nothing to look up: the answer is the lines already on screen.
  */
 export function definitionIsWhereTheNameWasRead(
-  definition: { endLine: number; path: string; startLine: number },
+  definition: {
+    endLine: number;
+    focusLine?: number;
+    path: string;
+    startLine: number;
+  },
   read: { line?: number; path: string },
 ) {
-  return (
-    read.line !== undefined &&
-    definition.path === read.path &&
-    read.line >= definition.startLine &&
-    read.line <= definition.endLine
-  );
+  if (read.line === undefined || definition.path !== read.path) return false;
+  if (definition.focusLine !== undefined) {
+    return read.line === definition.focusLine;
+  }
+  return read.line >= definition.startLine && read.line <= definition.endLine;
 }
 
 /** Lines of context kept above a scanned same-file declaration. */
