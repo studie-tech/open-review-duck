@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { safeRemoteFetch } from "~/server/security/remote-url";
-import { mapWithConcurrency, providerFetch, providerText } from "./http";
+import { providerFetch, providerText } from "./http";
 
 vi.mock("~/server/security/remote-url", () => ({
   safeRemoteFetch: vi.fn(),
@@ -21,25 +21,6 @@ describe("provider HTTP safeguards", () => {
     await expect(
       providerText("github", "https://example.com/large.ts", {}),
     ).resolves.toBeUndefined();
-  });
-
-  it("limits concurrent provider operations and preserves ordering", async () => {
-    let active = 0;
-    let maximumActive = 0;
-    const results = await mapWithConcurrency(
-      [1, 2, 3, 4, 5],
-      2,
-      async (item) => {
-        active += 1;
-        maximumActive = Math.max(maximumActive, active);
-        await Promise.resolve();
-        active -= 1;
-        return item * 2;
-      },
-    );
-
-    expect(maximumActive).toBe(2);
-    expect(results).toEqual([2, 4, 6, 8, 10]);
   });
 
   it("reports provider error responses", async () => {

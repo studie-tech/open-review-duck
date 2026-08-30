@@ -139,33 +139,6 @@ async function boundedResponseText(
   return content + decoder.decode();
 }
 
-/** Maps values with a bounded number of concurrent asynchronous operations. */
-export async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  concurrency: number,
-  operation: (item: T) => Promise<R>,
-) {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  /** Consumes the next item in a bounded-concurrency mapping operation. */
-  const worker = async () => {
-    while (true) {
-      const index = nextIndex++;
-      if (index >= items.length) return;
-      const item = items[index];
-      if (item === undefined) return;
-      results[index] = await operation(item);
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(Math.max(1, concurrency), items.length) },
-      worker,
-    ),
-  );
-  return results;
-}
-
 /** Performs a provider request and returns the validated response. */
 export async function providerResponse<T>(
   provider: ProviderName,
