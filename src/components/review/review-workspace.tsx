@@ -227,6 +227,26 @@ export function useTerminalReviewRefetch(
   }, [refetchAiUsage, refetchDeepReview, refetchDiscussion, status]);
 }
 
+interface PrefetchingRouter {
+  prefetch: (href: string) => void;
+}
+
+/** Warms the router cache for the exits a finished review offers. */
+export function useReviewExitPrefetch(
+  router: PrefetchingRouter,
+  destinations: { nextReviewId: string | undefined; reviewEnded: boolean },
+) {
+  const { nextReviewId, reviewEnded } = destinations;
+  useEffect(() => {
+    // The review page sits outside the shell, so no sidebar link has warmed
+    // either destination, and both are one deliberate click away in the footer
+    // and the completion panel once the review ends.
+    if (!reviewEnded) return;
+    router.prefetch("/pullrequests");
+    if (nextReviewId) router.prefetch(`/review/${nextReviewId}`);
+  }, [nextReviewId, reviewEnded, router]);
+}
+
 const findingSeverities = ["critical", "high", "medium", "low"] as const;
 const findingCategories = [
   "bug",
@@ -1828,6 +1848,10 @@ export function ReviewWorkspace({
     () => findNextReview(reviewQueue.data, initialData.pullRequest.id),
     [initialData.pullRequest.id, reviewQueue.data],
   );
+  useReviewExitPrefetch(router, {
+    nextReviewId: nextReview?.id,
+    reviewEnded: reviewComplete || reviewCaughtUp,
+  });
   useEffect(() => {
     sendReviewSession({
       type: reviewComplete ? "REVIEW_COMPLETED" : "REVIEW_REOPENED",
