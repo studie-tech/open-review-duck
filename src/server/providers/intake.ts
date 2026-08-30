@@ -8,6 +8,7 @@ import {
   reviewQueueItems,
   syncRuns,
 } from "@/drizzle/schema";
+import { mapWithLimit } from "~/lib/concurrency";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { assignPullRequestToQueue } from "~/server/review/queue";
@@ -26,6 +27,9 @@ type Database = typeof database;
 
 const AUTOMATIC_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 const MAX_REPOSITORIES_PER_PASS = 10;
+// Repository passes are independent, so a few run together to keep the
+// workspace reconciliation short without flooding the provider.
+const REPOSITORY_PASS_CONCURRENCY = 3;
 
 /** Reconciles one repository's configured PR intake policy. */
 export async function reconcileRepositoryIntake(
@@ -299,36 +303,38 @@ export async function reconcileWorkspaceIntake(
     limit: MAX_REPOSITORIES_PER_PASS,
     columns: { id: true, reviewIntakeMode: true },
   });
-  const results = [];
-  let stateChanges = 0;
-  let stateSyncs = 0;
-  for (const repository of workspaceRepositories) {
-    try {
-      const stateResult = await refreshRepositoryPullRequestStates(db, {
-        workspaceId,
-        repositoryId: repository.id,
-      });
-      stateChanges += stateResult.changed;
-      stateSyncs += stateResult.queued;
-    } catch {
-      // The repository row records the provider-state failure for diagnostics.
-    }
-    if (repository.reviewIntakeMode === "manual") continue;
-    try {
-      results.push(
-        await reconcileRepositoryIntake(db, {
+  const passes = await mapWithLimit(
+    workspaceRepositories,
+    REPOSITORY_PASS_CONCURRENCY,
+    async (repository) => {
+      const pass = { checked: 0, queued: 0, stateChanges: 0 };
+      try {
+        const stateResult = await refreshRepositoryPullRequestStates(db, {
           workspaceId,
           repositoryId: repository.id,
-        }),
-      );
-    } catch {
-      // The repository row records the safe failure summary for the settings UI.
-    }
-  }
+        });
+        pass.stateChanges = stateResult.changed;
+        pass.queued = stateResult.queued;
+      } catch {
+        // The repository row records the provider-state failure for diagnostics.
+      }
+      if (repository.reviewIntakeMode === "manual") return pass;
+      try {
+        const result = await reconcileRepositoryIntake(db, {
+          workspaceId,
+          repositoryId: repository.id,
+        });
+        if (!result.skipped) pass.checked = 1;
+        pass.queued += result.queued;
+      } catch {
+        // The repository row records the safe failure summary for the settings UI.
+      }
+      return pass;
+    },
+  );
   return {
-    checked: results.filter((result) => !result.skipped).length,
-    queued:
-      stateSyncs + results.reduce((total, result) => total + result.queued, 0),
-    stateChanges,
+    checked: passes.reduce((total, pass) => total + pass.checked, 0),
+    queued: passes.reduce((total, pass) => total + pass.queued, 0),
+    stateChanges: passes.reduce((total, pass) => total + pass.stateChanges, 0),
   };
 }

@@ -1,9 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  refreshRepositoryPullRequestStates: vi.fn(),
+}));
+
+vi.mock("./pull-request-state", () => ({
+  refreshRepositoryPullRequestStates: mocks.refreshRepositoryPullRequestStates,
+}));
+
+import type { db as database } from "~/server/db";
+import { reconcileWorkspaceIntake } from "./intake";
 import {
   automaticSyncSlots,
   shouldRetryFailedAutomaticSync,
   supportsAssignedIntake,
 } from "./intake-policy";
+
+type Database = typeof database;
 
 describe("repository pull-request intake", () => {
   it("rejects assigned mode for GitHub App installations", () => {
@@ -48,5 +61,35 @@ describe("repository pull-request intake", () => {
     expect(
       shouldRetryFailedAutomaticSync({ force: true, retryFailed: false }),
     ).toBe(false);
+  });
+});
+
+describe("workspace intake reconciliation", () => {
+  it("refreshes several repositories at once and sums their work", async () => {
+    const db = {
+      query: {
+        repositories: {
+          findMany: async () =>
+            Array.from({ length: 6 }, (_value, index) => ({
+              id: `repository-${index}`,
+              reviewIntakeMode: "manual" as const,
+            })),
+        },
+      },
+    } as unknown as Database;
+    let active = 0;
+    let peak = 0;
+    mocks.refreshRepositoryPullRequestStates.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
+      return { checked: true, changed: 1, queued: 2 };
+    });
+
+    const result = await reconcileWorkspaceIntake(db, "workspace-1");
+
+    expect(peak).toBeGreaterThan(1);
+    expect(result).toEqual({ checked: 0, queued: 12, stateChanges: 6 });
   });
 });
