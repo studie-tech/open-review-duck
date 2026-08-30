@@ -71,16 +71,11 @@ export async function refreshRepositoryPullRequestStates(
     const absent = tracked.filter(
       (pullRequest) => !openByNumber.has(pullRequest.number),
     );
-    for (let offset = 0; offset < absent.length; offset += 4) {
-      const batch = absent.slice(offset, offset + 4);
-      const remote = await Promise.all(
-        batch.map((pullRequest) =>
-          provider.getPullRequest(repository.externalId, pullRequest.number),
-        ),
-      );
-      for (const pullRequest of remote) {
-        remoteByNumber.set(pullRequest.number, pullRequest);
-      }
+    const absentRemotes = await mapWithLimit(absent, 4, (pullRequest) =>
+      provider.getPullRequest(repository.externalId, pullRequest.number),
+    );
+    for (const pullRequest of absentRemotes) {
+      remoteByNumber.set(pullRequest.number, pullRequest);
     }
 
     let changed = 0;
