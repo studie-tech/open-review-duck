@@ -1644,6 +1644,106 @@ function nearestMeasuredReviewLine(
   return below.line;
 }
 
+/** Renders the line-anchored composer for one inline provider comment. */
+export function InlineCommentComposer({
+  initialDraft,
+  line,
+  onCancel,
+  onDraftChange,
+  onPost,
+  path,
+  pending,
+  posting,
+  provider,
+}: {
+  initialDraft: string;
+  line: number;
+  onCancel: () => void;
+  onDraftChange: (value: string) => void;
+  onPost: (body: string) => void;
+  path: string;
+  pending: boolean;
+  posting: boolean;
+  provider: WorkspaceData["pullRequest"]["provider"];
+}) {
+  const input = useRef<HTMLTextAreaElement>(null);
+  // The composer keeps the comment text so a keystroke never re-renders the
+  // workspace tree; the parent only stores it so an unmount it did not ask
+  // for, such as a wait that failed, keeps what the reviewer already typed.
+  const [draft, setDraft] = useState(initialDraft);
+
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+
+  return (
+    <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <p className="text-cloud flex shrink-0 items-center gap-2 text-xs font-medium">
+          <MessageSquareText className="text-cyan size-3.5" />
+          Comment on {providerLabel(provider)} · line {line}
+        </p>
+        <span className="text-fog min-w-0 truncate text-right font-mono text-[9px]">
+          {path}
+        </span>
+      </div>
+      <textarea
+        ref={input}
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          onDraftChange(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          } else if (
+            event.key === "Enter" &&
+            (event.metaKey || event.ctrlKey) &&
+            draft.trim() &&
+            !pending
+          ) {
+            event.preventDefault();
+            onPost(draft);
+          }
+        }}
+        placeholder={`Write an inline ${providerLabel(provider)} comment…`}
+        rows={3}
+        className="bg-surface text-cloud focus:border-cyan/45 mt-3 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none"
+      />
+      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-fog flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] leading-4">
+          <span>Posts immediately to {providerLabel(provider)}.</span>
+          <span className="flex items-center gap-1">
+            <ShortcutHint shortcut={reviewShortcuts.postComment} />
+            post
+          </span>
+          <span>· Esc cancels</span>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!draft.trim() || pending}
+            onClick={() => onPost(draft)}
+          >
+            {posting ? (
+              <LoaderCircle className="size-3 animate-spin" />
+            ) : (
+              <Send className="size-3" />
+            )}
+            {posting ? "Posting…" : `Post to ${providerLabel(provider)}`}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Renders a line-anchored AI conversation that can move through review scope. */
 export function InlineAiQuestion({
   autoFocus = true,
