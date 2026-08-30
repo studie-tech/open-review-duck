@@ -181,7 +181,7 @@ function ReviewFileTreeRows({
   nodes,
   level,
   selectedPath,
-  pendingFileId,
+  pendingFileIds,
   expanded,
   onExpandedChange,
   onSelect,
@@ -190,7 +190,7 @@ function ReviewFileTreeRows({
   nodes: ReviewFileTreeNode[];
   level: number;
   selectedPath?: string;
-  pendingFileId?: string;
+  pendingFileIds?: ReadonlySet<string>;
   expanded: Set<string>;
   onExpandedChange: (path: string) => void;
   onSelect: (file: ReviewFileEntry) => void;
@@ -204,7 +204,7 @@ function ReviewFileTreeRows({
           file={node.file}
           level={level}
           selected={node.path === selectedPath}
-          pending={node.file.id === pendingFileId}
+          pending={Boolean(pendingFileIds?.has(node.file.id))}
           onSelect={onSelect}
           onToggle={onToggle}
         />
@@ -255,7 +255,7 @@ function ReviewFileTreeRows({
               nodes={node.children}
               level={level + 1}
               selectedPath={selectedPath}
-              pendingFileId={pendingFileId}
+              pendingFileIds={pendingFileIds}
               expanded={expanded}
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}
@@ -273,7 +273,7 @@ export function ReviewFilesPanel({
   files,
   search,
   selectedPath,
-  pendingFileId,
+  pendingFileIds,
   treeLabel = "Changed files",
   emptyLabel = "No changed files match this view.",
   onSelect,
@@ -282,7 +282,7 @@ export function ReviewFilesPanel({
   files: ReviewFileEntry[];
   search: string;
   selectedPath?: string;
-  pendingFileId?: string;
+  pendingFileIds?: ReadonlySet<string>;
   treeLabel?: string;
   emptyLabel?: string;
   onSelect: (file: ReviewFileEntry) => void;
@@ -462,7 +462,7 @@ export function ReviewFilesPanel({
               nodes={tree}
               level={0}
               selectedPath={selectedPath}
-              pendingFileId={pendingFileId}
+              pendingFileIds={pendingFileIds}
               expanded={expanded}
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}

@@ -495,6 +495,60 @@ describe("RepositoryReader", () => {
     expect(screen.getByRole("button", { name: /return file/i })).toBeDisabled();
   });
 
+  it("saves a second file while the first is still in flight", () => {
+    const first = makeUnit({
+      path: "src/first.ts",
+      snapshotFileId: "file-first",
+    });
+    const second = makeUnit({
+      path: "src/second.ts",
+      snapshotFileId: "file-second",
+    });
+    render(
+      <ShellHarness>
+        <RepositoryReader
+          initialData={makeData([first, second])}
+          monitor={monitor as never}
+        />
+      </ShellHarness>,
+    );
+    const firstBox = screen.getByRole("checkbox", {
+      name: /in src\/first\.ts/i,
+    });
+    const secondBox = screen.getByRole("checkbox", {
+      name: /in src\/second\.ts/i,
+    });
+    fireEvent.click(firstBox);
+    expect(firstBox).toBeDisabled();
+    expect(secondBox).toBeEnabled();
+    fireEvent.click(secondBox);
+    expect(mutationSpies.signOffMutate).toHaveBeenCalledTimes(2);
+    expect(mutationSpies.signOffMutate).toHaveBeenLastCalledWith({
+      snapshotFileId: "file-second",
+      durationSeconds: 0,
+    });
+    const options = mutationSpies.signOffOptions.mock.calls.at(-1)?.[0] as {
+      onError: (
+        error: { message: string },
+        variables: { snapshotFileId: string },
+      ) => void;
+    };
+    act(() => {
+      options.onError(
+        { message: "network down" },
+        {
+          snapshotFileId: "file-first",
+        },
+      );
+    });
+    expect(
+      screen.getByRole("checkbox", { name: /in src\/first\.ts/i }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /in src\/second\.ts/i }),
+    ).toBeChecked();
+  });
+
   it("returns every reviewed unit in a file to review together", () => {
     const unit = makeUnit({
       status: "signed_off",

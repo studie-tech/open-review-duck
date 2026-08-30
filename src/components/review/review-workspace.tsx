@@ -1148,8 +1148,10 @@ export function ReviewWorkspace({
     reviewed: boolean;
   }>();
   const [completedBrowsing, setCompletedBrowsing] = useState(false);
-  const [pendingFileId, setPendingFileId] = useState<string>();
-  const unreviewRollback = useRef<ReviewUnit[] | undefined>(undefined);
+  const [pendingFiles, setPendingFiles] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
@@ -2271,12 +2273,14 @@ export function ReviewWorkspace({
    * Sign-off uses the same optimistic queue as unit and card actions so a
    * reviewer can tick several files without waiting for each save. After a
    * sign-off the workspace opens the next outstanding file in the sidebar.
+   * Each return targets its own snapshot file, so returns are tracked per file
+   * and every other file stays clickable while one of them saves.
    */
   function toggleReviewFile(file: ReviewFileEntry) {
     if (file.totalUnits === 0 || file.waitingUnits > 0) return;
     if (file.state === "reviewed") {
       if (
-        pendingFileId ||
+        pendingFiles.has(file.id) ||
         file.units.some((unit) => signOffQueue.ids.has(unit.id))
       ) {
         return;
@@ -2284,13 +2288,17 @@ export function ReviewWorkspace({
       const signedIds = file.units
         .filter((unit) => unit.status === "signed_off")
         .map((unit) => unit.id);
-      unreviewRollback.current = units.filter((unit) =>
-        signedIds.includes(unit.id),
+      unreviewRollbacks.current.set(
+        file.id,
+        unitsRef.current.filter((unit) => signedIds.includes(unit.id)),
       );
-      const updated = optimisticallyUnreviewReviewUnits(units, signedIds);
+      const updated = optimisticallyUnreviewReviewUnits(
+        unitsRef.current,
+        signedIds,
+      );
       unitsRef.current = updated;
       setUnits(updated);
-      setPendingFileId(file.id);
+      setPendingFiles((current) => new Set(current).add(file.id));
       unreviewFile.mutate({
         snapshotFileId: file.id,
         sessionId,
@@ -2631,10 +2639,19 @@ export function ReviewWorkspace({
   ]);
   const signOff = api.review.signOff.useMutation();
   const signOffBatch = api.review.signOffBatch.useMutation();
+  /** Releases one saved file without disturbing the others still in flight. */
+  function resolvePendingFile(snapshotFileId: string) {
+    unreviewRollbacks.current.delete(snapshotFileId);
+    setPendingFiles((current) => {
+      const next = new Set(current);
+      next.delete(snapshotFileId);
+      return next;
+    });
+  }
+
   const unreviewFile = api.review.unreviewFile.useMutation({
     onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
       const unreviewed = new Set(unreviewedUnitIds);
-      unreviewRollback.current = undefined;
       setUnits((current) =>
         current.map((unit) =>
           unreviewed.has(unit.id)
@@ -2649,9 +2666,7 @@ export function ReviewWorkspace({
             : unit,
         ),
       );
-      setPendingFileId((current) =>
-        current === snapshotFileId ? undefined : current,
-      );
+      resolvePendingFile(snapshotFileId);
       setCompletedBrowsing(false);
       void Promise.all([
         utils.workspace.guidance.invalidate(),
@@ -2662,16 +2677,15 @@ export function ReviewWorkspace({
         description: `${unreviewedUnitIds.length} ${unreviewedUnitIds.length === 1 ? "unit is" : "units are"} back in the review path.`,
       });
     },
-    onError: (error) => {
-      const rollback = unreviewRollback.current;
-      unreviewRollback.current = undefined;
+    onError: (error, { snapshotFileId }) => {
+      const rollback = unreviewRollbacks.current.get(snapshotFileId);
       if (rollback) {
         const restored = new Map(rollback.map((unit) => [unit.id, unit]));
         setUnits((current) =>
           current.map((unit) => restored.get(unit.id) ?? unit),
         );
       }
-      setPendingFileId(undefined);
+      resolvePendingFile(snapshotFileId);
       toast.error("File could not be returned to review", {
         description: error.message,
       });
@@ -7261,7 +7275,7 @@ export function ReviewWorkspace({
               files={reviewFiles}
               search={pathSearch}
               selectedPath={completedBrowsing ? undefined : activeUnit.path}
-              pendingFileId={pendingFileId}
+              pendingFileIds={pendingFiles}
               onSelect={selectReviewFile}
               onToggle={toggleReviewFile}
             />
