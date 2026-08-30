@@ -141,18 +141,21 @@ beforeAll(async () => {
       unitId: fixture.carriedUnitId,
       userId: fixture.userId,
       semanticHash: "d".repeat(64),
+      durationSeconds: 45,
       signedOffAt: new Date("2026-03-01T00:00:00.000Z"),
     },
     {
       unitId: fixture.freshUnitId,
       userId: fixture.userId,
       semanticHash: "d".repeat(64),
+      durationSeconds: 30,
       signedOffAt: new Date("2026-03-03T00:00:00.000Z"),
     },
     {
       unitId: fixture.openUnitId,
       userId: fixture.userId,
       semanticHash: "d".repeat(64),
+      durationSeconds: 90,
       signedOffAt: new Date("2026-03-03T00:00:00.000Z"),
       invalidatedAt: new Date("2026-03-04T00:00:00.000Z"),
     },
@@ -160,12 +163,14 @@ beforeAll(async () => {
       unitId: fixture.openUnitId,
       userId: fixture.otherUserId,
       semanticHash: "d".repeat(64),
+      durationSeconds: 120,
       signedOffAt: new Date("2026-03-03T00:00:00.000Z"),
     },
     {
       unitId: fixture.fileUnitId,
       userId: fixture.userId,
       semanticHash: "d".repeat(64),
+      durationSeconds: 30,
       signedOffAt: new Date("2026-03-03T00:00:00.000Z"),
     },
   ]);
@@ -195,5 +200,23 @@ describe("dashboard review progress", () => {
     expect(
       rows.find(({ id }) => id === fixture.freshPullRequestId),
     ).toMatchObject({ totalUnits: 0, signedUnits: 0, carriedSignOffs: 0 });
+  });
+});
+
+describe("achievement totals", () => {
+  it("totals the reviewer's own distinct active sign-offs", async () => {
+    const stats = await createCaller({
+      db,
+      auth: { userId: fixture.userId, has: () => true },
+      headers: new Headers(),
+    }).gamification();
+
+    expect(stats).toMatchObject({
+      totalSignOffs: 2,
+      reviewSeconds: 75,
+      currentStreak: 0,
+      longestStreak: 0,
+      experiencePoints: 0,
+    });
   });
 });
