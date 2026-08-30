@@ -197,6 +197,27 @@ describe("parseImportReferences", () => {
     }
   });
 
+  it("returns the widest statement per import in source order", () => {
+    const lua = parseImportStatements(
+      'local support = require("./support")\nlocal fs = require("fs")',
+      "lua",
+    );
+    const typescript = parseImportStatements(
+      [
+        'import { alpha } from "./helpers";',
+        'import * as tools from "~/lib/tools";',
+        'import "./setup";',
+      ].join("\n"),
+      "typescript",
+    );
+
+    expect(lua.map(({ source }) => source)).toEqual([
+      'local support = require("./support")',
+      'local fs = require("fs")',
+    ]);
+    expect(typescript.map(({ startLine }) => startLine)).toEqual([1, 2, 3]);
+  });
+
   it("distinguishes import-only source and bindings used by a unit", () => {
     const imports = [
       "// Shared dependencies",

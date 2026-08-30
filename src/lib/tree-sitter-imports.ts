@@ -281,10 +281,18 @@ function staticModuleReference(source: string, node: SyntaxNode) {
   ];
 }
 
-/** Returns whether a candidate node is an actual import for its language. */
+/** Returns whether a node type can carry an import for its language. */
+function isImportStatementType(language: string, type: string) {
+  return Boolean(statementTypes[language as TreeSitterLanguage]?.has(type));
+}
+
+/**
+ * Returns whether a node of an import type is an actual import.
+ *
+ * Several languages spell imports with the same node they use for ordinary
+ * calls or declarations, so the type alone only narrows the candidates.
+ */
 function isLanguageImport(language: string, source: string, node: SyntaxNode) {
-  if (!statementTypes[language as TreeSitterLanguage]?.has(node.type))
-    return false;
   if (language === "shell") {
     const name = node.childForFieldName("name");
     return Boolean(name && [".", "source"].includes(syntaxText(source, name)));
@@ -315,40 +323,62 @@ function isLanguageImport(language: string, source: string, node: SyntaxNode) {
   return true;
 }
 
+/**
+ * Returns the outermost import nodes in depth-first source order.
+ *
+ * A file holds tens of thousands of named nodes and only a handful of imports,
+ * so the walk reads each node's type off the cursor and builds a node object
+ * only for the candidates. An import never nests inside another, so a match
+ * ends that branch and the result excludes anything a wider statement covers.
+ */
+function importNodes(source: string, language: string, root: SyntaxNode) {
+  const nodes: SyntaxNode[] = [];
+  const cursor = root.walk();
+  let complete = false;
+  while (!complete) {
+    let imported = false;
+    if (
+      isImportStatementType(language, cursor.nodeType) &&
+      cursor.nodeIsNamed
+    ) {
+      const node = cursor.currentNode;
+      imported = isLanguageImport(language, source, node);
+      if (imported) nodes.push(node);
+    }
+    if (!imported && cursor.gotoFirstChild()) continue;
+    if (cursor.gotoNextSibling()) continue;
+    while (true) {
+      if (!cursor.gotoParent()) {
+        complete = true;
+        break;
+      }
+      if (cursor.gotoNextSibling()) break;
+    }
+  }
+  cursor.delete();
+  return nodes;
+}
+
 /** Extracts complete import statements from a Tree-sitter syntax tree. */
 export function importStatementsFromTree(
   source: string,
   language: string,
   root: SyntaxNode,
 ) {
-  const nodes = descendants(root).filter((node) =>
-    isLanguageImport(language, source, node),
-  );
-  return nodes
-    .filter(
-      (node) =>
-        !nodes.some(
-          (parent) =>
-            parent !== node &&
-            parent.startIndex <= node.startIndex &&
-            parent.endIndex >= node.endIndex,
-        ),
-    )
-    .map((node): ImportStatement => {
-      const references =
-        language === "python"
-          ? pythonReferences(source, node)
-          : language === "javascript" || language === "typescript"
-            ? javascriptReferences(source, node)
-            : staticModuleReference(source, node);
-      return {
-        from: node.startIndex,
-        to: node.endIndex,
-        startLine: node.startPosition.row + 1,
-        endLine: node.endPosition.row + 1,
-        source: syntaxText(source, node),
-        references,
-      };
-    })
-    .sort((left, right) => left.from - right.from);
+  return importNodes(source, language, root).map((node): ImportStatement => {
+    const references =
+      language === "python"
+        ? pythonReferences(source, node)
+        : language === "javascript" || language === "typescript"
+          ? javascriptReferences(source, node)
+          : staticModuleReference(source, node);
+    return {
+      from: node.startIndex,
+      to: node.endIndex,
+      startLine: node.startPosition.row + 1,
+      endLine: node.endPosition.row + 1,
+      source: syntaxText(source, node),
+      references,
+    };
+  });
 }

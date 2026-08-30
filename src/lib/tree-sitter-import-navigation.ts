@@ -3,15 +3,36 @@ import type { ImportReference, ImportStatement } from "./import-navigation";
 import { withClientSyntaxTree } from "./syntax-highlighting";
 import { importStatementsFromTree } from "./tree-sitter-imports";
 
+// A unit and its expanded file context parse the same source, and reviewers
+// return to units they have already opened, so the bound has to hold the
+// sources one review keeps reachable rather than just the visible one.
+const IMPORT_PARSE_CACHE_LIMIT = 200;
+const importStatementPromises = new Map<string, Promise<ImportStatement[]>>();
+
+/** Identifies one import parse by its source and grammar. */
+function importParseKey(source: string, language: string) {
+  return `${language}\0${source}`;
+}
+
 /** Parses client-side import statements with the selected Tree-sitter grammar. */
 async function parseTreeSitterImportStatements(
   source: string,
   language: string,
 ) {
   if (language === "text") return [];
-  return withClientSyntaxTree(source, language, (root) =>
-    importStatementsFromTree(source, language, root),
-  );
+  const key = importParseKey(source, language);
+  let statements = importStatementPromises.get(key);
+  if (!statements) {
+    statements = withClientSyntaxTree(source, language, (root) =>
+      importStatementsFromTree(source, language, root),
+    );
+    importStatementPromises.set(key, statements);
+    if (importStatementPromises.size > IMPORT_PARSE_CACHE_LIMIT) {
+      const oldest = importStatementPromises.keys().next().value;
+      if (oldest) importStatementPromises.delete(oldest);
+    }
+  }
+  return statements;
 }
 
 /** Flattens client-side import statements into navigable symbol references. */
