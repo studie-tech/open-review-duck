@@ -44,14 +44,6 @@ export function actionableReviewCardMember<
   return members.find(outstandingReviewCardMember) ?? members[0];
 }
 
-/** Line a selected file card should bring into view for remaining work. */
-export function reviewCardFocusStartLine<Member extends ReviewCardMemberState>(
-  members: readonly Member[],
-  fallback = 1,
-) {
-  return actionableReviewCardMember(members)?.startLine ?? fallback;
-}
-
 /** Extracts the stored disjoint ranges for one side of a review concept. */
 export function relatedReviewRanges(
   unit: Pick<ReviewUnit, "relatedRanges"> | undefined,
