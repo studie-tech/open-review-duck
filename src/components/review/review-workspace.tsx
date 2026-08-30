@@ -1024,6 +1024,49 @@ function questionGroupsAt<Entry>(
   return index.get(line) ?? NO_QUESTION_GROUPS;
 }
 
+/**
+ * Applies one streamed answer update to the live AI question it names.
+ *
+ * The stream repeats the running job's progress while the model thinks, so an
+ * update often restates what the entry already holds. Returning the array it
+ * was given leaves the workspace state referentially equal, which is what
+ * keeps a repeated update from re-rendering the whole review tree.
+ */
+export function applyAiQuestionStreamUpdate(
+  questions: LiveAiQuestion[],
+  id: string,
+  update: AiQuestionStreamUpdate,
+): LiveAiQuestion[] {
+  const current = questions.find((question) => question.id === id);
+  if (!current) return questions;
+  const error = update.error ?? null;
+  const status = update.status === "working" ? "running" : update.status;
+  const unchanged =
+    current.error === error &&
+    current.progress === update.progress &&
+    current.status === status &&
+    (!update.text ||
+      (current.result?.summary === update.text &&
+        current.result?.commentProposals === update.commentProposals));
+  if (unchanged) return questions;
+  return questions.map((question) =>
+    question.id === id
+      ? {
+          ...question,
+          error,
+          progress: update.progress,
+          result: update.text
+            ? {
+                summary: update.text,
+                commentProposals: update.commentProposals,
+              }
+            : question.result,
+          status,
+        }
+      : question,
+  );
+}
+
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -5110,22 +5153,7 @@ export function ReviewWorkspace({
   /** Applies one durable agent-stream update to an optimistic chat entry. */
   function updateLiveAiQuestion(id: string, update: AiQuestionStreamUpdate) {
     setLiveAiQuestions((questions) =>
-      questions.map((question) =>
-        question.id === id
-          ? {
-              ...question,
-              error: update.error ?? null,
-              progress: update.progress,
-              result: update.text
-                ? {
-                    summary: update.text,
-                    commentProposals: update.commentProposals,
-                  }
-                : question.result,
-              status: update.status === "working" ? "running" : update.status,
-            }
-          : question,
-      ),
+      applyAiQuestionStreamUpdate(questions, id, update),
     );
   }
 
