@@ -503,17 +503,19 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     number: number,
     options?: ChangedFilesOptions,
   ) {
-    const iterations = await providerFetch<{ value: Array<{ id: number }> }>(
-      this.name,
-      `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}/iterations?api-version=7.1`,
-      { headers: this.headers },
-    );
+    const [iterations, pull] = await Promise.all([
+      providerFetch<{ value: Array<{ id: number }> }>(
+        this.name,
+        `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}/iterations?api-version=7.1`,
+        { headers: this.headers },
+      ),
+      this.getPullRequest(repositoryExternalId, number),
+    ]);
     const latest = iterations.value.at(-1);
     if (!latest) return [];
     const changes = await this.getAllChanges(
       `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}/iterations/${latest.id}/changes?api-version=7.1`,
     );
-    const pull = await this.getPullRequest(repositoryExternalId, number);
     const sourceChanges = changes.filter(
       (change): change is AzureChange & { item: { path: string } } =>
         typeof change.item?.path === "string" &&
