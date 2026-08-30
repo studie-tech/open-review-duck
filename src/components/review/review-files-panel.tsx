@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   type KeyboardEvent,
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -268,8 +269,15 @@ function ReviewFileTreeRows({
   });
 }
 
-/** Presents changed files as a searchable, revision-aware folder tree. */
-export function ReviewFilesPanel({
+/**
+ * Presents changed files as a searchable, revision-aware folder tree.
+ *
+ * The workspace around it re-renders on composer keystrokes, AI stream
+ * chunks and scroll state, none of which touch the tree, so the panel is
+ * memoized and rebuilds its rows only when the files, the search or the
+ * selection actually move.
+ */
+export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   files,
   search,
   selectedPath,
@@ -484,4 +492,4 @@ export function ReviewFilesPanel({
       </div>
     </div>
   );
-}
+});
