@@ -296,29 +296,40 @@ function ReviewConceptFileCardSource({
   members: readonly ReviewUnit[];
   onCommentLine?: (unitId: string, line: number) => void;
 }) {
-  const ranges = reviewCardRanges(members);
+  const ranges = useMemo(() => reviewCardRanges(members), [members]);
   const startLine = ranges.at(0)?.startLine ?? 1;
   const endLine = ranges.at(-1)?.endLine ?? startLine;
-  const source = fileSource
-    .split("\n")
-    .slice(startLine - 1, endLine)
-    .join("\n");
+  const source = useMemo(
+    () =>
+      fileSource
+        .split("\n")
+        .slice(startLine - 1, endLine)
+        .join("\n"),
+    [endLine, fileSource, startLine],
+  );
   const lines = useHighlightedSource(source, members[0]?.language ?? "text");
-  const memberRanges = members.map((member) => ({
-    member,
-    ranges: reviewCardRanges([member]),
-  }));
+  // Every rendered line asks which member owns it, so ownership is indexed
+  // once per member rather than scanned per line. Where member ranges overlap
+  // the earliest member in the card owns the shared lines.
+  const ownerByLine = useMemo(() => {
+    const owners = new Map<number, ReviewUnit>();
+    for (const member of members) {
+      for (const { startLine: from, endLine: to } of reviewCardRanges([
+        member,
+      ])) {
+        for (let line = from; line <= to; line += 1) {
+          if (!owners.has(line)) owners.set(line, member);
+        }
+      }
+    }
+    return owners;
+  }, [members]);
   return (
     <div className="overflow-x-auto py-2">
       {fileSource
         ? lines.map((line, lineIndex) => {
             const lineNumber = startLine + lineIndex;
-            const owner = memberRanges.find(({ ranges: ownedRanges }) =>
-              ownedRanges.some(
-                ({ startLine: from, endLine: to }) =>
-                  lineNumber >= from && lineNumber <= to,
-              ),
-            )?.member;
+            const owner = ownerByLine.get(lineNumber);
             return (
               <div
                 key={`${members[0]?.id}-${lineNumber}`}
