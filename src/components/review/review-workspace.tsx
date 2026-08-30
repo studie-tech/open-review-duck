@@ -165,8 +165,7 @@ import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   overviewMarksFromDiffRows,
   overviewRangeFromDiffRows,
-  ReviewScrollOverview,
-  shouldShowReviewScrollOverview,
+  ReviewScrollOverviewStrip,
   useReviewCodeOverview,
 } from "./review-scroll-overview";
 import {
@@ -2047,11 +2046,6 @@ export function ReviewWorkspace({
     codeOverviewRef,
     `${activeUnit?.id ?? ""}:${sideBySideVisible}:${overviewLineCount}:${fullFileVisible}`,
   );
-  const showScrollOverview =
-    overviewEnabled &&
-    shouldShowReviewScrollOverview(overviewRows, overviewViewport, {
-      revealWholeFile: fullFileVisible,
-    });
   const fullFileLines = useMemo(
     () => activeModule?.source.split("\n") ?? [],
     [activeModule?.source],
@@ -7781,20 +7775,20 @@ export function ReviewWorkspace({
                         ) : undefined
                       }
                     />
-                    {showScrollOverview && (
-                      <ReviewScrollOverview
-                        className="px-3 py-2 sm:px-3 lg:px-3"
-                        label={
-                          activeUnit
-                            ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
-                            : undefined
-                        }
-                        marks={overviewMarks}
-                        unitRange={overviewUnitRange}
-                        viewport={overviewViewport}
-                        onSeek={seekCodeOverview}
-                      />
-                    )}
+                    <ReviewScrollOverviewStrip
+                      className="px-3 py-2 sm:px-3 lg:px-3"
+                      label={
+                        activeUnit
+                          ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
+                          : undefined
+                      }
+                      marks={overviewMarks}
+                      rows={overviewRows}
+                      revealWholeFile={fullFileVisible}
+                      unitRange={overviewUnitRange}
+                      viewport={overviewViewport}
+                      onSeek={seekCodeOverview}
+                    />
                   </div>
                 </div>
                 <div

@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clampOverviewRatio,
@@ -9,11 +15,16 @@ import {
   overviewRangeFromDiffRows,
   overviewViewportFromElements,
   ReviewScrollOverview,
+  ReviewScrollOverviewStrip,
   seekOverviewRatio,
   shouldShowReviewScrollOverview,
+  useReviewCodeOverview,
 } from "./review-scroll-overview";
 
 afterEach(cleanup);
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("overviewMarksFromDiffRows", () => {
   it("coalesces consecutive changed rows of the same kind", () => {
@@ -209,5 +220,98 @@ describe("ReviewScrollOverview", () => {
     expect(onSeek.mock.calls[0]?.[0]).toBeCloseTo(0.29);
     fireEvent.keyDown(slider, { key: "Home" });
     expect(onSeek).toHaveBeenCalledWith(0);
+  });
+});
+
+class StubResizeObserver {
+  /** Ignores observation; the harness drives measurement by hand. */
+  observe() {}
+
+  /** Ignores teardown; the harness drives measurement by hand. */
+  disconnect() {}
+}
+
+describe("useReviewCodeOverview", () => {
+  /** Builds a code pane whose scroll offset the test controls. */
+  function createPane() {
+    const pane = document.createElement("div");
+    const code = document.createElement("div");
+    const position = { top: 0 };
+    Object.defineProperty(pane, "scrollTop", { get: () => position.top });
+    pane.getBoundingClientRect = () => ({ bottom: 100, top: 0 }) as DOMRect;
+    code.getBoundingClientRect = () =>
+      ({ height: 400, top: -position.top }) as DOMRect;
+    return { code, pane, position };
+  }
+
+  it("moves the ruler without re-rendering the pane owner", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("ResizeObserver", StubResizeObserver);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const { code, pane, position } = createPane();
+    const onRender = vi.fn();
+    const updateRef = { current: () => {} };
+
+    /** Renders the hook alongside the strip that consumes its viewport. */
+    function Harness() {
+      const { update, viewport } = useReviewCodeOverview(
+        { current: pane },
+        { current: code },
+        "unit",
+      );
+      updateRef.current = update;
+      onRender();
+      return (
+        <ReviewScrollOverviewStrip
+          marks={[]}
+          rows={[{ kind: "unchanged" }, { kind: "added" }]}
+          viewport={viewport}
+          onSeek={() => {}}
+        />
+      );
+    }
+
+    /** Runs every animation frame the hook has queued. */
+    function flushFrames() {
+      const pending = frames.splice(0, frames.length);
+      act(() => {
+        for (const callback of pending) callback(0);
+      });
+    }
+
+    render(<Harness />);
+    expect(screen.queryByRole("slider")).toBeNull();
+
+    flushFrames();
+    expect(screen.getByRole("slider")).toHaveAttribute(
+      "aria-valuetext",
+      "0% to 25% of the file",
+    );
+    expect(onRender).toHaveBeenCalledTimes(1);
+
+    position.top = 40;
+    act(() => updateRef.current());
+    flushFrames();
+    expect(screen.getByRole("slider")).toHaveAttribute(
+      "aria-valuetext",
+      "10% to 35% of the file",
+    );
+
+    position.top = 80;
+    act(() => updateRef.current());
+    flushFrames();
+    const rendersWhileScrolling = onRender.mock.calls.length;
+
+    position.top = 120;
+    act(() => updateRef.current());
+    flushFrames();
+    expect(screen.getByRole("slider")).toHaveAttribute(
+      "aria-valuetext",
+      "30% to 55% of the file",
+    );
+    expect(onRender).toHaveBeenCalledTimes(rendersWhileScrolling);
   });
 });
