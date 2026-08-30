@@ -352,6 +352,7 @@ describe("RepositoryReader", () => {
       path: "src/b.ts",
       snapshotFileId: "file-b",
       name: "thirdMember",
+      source: "third file source\n",
     });
     render(
       <ShellHarness>
@@ -371,7 +372,8 @@ describe("RepositoryReader", () => {
       key: "ArrowDown",
       ctrlKey: true,
     });
-    expect(screen.getByText("thirdMember")).toBeVisible();
+    // A one-unit file card does not paint a member-name marker.
+    expect(screen.getByText("third file source")).toBeVisible();
     expect(screen.queryByText("firstMember")).toBeNull();
     fireEvent.keyDown(document, { key: "ArrowUp", ctrlKey: true });
     expect(screen.getByText("firstMember")).toBeVisible();
