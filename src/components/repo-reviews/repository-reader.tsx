@@ -130,8 +130,10 @@ export function RepositoryReader({
   const [sourceLoading, setSourceLoading] = useState(
     Boolean(initialData.snapshot),
   );
-  const [pendingFileId, setPendingFileId] = useState<string>();
-  const fileToggleRollback = useRef<Workspace["units"] | undefined>(undefined);
+  const [pendingFiles, setPendingFiles] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const fileToggleRollbacks = useRef(new Map<string, Workspace["units"]>());
   const searchInputRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
   const ruleInstructionRef = useRef<HTMLTextAreaElement>(null);
@@ -358,6 +360,16 @@ export function RepositoryReader({
     [selectUnit, units],
   );
 
+  /** Releases one saved file without disturbing the others still in flight. */
+  const resolvePendingFile = useCallback((snapshotFileId: string) => {
+    fileToggleRollbacks.current.delete(snapshotFileId);
+    setPendingFiles((current) => {
+      const next = new Set(current);
+      next.delete(snapshotFileId);
+      return next;
+    });
+  }, []);
+
   const utils = api.useUtils();
   const addRule = api.repoReviews.addRule.useMutation({
     onSuccess: () => {
@@ -375,7 +387,6 @@ export function RepositoryReader({
   const signOffFile = api.review.signOffFile.useMutation({
     onSuccess: ({ snapshotFileId, signedUnitIds }) => {
       const signedIds = new Set(signedUnitIds);
-      fileToggleRollback.current = undefined;
       setUnits((current) =>
         current.map((unit) =>
           signedIds.has(unit.id)
@@ -388,20 +399,17 @@ export function RepositoryReader({
             : unit,
         ),
       );
-      setPendingFileId((current) =>
-        current === snapshotFileId ? undefined : current,
-      );
+      resolvePendingFile(snapshotFileId);
       toast.success("File reviewed", {
         description: `${signedUnitIds.length} ${signedUnitIds.length === 1 ? "unit" : "units"} signed off together.`,
       });
     },
-    onError: (error) => {
-      const rollback = fileToggleRollback.current;
-      fileToggleRollback.current = undefined;
+    onError: (error, { snapshotFileId }) => {
+      const rollback = fileToggleRollbacks.current.get(snapshotFileId);
       if (rollback) {
         setUnits((current) => restoreFileToggleReviewState(current, rollback));
       }
-      setPendingFileId(undefined);
+      resolvePendingFile(snapshotFileId);
       toast.error("Could not save file progress", {
         description: error.message,
       });
@@ -410,7 +418,6 @@ export function RepositoryReader({
   const unreviewFile = api.review.unreviewFile.useMutation({
     onSuccess: ({ snapshotFileId, unreviewedUnitIds }) => {
       const unreviewedIds = new Set(unreviewedUnitIds);
-      fileToggleRollback.current = undefined;
       setUnits((current) =>
         current.map((unit) =>
           unreviewedIds.has(unit.id)
@@ -425,18 +432,15 @@ export function RepositoryReader({
             : unit,
         ),
       );
-      setPendingFileId((current) =>
-        current === snapshotFileId ? undefined : current,
-      );
+      resolvePendingFile(snapshotFileId);
       toast.success("File returned to review");
     },
-    onError: (error) => {
-      const rollback = fileToggleRollback.current;
-      fileToggleRollback.current = undefined;
+    onError: (error, { snapshotFileId }) => {
+      const rollback = fileToggleRollbacks.current.get(snapshotFileId);
       if (rollback) {
         setUnits((current) => restoreFileToggleReviewState(current, rollback));
       }
-      setPendingFileId(undefined);
+      resolvePendingFile(snapshotFileId);
       toast.error("Could not return file to review", {
         description: error.message,
       });
@@ -445,36 +449,43 @@ export function RepositoryReader({
   const signOffFileStart = signOffFile.mutate;
   const unreviewFileStart = unreviewFile.mutate;
 
-  /** Applies or reverses the file-sized decision shown in both sidebar and footer. */
+  /**
+   * Applies or reverses the file-sized decision shown in both sidebar and footer.
+   *
+   * Each save targets its own snapshot file, so in-flight files are tracked
+   * individually and a reviewer can keep ticking files while earlier saves
+   * are still landing.
+   */
   const toggleReviewFile = useCallback(
     (file: ReviewFileEntry) => {
-      if (pendingFileId || file.totalUnits === 0) return;
-      fileToggleRollback.current = units;
-      setPendingFileId(file.id);
+      if (pendingFiles.has(file.id) || file.totalUnits === 0) return;
+      fileToggleRollbacks.current.set(
+        file.id,
+        units.filter(({ path }) => path === file.path),
+      );
+      setPendingFiles((current) => new Set(current).add(file.id));
       if (file.state === "reviewed") {
-        setUnits(
-          optimisticallyUnreviewReviewUnits(
-            units,
-            file.units
-              .filter((unit) => unit.status === "signed_off")
-              .map((unit) => unit.id),
-          ),
+        const signedIds = file.units
+          .filter((unit) => unit.status === "signed_off")
+          .map((unit) => unit.id);
+        setUnits((current) =>
+          optimisticallyUnreviewReviewUnits(current, signedIds),
         );
         unreviewFileStart({ snapshotFileId: file.id });
         return;
       }
-      setUnits(
-        optimisticallySignOffReviewUnits(
-          units,
-          outstandingReviewFileUnits(file).map((unit) => unit.id),
-        ),
+      const outstandingIds = outstandingReviewFileUnits(file).map(
+        (unit) => unit.id,
+      );
+      setUnits((current) =>
+        optimisticallySignOffReviewUnits(current, outstandingIds),
       );
       signOffFileStart({
         snapshotFileId: file.id,
         durationSeconds: 0,
       });
     },
-    [pendingFileId, signOffFileStart, units, unreviewFileStart],
+    [pendingFiles, signOffFileStart, units, unreviewFileStart],
   );
 
   /** Advances to the next unread unit, wrapping once past the end. */
@@ -657,16 +668,18 @@ export function RepositoryReader({
     addRule.mutate({ monitorId: monitor.id, ...ruleForm });
   }, [addRule, monitor.id, ruleForm]);
 
-  const activeSignOffPending = pendingFileId === activeFile?.id;
+  const activeFilePending = Boolean(
+    activeFile && pendingFiles.has(activeFile.id),
+  );
   const canSignOff = Boolean(
     activeFile &&
       activeFile.state !== "reviewed" &&
       activeFile.totalUnits > 0 &&
       activeFile.waitingUnits === 0 &&
-      !pendingFileId,
+      !activeFilePending,
   );
   const canUnreview = Boolean(
-    activeFile && activeFile.state === "reviewed" && !pendingFileId,
+    activeFile && activeFile.state === "reviewed" && !activeFilePending,
   );
   const runSignOff = useCallback(() => {
     if (!activeFile || !canSignOff) return;
@@ -964,7 +977,7 @@ export function RepositoryReader({
               files={reviewFiles}
               search={search}
               selectedPath={activeFile?.path}
-              pendingFileId={pendingFileId}
+              pendingFileIds={pendingFiles}
               treeLabel="Repository files"
               emptyLabel="No repository files match this view."
               onSelect={selectFile}
@@ -1317,7 +1330,7 @@ export function RepositoryReader({
                     <Button
                       size="sm"
                       variant="secondary"
-                      loading={unreviewFile.isPending}
+                      loading={activeFilePending}
                       disabled={!canUnreview}
                       onClick={runUnreview}
                     >
@@ -1330,7 +1343,7 @@ export function RepositoryReader({
                   ) : (
                     <Button
                       size="sm"
-                      loading={activeSignOffPending}
+                      loading={activeFilePending}
                       onClick={runSignOff}
                     >
                       <Check className="size-4" /> Sign off file (

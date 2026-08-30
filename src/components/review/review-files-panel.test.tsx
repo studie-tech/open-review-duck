@@ -114,6 +114,63 @@ describe("ReviewFilesPanel", () => {
     ).toHaveClass("items-center", "py-1.5");
   });
 
+  it("disables only the checkboxes of files whose save is in flight", () => {
+    const saving = reviewFileEntries(
+      [
+        {
+          id: "file-a",
+          path: "src/a.ts",
+          previousPath: null,
+          changeType: "modified",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "file-b",
+          path: "src/b.ts",
+          previousPath: null,
+          changeType: "modified",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+      ],
+      [
+        {
+          id: "a-unit",
+          path: "src/a.ts",
+          status: "pending",
+          revisionState: "unchanged",
+        },
+        {
+          id: "b-unit",
+          path: "src/b.ts",
+          status: "pending",
+          revisionState: "unchanged",
+        },
+      ],
+    );
+    render(
+      <ReviewFilesPanel
+        files={saving}
+        search=""
+        pendingFileIds={new Set(["file-a"])}
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("checkbox", { name: /in src\/a\.ts/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: /in src\/b\.ts/i }),
+    ).toBeEnabled();
+  });
+
   it("keeps opening a file separate from signing it off", async () => {
     const onSelect = vi.fn();
     const onToggle = vi.fn();
