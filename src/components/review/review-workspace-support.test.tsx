@@ -78,7 +78,37 @@ type WorkspacePullRequest = RouterOutputs["review"]["workspace"]["pullRequest"];
 type WorkspaceConcept =
   RouterOutputs["review"]["workspace"]["concepts"][number];
 
-afterEach(cleanup);
+let viewportIsWide = true;
+const viewportListeners = new Set<() => void>();
+
+// jsdom answers no media queries, so the diff's breakpoint store reads this
+// stub and a case can move the viewport across Tailwind's `sm` edge.
+Object.defineProperty(window, "matchMedia", {
+  configurable: true,
+  value: (media: string) => ({
+    get matches() {
+      return viewportIsWide;
+    },
+    media,
+    onchange: null,
+    addEventListener: (_event: string, listener: () => void) =>
+      viewportListeners.add(listener),
+    removeEventListener: (_event: string, listener: () => void) =>
+      viewportListeners.delete(listener),
+    dispatchEvent: () => true,
+  }),
+});
+
+/** Moves the emulated viewport across the side-by-side breakpoint. */
+function setViewportWide(wide: boolean) {
+  viewportIsWide = wide;
+  for (const listener of viewportListeners) listener();
+}
+
+afterEach(() => {
+  cleanup();
+  viewportIsWide = true;
+});
 
 describe("review shortcuts", () => {
   it("provides editor-style sidebar shortcuts", () => {
@@ -2605,23 +2635,55 @@ describe("SideBySideUnitDiff", () => {
       />,
     );
 
-    // Both the wide and the narrow layout render the row, so every match has
-    // to carry the highlight or the finding is invisible at one width.
-    const findingRows = screen.getAllByRole("button", {
-      name: "Comment on current line 12",
-    });
-    expect(findingRows.length).toBeGreaterThan(0);
-    for (const row of findingRows) {
-      expect(row).toHaveClass(
-        "bg-amber-400/[.09]",
-        "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
-      );
-    }
-    for (const row of screen.getAllByRole("button", {
-      name: "Comment on current line 13",
-    })) {
-      expect(row).not.toHaveClass("bg-amber-400/[.09]");
-    }
+    // The row is laid out for one width at a time, so the highlight has to
+    // survive the swap or the finding is invisible on a narrow viewport.
+    expect(
+      screen.getByRole("button", { name: "Comment on current line 12" }),
+    ).toHaveClass(
+      "bg-amber-400/[.09]",
+      "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+    );
+    expect(
+      screen.getByRole("button", { name: "Comment on current line 13" }),
+    ).not.toHaveClass("bg-amber-400/[.09]");
+
+    act(() => setViewportWide(false));
+
+    expect(
+      screen.getByRole("button", { name: "Comment on current line 12" }),
+    ).toHaveClass(
+      "bg-amber-400/[.09]",
+      "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+    );
+    expect(
+      screen.getByRole("button", { name: "Comment on current line 13" }),
+    ).not.toHaveClass("bg-amber-400/[.09]");
+  });
+
+  it("renders one row layout instead of a copy for each breakpoint", () => {
+    const { container } = render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const splitColumns =
+      '[class*="grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)]"]';
+    expect(container.querySelectorAll("[data-review-scope]")).toHaveLength(2);
+    expect(container.querySelectorAll(splitColumns)).toHaveLength(2);
+
+    act(() => setViewportWide(false));
+
+    expect(container.querySelectorAll("[data-review-scope]")).toHaveLength(2);
+    expect(container.querySelectorAll(splitColumns)).toHaveLength(0);
+    expect(
+      screen.getAllByRole("button", { name: "Comment on current line 12" }),
+    ).toHaveLength(1);
   });
 
   it("paints the finding line amber on the deleted side of the split", () => {
@@ -2643,16 +2705,12 @@ describe("SideBySideUnitDiff", () => {
       />,
     );
 
-    const deletedRows = screen.getAllByRole("button", {
-      name: "Comment on deleted line 8",
-    });
-    expect(deletedRows.length).toBeGreaterThan(0);
-    for (const row of deletedRows) {
-      expect(row).toHaveClass(
-        "bg-amber-400/[.09]",
-        "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
-      );
-    }
+    expect(
+      screen.getByRole("button", { name: "Comment on deleted line 8" }),
+    ).toHaveClass(
+      "bg-amber-400/[.09]",
+      "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
+    );
   });
 
   it("leaves context rows unpainted while no finding is open", async () => {
@@ -2836,10 +2894,10 @@ describe("SideBySideUnitDiff", () => {
 
     expect(
       screen.getAllByRole("button", { name: "Comment on current line 2" }),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       screen.getAllByRole("button", { name: "Comment on current line 5" }),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       screen.queryByRole("button", { name: "Comment on current line 3" }),
     ).not.toBeInTheDocument();
@@ -2848,7 +2906,7 @@ describe("SideBySideUnitDiff", () => {
     ).not.toBeInTheDocument();
     expect(
       container.querySelectorAll('[data-review-scope="context"]'),
-    ).toHaveLength(4);
+    ).toHaveLength(2);
 
     const currentLine = screen.getAllByRole("button", {
       name: "Comment on current line 5",

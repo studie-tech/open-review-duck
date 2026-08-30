@@ -41,6 +41,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
@@ -2342,8 +2343,32 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   );
 });
 
+/** Tailwind's `sm` breakpoint, where a row fits both sides of the diff. */
+const SIDE_BY_SIDE_DIFF_QUERY = "(min-width: 40rem)";
+
+/** Watches the viewport for the width the two-column diff needs. */
+function subscribeSideBySideWidth(onStoreChange: () => void) {
+  const query = window.matchMedia(SIDE_BY_SIDE_DIFF_QUERY);
+  query.addEventListener("change", onStoreChange);
+  return () => query.removeEventListener("change", onStoreChange);
+}
+
+/** Reports whether the viewport has room for the two-column diff. */
+function sideBySideWidth() {
+  return window.matchMedia(SIDE_BY_SIDE_DIFF_QUERY).matches;
+}
+
+/** Assumes the two-column diff where there is no viewport to measure. */
+function serverSideBySideWidth() {
+  return true;
+}
+
 /**
- * Shows one aligned base/head row of a unit diff at both breakpoints.
+ * Shows one aligned base/head row of a unit diff.
+ *
+ * The wide and the narrow layout differ in structure rather than in styling,
+ * so the row picks one: an expanded file holds hundreds of rows, and mounting
+ * both layouts behind visibility classes would double every token span.
  *
  * Memoized for the same reason as `AddedUnitDiffRow`: an expanded file holds
  * hundreds of rows whose tokens no workspace event changes.
@@ -2362,6 +2387,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   previousLineNumber,
   previousReviewLine,
   selected,
+  sideBySide,
 }: DiffRowHighlightProps &
   DiffRowActionProps & {
     currentLine: HighlightedLine | undefined;
@@ -2371,16 +2397,17 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
     previousLine: HighlightedLine | undefined;
     previousLineNumber: number | undefined;
     previousReviewLine: number | undefined;
+    sideBySide: boolean;
   }) {
   // A row commentable on both sides is commented through the head line, so at
   // most one side carries the provider line and the other is always unset.
   const reviewLine = currentReviewLine ?? previousReviewLine;
-  return (
-    <>
+  if (sideBySide) {
+    return (
       <div
         data-review-scope={reviewLine === undefined ? "context" : "unit"}
         className={cn(
-          "group relative hidden grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)] sm:grid",
+          "group relative grid grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)]",
           reviewLine === undefined &&
             "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
         )}
@@ -2507,43 +2534,98 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
           </button>
         )}
       </div>
-      <div
-        data-review-scope={reviewLine === undefined ? "context" : "unit"}
-        className={cn(
-          "group relative sm:hidden",
-          reviewLine === undefined &&
-            "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
-        )}
-      >
-        {reviewLine !== undefined && canAsk && (
-          <AskAiLineButton
-            className="bg-panel/90 absolute top-1/2 right-2 z-10 size-5 -translate-y-1/2 rounded-md border border-line shadow-sm"
-            line={reviewLine}
-            onAsk={onAsk}
-          />
-        )}
-        {kind === "unchanged" ? (
-          <div
-            className={cn(
-              "grid grid-cols-[42px_42px_minmax(0,1fr)]",
-              isFinding && FINDING_LINE_HIGHLIGHT,
-              selected && "bg-violet/[.055]",
-              keyboardFocused &&
-                "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-            )}
-          >
-            <span className="text-fog border-r border-line/60 px-2 text-right select-none">
-              {previousLineNumber}
-            </span>
-            {currentReviewLine !== undefined ? (
+    );
+  }
+  return (
+    <div
+      data-review-scope={reviewLine === undefined ? "context" : "unit"}
+      className={cn(
+        "group relative",
+        reviewLine === undefined &&
+          "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
+      )}
+    >
+      {reviewLine !== undefined && canAsk && (
+        <AskAiLineButton
+          className="bg-panel/90 absolute top-1/2 right-2 z-10 size-5 -translate-y-1/2 rounded-md border border-line shadow-sm"
+          line={reviewLine}
+          onAsk={onAsk}
+        />
+      )}
+      {kind === "unchanged" ? (
+        <div
+          className={cn(
+            "grid grid-cols-[42px_42px_minmax(0,1fr)]",
+            isFinding && FINDING_LINE_HIGHLIGHT,
+            selected && "bg-violet/[.055]",
+            keyboardFocused &&
+              "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+          )}
+        >
+          <span className="text-fog border-r border-line/60 px-2 text-right select-none">
+            {previousLineNumber}
+          </span>
+          {currentReviewLine !== undefined ? (
+            <button
+              type="button"
+              aria-label={`Comment on current line ${currentReviewLine}`}
+              title="Comment on this pull-request line"
+              onClick={(event) => onSelect(event, currentReviewLine)}
+              className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
+            >
+              <span className="flex items-center justify-end gap-1 border-r border-line/60 px-2 transition select-none group-hover:text-violet">
+                <MessageSquareText
+                  className={cn(
+                    "size-3 transition-opacity",
+                    selected || keyboardFocused
+                      ? "text-cyan opacity-100"
+                      : "opacity-0 group-hover:opacity-100",
+                  )}
+                />
+                {currentLineNumber}
+              </span>
+              <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
+                <HighlightedDiffTokens
+                  line={currentLine}
+                  lineNumber={currentLineNumber}
+                />
+              </span>
+            </button>
+          ) : (
+            <>
+              <span className="text-fog border-r border-line/60 px-2 text-right select-none">
+                {currentLineNumber}
+              </span>
+              <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
+                <HighlightedDiffTokens
+                  line={currentLine}
+                  lineNumber={currentLineNumber}
+                />
+              </span>
+            </>
+          )}
+        </div>
+      ) : (
+        <>
+          {previousLine &&
+            (previousReviewLine !== undefined ? (
               <button
                 type="button"
-                aria-label={`Comment on current line ${currentReviewLine}`}
-                title="Comment on this pull-request line"
-                onClick={(event) => onSelect(event, currentReviewLine)}
-                className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
+                aria-label={`Comment on deleted line ${previousReviewLine}`}
+                title="Comment on this deleted pull-request line"
+                onClick={(event) => onSelect(event, previousReviewLine)}
+                className={cn(
+                  "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                  isFinding && FINDING_LINE_HIGHLIGHT,
+                  selected && "bg-violet/[.055]",
+                  keyboardFocused &&
+                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                )}
               >
-                <span className="flex items-center justify-end gap-1 border-r border-line/60 px-2 transition select-none group-hover:text-violet">
+                <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
+                  {previousLineNumber}
+                </span>
+                <span className="flex items-center justify-center gap-1 border-x border-line/60 px-2 text-red-700 transition select-none group-hover:text-violet dark:text-red-200">
                   <MessageSquareText
                     className={cn(
                       "size-3 transition-opacity",
@@ -2552,7 +2634,49 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                         : "opacity-0 group-hover:opacity-100",
                     )}
                   />
+                  −
+                </span>
+                <HighlightedDiffLine line={previousLine} />
+              </button>
+            ) : (
+              <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15">
+                <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
+                  {previousLineNumber}
+                </span>
+                <span className="border-x border-line/60 px-2 text-center text-red-700 select-none dark:text-red-200">
+                  −
+                </span>
+                <HighlightedDiffLine line={previousLine} />
+              </div>
+            ))}
+          {currentLine &&
+            (currentReviewLine !== undefined ? (
+              <button
+                type="button"
+                aria-label={`Comment on current line ${currentReviewLine}`}
+                title="Comment on this pull-request line"
+                onClick={(event) => onSelect(event, currentReviewLine)}
+                className={cn(
+                  "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                  isFinding && FINDING_LINE_HIGHLIGHT,
+                  selected && "bg-violet/[.055]",
+                  keyboardFocused &&
+                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                )}
+              >
+                <span className="px-2 text-right text-addition select-none">
                   {currentLineNumber}
+                </span>
+                <span className="flex items-center justify-center gap-1 border-x border-line/60 px-2 text-addition transition select-none group-hover:text-violet">
+                  <MessageSquareText
+                    className={cn(
+                      "size-3 transition-opacity",
+                      selected || keyboardFocused
+                        ? "text-cyan opacity-100"
+                        : "opacity-0 group-hover:opacity-100",
+                    )}
+                  />
+                  +
                 </span>
                 <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                   <HighlightedDiffTokens
@@ -2562,9 +2686,12 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                 </span>
               </button>
             ) : (
-              <>
-                <span className="text-fog border-r border-line/60 px-2 text-right select-none">
+              <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15">
+                <span className="px-2 text-right text-addition select-none">
                   {currentLineNumber}
+                </span>
+                <span className="border-x border-line/60 px-2 text-center text-addition select-none">
+                  +
                 </span>
                 <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
                   <HighlightedDiffTokens
@@ -2572,109 +2699,11 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                     lineNumber={currentLineNumber}
                   />
                 </span>
-              </>
-            )}
-          </div>
-        ) : (
-          <>
-            {previousLine &&
-              (previousReviewLine !== undefined ? (
-                <button
-                  type="button"
-                  aria-label={`Comment on deleted line ${previousReviewLine}`}
-                  title="Comment on this deleted pull-request line"
-                  onClick={(event) => onSelect(event, previousReviewLine)}
-                  className={cn(
-                    "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                    isFinding && FINDING_LINE_HIGHLIGHT,
-                    selected && "bg-violet/[.055]",
-                    keyboardFocused &&
-                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                  )}
-                >
-                  <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
-                    {previousLineNumber}
-                  </span>
-                  <span className="flex items-center justify-center gap-1 border-x border-line/60 px-2 text-red-700 transition select-none group-hover:text-violet dark:text-red-200">
-                    <MessageSquareText
-                      className={cn(
-                        "size-3 transition-opacity",
-                        selected || keyboardFocused
-                          ? "text-cyan opacity-100"
-                          : "opacity-0 group-hover:opacity-100",
-                      )}
-                    />
-                    −
-                  </span>
-                  <HighlightedDiffLine line={previousLine} />
-                </button>
-              ) : (
-                <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15">
-                  <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
-                    {previousLineNumber}
-                  </span>
-                  <span className="border-x border-line/60 px-2 text-center text-red-700 select-none dark:text-red-200">
-                    −
-                  </span>
-                  <HighlightedDiffLine line={previousLine} />
-                </div>
-              ))}
-            {currentLine &&
-              (currentReviewLine !== undefined ? (
-                <button
-                  type="button"
-                  aria-label={`Comment on current line ${currentReviewLine}`}
-                  title="Comment on this pull-request line"
-                  onClick={(event) => onSelect(event, currentReviewLine)}
-                  className={cn(
-                    "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                    isFinding && FINDING_LINE_HIGHLIGHT,
-                    selected && "bg-violet/[.055]",
-                    keyboardFocused &&
-                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                  )}
-                >
-                  <span className="px-2 text-right text-addition select-none">
-                    {currentLineNumber}
-                  </span>
-                  <span className="flex items-center justify-center gap-1 border-x border-line/60 px-2 text-addition transition select-none group-hover:text-violet">
-                    <MessageSquareText
-                      className={cn(
-                        "size-3 transition-opacity",
-                        selected || keyboardFocused
-                          ? "text-cyan opacity-100"
-                          : "opacity-0 group-hover:opacity-100",
-                      )}
-                    />
-                    +
-                  </span>
-                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
-                    <HighlightedDiffTokens
-                      line={currentLine}
-                      lineNumber={currentLineNumber}
-                    />
-                  </span>
-                </button>
-              ) : (
-                <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15">
-                  <span className="px-2 text-right text-addition select-none">
-                    {currentLineNumber}
-                  </span>
-                  <span className="border-x border-line/60 px-2 text-center text-addition select-none">
-                    +
-                  </span>
-                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
-                    <HighlightedDiffTokens
-                      line={currentLine}
-                      lineNumber={currentLineNumber}
-                    />
-                  </span>
-                </div>
-              ))}
-          </>
-        )}
-      </div>
-    </>
+              </div>
+            ))}
+        </>
+      )}
+    </div>
   );
 });
 
@@ -2713,6 +2742,13 @@ export const SideBySideUnitDiff = forwardRef<
   useEffect(() => {
     lineHandlersRef.current = { onAskReviewLine, onSelectReviewLine };
   }, [onAskReviewLine, onSelectReviewLine]);
+  // One subscription for the whole diff: the rows below read the breakpoint
+  // from it instead of each mounting a wide and a narrow copy of itself.
+  const sideBySide = useSyncExternalStore(
+    subscribeSideBySideWidth,
+    sideBySideWidth,
+    serverSideBySideWidth,
+  );
   const previousLines = useHighlightedSource(previousSource, language);
   const currentLines = useHighlightedSource(currentSource, language);
   const rows = useMemo(
@@ -3270,6 +3306,7 @@ export const SideBySideUnitDiff = forwardRef<
               previousLineNumber={previousLineNumber}
               previousReviewLine={previousIsReviewLine ? reviewLine : undefined}
               selected={highlightsReviewLine(selectedLine, reviewLine)}
+              sideBySide={sideBySide}
             />
             {rendersLineDetails && renderLineDetails?.(reviewLine)}
             {endsScope && <ReviewScopeMarker edge="end" line={scopeEndLine} />}
