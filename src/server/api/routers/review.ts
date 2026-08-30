@@ -142,15 +142,6 @@ import { createTRPCRouter, protectedProcedure } from "../trpc";
 const accessiblePullRequest = (userId: string, pullRequestId: string) =>
   and(eq(pullRequests.id, pullRequestId), eq(workspaceMembers.userId, userId));
 
-/** Resolves a source provider only after loading its authorized connection. */
-async function providerForScope(db: typeof database, connectionId: string) {
-  const connection = await db.query.providerConnections.findFirst({
-    where: eq(providerConnections.id, connectionId),
-  });
-  if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
-  return providerForConnection(db, connection);
-}
-
 /**
  * Authorizes and rate-limits one management action on a provider conversation.
  *
@@ -173,7 +164,7 @@ async function reviewThreadScope(
     30,
     60_000,
   );
-  return { provider: await providerForScope(db, scope.connectionId), scope };
+  return { provider: await providerForConnection(db, scope.connection), scope };
 }
 
 /**
@@ -567,13 +558,13 @@ async function importedSymbolDefinition(
   userId: string,
   snapshot: { headSha: string; id: string },
   scope: {
-    connectionId: string | null;
+    connection: typeof providerConnections.$inferSelect;
     pullRequestId: string;
     repositoryExternalId: string;
   },
   input: SymbolDefinitionInput,
 ) {
-  if (!input.specifier || !scope.connectionId) return undefined;
+  if (!input.specifier) return undefined;
   const imported = input.imported ?? input.symbol;
   const candidates = importPathCandidates(
     input.sourcePath,
@@ -607,7 +598,7 @@ async function importedSymbolDefinition(
     30,
     60_000,
   );
-  const provider = await providerForScope(db, scope.connectionId);
+  const provider = await providerForConnection(db, scope.connection);
   // A file answers before the directory of the same name, the way the runtime
   // resolves it, so the two are bounded apart rather than as one list: a flat
   // bound would spend itself on extensions and never reach an index at all.
@@ -717,8 +708,7 @@ async function providerScopeForUnit(
       headSha: pullRequests.headSha,
       baseSha: pullRequests.baseSha,
       repositoryExternalId: repositories.externalId,
-      provider: providerConnections.provider,
-      connectionId: providerConnections.id,
+      connection: providerConnections,
     })
     .from(reviewUnits)
     .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
@@ -761,8 +751,7 @@ async function providerScopeForPullRequest(
       headSha: pullRequests.headSha,
       baseSha: pullRequests.baseSha,
       repositoryExternalId: repositories.externalId,
-      provider: providerConnections.provider,
-      connectionId: providerConnections.id,
+      connection: providerConnections,
     })
     .from(pullRequests)
     .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -824,7 +813,7 @@ function providerOperationError(
 /** Gates merge on the exact revision the reviewer just finished. */
 function scopedProviderLifecycle(
   scope: {
-    provider: ProviderName;
+    connection: { provider: ProviderName };
     headSha: string;
     baseSha: string;
     snapshot?: { headSha: string; baseSha: string } | null;
@@ -839,7 +828,7 @@ function scopedProviderLifecycle(
     scope.snapshot?.baseSha === scope.baseSha;
   return {
     ...lifecycle,
-    provider: scope.provider,
+    provider: scope.connection.provider,
     revisionCurrent,
     syncedAt: new Date(),
     canMerge: revisionCurrent && lifecycle.canMerge,
@@ -1848,8 +1837,7 @@ async function beginReviewWaits(
       headSha: pullRequests.headSha,
       baseSha: pullRequests.baseSha,
       repositoryExternalId: repositories.externalId,
-      provider: providerConnections.provider,
-      connectionId: providerConnections.id,
+      connection: providerConnections,
     })
     .from(reviewUnits)
     .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
@@ -1885,19 +1873,13 @@ async function beginReviewWaits(
       message: "Synchronize the pull request before waiting for a response",
     });
   }
-  if (!scope.connectionId) {
+  if (!scope.connection) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Local comments do not have provider response threads",
     });
   }
-  if (!scope.provider) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Provider connection not found",
-    });
-  }
-  const provider = await providerForScope(db, scope.connectionId);
+  const provider = await providerForConnection(db, scope.connection);
   let threads: Awaited<ReturnType<typeof provider.listInlineCommentThreads>>;
   try {
     threads = await provider.listInlineCommentThreads(
@@ -1907,7 +1889,7 @@ async function beginReviewWaits(
   } catch (cause) {
     throw new TRPCError({
       code: "BAD_GATEWAY",
-      message: providerSyncErrorMessage(scope.provider, cause),
+      message: providerSyncErrorMessage(scope.connection.provider, cause),
       cause,
     });
   }
@@ -2577,7 +2559,7 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const provider = await providerForConnection(ctx.db, scope.connection);
         const [state, remotePullRequest] = await Promise.all([
           provider.getPullRequestReviewState(
             scope.repositoryExternalId,
@@ -2595,7 +2577,7 @@ export const reviewRouter = createTRPCRouter({
           scope.snapshot?.baseSha === scope.baseSha;
         return {
           ...state,
-          provider: scope.provider,
+          provider: scope.connection.provider,
           revisionCurrent,
           syncedAt: new Date(),
           canApprove: revisionCurrent && state.canApprove,
@@ -2606,7 +2588,11 @@ export const reviewRouter = createTRPCRouter({
             : "The provider has a newer revision. Synchronize this pull request before changing its review decision.",
         };
       } catch (cause) {
-        throw providerOperationError(scope.provider, cause, "review");
+        throw providerOperationError(
+          scope.connection.provider,
+          cause,
+          "review",
+        );
       }
     }),
 
@@ -2631,7 +2617,7 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const provider = await providerForConnection(ctx.db, scope.connection);
         const [lifecycle, remotePullRequest] = await Promise.all([
           provider.getPullRequestLifecycle(
             scope.repositoryExternalId,
@@ -2644,7 +2630,11 @@ export const reviewRouter = createTRPCRouter({
         ]);
         return scopedProviderLifecycle(scope, lifecycle, remotePullRequest);
       } catch (cause) {
-        throw providerOperationError(scope.provider, cause, "lifecycle");
+        throw providerOperationError(
+          scope.connection.provider,
+          cause,
+          "lifecycle",
+        );
       }
     }),
 
@@ -2693,7 +2683,7 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       try {
-        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const provider = await providerForConnection(ctx.db, scope.connection);
         const [remotePullRequest, currentLifecycle] = await Promise.all([
           provider.getPullRequest(
             scope.repositoryExternalId,
@@ -2752,7 +2742,7 @@ export const reviewRouter = createTRPCRouter({
             mergeable: true,
             canMerge: false,
             mergeBlockedReason:
-              scope.provider === "azure_devops"
+              scope.connection.provider === "azure_devops"
                 ? "Already completed"
                 : "Already merged",
             mergeActionLabel: currentLifecycle.mergeActionLabel,
@@ -2776,7 +2766,7 @@ export const reviewRouter = createTRPCRouter({
           remotePullRequest,
         );
       } catch (cause) {
-        throw providerOperationError(scope.provider, cause, "merge");
+        throw providerOperationError(scope.connection.provider, cause, "merge");
       }
     }),
 
@@ -2827,7 +2817,7 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       try {
-        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const provider = await providerForConnection(ctx.db, scope.connection);
         const [remotePullRequest, currentState] = await Promise.all([
           provider.getPullRequest(
             scope.repositoryExternalId,
@@ -2864,7 +2854,7 @@ export const reviewRouter = createTRPCRouter({
         if (alreadyApplied) {
           return {
             ...currentState,
-            provider: scope.provider,
+            provider: scope.connection.provider,
             revisionCurrent: true,
             syncedAt: new Date(),
             unavailableReason: currentState.unavailableReason,
@@ -2917,13 +2907,17 @@ export const reviewRouter = createTRPCRouter({
         }
         return {
           ...updatedState,
-          provider: scope.provider,
+          provider: scope.connection.provider,
           revisionCurrent: true,
           syncedAt: new Date(),
           unavailableReason: updatedState.unavailableReason,
         };
       } catch (cause) {
-        throw providerOperationError(scope.provider, cause, "review");
+        throw providerOperationError(
+          scope.connection.provider,
+          cause,
+          "review",
+        );
       }
     }),
 
@@ -3064,8 +3058,7 @@ export const reviewRouter = createTRPCRouter({
           pullRequestId: pullRequests.id,
           pullRequestNumber: pullRequests.number,
           repositoryExternalId: repositories.externalId,
-          provider: providerConnections.provider,
-          connectionId: providerConnections.id,
+          connection: providerConnections,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -3093,7 +3086,7 @@ export const reviewRouter = createTRPCRouter({
       });
       if (!snapshot) {
         return {
-          provider: scope.provider,
+          provider: scope.connection.provider,
           threads: [],
           syncedAt: new Date(),
           answeredUnitIds: [],
@@ -3112,13 +3105,7 @@ export const reviewRouter = createTRPCRouter({
       const units = allUnits.filter(({ kind }) => kind !== "file");
       const paths = new Set(units.map(({ path }) => path));
       try {
-        if (!scope.connectionId) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Provider connection not found",
-          });
-        }
-        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const provider = await providerForConnection(ctx.db, scope.connection);
         const threads = await provider.listInlineCommentThreads(
           scope.repositoryExternalId,
           scope.pullRequestNumber,
@@ -3216,7 +3203,7 @@ export const reviewRouter = createTRPCRouter({
           answeredUnitIds.includes(unitId),
         );
         return {
-          provider: scope.provider,
+          provider: scope.connection.provider,
           threads: assignedThreads
             .filter((thread) => paths.has(thread.path))
             .map((thread) => ({
@@ -3245,7 +3232,7 @@ export const reviewRouter = createTRPCRouter({
       } catch (cause) {
         throw new TRPCError({
           code: "BAD_GATEWAY",
-          message: providerSyncErrorMessage(scope.provider, cause),
+          message: providerSyncErrorMessage(scope.connection.provider, cause),
           cause,
         });
       }
@@ -3346,8 +3333,7 @@ export const reviewRouter = createTRPCRouter({
         .select({
           pullRequestId: pullRequests.id,
           repositoryExternalId: repositories.externalId,
-          provider: providerConnections.provider,
-          connectionId: providerConnections.id,
+          connection: providerConnections,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -3425,7 +3411,7 @@ export const reviewRouter = createTRPCRouter({
         }
       }
 
-      const provider = await providerForScope(ctx.db, scope.connectionId);
+      const provider = await providerForConnection(ctx.db, scope.connection);
       for (const path of candidates) {
         let content: string | undefined;
         try {
@@ -3516,7 +3502,7 @@ export const reviewRouter = createTRPCRouter({
         .select({
           pullRequestId: pullRequests.id,
           repositoryExternalId: repositories.externalId,
-          connectionId: providerConnections.id,
+          connection: providerConnections,
         })
         .from(pullRequests)
         .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
@@ -3892,7 +3878,7 @@ export const reviewRouter = createTRPCRouter({
       const publicationLeaseToken = comment.publicationLeaseToken;
 
       try {
-        const provider = await providerForScope(ctx.db, scope.connectionId);
+        const provider = await providerForConnection(ctx.db, scope.connection);
         const existingThread = retryingPublication
           ? publishedThreadForComment(
               await provider.listInlineCommentThreads(
@@ -3936,7 +3922,10 @@ export const reviewRouter = createTRPCRouter({
         }
         return updated;
       } catch (cause) {
-        const message = providerSyncErrorMessage(scope.provider, cause);
+        const message = providerSyncErrorMessage(
+          scope.connection.provider,
+          cause,
+        );
         await ctx.db
           .update(reviewComments)
           .set({
@@ -4000,7 +3989,7 @@ export const reviewRouter = createTRPCRouter({
         });
         return reply;
       } catch (cause) {
-        throw providerThreadError(scope.provider, cause);
+        throw providerThreadError(scope.connection.provider, cause);
       }
     }),
 
@@ -4023,7 +4012,7 @@ export const reviewRouter = createTRPCRouter({
         });
         return { resolved: input.resolved };
       } catch (cause) {
-        throw providerThreadError(scope.provider, cause);
+        throw providerThreadError(scope.connection.provider, cause);
       }
     }),
 
@@ -4090,7 +4079,7 @@ export const reviewRouter = createTRPCRouter({
           );
         return { edited: true };
       } catch (cause) {
-        throw providerThreadError(scope.provider, cause);
+        throw providerThreadError(scope.connection.provider, cause);
       }
     }),
 
@@ -4136,7 +4125,7 @@ export const reviewRouter = createTRPCRouter({
         });
         return { deleted: 1 };
       } catch (cause) {
-        throw providerThreadError(scope.provider, cause);
+        throw providerThreadError(scope.connection.provider, cause);
       }
     }),
 
@@ -4151,7 +4140,7 @@ export const reviewRouter = createTRPCRouter({
       );
       const thread = await attachedProviderThread(provider, scope, input).catch(
         (cause: unknown) => {
-          throw providerThreadError(scope.provider, cause);
+          throw providerThreadError(scope.connection.provider, cause);
         },
       );
       // Deleting a conversation takes every comment in it, so each one has to
@@ -4193,7 +4182,7 @@ export const reviewRouter = createTRPCRouter({
             : [],
           commentIds: removed,
         });
-        throw providerThreadError(scope.provider, cause);
+        throw providerThreadError(scope.connection.provider, cause);
       }
       await forgetPublishedComments(ctx.db, input.unitId, {
         conversationIds: [thread.externalId],
