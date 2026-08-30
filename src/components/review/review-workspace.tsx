@@ -1192,6 +1192,49 @@ export function ReviewWorkspace({
     setHydratedUnitIds(new Set());
     setSettledUnitIds(new Set());
     const cache = new Map<string, Promise<Uint8Array>>();
+    // Every units change re-runs the workspace's derived file tree, hierarchy
+    // and sort memos, so downloads that settle within one frame are applied as
+    // a single update rather than one per unit.
+    const pendingUnits = new Map<string, (typeof prioritizedUnits)[number]>();
+    const pendingHydratedIds = new Set<string>();
+    const pendingSettledIds = new Set<string>();
+    let flushFrame: number | undefined;
+    /** Applies every unit settled since the last frame in one state update. */
+    const flushHydration = () => {
+      flushFrame = undefined;
+      if (!active) return;
+      if (pendingUnits.size > 0) {
+        const replacements = new Map(pendingUnits);
+        pendingUnits.clear();
+        setUnits((current) =>
+          current.map((unit) => {
+            const replacement = replacements.get(unit.id);
+            return replacement
+              ? {
+                  ...replacement,
+                  status: unit.status,
+                  changedSinceSignOff: unit.changedSinceSignOff,
+                  waitingSince: unit.waitingSince,
+                }
+              : unit;
+          }),
+        );
+      }
+      if (pendingHydratedIds.size > 0) {
+        const added = [...pendingHydratedIds];
+        pendingHydratedIds.clear();
+        setHydratedUnitIds((current) => new Set([...current, ...added]));
+      }
+      if (pendingSettledIds.size > 0) {
+        const added = [...pendingSettledIds];
+        pendingSettledIds.clear();
+        setSettledUnitIds((current) => new Set([...current, ...added]));
+      }
+    };
+    /** Coalesces the per-unit hydration callbacks into one flush per frame. */
+    const scheduleHydrationFlush = () => {
+      flushFrame ??= window.requestAnimationFrame(flushHydration);
+    };
     void Promise.all([
       hydratePrivateReviewSources(
         prioritizedUnits,
@@ -1203,32 +1246,23 @@ export function ReviewWorkspace({
           if (!active) return;
           const original = prioritizedUnits[index];
           if (!original) return;
-          setUnits((current) =>
-            current.map((unit) =>
-              unit.id === original.id
-                ? {
-                    ...hydrated,
-                    status: unit.status,
-                    changedSinceSignOff: unit.changedSinceSignOff,
-                    waitingSince: unit.waitingSince,
-                  }
-                : unit,
-            ),
-          );
+          pendingUnits.set(original.id, hydrated);
           if (
             original.kind === "binary" ||
             original.currentBlobId ||
             original.previousBlobId
           ) {
-            setHydratedUnitIds((current) => new Set(current).add(original.id));
+            pendingHydratedIds.add(original.id);
           }
-          setSettledUnitIds((current) => new Set(current).add(original.id));
+          pendingSettledIds.add(original.id);
+          scheduleHydrationFlush();
         },
         (index) => {
           if (!active) return;
           const original = prioritizedUnits[index];
           if (original) {
-            setSettledUnitIds((current) => new Set(current).add(original.id));
+            pendingSettledIds.add(original.id);
+            scheduleHydrationFlush();
           }
         },
       ),
@@ -1251,6 +1285,8 @@ export function ReviewWorkspace({
       ),
     ]).then(([hydratedUnits, hydratedContexts]) => {
       if (!active) return;
+      if (flushFrame !== undefined) window.cancelAnimationFrame(flushFrame);
+      flushHydration();
       setSourceHydrationPending(false);
       setHydratedUnitIds(
         new Set(
@@ -1280,6 +1316,7 @@ export function ReviewWorkspace({
     return () => {
       active = false;
       controller.abort();
+      if (flushFrame !== undefined) window.cancelAnimationFrame(flushFrame);
       cache.clear();
     };
   }, [sourceHydrationInput, sourceSnapshotId]);
