@@ -31,6 +31,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -156,7 +157,6 @@ import { useImportReferences } from "~/lib/tree-sitter-import-navigation";
 import { useSettledValue } from "~/lib/use-settled-value";
 import { cn } from "~/lib/utils";
 import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
-import { ProviderCommentBody } from "./provider-comment-body";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
@@ -183,6 +183,18 @@ type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
 type ProviderConversationThread = ProviderConversations["threads"][number];
+
+/**
+ * Splits the Markdown renderer out of the review page's first-load bundle.
+ *
+ * react-markdown pulls in the whole remark/rehype/parse5 closure, and every
+ * render site here is behind something the reviewer has to trigger — a
+ * finished AI job, a fetched provider conversation, an opened dialog — so
+ * nothing renders it before the first diff row is interactive.
+ */
+const ProviderCommentBody = dynamic(() =>
+  import("./provider-comment-body").then((m) => m.ProviderCommentBody),
+);
 
 // One shared element: every review-unit command renders the same static icon.
 const unitCommandIcon = <FileCode2 className="size-4" />;
