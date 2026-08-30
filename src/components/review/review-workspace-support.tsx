@@ -1646,15 +1646,15 @@ function nearestMeasuredReviewLine(
 export function InlineAiQuestion({
   autoFocus = true,
   canAsk,
-  draft,
   entries,
+  initialDraft,
   line,
   maximumLine,
   minimumLine,
   onAsk,
-  onChange,
   onClose,
   onDeleteThread,
+  onDraftChange,
   onMove,
   onPreview,
   onPublishProposal,
@@ -1663,15 +1663,15 @@ export function InlineAiQuestion({
 }: {
   autoFocus?: boolean;
   canAsk: boolean;
-  draft: string;
   entries: AiQuestionEntry[];
+  initialDraft: string;
   line: number;
   maximumLine: number;
   minimumLine: number;
-  onAsk: (question?: string) => void;
-  onChange: (value: string) => void;
+  onAsk: (question: string) => void;
   onClose: () => void;
   onDeleteThread?: (jobIds: string[]) => Promise<void>;
+  onDraftChange: (value: string) => void;
   onMove: (line: number) => void;
   onPreview: (line?: number) => void;
   onPublishProposal?: (input: {
@@ -1686,6 +1686,10 @@ export function InlineAiQuestion({
   const previewLine = useRef(line);
   const input = useRef<HTMLTextAreaElement>(null);
   const clearDragListeners = useRef<() => void>(() => undefined);
+  // The composer keeps the question text so a keystroke never re-renders the
+  // workspace tree; the parent only stores it so a line move, which remounts
+  // this card, keeps what the reviewer already typed.
+  const [draft, setDraft] = useState(initialDraft);
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, string>>(
     {},
   );
@@ -1758,6 +1762,16 @@ export function InlineAiQuestion({
     [onPublishProposal, proposalDrafts, publishingProposal],
   );
 
+  /** Sends one question upward and empties the composer for the next one. */
+  const submitQuestion = useCallback(
+    (question: string) => {
+      setDraft("");
+      onDraftChange("");
+      onAsk(question);
+    },
+    [onAsk, onDraftChange],
+  );
+
   useEffect(() => {
     /** Handles line movement and explicitly modified quick questions. */
     function handleComposerShortcuts(event: KeyboardEvent) {
@@ -1781,7 +1795,7 @@ export function InlineAiQuestion({
         event.preventDefault();
         event.stopPropagation();
         if (entries.length === 0) {
-          onAsk(quickQuestion.question);
+          submitQuestion(quickQuestion.question);
         } else {
           void publishProposal(proposals[Number(quickQuestion.key) - 1]);
         }
@@ -1797,7 +1811,14 @@ export function InlineAiQuestion({
     window.addEventListener("keydown", handleComposerShortcuts, true);
     return () =>
       window.removeEventListener("keydown", handleComposerShortcuts, true);
-  }, [canAsk, entries.length, onAsk, onStep, proposals, publishProposal]);
+  }, [
+    canAsk,
+    entries.length,
+    onStep,
+    proposals,
+    publishProposal,
+    submitQuestion,
+  ]);
 
   useEffect(
     () => () => {
@@ -2115,7 +2136,7 @@ export function InlineAiQuestion({
         className="p-3"
         onSubmit={(event) => {
           event.preventDefault();
-          if (canAsk && draft.trim()) onAsk();
+          if (canAsk && draft.trim()) submitQuestion(draft);
         }}
       >
         <textarea
@@ -2124,14 +2145,17 @@ export function InlineAiQuestion({
           value={draft}
           rows={2}
           placeholder="Ask a focused question about this code and its role in the pull request…"
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            onDraftChange(event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
               onClose();
             } else if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              if (canAsk && draft.trim()) onAsk();
+              if (canAsk && draft.trim()) submitQuestion(draft);
             }
           }}
           className="bg-surface/70 text-cloud placeholder:text-fog min-h-16 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none transition focus:border-violet/40"
@@ -2148,7 +2172,7 @@ export function InlineAiQuestion({
                   type="button"
                   disabled={!canAsk}
                   aria-label={`Quick question ${quickQuestion.key}: ${quickQuestion.label}`}
-                  onClick={() => onAsk(quickQuestion.question)}
+                  onClick={() => submitQuestion(quickQuestion.question)}
                   className="border-line bg-surface/40 text-mist hover:border-violet/30 hover:bg-violet/[.06] hover:text-cloud flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-[10px] transition disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <ShortcutHint

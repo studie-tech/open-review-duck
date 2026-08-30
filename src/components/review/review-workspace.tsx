@@ -1226,7 +1226,9 @@ export function ReviewWorkspace({
   const [aiQuestionThreadId, setAiQuestionThreadId] = useState<string>();
   const [focusAiQuestionComposer, setFocusAiQuestionComposer] = useState(false);
   const [aiQuestionPreviewLine, setAiQuestionPreviewLine] = useState<number>();
-  const [aiQuestionDraft, setAiQuestionDraft] = useState("");
+  // A ref, not state: the composer owns the draft while it is mounted, and a
+  // line move remounts it, so this only carries the text across that remount.
+  const aiQuestionDraft = useRef("");
   const [liveAiQuestions, setLiveAiQuestions] = useState<LiveAiQuestion[]>([]);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [activeSyncId, setActiveSyncId] = useState<string>();
@@ -3953,13 +3955,12 @@ export function ReviewWorkspace({
           <InlineAiQuestion
             autoFocus={focusAiQuestionComposer}
             canAsk={canAskAi}
-            draft={aiQuestionDraft}
+            initialDraft={aiQuestionDraft.current}
             entries={lineQuestions}
             line={lineNumber}
             minimumLine={Math.min(activeUnit.startLine, previousUnitStartLine)}
             maximumLine={Math.max(activeUnit.endLine, previousUnitEndLine)}
             onAsk={askAiQuestion}
-            onChange={setAiQuestionDraft}
             onClose={() => {
               if (activeUnitId) {
                 dismissedAiQuestionUnits.current.add(activeUnitId);
@@ -3974,7 +3975,7 @@ export function ReviewWorkspace({
               setAiQuestionThreadId(undefined);
               setFocusAiQuestionComposer(false);
               setAiQuestionPreviewLine(undefined);
-              setAiQuestionDraft("");
+              aiQuestionDraft.current = "";
             }}
             onDeleteThread={async (jobIds) => {
               if (jobIds.length === 0) return;
@@ -4017,7 +4018,7 @@ export function ReviewWorkspace({
               setAiQuestionThreadId(undefined);
               setFocusAiQuestionComposer(false);
               setAiQuestionPreviewLine(undefined);
-              setAiQuestionDraft("");
+              aiQuestionDraft.current = "";
               toast.success("AI conversation deleted", {
                 description:
                   "Previously published pull-request comments were preserved.",
@@ -4025,6 +4026,9 @@ export function ReviewWorkspace({
               for (const input of questionInputs) {
                 void utils.ai.questions.invalidate(input);
               }
+            }}
+            onDraftChange={(value) => {
+              aiQuestionDraft.current = value;
             }}
             onMove={moveAiQuestion}
             onPreview={setAiQuestionPreviewLine}
@@ -4399,7 +4403,7 @@ export function ReviewWorkspace({
     setAiQuestionThreadId(undefined);
     setFocusAiQuestionComposer(false);
     setAiQuestionPreviewLine(undefined);
-    setAiQuestionDraft("");
+    aiQuestionDraft.current = "";
   }, [activeUnitId]);
   // Declared after the reset above so it runs after it in the same commit: a
   // line picked in another member's card survives the switch that opens it.
@@ -4999,16 +5003,10 @@ export function ReviewWorkspace({
   }
 
   /** Sends the current line-focused question to the isolated AI reviewer. */
-  function askAiQuestion(quickQuestion?: string) {
-    if (
-      !activeUnit ||
-      aiQuestionLine === undefined ||
-      !(quickQuestion ?? aiQuestionDraft).trim() ||
-      !canAskAi
-    ) {
-      return;
-    }
-    const question = (quickQuestion ?? aiQuestionDraft).trim();
+  function askAiQuestion(rawQuestion: string) {
+    if (!activeUnit || aiQuestionLine === undefined || !canAskAi) return;
+    const question = rawQuestion.trim();
+    if (!question) return;
     const focusLine = aiQuestionLine;
     const threadId = aiQuestionThreadId ?? crypto.randomUUID();
     if (!aiQuestionThreadId) setAiQuestionThreadId(threadId);
@@ -5026,7 +5024,6 @@ export function ReviewWorkspace({
         threadId,
       },
     ]);
-    setAiQuestionDraft("");
     startAiQuestion.mutate(
       {
         pullRequestId: initialData.pullRequest.id,

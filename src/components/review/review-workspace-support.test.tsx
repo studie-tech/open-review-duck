@@ -1234,7 +1234,7 @@ describe("InlineAiQuestion", () => {
       <InlineAiQuestion
         autoFocus={false}
         canAsk
-        draft=""
+        initialDraft=""
         entries={[
           {
             id: "question-1",
@@ -1248,7 +1248,7 @@ describe("InlineAiQuestion", () => {
         minimumLine={10}
         maximumLine={30}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1268,7 +1268,7 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft="Why is this guard needed?"
+        initialDraft="Why is this guard needed?"
         entries={[
           {
             id: "question-1",
@@ -1282,7 +1282,7 @@ describe("InlineAiQuestion", () => {
         minimumLine={10}
         maximumLine={30}
         onAsk={ask}
-        onChange={change}
+        onDraftChange={change}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1299,7 +1299,42 @@ describe("InlineAiQuestion", () => {
     });
     await user.type(input, "x{Enter}");
     expect(ask).toHaveBeenCalledOnce();
-    expect(change).toHaveBeenCalled();
+    expect(ask).toHaveBeenCalledWith("Why is this guard needed?x");
+    expect(change).toHaveBeenCalledWith("Why is this guard needed?x");
+  });
+
+  it("keeps the typed question local and clears it once submitted", async () => {
+    const ask = vi.fn();
+    const draftChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineAiQuestion
+        canAsk
+        initialDraft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={ask}
+        onClose={vi.fn()}
+        onDraftChange={draftChange}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", {
+      name: "Ask AI about line 17",
+    });
+    await user.type(input, "Why retry twice");
+    expect(input).toHaveValue("Why retry twice");
+    expect(draftChange).toHaveBeenLastCalledWith("Why retry twice");
+
+    await user.type(input, "{Enter}");
+    expect(ask).toHaveBeenCalledExactlyOnceWith("Why retry twice");
+    expect(input).toHaveValue("");
+    expect(draftChange).toHaveBeenLastCalledWith("");
   });
 
   it("moves the focus with the line controls", async () => {
@@ -1308,13 +1343,13 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[]}
         line={17}
         minimumLine={10}
         maximumLine={30}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1335,13 +1370,13 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[]}
         line={17}
         minimumLine={10}
         maximumLine={30}
         onAsk={ask}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1377,13 +1412,13 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft="Compare version "
+        initialDraft="Compare version "
         entries={[]}
         line={17}
         minimumLine={10}
         maximumLine={30}
         onAsk={ask}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1404,7 +1439,7 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[
           {
             id: "question-1",
@@ -1428,7 +1463,7 @@ describe("InlineAiQuestion", () => {
         minimumLine={1}
         maximumLine={20}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1468,7 +1503,7 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[
           {
             id: "question-1",
@@ -1483,7 +1518,7 @@ describe("InlineAiQuestion", () => {
         minimumLine={1}
         maximumLine={20}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onDeleteThread={deleteThread}
         onMove={vi.fn()}
@@ -1519,7 +1554,7 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[
           {
             id: "question-streaming",
@@ -1537,7 +1572,7 @@ describe("InlineAiQuestion", () => {
         minimumLine={1}
         maximumLine={20}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1556,13 +1591,13 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[]}
         line={17}
         minimumLine={10}
         maximumLine={30}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1588,13 +1623,13 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[]}
         line={17}
         minimumLine={10}
         maximumLine={30}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={move}
         onPreview={preview}
@@ -1629,13 +1664,13 @@ describe("InlineAiQuestion", () => {
     render(
       <InlineAiQuestion
         canAsk
-        draft=""
+        initialDraft=""
         entries={[]}
         line={17}
         minimumLine={10}
         maximumLine={30}
         onAsk={vi.fn()}
-        onChange={vi.fn()}
+        onDraftChange={vi.fn()}
         onClose={vi.fn()}
         onMove={move}
         onPreview={preview}
