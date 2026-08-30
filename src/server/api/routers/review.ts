@@ -3649,6 +3649,16 @@ export const reviewRouter = createTRPCRouter({
           orderBy: [reviewComments.createdAt],
         }),
         ctx.db.query.aiJobs.findFirst({
+          columns: { id: true },
+          // The run's `result` carries its summary, annotations, proposals and
+          // concepts for the whole pull request, and this query re-runs on
+          // every unit the reviewer opens, so the findings are cut out in
+          // Postgres rather than deserialized per navigation.
+          extras: {
+            findings: sql<
+              NonNullable<typeof aiJobs.$inferSelect.result>["findings"] | null
+            >`${aiJobs.result} -> 'findings'`.as("findings"),
+          },
           where: and(
             eq(aiJobs.pullRequestId, unit.pullRequestId),
             eq(aiJobs.snapshotId, unit.snapshotId),
@@ -3676,7 +3686,7 @@ export const reviewRouter = createTRPCRouter({
         }),
       ]);
       const findings =
-        reviewJob?.result?.findings.flatMap((finding, index) => {
+        reviewJob?.findings?.flatMap((finding, index) => {
           if (finding.path !== unit.path || finding.line === undefined)
             return [];
           const target = pathUnits
