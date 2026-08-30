@@ -946,8 +946,15 @@ interface LiveAiQuestion {
 
 import { reviewSessionMachine } from "./review-session-machine";
 import {
-  AskAiLineButton,
+  ReviewFileCardHeader,
+  ReviewFileUnitMarker,
   actionableReviewCardMember,
+  relatedReviewRanges,
+  reviewCardRanges,
+  reviewedFileCard,
+} from "./review-file-card";
+import {
+  AskAiLineButton,
   aiConversationVisibility,
   CONTEXT_PAGE_LINES,
   ConceptMoveDialog,
@@ -969,20 +976,15 @@ import {
   providerLabel,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
-  ReviewFileCardHeader,
   ReviewFileCardSourcePlaceholder,
-  ReviewFileUnitMarker,
   ReviewHierarchyDialog,
   ReviewPathUnit,
   ReviewRevisionLoadedNotice,
   ReviewScopeMarker,
   ReviewUnitViewOptions,
-  relatedReviewRanges,
   rememberAiConversationVisibility,
   reviewProviderWebUrl,
   reviewCardMemberForLine,
-  reviewCardRanges,
-  reviewedFileCard,
   reviewShortcuts,
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
