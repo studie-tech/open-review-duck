@@ -312,9 +312,23 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
     [files, filter, search],
   );
   const tree = useMemo(() => buildReviewFileTree(filtered), [filtered]);
+  // A query or a filter has to show what it matched, so the render opens the
+  // ancestors of every surviving file. Keeping that out of `expanded` leaves
+  // the reviewer's own folders untouched once the query clears.
+  const searching = search.trim().length > 0 || filter !== "all";
+  const openPaths = useMemo(
+    () =>
+      searching
+        ? new Set([
+            ...expanded,
+            ...filtered.flatMap((file) => reviewFileAncestorPaths(file.path)),
+          ])
+        : expanded,
+    [expanded, filtered, searching],
+  );
   const visibleItems = useMemo(
-    () => visibleReviewFileTreeItems(tree, expanded),
-    [expanded, tree],
+    () => visibleReviewFileTreeItems(tree, openPaths),
+    [openPaths, tree],
   );
 
   // Sign-off and next/previous file change `selectedPath` from outside the
@@ -478,7 +492,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
               level={0}
               selectedPath={selectedPath}
               pendingFileIds={pendingFileIds}
-              expanded={expanded}
+              expanded={openPaths}
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}
               onToggle={onToggle}

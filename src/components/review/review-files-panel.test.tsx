@@ -452,6 +452,48 @@ describe("ReviewFilesPanel", () => {
       screen.queryByRole("button", { name: /workspace\.ts/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("reveals a nested search match and re-collapses when the query clears", () => {
+    const { rerender } = render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <ReviewFilesPanel
+        files={files}
+        search="workspace"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /workspace\.ts/i }),
+    ).toBeVisible();
+
+    rerender(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps its rows mounted when the view around it renders", async () => {
     const user = userEvent.setup();
     let progressReads = 0;
