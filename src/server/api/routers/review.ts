@@ -747,33 +747,37 @@ async function providerScopeForPullRequest(
   userId: string,
   pullRequestId: string,
 ) {
-  const [scope] = await db
-    .select({
-      pullRequestId: pullRequests.id,
-      pullRequestNumber: pullRequests.number,
-      pullRequestState: pullRequests.state,
-      headSha: pullRequests.headSha,
-      baseSha: pullRequests.baseSha,
-      repositoryExternalId: repositories.externalId,
-      connection: providerConnections,
-    })
-    .from(pullRequests)
-    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-    .innerJoin(
-      providerConnections,
-      eq(repositories.connectionId, providerConnections.id),
-    )
-    .innerJoin(
-      workspaceMembers,
-      eq(repositories.workspaceId, workspaceMembers.workspaceId),
-    )
-    .where(accessiblePullRequest(userId, pullRequestId))
-    .limit(1);
+  // The snapshot is keyed on the id the authorization filters on, so it reads
+  // nothing that lookup produces and shares its round trip.
+  const [[scope], snapshot] = await Promise.all([
+    db
+      .select({
+        pullRequestId: pullRequests.id,
+        pullRequestNumber: pullRequests.number,
+        pullRequestState: pullRequests.state,
+        headSha: pullRequests.headSha,
+        baseSha: pullRequests.baseSha,
+        repositoryExternalId: repositories.externalId,
+        connection: providerConnections,
+      })
+      .from(pullRequests)
+      .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+      .innerJoin(
+        providerConnections,
+        eq(repositories.connectionId, providerConnections.id),
+      )
+      .innerJoin(
+        workspaceMembers,
+        eq(repositories.workspaceId, workspaceMembers.workspaceId),
+      )
+      .where(accessiblePullRequest(userId, pullRequestId))
+      .limit(1),
+    db.query.reviewSnapshots.findFirst({
+      where: eq(reviewSnapshots.pullRequestId, pullRequestId),
+      orderBy: [desc(reviewSnapshots.version)],
+    }),
+  ]);
   if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
-  const snapshot = await db.query.reviewSnapshots.findFirst({
-    where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
-    orderBy: [desc(reviewSnapshots.version)],
-  });
   return { ...scope, snapshot };
 }
 
@@ -2168,43 +2172,49 @@ export const reviewRouter = createTRPCRouter({
   workspace: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
-      const [pullRequest] = await ctx.db
-        .select({
-          id: pullRequests.id,
-          number: pullRequests.number,
-          title: pullRequests.title,
-          description: pullRequests.description,
-          authorLogin: pullRequests.authorLogin,
-          sourceBranch: pullRequests.sourceBranch,
-          targetBranch: pullRequests.targetBranch,
-          headSha: pullRequests.headSha,
-          baseSha: pullRequests.baseSha,
-          webUrl: pullRequests.webUrl,
-          repositoryId: repositories.id,
-          repositoryOwner: repositories.owner,
-          repositoryName: repositories.name,
-          repositoryWebUrl: repositories.webUrl,
-          provider: providerConnections.provider,
-        })
-        .from(pullRequests)
-        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
-          workspaceMembers,
-          eq(repositories.workspaceId, workspaceMembers.workspaceId),
-        )
-        .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
-        .limit(1);
-      if (!pullRequest) throw new TRPCError({ code: "NOT_FOUND" });
-      const [snapshot, previousSnapshot] =
-        await ctx.db.query.reviewSnapshots.findMany({
-          where: eq(reviewSnapshots.pullRequestId, pullRequest.id),
+      // The two newest snapshots are keyed on the id the authorization filters
+      // on, so they read nothing that lookup produces and share its round trip.
+      const [[pullRequest], [snapshot, previousSnapshot]] = await Promise.all([
+        ctx.db
+          .select({
+            id: pullRequests.id,
+            number: pullRequests.number,
+            title: pullRequests.title,
+            description: pullRequests.description,
+            authorLogin: pullRequests.authorLogin,
+            sourceBranch: pullRequests.sourceBranch,
+            targetBranch: pullRequests.targetBranch,
+            headSha: pullRequests.headSha,
+            baseSha: pullRequests.baseSha,
+            webUrl: pullRequests.webUrl,
+            repositoryId: repositories.id,
+            repositoryOwner: repositories.owner,
+            repositoryName: repositories.name,
+            repositoryWebUrl: repositories.webUrl,
+            provider: providerConnections.provider,
+          })
+          .from(pullRequests)
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            providerConnections,
+            eq(repositories.connectionId, providerConnections.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
+          .limit(1),
+        ctx.db.query.reviewSnapshots.findMany({
+          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
           orderBy: [desc(reviewSnapshots.version)],
           limit: 2,
-        });
+        }),
+      ]);
+      if (!pullRequest) throw new TRPCError({ code: "NOT_FOUND" });
       if (!snapshot)
         return {
           pullRequest,
@@ -3042,9 +3052,9 @@ export const reviewRouter = createTRPCRouter({
   providerConversations: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
-      // The reviewer-wide gate reads nothing the lookup produces, so the two
-      // share one round trip.
-      const [[scope]] = await Promise.all([
+      // The reviewer-wide gate and the snapshot both read nothing the lookup
+      // produces, so the three share one round trip.
+      const [[scope], snapshot] = await Promise.all([
         ctx.db
           .select({
             pullRequestId: pullRequests.id,
@@ -3067,6 +3077,10 @@ export const reviewRouter = createTRPCRouter({
           )
           .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
           .limit(1),
+        ctx.db.query.reviewSnapshots.findFirst({
+          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+          orderBy: [desc(reviewSnapshots.version)],
+        }),
         enforceRateLimit(
           ctx.db,
           `review-conversations:${ctx.auth.userId}`,
@@ -3082,10 +3096,6 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
 
-      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
-        orderBy: [desc(reviewSnapshots.version)],
-      });
       if (!snapshot) {
         return {
           provider: scope.connection.provider,
@@ -3331,31 +3341,36 @@ export const reviewRouter = createTRPCRouter({
   importTarget: protectedProcedure
     .input(importTargetSchema)
     .query(async ({ ctx, input }) => {
-      const [scope] = await ctx.db
-        .select({
-          pullRequestId: pullRequests.id,
-          repositoryExternalId: repositories.externalId,
-          connection: providerConnections,
-        })
-        .from(pullRequests)
-        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
-          workspaceMembers,
-          eq(repositories.workspaceId, workspaceMembers.workspaceId),
-        )
-        .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
-        .limit(1);
-      if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
-        orderBy: [desc(reviewSnapshots.version)],
-      });
-      if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      // The snapshot is keyed on the id the authorization filters on, so it
+      // reads nothing that lookup produces and shares its round trip.
+      const [[scope], snapshot] = await Promise.all([
+        ctx.db
+          .select({
+            pullRequestId: pullRequests.id,
+            repositoryExternalId: repositories.externalId,
+            connection: providerConnections,
+          })
+          .from(pullRequests)
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            providerConnections,
+            eq(repositories.connectionId, providerConnections.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
+          .limit(1),
+        ctx.db.query.reviewSnapshots.findFirst({
+          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+          orderBy: [desc(reviewSnapshots.version)],
+        }),
+      ]);
+      if (!scope || !snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
       const candidates = importPathCandidates(
         input.sourcePath,
@@ -3500,30 +3515,36 @@ export const reviewRouter = createTRPCRouter({
         240,
         60_000,
       );
-      const [scope] = await ctx.db
-        .select({
-          pullRequestId: pullRequests.id,
-          repositoryExternalId: repositories.externalId,
-          connection: providerConnections,
-        })
-        .from(pullRequests)
-        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .innerJoin(
-          providerConnections,
-          eq(repositories.connectionId, providerConnections.id),
-        )
-        .innerJoin(
-          workspaceMembers,
-          eq(repositories.workspaceId, workspaceMembers.workspaceId),
-        )
-        .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
-        .limit(1);
-      if (!scope) throw new TRPCError({ code: "NOT_FOUND" });
-      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        where: eq(reviewSnapshots.pullRequestId, scope.pullRequestId),
-        orderBy: [desc(reviewSnapshots.version)],
-      });
-      if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      // The snapshot is keyed on the id the authorization filters on, so it
+      // reads nothing that lookup produces and shares its round trip.
+      const [[scope], snapshot] = await Promise.all([
+        ctx.db
+          .select({
+            pullRequestId: pullRequests.id,
+            repositoryExternalId: repositories.externalId,
+            connection: providerConnections,
+          })
+          .from(pullRequests)
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            providerConnections,
+            eq(repositories.connectionId, providerConnections.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
+          .limit(1),
+        ctx.db.query.reviewSnapshots.findFirst({
+          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+          orderBy: [desc(reviewSnapshots.version)],
+        }),
+      ]);
+      if (!scope || !snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
       const parsedFile = await parsedSymbolFile(ctx.db, snapshot.id, input);
       // Browser-side import parsing is progressive: a reviewer can hover a
@@ -3686,23 +3707,29 @@ export const reviewRouter = createTRPCRouter({
   deepReviewFindings: protectedProcedure
     .input(reviewWorkspaceSchema)
     .query(async ({ ctx, input }) => {
-      const [accessible] = await ctx.db
-        .select({ id: pullRequests.id })
-        .from(pullRequests)
-        .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-        .innerJoin(
-          workspaceMembers,
-          eq(repositories.workspaceId, workspaceMembers.workspaceId),
-        )
-        .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
-        .limit(1);
+      // The snapshot is keyed on the id the authorization filters on, so it
+      // reads nothing that lookup produces and shares its round trip.
+      const [[accessible], snapshot] = await Promise.all([
+        ctx.db
+          .select({ id: pullRequests.id })
+          .from(pullRequests)
+          .innerJoin(
+            repositories,
+            eq(pullRequests.repositoryId, repositories.id),
+          )
+          .innerJoin(
+            workspaceMembers,
+            eq(repositories.workspaceId, workspaceMembers.workspaceId),
+          )
+          .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
+          .limit(1),
+        ctx.db.query.reviewSnapshots.findFirst({
+          columns: { id: true },
+          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+          orderBy: [desc(reviewSnapshots.version)],
+        }),
+      ]);
       if (!accessible) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        columns: { id: true },
-        where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
-        orderBy: [desc(reviewSnapshots.version)],
-      });
       if (!snapshot) return null;
 
       // The same scope `ai.reviewStatus` resolves a run by, and the only one
