@@ -10,6 +10,7 @@ import {
   pullRequests,
   repositories,
   repositoryBranchMonitors,
+  repositoryBranchSyncRuns,
   reviewSnapshots,
   users,
   workspaceMembers,
@@ -34,6 +35,7 @@ const fixture = {
   itemId: randomUUID(),
   findingId: `finding-${randomUUID()}`,
   activeJobId: randomUUID(),
+  syncRunId: randomUUID(),
 };
 
 const createCaller = createCallerFactory(repoReviewsRouter);
@@ -249,5 +251,36 @@ describe("repoReviews.get", () => {
     await expect(
       caller(fixture.otherUserId).get({ monitorId: fixture.monitorId }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("repoReviews.runProgress", () => {
+  it("reports the run state the monitor list shows, scoped to the workspace", async () => {
+    await db.insert(repositoryBranchSyncRuns).values({
+      id: fixture.syncRunId,
+      workspaceId: fixture.workspaceId,
+      monitorId: fixture.monitorId,
+      status: "running",
+      progress: 28,
+    });
+
+    const [monitor] = await caller(fixture.userId).list();
+    const [progress] = await caller(fixture.userId).runProgress();
+
+    expect(progress).toEqual({
+      monitorId: fixture.monitorId,
+      activeSync: {
+        id: fixture.syncRunId,
+        status: "running",
+        progress: 28,
+        error: null,
+      },
+      latestCodeRun: monitor?.latestCodeRun,
+      latestComplianceRun: monitor?.latestComplianceRun,
+    });
+    expect(monitor?.activeSync).toEqual(progress?.activeSync);
+    await expect(caller(fixture.otherUserId).runProgress()).resolves.toEqual(
+      [],
+    );
   });
 });

@@ -40,6 +40,11 @@ import {
   repositoryReportFilename,
   repositoryReviewReport,
 } from "~/lib/repository-review-report";
+import {
+  activeRunStatuses,
+  hasActiveRepositoryRun,
+  mergeRepositoryRunProgress,
+} from "~/lib/repository-run-progress";
 import { repositorySyncActivity } from "~/lib/repository-sync-progress";
 import { cockpitShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
@@ -49,12 +54,6 @@ type Monitors = RouterOutputs["repoReviews"]["list"];
 type Repositories = RouterOutputs["provider"]["listImportedRepositories"];
 type Section = "overview" | "findings" | "rules" | "history";
 const EMPTY_UUID = "00000000-0000-4000-8000-000000000000";
-const activeStatuses = new Set([
-  "queued",
-  "waiting_for_provider",
-  "running",
-  "streaming",
-]);
 
 const providerLabel = {
   github: "GitHub",
@@ -89,7 +88,7 @@ function relativeTime(value: Date | null | undefined) {
 
 /** Renders a durable review run's compact live state. */
 function RunStatus({ status, progress }: { status: string; progress: number }) {
-  const active = activeStatuses.has(status);
+  const active = activeRunStatuses.has(status);
   return (
     <span className="inline-flex items-center gap-2 text-xs text-mist">
       <span
@@ -125,20 +124,29 @@ export function RepoReviewsContent({
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
-      query.state.data?.some(
-        (monitor) =>
-          monitor.activeSync ||
-          activeStatuses.has(monitor.latestCodeRun?.status ?? "") ||
-          activeStatuses.has(monitor.latestComplianceRun?.status ?? ""),
-      )
-        ? 1_500
-        : false,
+      query.state.data?.some(({ activeSync }) => activeSync) ? 1_500 : false,
   });
+  const monitors = monitorsQuery.data ?? initialMonitors;
+  const runsActive = hasActiveRepositoryRun(monitors);
+  const runProgressQuery = api.repoReviews.runProgress.useQuery(undefined, {
+    enabled: runsActive,
+    refetchInterval: runsActive ? 1_500 : false,
+  });
+  const runProgress = runProgressQuery.data;
+  // `list` reads every review unit and snapshot file of every monitor, and an
+  // AI run stays live for minutes, so its status and percentage arrive through
+  // the narrow progress read and are folded into the same cache.
+  useEffect(() => {
+    if (!runProgress) return;
+    utils.repoReviews.list.setData(
+      undefined,
+      (cached) => cached && mergeRepositoryRunProgress(cached, runProgress),
+    );
+  }, [runProgress, utils]);
   const repositoriesQuery = api.provider.listImportedRepositories.useQuery(
     undefined,
     { initialData: initialRepositories },
   );
-  const monitors = monitorsQuery.data ?? initialMonitors;
   const [selectedMonitorId, setSelectedMonitorId] = useState(
     initialMonitors.some(({ id }) => id === initialMonitorId)
       ? initialMonitorId
@@ -542,7 +550,7 @@ function RepositoryCockpit({
         shortcut: cockpitShortcuts.runCodeAudit,
         disabled:
           !monitor.snapshot ||
-          activeStatuses.has(monitor.latestCodeRun?.status ?? ""),
+          activeRunStatuses.has(monitor.latestCodeRun?.status ?? ""),
         onSelect: () => startRun("code"),
       },
       {
@@ -559,7 +567,7 @@ function RepositoryCockpit({
         disabled:
           !monitor.snapshot ||
           rules.isLoading ||
-          activeStatuses.has(monitor.latestComplianceRun?.status ?? ""),
+          activeRunStatuses.has(monitor.latestComplianceRun?.status ?? ""),
         onSelect: () => startRun("compliance"),
       },
     ],
@@ -812,17 +820,17 @@ function Overview({
               className="w-full"
               loading={
                 runPendingPurpose === "code" ||
-                activeStatuses.has(monitor.latestCodeRun?.status ?? "")
+                activeRunStatuses.has(monitor.latestCodeRun?.status ?? "")
               }
               disabled={
                 !monitor.snapshot ||
-                activeStatuses.has(monitor.latestCodeRun?.status ?? "")
+                activeRunStatuses.has(monitor.latestCodeRun?.status ?? "")
               }
               onClick={() => startRun("code")}
             >
               <Code2 className="size-4" />
               {runPendingPurpose === "code" ||
-              activeStatuses.has(monitor.latestCodeRun?.status ?? "")
+              activeRunStatuses.has(monitor.latestCodeRun?.status ?? "")
                 ? "Running…"
                 : "Run code audit"}
               <ShortcutHint
@@ -851,18 +859,22 @@ function Overview({
                 variant="secondary"
                 loading={
                   runPendingPurpose === "compliance" ||
-                  activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
+                  activeRunStatuses.has(
+                    monitor.latestComplianceRun?.status ?? "",
+                  )
                 }
                 disabled={
                   !monitor.snapshot ||
                   rules.isLoading ||
-                  activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
+                  activeRunStatuses.has(
+                    monitor.latestComplianceRun?.status ?? "",
+                  )
                 }
                 onClick={() => startRun("compliance")}
               >
                 <ShieldCheck className="size-4" />
                 {runPendingPurpose === "compliance" ||
-                activeStatuses.has(monitor.latestComplianceRun?.status ?? "")
+                activeRunStatuses.has(monitor.latestComplianceRun?.status ?? "")
                   ? "Checking…"
                   : enabledRuleCount === 0
                     ? "Set up rules"
@@ -990,7 +1002,7 @@ function Findings({
     { monitorId: monitor.id },
     {
       refetchInterval: (query) =>
-        query.state.data?.some(({ status }) => activeStatuses.has(status))
+        query.state.data?.some(({ status }) => activeRunStatuses.has(status))
           ? 1_500
           : false,
     },
@@ -1029,7 +1041,9 @@ function Findings({
     {
       enabled: Boolean(selectedJobId),
       refetchInterval:
-        selectedRun && activeStatuses.has(selectedRun.status) ? 1_500 : false,
+        selectedRun && activeRunStatuses.has(selectedRun.status)
+          ? 1_500
+          : false,
     },
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1143,12 +1157,12 @@ function Findings({
             loading={deleteReport.isPending}
             disabled={
               !selectedRun ||
-              activeStatuses.has(selectedRun.status) ||
+              activeRunStatuses.has(selectedRun.status) ||
               deleteReport.isPending
             }
             aria-label="Delete repository report"
             title={
-              selectedRun && activeStatuses.has(selectedRun.status)
+              selectedRun && activeRunStatuses.has(selectedRun.status)
                 ? "A running report cannot be deleted"
                 : "Delete this report and its findings"
             }
@@ -1170,7 +1184,7 @@ function Findings({
           </Button>
         </div>
       </div>
-      {selectedRun && activeStatuses.has(selectedRun.status) && (
+      {selectedRun && activeRunStatuses.has(selectedRun.status) && (
         <div className="rounded-2xl border border-amber-400/20 bg-amber-400/7 p-4">
           <div className="flex items-center justify-between text-xs text-amber-200">
             <span>Reviewing repository snapshot…</span>
@@ -1317,7 +1331,7 @@ function Findings({
       </div>
       {payload &&
         visibleFindings.length === 0 &&
-        !activeStatuses.has(payload.status) && (
+        !activeRunStatuses.has(payload.status) && (
           <div className="rounded-2xl border border-line bg-surface py-16 text-center">
             <CheckCircle2 className="mx-auto size-8 text-lime" />
             <h3 className="mt-4 font-semibold text-cloud">
@@ -1605,7 +1619,7 @@ function History({
     { monitorId: monitor.id },
     {
       refetchInterval: (query) =>
-        query.state.data?.some(({ status }) => activeStatuses.has(status))
+        query.state.data?.some(({ status }) => activeRunStatuses.has(status))
           ? 1_500
           : false,
     },

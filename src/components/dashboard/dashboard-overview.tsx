@@ -23,6 +23,7 @@ import {
   LinkPendingSpinner,
 } from "~/components/ui/link-status";
 import { prioritizeInbox } from "~/lib/priority-inbox";
+import { activeRunStatuses } from "~/lib/repository-run-progress";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
 import { cn } from "~/lib/utils";
@@ -208,9 +209,7 @@ export function DashboardOverview({
     ({ activeSync, latestCodeRun, latestComplianceRun }) =>
       activeSync ||
       [latestCodeRun?.status, latestComplianceRun?.status].some((status) =>
-        ["queued", "waiting_for_provider", "running", "streaming"].includes(
-          status ?? "",
-        ),
+        activeRunStatuses.has(status ?? ""),
       ),
   ).length;
   const attentionCount = needsReview.length + repositoryAttentionCount;
