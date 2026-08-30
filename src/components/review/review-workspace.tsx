@@ -126,6 +126,7 @@ import {
   isHeavyReviewSource,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
+  reviewSourceLineCount,
 } from "~/lib/review-source-display";
 import {
   currentChangedLineIndexes,
@@ -2182,9 +2183,13 @@ export function ReviewWorkspace({
   const diffCurrentSource =
     activeModule?.source ??
     (activeUnit?.changeType === "deleted" ? "" : (activeUnit?.source ?? ""));
-  const overviewLineCount = Math.max(
-    diffCurrentSource ? diffCurrentSource.split("\n").length : 0,
-    diffPreviousSource ? diffPreviousSource.split("\n").length : 0,
+  const overviewLineCount = useMemo(
+    () =>
+      Math.max(
+        reviewSourceLineCount(diffCurrentSource),
+        reviewSourceLineCount(diffPreviousSource),
+      ),
+    [diffCurrentSource, diffPreviousSource],
   );
   const overviewEnabled =
     Boolean(activeUnit) &&
