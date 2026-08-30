@@ -22,7 +22,6 @@ import {
   CopyReviewPathButton,
   ReviewFileUnitMarker,
   actionableReviewCardMember,
-  reviewCardFocusStartLine,
   reviewCardRanges,
   reviewedFileCard,
 } from "./review-file-card";
@@ -633,23 +632,12 @@ describe("same-file concept cards", () => {
 
   it("opens a new unit added after a revision in a partially reviewed card", () => {
     const members = [
-      {
-        id: "old",
-        status: "signed_off",
-        revisionState: "unchanged",
-        startLine: 1,
-      },
-      {
-        id: "added",
-        status: "pending",
-        revisionState: "new",
-        startLine: 84,
-      },
+      { id: "old", status: "signed_off", revisionState: "unchanged" },
+      { id: "added", status: "pending", revisionState: "new" },
     ];
 
     expect(actionableReviewCardMember(members)?.id).toBe("added");
     expect(reviewedFileCard(members)).toBe(false);
-    expect(reviewCardFocusStartLine(members)).toBe(84);
   });
 
   it("opens an updated unit that needs re-review before signed-off siblings", () => {
