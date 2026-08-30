@@ -151,6 +151,23 @@ type ReaderData = ComponentProps<typeof RepositoryReader>["initialData"];
 function makeData(units: ReturnType<typeof makeUnit>[]): ReaderData {
   return {
     units,
+    files: [
+      ...new Map(
+        units.map((unit) => [
+          unit.path,
+          {
+            id: unit.snapshotFileId,
+            path: unit.path,
+            previousPath: null,
+            changeType: unit.changeType,
+            additions: 0,
+            deletions: 0,
+            isBinary: unit.kind === "binary",
+            skipReason: null,
+          },
+        ]),
+      ).values(),
+    ],
     fileContexts: [],
     snapshot: null,
   } as unknown as ReaderData;
