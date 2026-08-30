@@ -1,0 +1,1 @@
+CREATE INDEX "review_unit_path_idx" ON "open_review_duck_review_unit" USING btree ("snapshotId","path");

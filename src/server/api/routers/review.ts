@@ -3652,6 +3652,14 @@ export const reviewRouter = createTRPCRouter({
           orderBy: [desc(aiJobs.createdAt)],
         }),
         ctx.db.query.reviewUnits.findMany({
+          columns: {
+            changeType: true,
+            endLine: true,
+            id: true,
+            kind: true,
+            relatedRanges: true,
+            startLine: true,
+          },
           where: and(
             eq(reviewUnits.snapshotId, unit.snapshotId),
             eq(reviewUnits.path, unit.path),

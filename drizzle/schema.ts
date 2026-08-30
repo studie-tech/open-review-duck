@@ -766,6 +766,10 @@ export const reviewUnits = createTable(
     // that identifies a unit inside its snapshot has to be referenceable.
     uniqueIndex("review_unit_scope_idx").on(t.id, t.snapshotId),
     index("review_order_idx").on(t.snapshotId, t.reviewOrder),
+    // Symbol peeks and unit selection ask for the units of one path, and a
+    // snapshot holds thousands, so the path has to be seekable next to the
+    // snapshot rather than filtered out of every row.
+    index("review_unit_path_idx").on(t.snapshotId, t.path),
     // Snapshot pruning cascades from snapshot_file, and source-blob collection
     // has to prove no unit still references a blob. Without these the referential
     // triggers scan the whole unit table once per parent row.
