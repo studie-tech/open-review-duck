@@ -90,9 +90,9 @@ const DEEP_REVIEW_PLAN_LINE_THRESHOLD = env.DEEP_REVIEW_PLAN_LINE_THRESHOLD;
 /**
  * Concurrent tool bodies per file scout.
  *
- * The single-agent loop hard-codes four, sized for one agent holding the whole
- * connection pool. A fan-out multiplies this by the number of files in flight,
- * so the child path runs narrower until `DATABASE_POOL_MAX` is measured.
+ * The runtime pool floor is derived from this, so a scout's widest wave of
+ * statements never has to queue behind itself; a fan-out that runs several
+ * scouts in one process multiplies it and wants `DATABASE_POOL_MAX` raised.
  */
 const DEEP_REVIEW_TOOL_SLOTS = env.DEEP_REVIEW_TOOL_SLOTS;
 

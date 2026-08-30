@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@/drizzle/schema";
 import { env } from "~/env";
-import { nodePostgresPoolConfig } from "./pool";
+import { nodePostgresPoolConfig, reviewPoolSize } from "./pool";
 
 /**
  * Cache the database connection in development. This avoids creating a new connection on every HMR
@@ -17,14 +17,11 @@ const pool =
   new Pool(
     nodePostgresPoolConfig({
       connectionString: env.DATABASE_URL,
-      // Sized to the review fan-out: every file under review holds its own
-      // statements, so the pool has to cover the widest wave plus the status
-      // polling and the maintenance cron. Development honours the same setting
-      // so a fan-out can be exercised locally.
-      max:
-        env.NODE_ENV === "production"
-          ? env.DATABASE_POOL_MAX
-          : Math.min(env.DATABASE_POOL_MAX, 8),
+      max: reviewPoolSize({
+        configured: env.DATABASE_POOL_MAX,
+        toolSlots: env.DEEP_REVIEW_TOOL_SLOTS,
+        development: env.NODE_ENV !== "production",
+      }),
       idleTimeoutMillis: 20_000,
       connectionTimeoutMillis: 15_000,
       keepAlive: true,

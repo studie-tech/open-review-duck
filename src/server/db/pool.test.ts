@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { nodePostgresPoolConfig } from "./pool";
+import { nodePostgresPoolConfig, reviewPoolSize } from "./pool";
+
+describe("reviewPoolSize", () => {
+  it("covers a file scout's tool slots when the configured pool is smaller", () => {
+    expect(
+      reviewPoolSize({ configured: 5, toolSlots: 4, development: false }),
+    ).toBe(8);
+  });
+
+  it("keeps a configured pool wider than the fan-out floor", () => {
+    expect(
+      reviewPoolSize({ configured: 32, toolSlots: 4, development: false }),
+    ).toBe(32);
+  });
+
+  it("grows with the tool slots a scout is given", () => {
+    expect(
+      reviewPoolSize({ configured: 5, toolSlots: 16, development: false }),
+    ).toBe(20);
+  });
+
+  it("runs the floor alone in development", () => {
+    expect(
+      reviewPoolSize({ configured: 50, toolSlots: 4, development: true }),
+    ).toBe(8);
+  });
+});
 
 describe("nodePostgresPoolConfig", () => {
   it("uses a client query timeout without unsupported startup parameters", () => {
