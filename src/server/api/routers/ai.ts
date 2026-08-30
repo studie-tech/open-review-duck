@@ -120,25 +120,27 @@ function aiStartErrorMessage(cause: unknown) {
 export const aiRouter = createTRPCRouter({
   configuration: protectedProcedure.query(async ({ ctx }) => {
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-    const preference = await ctx.db.query.aiPreferences.findFirst({
-      where: eq(aiPreferences.workspaceId, workspace.id),
-    });
     const local = isLocalDeployment();
-    const localConfiguration = local
-      ? await ctx.db.query.localAiConfigurations.findFirst({
-          where: eq(localAiConfigurations.workspaceId, workspace.id),
-        })
-      : undefined;
+    const [preference, localConfiguration, user] = await Promise.all([
+      ctx.db.query.aiPreferences.findFirst({
+        where: eq(aiPreferences.workspaceId, workspace.id),
+      }),
+      local
+        ? ctx.db.query.localAiConfigurations.findFirst({
+            where: eq(localAiConfigurations.workspaceId, workspace.id),
+          })
+        : undefined,
+      ctx.db.query.users.findFirst({
+        columns: { isAdmin: true },
+        where: eq(users.id, ctx.auth.userId),
+      }),
+    ]);
     const localSecret = localConfiguration
       ? await readLocalAiSecret(workspace.id, localConfiguration)
       : undefined;
     const managedModel = local
       ? (preference?.selectedModel ?? "")
       : managedSaasModel();
-    const user = await ctx.db.query.users.findFirst({
-      columns: { isAdmin: true },
-      where: eq(users.id, ctx.auth.userId),
-    });
     return {
       canEditPrompts: Boolean(user?.isAdmin),
       mode: preference?.mode ?? workspace.aiMode,
