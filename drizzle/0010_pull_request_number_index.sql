@@ -1,0 +1,1 @@
+CREATE INDEX "pull_request_number_idx" ON "open_review_duck_pull_request" USING btree ("repositoryId","number");
