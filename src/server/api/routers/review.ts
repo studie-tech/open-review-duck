@@ -41,6 +41,7 @@ import {
   workspaceMembers,
 } from "@/drizzle/schema";
 import { conceptStatusFromMembers } from "~/lib/concept-progress";
+import { mapWithLimit } from "~/lib/concurrency";
 import {
   findImportedDeclarationLine,
   findImportTargetUnit,
@@ -432,6 +433,62 @@ const MAXIMUM_IMPORT_READS = 8;
 
 const DIRECTORY_IMPORT = /\/(?:index\.[^./]+|__init__\.py)$/;
 
+/**
+ * How many candidate paths one wave of import probes may hold open at once.
+ *
+ * A wave is what the provider is asked for before any of it is judged, so it
+ * is the most a resolution can overspend by, and it is held to the same bound
+ * the reads for a single name are given.
+ */
+const IMPORT_PROBE_WAVE = 8;
+
+/** One candidate path's read: its content, a 404, or the failure. */
+type ImportCandidateRead =
+  | { kind: "content"; content: string | undefined; path: string }
+  | { kind: "failed"; cause: unknown; path: string }
+  | { kind: "missing" };
+
+/**
+ * Reads import candidates in waves, yielding each read in candidate order.
+ *
+ * At most one candidate is the file, so every path ahead of it is a 404 a
+ * hover waits through. Probing a wave at a time overlaps those misses while
+ * the order the runtime itself resolves in still decides the answer, and
+ * leaving the iterator early means the waves behind it are never requested.
+ */
+export async function* importCandidateReads(
+  provider: Pick<PullRequestProvider, "getFileContent">,
+  repositoryExternalId: string,
+  headSha: string,
+  candidates: string[],
+) {
+  for (let start = 0; start < candidates.length; start += IMPORT_PROBE_WAVE) {
+    yield* await mapWithLimit(
+      candidates.slice(start, start + IMPORT_PROBE_WAVE),
+      IMPORT_PROBE_WAVE,
+      async (path): Promise<ImportCandidateRead> => {
+        try {
+          return {
+            kind: "content",
+            content: await provider.getFileContent(
+              repositoryExternalId,
+              path,
+              headSha,
+              150_000,
+            ),
+            path,
+          };
+        } catch (cause) {
+          if (cause instanceof ProviderError && cause.status === 404) {
+            return { kind: "missing" };
+          }
+          return { kind: "failed", cause, path };
+        }
+      },
+    );
+  }
+}
+
 interface ParsedSymbolFile {
   declarations: Map<string, ReturnType<typeof symbolDefinitionOf>>;
   imports: ReturnType<typeof parseImportReferences>;
@@ -613,33 +670,32 @@ async function importedSymbolDefinition(
       .filter((path) => DIRECTORY_IMPORT.test(path))
       .slice(0, MAXIMUM_IMPORT_READS),
   ];
-  for (const path of reads) {
-    let content: string | undefined;
-    try {
-      content = await provider.getFileContent(
-        scope.repositoryExternalId,
-        path,
-        snapshot.headSha,
-        150_000,
-      );
-    } catch (cause) {
-      if (cause instanceof ProviderError && cause.status === 404) continue;
+  for await (const read of importCandidateReads(
+    provider,
+    scope.repositoryExternalId,
+    snapshot.headSha,
+    reads,
+  )) {
+    if (read.kind === "missing") continue;
+    if (read.kind === "failed") {
       // A peek must not break the review, so a refused or rate-limited
       // provider is answered softly — but it is not the same answer as "this
       // name has no declaration", and an expired token has to be diagnosable.
       console.error("Symbol definition lookup could not read the source", {
-        path,
+        path: read.path,
         pullRequestId: scope.pullRequestId,
-        status: cause instanceof ProviderError ? cause.status : undefined,
-        message: cause instanceof Error ? cause.message : String(cause),
+        status:
+          read.cause instanceof ProviderError ? read.cause.status : undefined,
+        message:
+          read.cause instanceof Error ? read.cause.message : String(read.cause),
       });
       return { kind: "unresolved" as const, reason: "unavailable" as const };
     }
-    if (content === undefined) {
+    if (read.content === undefined) {
       return { kind: "unresolved" as const, reason: "too_large" as const };
     }
     const analyzed = analyzeFiles([
-      { path, content, changeType: "modified" },
+      { path: read.path, content: read.content, changeType: "modified" },
     ]).units;
     const declaration = analyzed.find(
       (unit) =>
@@ -3431,32 +3487,29 @@ export const reviewRouter = createTRPCRouter({
       }
 
       const provider = await providerForConnection(ctx.db, scope.connection);
-      for (const path of candidates) {
-        let content: string | undefined;
-        try {
-          content = await provider.getFileContent(
-            scope.repositoryExternalId,
-            path,
-            snapshot.headSha,
-            150_000,
-          );
-        } catch (cause) {
-          if (cause instanceof ProviderError && cause.status === 404) continue;
+      for await (const read of importCandidateReads(
+        provider,
+        scope.repositoryExternalId,
+        snapshot.headSha,
+        candidates,
+      )) {
+        if (read.kind === "missing") continue;
+        if (read.kind === "failed") {
           throw new TRPCError({
             code: "BAD_GATEWAY",
             message:
               "The imported source could not be loaded from the provider",
-            cause,
+            cause: read.cause,
           });
         }
-        if (content === undefined) {
+        if (read.content === undefined) {
           return {
             kind: "unresolved" as const,
             reason: "too_large" as const,
           };
         }
         const analyzed = analyzeFiles([
-          { path, content, changeType: "modified" },
+          { path: read.path, content: read.content, changeType: "modified" },
         ]).units;
         const exactTarget =
           input.kind === "named"
@@ -3474,7 +3527,7 @@ export const reviewRouter = createTRPCRouter({
         if (!target) continue;
         return {
           kind: "preview" as const,
-          path,
+          path: read.path,
           language: target.language,
           name: input.imported,
           source: target.source,

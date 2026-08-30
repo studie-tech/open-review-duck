@@ -2,12 +2,14 @@ import { TRPCError } from "@trpc/server";
 import { describe, expect, it } from "vitest";
 import { aiReviewFindingLocations } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
+import { ProviderError } from "~/server/providers/types";
 import { DEEP_REVIEW_SURVEY_ITEM_PATH } from "~/server/review/deep/survey";
 import { sealVaultSecret } from "~/server/security/vault";
 import {
   assertCommentIsTheReviewersToChange,
   deepReviewFindingForPublication,
   deepReviewRunPayload,
+  importCandidateReads,
   publishedCommentAuthor,
 } from "./review";
 
@@ -655,5 +657,104 @@ describe("who may change a provider comment", () => {
         "reply-9",
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("importCandidateReads", () => {
+  const notFound = new ProviderError("github", "Not Found", 404);
+
+  /** Names the candidate paths one unresolved specifier would expand to. */
+  function candidatePaths(count: number) {
+    return Array.from(
+      { length: count },
+      (_, index) => `src/target/${index}.ts`,
+    );
+  }
+
+  /** Serves known files while recording probe order and overlap. */
+  function probeProvider(files: Record<string, string>, slow: string[] = []) {
+    const requested: string[] = [];
+    const overlap = { open: 0, peak: 0 };
+    return {
+      requested,
+      overlap,
+      /** Answers a known path and holds the request open for a few ticks. */
+      async getFileContent(_repository: string, path: string) {
+        requested.push(path);
+        overlap.open += 1;
+        overlap.peak = Math.max(overlap.peak, overlap.open);
+        for (let tick = slow.includes(path) ? 4 : 1; tick > 0; tick -= 1) {
+          await Promise.resolve();
+        }
+        overlap.open -= 1;
+        if (!(path in files)) throw notFound;
+        return files[path];
+      },
+    };
+  }
+
+  it("probes a wave of candidates at once and stops at the answer", async () => {
+    const provider = probeProvider({
+      "src/target/11.ts": "export const a = 1;",
+    });
+    const reads = [];
+    for await (const read of importCandidateReads(
+      provider,
+      "repo-1",
+      "head-sha",
+      candidatePaths(24),
+    )) {
+      reads.push(read);
+      if (read.kind === "content") break;
+    }
+    expect(provider.overlap.peak).toBe(8);
+    // Two waves reach the eleventh candidate; the third is never requested.
+    expect(provider.requested).toHaveLength(16);
+    expect(reads.at(-1)).toMatchObject({
+      kind: "content",
+      path: "src/target/11.ts",
+    });
+  });
+
+  it("answers with the first candidate that exists, not the first to reply", async () => {
+    const provider = probeProvider(
+      { "src/target/1.ts": "first", "src/target/2.ts": "second" },
+      ["src/target/1.ts"],
+    );
+    const found = [];
+    for await (const read of importCandidateReads(
+      provider,
+      "repo-1",
+      "head-sha",
+      candidatePaths(4),
+    )) {
+      if (read.kind === "content") found.push(read.path);
+    }
+    expect(found).toEqual(["src/target/1.ts", "src/target/2.ts"]);
+  });
+
+  it("carries a refused probe back with the path it belongs to", async () => {
+    const refused = new ProviderError("github", "Bad credentials", 401);
+    const provider = {
+      /** Refuses one candidate and reports the rest as absent. */
+      async getFileContent(_repository: string, path: string) {
+        if (path === "src/target/1.ts") throw refused;
+        throw notFound;
+      },
+    };
+    const reads = [];
+    for await (const read of importCandidateReads(
+      provider,
+      "repo-1",
+      "head-sha",
+      candidatePaths(3),
+    )) {
+      reads.push(read);
+    }
+    expect(reads).toEqual([
+      { kind: "missing" },
+      { kind: "failed", cause: refused, path: "src/target/1.ts" },
+      { kind: "missing" },
+    ]);
   });
 });
