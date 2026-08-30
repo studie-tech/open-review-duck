@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { RepositoryReader } from "~/components/repo-reviews/repository-reader";
+import { isTrpcNotFoundError } from "~/lib/trpc-errors";
 import { protectApplicationRoute } from "~/server/auth";
 import { api } from "~/trpc/server";
 
@@ -11,10 +12,10 @@ export default async function RepositoryReadPage({
 }) {
   await protectApplicationRoute();
   const { monitorId } = await params;
-  const monitor = (await api.repoReviews.list()).find(
-    ({ id }) => id === monitorId,
-  );
-  if (!monitor) notFound();
+  const monitor = await api.repoReviews.get({ monitorId }).catch((cause) => {
+    if (isTrpcNotFoundError(cause)) notFound();
+    throw cause;
+  });
   const data = await api.review.workspace({
     pullRequestId: monitor.pullRequestId,
   });

@@ -159,3 +159,39 @@ describe("repoReviews.deleteReport", () => {
     ).rejects.toThrow("finished repository report no longer exists");
   });
 });
+
+/** Builds the single-row monitor read, recording how many selects ran. */
+function createMonitorDb(rows: readonly unknown[]) {
+  const chain = {
+    from: () => chain,
+    innerJoin: () => chain,
+    where: () => chain,
+    limit: async () => rows,
+  };
+  const select = vi.fn(() => chain);
+  return { db: { select } as unknown as Database, select };
+}
+
+describe("repoReviews.get", () => {
+  it("reads one workspace-scoped monitor in a single statement", async () => {
+    const monitor = {
+      id: monitorId,
+      branch: "main",
+      pullRequestId,
+      repositoryOwner: "reviewduck",
+      repositoryName: "hub-app",
+    };
+    const { db, select } = createMonitorDb([monitor]);
+
+    await expect(caller([], db).get({ monitorId })).resolves.toEqual(monitor);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides a monitor that belongs to another workspace", async () => {
+    const { db } = createMonitorDb([]);
+
+    await expect(caller([], db).get({ monitorId })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+});

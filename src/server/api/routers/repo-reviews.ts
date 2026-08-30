@@ -299,6 +299,34 @@ export const repoReviewsRouter = createTRPCRouter({
     });
   }),
 
+  get: protectedProcedure
+    .input(monitorIdSchema)
+    .query(async ({ ctx, input }) => {
+      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      const [monitor] = await ctx.db
+        .select({
+          id: repositoryBranchMonitors.id,
+          branch: repositoryBranchMonitors.branch,
+          pullRequestId: repositoryBranchMonitors.pullRequestId,
+          repositoryOwner: repositories.owner,
+          repositoryName: repositories.name,
+        })
+        .from(repositoryBranchMonitors)
+        .innerJoin(
+          repositories,
+          eq(repositoryBranchMonitors.repositoryId, repositories.id),
+        )
+        .where(
+          and(
+            eq(repositoryBranchMonitors.id, input.monitorId),
+            eq(repositoryBranchMonitors.workspaceId, workspace.id),
+          ),
+        )
+        .limit(1);
+      if (!monitor) throw new TRPCError({ code: "NOT_FOUND" });
+      return monitor;
+    }),
+
   listBranches: protectedProcedure
     .input(z.object({ repositoryId: z.uuid() }))
     .query(async ({ ctx, input }) => {

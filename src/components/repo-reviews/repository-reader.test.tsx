@@ -109,7 +109,6 @@ const monitor = {
   repositoryOwner: "reviewduck",
   repositoryName: "hub-app",
   branch: "main",
-  snapshot: { headSha: "abcdef1234567890" },
 };
 
 let sequence = 0;
@@ -220,6 +219,24 @@ describe("RepositoryReader", () => {
     ).toBeVisible();
   });
 
+  it("labels the branch with the head sha of the loaded snapshot", () => {
+    const data = makeData([makeUnit()]);
+    render(
+      <ShellHarness>
+        <RepositoryReader
+          initialData={
+            {
+              ...data,
+              snapshot: { id: "snapshot-1", headSha: "abcdef1234567890" },
+            } as unknown as ReaderData
+          }
+          monitor={monitor as never}
+        />
+      </ShellHarness>,
+    );
+    expect(screen.getByText("abcdef1")).toBeVisible();
+  });
+
   it("registers command-center entries for stepping, queue resume, and sign-off", () => {
     const registrations: CommandCenterItem[][] = [];
     render(
@@ -300,7 +317,10 @@ describe("RepositoryReader", () => {
     const second = makeUnit({ path: "src/two.ts" });
     const data = makeData([first, second]);
     data.sourceDelivery = "direct";
-    data.snapshot = { id: "snapshot-1" } as ReaderData["snapshot"];
+    data.snapshot = {
+      id: "snapshot-1",
+      headSha: "abcdef1234567890",
+    } as ReaderData["snapshot"];
     data.fileContexts = [
       { ...first, id: "context-one", kind: "file", source: "" },
       { ...second, id: "context-two", kind: "file", source: "" },
