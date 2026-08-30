@@ -8,6 +8,7 @@ import {
   inArray,
   isNull,
   lt,
+  ne,
   notInArray,
   or,
   sql,
@@ -2065,64 +2066,47 @@ export const reviewRouter = createTRPCRouter({
         carriedSignOffs: 0,
       }));
     }
-    const units = await ctx.db
+    const progress = await ctx.db
       .select({
-        id: reviewUnits.id,
         snapshotId: reviewUnits.snapshotId,
-        createdAt: reviewUnits.createdAt,
-        kind: reviewUnits.kind,
+        totalUnits: sql<number>`count(distinct ${reviewUnits.id})`,
+        signedUnits: sql<number>`count(distinct ${signOffs.unitId})`,
+        carriedSignOffs: sql<number>`count(distinct ${signOffs.unitId}) filter (where ${signOffs.signedOffAt} < ${reviewUnits.createdAt})`,
       })
       .from(reviewUnits)
-      .where(
-        inArray(
-          reviewUnits.snapshotId,
-          snapshots.map(({ id }) => id),
+      .leftJoin(
+        signOffs,
+        and(
+          eq(signOffs.unitId, reviewUnits.id),
+          eq(signOffs.userId, ctx.auth.userId),
+          isNull(signOffs.invalidatedAt),
         ),
-      );
-    const reviewableUnits = units.filter(({ kind }) => kind !== "file");
-    const unitIds = reviewableUnits.map(({ id }) => id);
-    const currentSignOffs =
-      unitIds.length > 0
-        ? await ctx.db
-            .select({
-              unitId: signOffs.unitId,
-              signedOffAt: signOffs.signedOffAt,
-            })
-            .from(signOffs)
-            .where(
-              and(
-                eq(signOffs.userId, ctx.auth.userId),
-                inArray(signOffs.unitId, unitIds),
-                isNull(signOffs.invalidatedAt),
-              ),
-            )
-        : [];
-    const signOffByUnit = new Map(
-      currentSignOffs.map((signOff) => [signOff.unitId, signOff]),
+      )
+      .where(
+        and(
+          inArray(
+            reviewUnits.snapshotId,
+            snapshots.map(({ id }) => id),
+          ),
+          ne(reviewUnits.kind, "file"),
+        ),
+      )
+      .groupBy(reviewUnits.snapshotId);
+    const progressBySnapshot = new Map(
+      progress.map((counts) => [counts.snapshotId, counts]),
     );
-    const unitsBySnapshot = new Map<string, typeof units>();
-    for (const unit of reviewableUnits) {
-      const existing = unitsBySnapshot.get(unit.snapshotId);
-      if (existing) existing.push(unit);
-      else unitsBySnapshot.set(unit.snapshotId, [unit]);
-    }
     const snapshotByPullRequest = new Map(
       snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot.id]),
     );
     return rows.map((row) => {
-      const snapshotUnits =
-        unitsBySnapshot.get(snapshotByPullRequest.get(row.id) ?? "") ?? [];
-      const signedUnits = snapshotUnits.filter((unit) =>
-        signOffByUnit.has(unit.id),
+      const counts = progressBySnapshot.get(
+        snapshotByPullRequest.get(row.id) ?? "",
       );
       return {
         ...row,
-        totalUnits: snapshotUnits.length,
-        signedUnits: signedUnits.length,
-        carriedSignOffs: signedUnits.filter((unit) => {
-          const signOff = signOffByUnit.get(unit.id);
-          return signOff && signOff.signedOffAt < unit.createdAt;
-        }).length,
+        totalUnits: Number(counts?.totalUnits ?? 0),
+        signedUnits: Number(counts?.signedUnits ?? 0),
+        carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
       };
     });
   }),
