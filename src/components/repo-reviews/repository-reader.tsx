@@ -34,7 +34,7 @@ import {
   type CommandCenterItem,
   ShortcutHint,
 } from "~/components/command-center";
-import { usePageCommandCenter } from "~/components/page-command-center";
+import { useRegisterPageCommands } from "~/components/page-command-center";
 import { HighlightedSourceLines } from "~/components/review/highlighted-source-lines";
 import { ReviewFilesPanel } from "~/components/review/review-files-panel";
 import {
@@ -848,7 +848,7 @@ export function RepositoryReader({
       reviewFiles.length,
     ],
   );
-  usePageCommandCenter(commands);
+  useRegisterPageCommands(commands);
 
   const language = knownLanguage(active?.language ?? "text");
   const displayedStartLine = contextVisible

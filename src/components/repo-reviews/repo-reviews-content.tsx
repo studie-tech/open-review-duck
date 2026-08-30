@@ -31,7 +31,7 @@ import {
   ShortcutHint,
 } from "~/components/command-center";
 import { usePendingNavigation } from "~/components/navigation-progress";
-import { usePageCommandCenter } from "~/components/page-command-center";
+import { useRegisterPageCommands } from "~/components/page-command-center";
 import { PageContainer } from "~/components/page-container";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -268,7 +268,7 @@ export function RepoReviewsContent({
     ],
     [selectedMonitor, stepMonitor, visibleMonitors.length],
   );
-  usePageCommandCenter(commands);
+  useRegisterPageCommands(commands);
 
   return (
     <PageContainer>
@@ -587,7 +587,7 @@ function RepositoryCockpit({
       syncStart,
     ],
   );
-  usePageCommandCenter(commands);
+  useRegisterPageCommands(commands);
 
   return (
     <section className="min-w-0">

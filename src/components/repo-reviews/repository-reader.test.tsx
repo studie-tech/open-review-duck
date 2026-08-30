@@ -186,7 +186,10 @@ function ShellHarness({
     onOpenShortcuts: () => {},
   });
   return (
-    <PageCommandCenterProvider value={{ pendingShortcut, register }}>
+    <PageCommandCenterProvider
+      pendingShortcut={pendingShortcut}
+      register={register}
+    >
       {children}
     </PageCommandCenterProvider>
   );

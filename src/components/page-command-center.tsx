@@ -7,35 +7,48 @@ import type {
   PendingShortcutSequence,
 } from "~/components/command-center";
 
-type PageCommandCenterValue = {
-  pendingShortcut?: PendingShortcutSequence;
-  register: (commands: CommandCenterItem[]) => () => void;
-};
+type RegisterPageCommands = (commands: CommandCenterItem[]) => () => void;
 
-const PageCommandCenterContext = createContext<
-  PageCommandCenterValue | undefined
+// Registration and the pending shortcut sequence live in separate contexts so
+// that pages which only contribute commands are not re-rendered every time a
+// shortcut prefix changes or the shell re-renders for its own reasons.
+const RegisterPageCommandsContext = createContext<
+  RegisterPageCommands | undefined
+>(undefined);
+
+const PendingShortcutContext = createContext<
+  PendingShortcutSequence | undefined
 >(undefined);
 
 /** Provides page-specific commands and pending shortcut state to descendants. */
 export function PageCommandCenterProvider({
   children,
-  value,
+  pendingShortcut,
+  register,
 }: {
   children: ReactNode;
-  value: PageCommandCenterValue;
+  pendingShortcut?: PendingShortcutSequence;
+  register: RegisterPageCommands;
 }) {
   return (
-    <PageCommandCenterContext value={value}>
-      {children}
-    </PageCommandCenterContext>
+    <RegisterPageCommandsContext value={register}>
+      <PendingShortcutContext value={pendingShortcut}>
+        {children}
+      </PendingShortcutContext>
+    </RegisterPageCommandsContext>
   );
 }
 
 /** Registers page-specific commands for the lifetime of the calling component. */
+export function useRegisterPageCommands(commands: CommandCenterItem[]) {
+  const register = useContext(RegisterPageCommandsContext);
+
+  useEffect(() => register?.(commands), [commands, register]);
+}
+
+/** Registers page commands and reports the shortcut sequence being typed. */
 export function usePageCommandCenter(commands: CommandCenterItem[]) {
-  const context = useContext(PageCommandCenterContext);
+  useRegisterPageCommands(commands);
 
-  useEffect(() => context?.register(commands), [commands, context?.register]);
-
-  return context?.pendingShortcut;
+  return useContext(PendingShortcutContext);
 }
