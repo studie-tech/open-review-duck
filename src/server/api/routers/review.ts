@@ -3399,36 +3399,13 @@ export const reviewRouter = createTRPCRouter({
   importTarget: protectedProcedure
     .input(importTargetSchema)
     .query(async ({ ctx, input }) => {
-      // The snapshot is keyed on the id the authorization filters on, so it
-      // reads nothing that lookup produces and shares its round trip.
-      const [[scope], snapshot] = await Promise.all([
-        ctx.db
-          .select({
-            pullRequestId: pullRequests.id,
-            repositoryExternalId: repositories.externalId,
-            connection: providerConnections,
-          })
-          .from(pullRequests)
-          .innerJoin(
-            repositories,
-            eq(pullRequests.repositoryId, repositories.id),
-          )
-          .innerJoin(
-            providerConnections,
-            eq(repositories.connectionId, providerConnections.id),
-          )
-          .innerJoin(
-            workspaceMembers,
-            eq(repositories.workspaceId, workspaceMembers.workspaceId),
-          )
-          .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
-          .limit(1),
-        ctx.db.query.reviewSnapshots.findFirst({
-          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
-          orderBy: [desc(reviewSnapshots.version)],
-        }),
-      ]);
-      if (!scope || !snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      const snapshot = scope.snapshot;
+      if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
       const candidates = importPathCandidates(
         input.sourcePath,
