@@ -525,10 +525,8 @@ export function AppShell({
           </div>
         </nav>
         <PageCommandCenterProvider
-          value={{
-            pendingShortcut,
-            register: registerPageCommands,
-          }}
+          pendingShortcut={pendingShortcut}
+          register={registerPageCommands}
         >
           {children}
         </PageCommandCenterProvider>
