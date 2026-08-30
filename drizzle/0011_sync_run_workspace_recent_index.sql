@@ -1,0 +1,1 @@
+CREATE INDEX "sync_run_workspace_recent_idx" ON "open_review_duck_sync_run" USING btree ("workspaceId","createdAt" DESC NULLS LAST);
