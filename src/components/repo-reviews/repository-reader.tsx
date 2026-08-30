@@ -281,30 +281,9 @@ export function RepositoryReader({
     };
   }, [active?.path, hydrationPlan]);
 
-  const fileManifest = useMemo(
-    () =>
-      initialData.files ?? [
-        ...new Map(
-          units.map((unit) => [
-            unit.path,
-            {
-              id: unit.snapshotFileId ?? unit.id,
-              path: unit.path,
-              previousPath: null,
-              changeType: unit.changeType,
-              additions: 0,
-              deletions: 0,
-              isBinary: unit.kind === "binary",
-              skipReason: null,
-            },
-          ]),
-        ).values(),
-      ],
-    [initialData.files, units],
-  );
   const reviewFiles = useMemo(
-    () => reviewFileEntries(fileManifest, units),
-    [fileManifest, units],
+    () => reviewFileEntries(initialData.files, units),
+    [initialData.files, units],
   );
   const activeFile = active
     ? reviewFiles.find(({ path }) => path === active.path)
