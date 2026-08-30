@@ -1119,9 +1119,16 @@ export const syncRuns = createTable(
       t.pullRequestNumber,
       t.createdAt,
     ),
-    // Dashboards poll for the workspace's queued, running and recent runs, which
+    // Dashboards poll for the workspace's queued and running runs, which
     // otherwise scans the whole run history on every poll.
     index("sync_run_workspace_idx").on(t.workspaceId, t.status, t.createdAt),
+    // The recent-failure poll constrains a createdAt window without a status,
+    // so it needs createdAt adjacent to the workspace to seek the window in
+    // order and stop at the limit rather than sorting the matches.
+    index("sync_run_workspace_recent_idx").on(
+      t.workspaceId,
+      t.createdAt.desc(),
+    ),
   ],
 );
 
