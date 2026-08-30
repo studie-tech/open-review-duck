@@ -2360,6 +2360,15 @@ export function ReviewWorkspace({
     selectedFileSourceExpanded ? displayedSource : "",
     activeUnit?.language ?? "text",
   );
+  // Every token of every rendered line asks whether it starts an import
+  // binding, so the references are indexed by offset rather than scanned.
+  const importReferenceByStart = useMemo(() => {
+    const byStart = new Map<number, ImportReference>();
+    for (const reference of importReferences) {
+      byStart.set(reference.from, reference);
+    }
+    return byStart;
+  }, [importReferences]);
   const fileImportReferences = useImportReferences(
     selectedFileSourceExpanded ? (activeModule?.source ?? "") : "",
     activeUnit?.language ?? "text",
@@ -8466,12 +8475,15 @@ export function ReviewWorkspace({
                                 <pre className="syntax-code overflow-visible text-cloud">
                                   {line.tokens.length
                                     ? line.tokens.map((token, tokenIndex) => {
-                                        const importReference =
-                                          importReferences.find(
-                                            (reference) =>
-                                              reference.from >= token.from &&
-                                              reference.to <= token.to,
+                                        const startingReference =
+                                          importReferenceByStart.get(
+                                            token.from,
                                           );
+                                        const importReference =
+                                          startingReference &&
+                                          startingReference.to <= token.to
+                                            ? startingReference
+                                            : undefined;
                                         const resolutionKey = importReference
                                           ? `${activeUnit.id}:${importReference.from}:${importReference.to}`
                                           : undefined;
