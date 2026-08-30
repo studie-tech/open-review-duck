@@ -2547,6 +2547,97 @@ describe("provider normalization", () => {
     );
   });
 
+  it("keeps Azure statuses required when only deleted or disabled policies exist", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/policy/evaluations")) {
+        return jsonResponse({
+          value: [
+            {
+              evaluationId: "eval-deleted",
+              status: "approved",
+              configuration: {
+                id: "policy-deleted",
+                isEnabled: true,
+                isBlocking: true,
+                isDeleted: true,
+                type: { displayName: "Deleted build" },
+              },
+            },
+            {
+              evaluationId: "eval-disabled",
+              status: "approved",
+              configuration: {
+                id: "policy-disabled",
+                isEnabled: false,
+                isBlocking: true,
+                type: { displayName: "Disabled build" },
+              },
+            },
+          ],
+        });
+      }
+      if (url.includes("/statuses?")) {
+        return jsonResponse({
+          value: [
+            {
+              id: 4,
+              state: "failed",
+              description: "Build failed",
+              context: { name: "Build" },
+              creationDate: "2026-08-30T09:40:00Z",
+            },
+          ],
+        });
+      }
+      if (url.includes("/pullRequests/12?")) {
+        return jsonResponse({
+          pullRequestId: 12,
+          title: "Checks",
+          status: "active",
+          isDraft: false,
+          mergeStatus: "succeeded",
+          sourceRefName: "refs/heads/feature",
+          targetRefName: "refs/heads/main",
+          lastMergeSourceCommit: { commitId: "head-sha" },
+          lastMergeTargetCommit: { commitId: "base-sha" },
+          repository: {
+            webUrl: "https://dev.azure.com/acme/repo",
+            project: { id: "project-1", name: "acme" },
+          },
+          createdBy: { id: "author-1", displayName: "Author" },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    );
+
+    await expect(provider.getPullRequestLifecycle("repo", 12)).resolves.toEqual(
+      {
+        checks: [
+          {
+            id: "status-4",
+            name: "Build",
+            state: "failure",
+            description: "Build failed",
+            webUrl: undefined,
+          },
+        ],
+        summary: "failing",
+        pullRequestState: "open",
+        headSha: "head-sha",
+        mergeable: true,
+        canMerge: true,
+        mergeBlockedReason: undefined,
+        mergeActionLabel: "Complete",
+      },
+    );
+  });
+
   it("resolves a GitHub conversation through its review-thread node", async () => {
     const requests: Array<{ url: string; body?: string }> = [];
     const fetchMock = vi.fn(async (input: string | URL | Request, init) => {

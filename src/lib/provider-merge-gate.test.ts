@@ -111,6 +111,27 @@ describe("githubMergeGate", () => {
       mergeBlockedReason: "Required checks or reviews are not satisfied",
     });
   });
+
+  it("blocks merge when a required check is absent and an optional check is pending", () => {
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "blocked",
+        reviewDecision: "APPROVED",
+        checks: applyCheckRequiredFlags(
+          [{ id: "status-10", name: "coverage", state: "in_progress" }],
+          new Map([
+            ["ci / test", true],
+            ["coverage", false],
+          ]),
+        ),
+      }),
+    ).toEqual({
+      mergeable: true,
+      canMerge: false,
+      mergeBlockedReason: "Required checks or reviews are not satisfied",
+    });
+  });
 });
 
 describe("gitlabMergeGate", () => {
@@ -168,6 +189,19 @@ describe("gitlabMergeGate", () => {
         state: "opened",
         detailedMergeStatus: "conflict",
         hasConflicts: true,
+      }),
+    ).toEqual({
+      mergeable: false,
+      canMerge: false,
+      mergeBlockedReason: "Has merge conflicts",
+    });
+  });
+
+  it("treats cannot_be_merged as a known conflict", () => {
+    expect(
+      gitlabMergeGate({
+        state: "opened",
+        mergeStatus: "cannot_be_merged",
       }),
     ).toEqual({
       mergeable: false,
@@ -296,6 +330,31 @@ describe("applyCheckRequiredFlags", () => {
         name: "coverage",
         state: "in_progress",
         required: false,
+      },
+    ]);
+  });
+
+  it("queues a placeholder for a GraphQL-required check that has not reported", () => {
+    expect(
+      applyCheckRequiredFlags(
+        [{ id: "status-10", name: "coverage", state: "in_progress" }],
+        new Map([
+          ["ci / test", true],
+          ["coverage", false],
+        ]),
+      ),
+    ).toEqual([
+      {
+        id: "status-10",
+        name: "coverage",
+        state: "in_progress",
+        required: false,
+      },
+      {
+        id: "required-ci / test",
+        name: "ci / test",
+        state: "queued",
+        required: true,
       },
     ]);
   });

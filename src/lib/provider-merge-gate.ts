@@ -64,7 +64,13 @@ export function requiredChecksBlockReason(
   return undefined;
 }
 
-/** Copies provider-required flags onto already-normalized checks. */
+/**
+ * Copies provider-required flags onto already-normalized checks.
+ *
+ * GraphQL can list a required check that REST has not reported yet. Those
+ * names become queued placeholders so a pending optional check cannot
+ * unlock merge while a required check is still missing.
+ */
 export function applyCheckRequiredFlags(
   checks: ProviderPullRequestCheck[],
   requiredByName: ReadonlyMap<string, boolean>,
@@ -73,11 +79,24 @@ export function applyCheckRequiredFlags(
   if (requiredByName.size === 0 && (requiredById?.size ?? 0) === 0) {
     return checks;
   }
-  return checks.map((check) => {
+  const flagged = checks.map((check) => {
     const required =
       requiredById?.get(check.id) ?? requiredByName.get(check.name);
     return required === undefined ? check : { ...check, required };
   });
+  const presentNames = new Set(flagged.map((check) => check.name));
+  const placeholders: ProviderPullRequestCheck[] = [];
+  for (const [name, required] of requiredByName) {
+    if (!required || presentNames.has(name)) continue;
+    placeholders.push({
+      id: `required-${name}`,
+      name,
+      state: "queued",
+      required: true,
+    });
+    presentNames.add(name);
+  }
+  return placeholders.length === 0 ? flagged : [...flagged, ...placeholders];
 }
 
 /** Interprets GitHub mergeable_state using required checks and reviews. */
@@ -193,7 +212,10 @@ export function gitlabMergeGate(input: {
     not_open: "This merge request is no longer open",
     locked_paths: "Locked files must be unlocked",
   };
-  const mergeable = status === "conflict" || input.hasConflicts ? false : null;
+  const mergeable =
+    status === "conflict" || status === "cannot_be_merged" || input.hasConflicts
+      ? false
+      : null;
   return {
     mergeable,
     canMerge: false,

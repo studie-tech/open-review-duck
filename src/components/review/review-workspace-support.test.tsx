@@ -15,6 +15,7 @@ import { createRef } from "react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { sortByReviewFileTreeOrder } from "~/lib/review-files";
+import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
@@ -1008,6 +1009,45 @@ describe("same-file concept cards", () => {
     expect(highlight).toHaveBeenCalled();
   });
 
+  it("hides a large one-line JSON file until the reviewer asks to see it", () => {
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    const fileSource = `{"blob":"${"x".repeat(HEAVY_DATA_SOURCE_BYTES)}"}`;
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "blob",
+              path: "generated/blob.json",
+              name: "blob.json",
+              changedLineCount: 1,
+              changeType: "added",
+              previousSource: null,
+              source: fileSource,
+              startLine: 1,
+              endLine: 1,
+              language: "json",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        fileSource={fileSource}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("1 line of json hidden")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Hidden so the review stays responsive/),
+    ).toBeInTheDocument();
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
   it("lets the reviewer fold a file card back up after opening it", async () => {
     render(
       <ReviewConceptFileCardPreview
@@ -1592,8 +1632,9 @@ describe("deleted AI conversation cache", () => {
         [
           { id: "keep", question: "Still here" },
           { id: "gone", question: "Delete me" },
+          { id: "row-3", jobId: "job-3", question: "Also gone" },
         ],
-        ["gone"],
+        ["gone", "job-3"],
       ),
     ).toEqual([{ id: "keep", question: "Still here" }]);
   });

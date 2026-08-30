@@ -1942,6 +1942,7 @@ export function ReviewWorkspace({
     language: activeUnit?.language,
     lineCount: activeFileCardLineCount,
     path: activeUnit?.path,
+    source: activeModule?.source,
   });
   const selectedFileSourceExpanded =
     fileSourceReveal &&

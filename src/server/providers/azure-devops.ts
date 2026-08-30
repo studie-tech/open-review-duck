@@ -446,7 +446,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     });
     return buildProviderLifecycle({
       checks: [
-        ...this.normalizeStatuses(statuses?.value ?? [], policies.length > 0),
+        ...this.normalizeStatuses(
+          statuses?.value ?? [],
+          policies.some(
+            (policy) => policy.enabled !== false && !policy.deleted,
+          ),
+        ),
         ...this.policyChecks(evaluations),
       ],
       pullRequestState:
