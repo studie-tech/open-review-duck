@@ -6,5 +6,5 @@ import { api } from "~/trpc/server";
 export default async function AchievementsPage() {
   await protectApplicationRoute();
   const stats = await api.review.gamification();
-  return <AchievementsContent initialStats={stats} />;
+  return <AchievementsContent initialStats={stats} fetchedAt={Date.now()} />;
 }

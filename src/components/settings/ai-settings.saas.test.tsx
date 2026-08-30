@@ -93,6 +93,7 @@ describe("SaasAiSettings", () => {
           remainingTokens: 87_500,
           resetsAt: new Date("2026-09-01T00:00:00Z"),
         }}
+        fetchedAt={Date.now()}
       />,
     );
 
@@ -181,6 +182,7 @@ describe("SaasAiSettings", () => {
           remainingTokens: 19_500_000,
           resetsAt: new Date("2026-09-01T00:00:00Z"),
         }}
+        fetchedAt={Date.now()}
       />,
     );
 

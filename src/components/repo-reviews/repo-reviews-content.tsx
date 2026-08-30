@@ -113,15 +113,21 @@ export function RepoReviewsContent({
   initialMonitors,
   initialRepositories,
   initialMonitorId,
+  fetchedAt,
 }: {
   initialMonitors: Monitors;
   initialRepositories: Repositories;
   initialMonitorId?: string;
+  fetchedAt: number;
 }) {
   const utils = api.useUtils();
+  // The sidebar prefetches this route eagerly, so the server payload can
+  // predate the navigation. Stamping it with the time it was read lets the
+  // shared stale time decide whether hydration has to refresh it.
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
     initialData: initialMonitors,
-    refetchOnMount: "always",
+    initialDataUpdatedAt: fetchedAt,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       query.state.data?.some(({ activeSync }) => activeSync) ? 1_500 : false,
@@ -145,7 +151,7 @@ export function RepoReviewsContent({
   }, [runProgress, utils]);
   const repositoriesQuery = api.provider.listImportedRepositories.useQuery(
     undefined,
-    { initialData: initialRepositories },
+    { initialData: initialRepositories, initialDataUpdatedAt: fetchedAt },
   );
   const [selectedMonitorId, setSelectedMonitorId] = useState(
     initialMonitors.some(({ id }) => id === initialMonitorId)

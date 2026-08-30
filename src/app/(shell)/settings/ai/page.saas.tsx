@@ -14,6 +14,7 @@ export default async function SaasAiSettingsPage() {
     <SaasAiSettings
       initialConfiguration={configuration}
       initialPlanUsage={planUsage}
+      fetchedAt={Date.now()}
     />
   );
 }

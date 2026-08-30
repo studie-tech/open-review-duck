@@ -13,6 +13,7 @@ export default async function DashboardPage() {
     <DashboardOverview
       initialPullRequests={pullRequests}
       initialMonitors={monitors}
+      fetchedAt={Date.now()}
     />
   );
 }

@@ -9,12 +9,18 @@ type Gamification = RouterOutputs["review"]["gamification"];
 /** Renders review achievements from automatically refreshed progress data. */
 export function AchievementsContent({
   initialStats,
+  fetchedAt,
 }: {
   initialStats: Gamification;
+  fetchedAt: number;
 }) {
+  // The sidebar prefetches this route eagerly, so the server payload can
+  // predate the navigation. Stamping it with the time it was read lets the
+  // shared stale time decide whether hydration has to refresh it.
   const progress = api.review.gamification.useQuery(undefined, {
     initialData: initialStats,
-    refetchOnMount: "always",
+    initialDataUpdatedAt: fetchedAt,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
   });
   const stats = progress.data ?? initialStats;
