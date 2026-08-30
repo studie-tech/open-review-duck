@@ -1421,6 +1421,7 @@ export function ReviewWorkspace({
   const [aiQuestionThreadId, setAiQuestionThreadId] = useState<string>();
   const [focusAiQuestionComposer, setFocusAiQuestionComposer] = useState(false);
   const [aiQuestionPreviewLine, setAiQuestionPreviewLine] = useState<number>();
+  const [explanationLine, setExplanationLine] = useState<number>();
   // A ref, not state: the composer owns the draft while it is mounted, and a
   // line move remounts it, so this only carries the text across that remount.
   const aiQuestionDraft = useRef("");
@@ -2422,6 +2423,17 @@ export function ReviewWorkspace({
         document
           .getElementById(`review-line-${line}`)
           ?.scrollIntoView({ block: "center" }),
+      ),
+    );
+  }, []);
+  /** Scrolls the source to one AI walkthrough note, mounting its block first. */
+  const revealExplanation = useCallback((endLine: number, index: number) => {
+    setExplanationLine(endLine);
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() =>
+        document
+          .getElementById(`ai-explanation-${index}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
       ),
     );
   }, []);
@@ -4758,6 +4770,7 @@ export function ReviewWorkspace({
     setAiQuestionThreadId(undefined);
     setFocusAiQuestionComposer(false);
     setAiQuestionPreviewLine(undefined);
+    setExplanationLine(undefined);
     aiQuestionDraft.current = "";
   }, [activeUnitId]);
   // Declared after the reset above so it runs after it in the same commit: a
@@ -6999,6 +7012,7 @@ export function ReviewWorkspace({
     activeUnit?.startLine,
     aiQuestionLine,
     aiQuestionPreviewLine,
+    explanationLine,
     findingLine,
     keyboardLine,
     pendingFindingReveal?.line,
@@ -9098,12 +9112,10 @@ export function ReviewWorkspace({
                           key={`${annotation.line}-${annotation.title}`}
                           type="button"
                           onClick={() =>
-                            document
-                              .getElementById(`ai-explanation-${index}`)
-                              ?.scrollIntoView({
-                                behavior: "smooth",
-                                block: "center",
-                              })
+                            revealExplanation(
+                              annotation.endLine ?? annotation.line,
+                              index,
+                            )
                           }
                           className="text-mist hover:bg-violet/[.06] hover:text-cloud flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[10px] transition"
                         >
