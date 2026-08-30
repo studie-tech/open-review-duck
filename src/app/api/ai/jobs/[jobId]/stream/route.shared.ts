@@ -192,14 +192,20 @@ export async function GET(
           cursor = precedingChunks.at(-1)?.sequence ?? -1;
         }
         while (!closed && !request.signal.aborted) {
-          const chunks = await db.query.aiJobChunks.findMany({
-            where: and(
-              eq(aiJobChunks.jobId, job.id),
-              gt(aiJobChunks.sequence, cursor),
-            ),
-            orderBy: [asc(aiJobChunks.sequence)],
-            limit: 100,
-          });
+          const [chunks, current] = await Promise.all([
+            db.query.aiJobChunks.findMany({
+              where: and(
+                eq(aiJobChunks.jobId, job.id),
+                gt(aiJobChunks.sequence, cursor),
+              ),
+              orderBy: [asc(aiJobChunks.sequence)],
+              limit: 100,
+            }),
+            db.query.aiJobs.findFirst({
+              columns: { status: true, result: true, error: true },
+              where: eq(aiJobs.id, job.id),
+            }),
+          ]);
           for (const chunk of chunks) {
             text += await openVaultSecret(
               {
@@ -217,10 +223,6 @@ export async function GET(
               cursor,
             });
           }
-          const current = await db.query.aiJobs.findFirst({
-            columns: { status: true, result: true, error: true },
-            where: eq(aiJobs.id, job.id),
-          });
           if (!current) {
             send({
               error: "The AI job was deleted.",
