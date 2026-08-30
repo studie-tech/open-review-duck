@@ -289,8 +289,15 @@ export function ReviewFilesPanel({
   onToggle: (file: ReviewFileEntry) => void;
 }) {
   const [filter, setFilter] = useState<ReviewFileFilter>("all");
+  // Only the top-level folders start open. Seeding every ancestor mounts a
+  // row per changed file, and a large pull request pays for hundreds of rows
+  // the reviewer never looked at. The layout effect below opens the folders
+  // leading to the selected file, and the rest expand on demand.
   const [expanded, setExpanded] = useState(
-    () => new Set(files.flatMap((file) => reviewFileAncestorPaths(file.path))),
+    () =>
+      new Set(
+        files.flatMap((file) => reviewFileAncestorPaths(file.path).slice(0, 1)),
+      ),
   );
   const filtered = useMemo(
     () => filterReviewFiles(files, filter, search),
