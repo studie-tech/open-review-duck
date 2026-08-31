@@ -48,6 +48,7 @@ import {
   importPathCandidates,
 } from "~/lib/import-navigation";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
+import { providerConnectionRecovery } from "~/lib/provider-permission-recovery";
 import {
   definitionIsWhereTheNameWasRead,
   localDefinitionForPeek,
@@ -72,6 +73,7 @@ import {
   parseImportReferences,
 } from "~/server/analysis/imports";
 import type { db as database } from "~/server/db";
+import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
 import {
   ProviderError,
@@ -877,7 +879,11 @@ function providerOperationError(
 /** Gates merge on the exact revision the reviewer just finished. */
 function scopedProviderLifecycle(
   scope: {
-    connection: { provider: ProviderName };
+    connection: {
+      id: string;
+      credentialKind: string;
+      provider: ProviderName;
+    };
     headSha: string;
     baseSha: string;
     snapshot?: { headSha: string; baseSha: string } | null;
@@ -899,6 +905,10 @@ function scopedProviderLifecycle(
     mergeBlockedReason: revisionCurrent
       ? lifecycle.mergeBlockedReason
       : "The provider has a newer revision. Synchronize this pull request before merging.",
+    connection: providerConnectionRecovery(
+      isLocalDeployment(),
+      scope.connection,
+    ),
   };
 }
 
@@ -2646,6 +2656,10 @@ export const reviewRouter = createTRPCRouter({
           unavailableReason: revisionCurrent
             ? state.unavailableReason
             : "The provider has a newer revision. Synchronize this pull request before changing its review decision.",
+          connection: providerConnectionRecovery(
+            isLocalDeployment(),
+            scope.connection,
+          ),
         };
       } catch (cause) {
         throw providerOperationError(
@@ -2922,6 +2936,10 @@ export const reviewRouter = createTRPCRouter({
             revisionCurrent: true,
             syncedAt: new Date(),
             unavailableReason: currentState.unavailableReason,
+            connection: providerConnectionRecovery(
+              isLocalDeployment(),
+              scope.connection,
+            ),
           };
         }
         if (!allowed) {
@@ -2975,6 +2993,10 @@ export const reviewRouter = createTRPCRouter({
           revisionCurrent: true,
           syncedAt: new Date(),
           unavailableReason: updatedState.unavailableReason,
+          connection: providerConnectionRecovery(
+            isLocalDeployment(),
+            scope.connection,
+          ),
         };
       } catch (cause) {
         throw providerOperationError(

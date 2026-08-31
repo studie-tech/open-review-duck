@@ -204,10 +204,11 @@ export function ConnectionFormDialog({
                 <div className="border-line bg-surface-subtle text-mist flex gap-3 rounded-xl border px-4 py-3 text-[11px] leading-5">
                   <ShieldCheck className="text-lime mt-0.5 size-4 shrink-0" />
                   <p>
-                    The listed permissions cover source, comments, and review
-                    decisions. ReviewDuck also tries to enable provider event
-                    delivery; if your account cannot manage hooks, the
-                    connection still works and you can fetch updates with
+                    The listed permissions cover source, comments, review
+                    decisions, and merge. ReviewDuck also tries to enable
+                    provider event delivery; if your account cannot manage
+                    hooks, the connection still works and you can fetch updates
+                    with
                     <span className="text-cloud"> Check now</span>.
                   </p>
                 </div>

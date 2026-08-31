@@ -131,6 +131,8 @@ export interface ProviderPullRequestLifecycle {
   canMerge: boolean;
   mergeBlockedReason?: string;
   mergeActionLabel: string;
+  /** False when the connected credential cannot merge even if the PR is ready. */
+  hasMergePermission: boolean;
 }
 
 export interface PullRequestProvider {

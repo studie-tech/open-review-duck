@@ -85,7 +85,7 @@ export function providerSyncErrorMessage(
         return `${label} requires organization SSO authorization for this token. Authorize the token with the repository's organization, then sync again.`;
       }
       return provider === "github"
-        ? "GitHub blocked access to this pull request. Confirm the token includes this repository with Contents: Read-only and Pull requests: Read and write."
+        ? "GitHub blocked access to this pull request. Confirm the token includes this repository with Contents: Read and write and Pull requests: Read and write."
         : `${label} blocked access to this pull request. Check the token's repository and pull-request permissions.`;
     }
     if (cause.status === 404) {

@@ -5,6 +5,7 @@ import {
   type GitHubReviewDecision,
   githubMergeGate,
 } from "~/lib/provider-merge-gate";
+import { githubViewerCanMerge } from "~/lib/provider-permission-recovery";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
@@ -42,6 +43,13 @@ interface GitHubRepository {
   allow_merge_commit?: boolean;
   allow_squash_merge?: boolean;
   allow_rebase_merge?: boolean;
+  permissions?: {
+    admin?: boolean;
+    maintain?: boolean;
+    push?: boolean;
+    triage?: boolean;
+    pull?: boolean;
+  };
 }
 interface GitHubUser {
   id: number;
@@ -532,6 +540,8 @@ export class GitHubProvider implements PullRequestProvider {
       reviewDecision: gate?.reviewDecision,
       checks,
     });
+    const hasMergePermission =
+      await this.repositoryHasMergePermission(repositoryExternalId);
     return buildProviderLifecycle({
       checks,
       pullRequestState: pull.merged_at
@@ -543,9 +553,10 @@ export class GitHubProvider implements PullRequestProvider {
             : "open",
       headSha: sha,
       mergeable: merge.mergeable,
-      canMerge: merge.canMerge,
+      canMerge: merge.canMerge && hasMergePermission,
       mergeBlockedReason: merge.mergeBlockedReason,
       mergeActionLabel: "Merge",
+      hasMergePermission,
     });
   }
 
@@ -1342,6 +1353,16 @@ export class GitHubProvider implements PullRequestProvider {
     if (state === "pending") return "in_progress";
     if (state === "failure" || state === "error") return "failure";
     return "neutral";
+  }
+
+  /** Reads whether this credential can write the repository, if GitHub says. */
+  private async repositoryHasMergePermission(repositoryExternalId: string) {
+    try {
+      const repository = await this.repository(repositoryExternalId);
+      return githubViewerCanMerge(repository.permissions);
+    } catch {
+      return true;
+    }
   }
 
   /** Picks a merge method the repository still allows. */

@@ -18,6 +18,7 @@ import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
 import { cn } from "~/lib/utils";
 import type { RouterInputs, RouterOutputs } from "~/trpc/react";
+import { ProviderPermissionRecovery } from "./provider-permission-recovery";
 
 type ReviewState = RouterOutputs["review"]["providerReviewState"];
 type ReviewAction =
@@ -36,8 +37,11 @@ export function ProviderReviewDecision({
   mutationPending,
   onDecision,
   onRefresh,
+  permissionDenied,
+  provider,
   pullRequestUrl,
   repositoryUrl,
+  reviewPath,
   state,
 }: {
   error?: string;
@@ -45,13 +49,25 @@ export function ProviderReviewDecision({
   mutationPending: boolean;
   onDecision: (action: ReviewAction, body?: string) => void;
   onRefresh: () => void;
+  permissionDenied?: boolean;
+  provider: ReviewState["provider"];
   pullRequestUrl: string;
   repositoryUrl: string;
+  reviewPath?: string;
   state?: ReviewState;
 }) {
   const [confirmation, setConfirmation] = useState<ReviewAction>();
   const [reason, setReason] = useState("");
-  const providerName = state ? providerNames[state.provider] : "provider";
+  const providerName = providerNames[provider];
+  const permissionLikeUnavailable = Boolean(
+    state?.unavailableReason &&
+      /permission|reconnect|GitHub App installations/i.test(
+        state.unavailableReason,
+      ),
+  );
+  const showPermissionRecovery = Boolean(
+    error || permissionDenied || permissionLikeUnavailable,
+  );
   const decisionLabel =
     state?.decision === "approved"
       ? "Approved"
@@ -146,10 +162,13 @@ export function ProviderReviewDecision({
           <p role="status" className="text-mist mt-4 text-xs">
             Synchronizing approval state…
           </p>
-        ) : error ? (
-          <p role="alert" className="text-coral mt-4 text-xs leading-5">
-            {error}
-          </p>
+        ) : error && !state ? (
+          <ProviderPermissionRecovery
+            kind={permissionDenied ? "review" : "sync"}
+            provider={provider}
+            pullRequestUrl={pullRequestUrl}
+            reviewPath={reviewPath}
+          />
         ) : state ? (
           <div className="mt-4">
             <div className="text-mist flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
@@ -170,10 +189,28 @@ export function ProviderReviewDecision({
               )}
               <span className="text-fog">Live state for {state.actorName}</span>
             </div>
-            {state.unavailableReason && (
+            {error && !showPermissionRecovery && (
+              <p role="alert" className="text-coral mt-3 text-xs leading-5">
+                {error}
+              </p>
+            )}
+            {state.unavailableReason && !permissionLikeUnavailable && (
               <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
                 {state.unavailableReason}
               </p>
+            )}
+            {showPermissionRecovery && (
+              <ProviderPermissionRecovery
+                kind={
+                  permissionDenied || permissionLikeUnavailable
+                    ? "review"
+                    : "sync"
+                }
+                provider={provider}
+                connection={state.connection}
+                pullRequestUrl={pullRequestUrl}
+                reviewPath={reviewPath}
+              />
             )}
             <div className="mt-4 flex flex-wrap gap-2">
               {state.canApprove && state.decision !== "approved" && (

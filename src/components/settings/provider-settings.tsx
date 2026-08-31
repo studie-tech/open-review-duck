@@ -68,6 +68,7 @@ export function ProviderSettings({
     repositoryId: string;
     mode: IntakeMode;
   }>();
+  const [deepLinkApplied, setDeepLinkApplied] = useState(false);
 
   const selectedConnection =
     selection?.kind === "connection"
@@ -90,6 +91,27 @@ export function ProviderSettings({
       );
     }
   }, [selection, selectedConnection, selectedRepository, connections]);
+
+  useEffect(() => {
+    if (deepLinkApplied) return;
+    const params = new URLSearchParams(window.location.search);
+    const connectionId = params.get("connection");
+    if (!connectionId) {
+      setDeepLinkApplied(true);
+      return;
+    }
+    const focused = connections.find(({ id }) => id === connectionId);
+    if (!focused) return;
+    setSelection({ kind: "connection", id: focused.id });
+    setMobileDetailOpen(true);
+    if (
+      params.get("repair") === "token" &&
+      supportsTokenReplacement(localMode, focused.credentialKind)
+    ) {
+      setFormMode({ kind: "replace", connection: focused });
+    }
+    setDeepLinkApplied(true);
+  }, [connections, deepLinkApplied, localMode]);
 
   const intakePreview = api.provider.previewRepositoryIntake.useQuery(
     {

@@ -53,6 +53,7 @@ interface GitLabMergeRequest {
   merge_status?: string;
   detailed_merge_status?: string;
   has_conflicts?: boolean;
+  user?: { can_merge?: boolean };
 }
 interface GitLabApprovals {
   approvals_required: number;
@@ -413,6 +414,7 @@ export class GitLabProvider implements PullRequestProvider {
       mergeStatus: mergeRequest.merge_status,
       hasConflicts: mergeRequest.has_conflicts,
     });
+    const hasMergePermission = mergeRequest.user?.can_merge !== false;
     const ciRequired =
       (mergeRequest.detailed_merge_status ?? mergeRequest.merge_status) ===
         "ci_must_pass" ||
@@ -450,9 +452,10 @@ export class GitLabProvider implements PullRequestProvider {
               : "open",
       headSha: mergeRequest.diff_refs?.head_sha ?? mergeRequest.sha,
       mergeable: merge.mergeable,
-      canMerge: merge.canMerge,
+      canMerge: merge.canMerge && hasMergePermission,
       mergeBlockedReason: merge.mergeBlockedReason,
       mergeActionLabel: "Merge",
+      hasMergePermission,
     });
   }
 

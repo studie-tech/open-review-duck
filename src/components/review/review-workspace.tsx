@@ -7794,9 +7794,19 @@ export function ReviewWorkspace({
               lifecycle={
                 <ProviderLifecycle
                   state={providerLifecycle.data}
-                  error={providerLifecycle.error?.message}
+                  error={
+                    mergePullRequest.error?.message ??
+                    providerLifecycle.error?.message
+                  }
                   loading={providerLifecycle.isFetching}
                   mutationPending={mergePullRequest.isPending}
+                  permissionDenied={
+                    mergePullRequest.error?.data?.code === "FORBIDDEN" ||
+                    providerLifecycle.error?.data?.code === "FORBIDDEN"
+                  }
+                  provider={initialData.pullRequest.provider}
+                  pullRequestUrl={initialData.pullRequest.webUrl}
+                  reviewPath={`/review/${initialData.pullRequest.id}`}
                   onRefresh={() => void providerLifecycle.refetch()}
                   onMerge={() =>
                     mergePullRequest.mutate({
@@ -7808,11 +7818,21 @@ export function ReviewWorkspace({
               providerReview={
                 <ProviderReviewDecision
                   state={providerReviewState.data}
-                  error={providerReviewState.error?.message}
+                  error={
+                    setProviderReviewDecision.error?.message ??
+                    providerReviewState.error?.message
+                  }
                   loading={providerReviewState.isFetching}
                   mutationPending={setProviderReviewDecision.isPending}
+                  permissionDenied={
+                    setProviderReviewDecision.error?.data?.code ===
+                      "FORBIDDEN" ||
+                    providerReviewState.error?.data?.code === "FORBIDDEN"
+                  }
+                  provider={initialData.pullRequest.provider}
                   repositoryUrl={initialData.pullRequest.repositoryWebUrl}
                   pullRequestUrl={initialData.pullRequest.webUrl}
+                  reviewPath={`/review/${initialData.pullRequest.id}`}
                   onRefresh={() => void providerReviewState.refetch()}
                   onDecision={(action, body) =>
                     setProviderReviewDecision.mutate({

@@ -41,7 +41,7 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
       },
       "Name it “ReviewDuck”, add a practical expiration date, and select the user or organization that owns the repositories.",
       "Under Repository access, choose Only select repositories and select each repository you want available in ReviewDuck.",
-      "Under Repository permissions, grant Contents: Read-only and Pull requests: Read and write. Metadata read access is added automatically.",
+      "Under Repository permissions, grant Contents: Read and write and Pull requests: Read and write. Metadata read access is added automatically. Contents write is what lets ReviewDuck merge a finished pull request.",
       "Generate the token, copy it immediately, and paste it into ReviewDuck. GitHub only shows the value once.",
     ],
     permissions: [
@@ -52,8 +52,9 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
       },
       {
         name: "Contents",
-        access: "Read-only",
-        reason: "Reads source files at the pull request revision.",
+        access: "Read and write",
+        reason:
+          "Reads source files at the pull request revision and merges when the review is finished.",
       },
       {
         name: "Pull requests",
@@ -93,7 +94,7 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
         name: "Scope",
         access: "api",
         reason:
-          "Reads merge-request state, creates diff discussions, and submits or withdraws approvals.",
+          "Reads merge-request state, creates diff discussions, submits or withdraws approvals, and merges finished requests.",
       },
       {
         name: "Access role",
@@ -131,7 +132,7 @@ const providerGuides: Record<CodeProvider, ProviderGuide> = {
         name: "Code",
         access: "Read & write",
         reason:
-          "Reads repositories, publishes comments, and manages pull-request review votes.",
+          "Reads repositories, publishes comments, manages review votes, and completes pull requests.",
       },
       {
         name: "Organization",
@@ -173,7 +174,7 @@ function providerTokenUrl(provider: CodeProvider, baseUrl?: string) {
   }
 
   if (origin) return `${origin}/settings/personal-access-tokens/new`;
-  return "https://github.com/settings/personal-access-tokens/new?name=ReviewDuck&description=Pull%20request%20review%20in%20ReviewDuck&contents=read&pull_requests=write";
+  return "https://github.com/settings/personal-access-tokens/new?name=ReviewDuck&description=Pull%20request%20review%20in%20ReviewDuck&contents=write&pull_requests=write";
 }
 
 /** Renders the provider token guide interface. */

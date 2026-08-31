@@ -27,9 +27,11 @@ export function buildProviderLifecycle(input: {
   canMerge: boolean;
   mergeBlockedReason?: string;
   mergeActionLabel: string;
+  hasMergePermission?: boolean;
 }): ProviderPullRequestLifecycle {
   return {
     ...input,
+    hasMergePermission: input.hasMergePermission ?? true,
     summary: providerCheckSummary(input.checks),
   };
 }

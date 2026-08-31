@@ -20,6 +20,7 @@ import {
 } from "~/lib/provider-lifecycle";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { ProviderPermissionRecovery } from "./provider-permission-recovery";
 
 type LifecycleState = RouterOutputs["review"]["providerLifecycle"];
 
@@ -36,6 +37,10 @@ export function ProviderLifecycle({
   mutationPending,
   onMerge,
   onRefresh,
+  permissionDenied,
+  provider,
+  pullRequestUrl,
+  reviewPath,
   state,
 }: {
   error?: string;
@@ -43,10 +48,14 @@ export function ProviderLifecycle({
   mutationPending: boolean;
   onMerge: () => void;
   onRefresh: () => void;
+  permissionDenied?: boolean;
+  provider: LifecycleState["provider"];
+  pullRequestUrl: string;
+  reviewPath?: string;
   state?: LifecycleState;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const providerName = state ? providerNames[state.provider] : "provider";
+  const providerName = providerNames[provider];
   const merged = state?.pullRequestState === "merged";
   const closed = state?.pullRequestState === "closed";
   const summary = state?.summary ?? "empty";
@@ -56,6 +65,12 @@ export function ProviderLifecycle({
         check.required === false &&
         (check.state === "queued" || check.state === "in_progress"),
     ),
+  );
+  const missingMergePermission = Boolean(
+    state && !merged && !closed && state.hasMergePermission === false,
+  );
+  const showPermissionRecovery = Boolean(
+    missingMergePermission || (error && (permissionDenied || !state)),
   );
   const mergeReady = Boolean(state?.canMerge && !merged && !closed);
   const summaryLabel = providerLifecycleSummaryLabel(
@@ -139,10 +154,13 @@ export function ProviderLifecycle({
           <p role="status" className="text-mist mt-4 text-xs">
             Synchronizing checks and merge state…
           </p>
-        ) : error ? (
-          <p role="alert" className="text-coral mt-4 text-xs leading-5">
-            {error}
-          </p>
+        ) : error && !state ? (
+          <ProviderPermissionRecovery
+            kind={permissionDenied ? "merge" : "sync"}
+            provider={provider}
+            pullRequestUrl={pullRequestUrl}
+            reviewPath={reviewPath}
+          />
         ) : state ? (
           <div className="mt-4">
             {state.checks.length > 0 ? (
@@ -160,10 +178,26 @@ export function ProviderLifecycle({
               </p>
             )}
 
-            {state.mergeBlockedReason && !merged && (
+            {error && !showPermissionRecovery && (
+              <p role="alert" className="text-coral mt-3 text-xs leading-5">
+                {error}
+              </p>
+            )}
+            {state.mergeBlockedReason && !merged && !missingMergePermission && (
               <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
                 {state.mergeBlockedReason}
               </p>
+            )}
+            {showPermissionRecovery && (
+              <ProviderPermissionRecovery
+                kind={
+                  permissionDenied || missingMergePermission ? "merge" : "sync"
+                }
+                provider={provider}
+                connection={state.connection}
+                pullRequestUrl={pullRequestUrl}
+                reviewPath={reviewPath}
+              />
             )}
             {(summary === "failing" || optionalPending) && state.canMerge && (
               <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
