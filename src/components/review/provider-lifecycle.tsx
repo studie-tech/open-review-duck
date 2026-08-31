@@ -164,7 +164,7 @@ export function ProviderLifecycle({
         ) : state ? (
           <div className="mt-4">
             {state.checks.length > 0 ? (
-              <ul className="max-h-52 space-y-1 overflow-y-auto pr-1">
+              <ul className="max-h-52 max-w-2xl space-y-1 overflow-y-auto pr-1">
                 {state.checks.map((check) => (
                   <li key={check.id}>
                     <CheckRow check={check} />
@@ -273,12 +273,13 @@ function CheckRow({ check }: { check: LifecycleState["checks"][number] }) {
   const content = (
     <span className="flex min-w-0 items-start gap-2.5 px-1 py-1.5">
       <CheckStateIcon state={check.state} />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
+      <span className="min-w-0">
+        <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-xs text-cloud">{check.name}</span>
           {check.webUrl && (
             <ExternalLink className="text-fog size-3 shrink-0" />
           )}
+          <span className="text-fog shrink-0 text-[10px]">{label}</span>
         </span>
         {check.description && (
           <span className="text-mist mt-0.5 block text-[10px] leading-4">
@@ -286,7 +287,6 @@ function CheckRow({ check }: { check: LifecycleState["checks"][number] }) {
           </span>
         )}
       </span>
-      <span className="text-fog shrink-0 text-[10px]">{label}</span>
     </span>
   );
 

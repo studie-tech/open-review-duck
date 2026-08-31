@@ -152,12 +152,14 @@ export function providerPermissionRecovery(
     return {
       title: "This GitHub App cannot merge",
       description:
-        "The connected GitHub App can review this pull request but does not have Contents: Read and write, so ReviewDuck cannot merge it. Finish the merge on GitHub, or connect a token that includes merge permission.",
+        "The connected GitHub App can review this pull request but its token does not include Contents: Read and write, so ReviewDuck cannot merge it. Grant that permission on the installation, then reconnect so ReviewDuck can mint a token that includes it. You can also merge on GitHub.",
       requiredAccess,
       finishLabel,
       settingsHref: replaceHref,
-      settingsLabel: "Open provider settings",
-      reconnect: false,
+      settingsLabel: connection.canReconnect
+        ? "Reconnect GitHub"
+        : "Open provider settings",
+      reconnect: Boolean(connection.canReconnect),
       replaceToken: Boolean(connection.canReplaceToken),
     };
   }

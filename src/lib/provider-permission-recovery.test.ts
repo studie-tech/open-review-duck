@@ -79,7 +79,7 @@ describe("providerPermissionRecovery", () => {
     expect(recovery.reconnect).toBe(false);
   });
 
-  it("does not promise that reconnecting a GitHub App will unlock merge", () => {
+  it("reconnects a GitHub App so a new token can include Contents write", () => {
     const recovery = providerPermissionRecovery("github", "merge", {
       connectionId: "app",
       credentialKind: "github_app",
@@ -88,9 +88,9 @@ describe("providerPermissionRecovery", () => {
     });
 
     expect(recovery.title).toMatch(/cannot merge/i);
-    expect(recovery.description).toMatch(/Finish the merge on GitHub/i);
-    expect(recovery.reconnect).toBe(false);
-    expect(recovery.settingsLabel).toBe("Open provider settings");
+    expect(recovery.description).toMatch(/reconnect/i);
+    expect(recovery.reconnect).toBe(true);
+    expect(recovery.settingsLabel).toBe("Reconnect GitHub");
   });
 
   it("reconnects GitLab OAuth when merge permission is missing", () => {

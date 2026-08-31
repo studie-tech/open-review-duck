@@ -8,6 +8,7 @@ import {
   repositories,
 } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
+import { invalidateGitHubInstallationToken } from "~/server/providers/credentials";
 import { githubInstallationId } from "~/server/security/oauth-flow";
 
 type Database = typeof database;
@@ -45,12 +46,16 @@ export async function applyGitHubLifecycleEvent(
 ) {
   if (event === "installation") {
     const value = installationEvent.parse(payload);
-    if (!["deleted", "suspend", "unsuspend"].includes(value.action)) {
-      return false;
-    }
     const installationId = githubInstallationId(String(value.installation.id));
     if (!installationId)
       throw new Error("Invalid GitHub installation identity");
+    if (value.action === "new_permissions_accepted") {
+      invalidateGitHubInstallationToken(installationId);
+      return true;
+    }
+    if (!["deleted", "suspend", "unsuspend"].includes(value.action)) {
+      return false;
+    }
     const status =
       value.action === "deleted"
         ? "revoked"

@@ -225,4 +225,34 @@ describe("ProviderLifecycle", () => {
     ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
     expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
   });
+
+  it("reconnects a GitHub App when merge permission is missing", () => {
+    render(
+      <ProviderLifecycle
+        state={{
+          ...githubLifecycle,
+          canMerge: false,
+          hasMergePermission: false,
+          connection: {
+            canReconnect: true,
+            canReplaceToken: false,
+            connectionId: "conn-app",
+            credentialKind: "github_app",
+          },
+        }}
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("This GitHub App cannot merge")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /Reconnect GitHub/i }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+  });
 });

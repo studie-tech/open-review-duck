@@ -13,6 +13,7 @@ import { env } from "~/env";
 import { applicationAuth } from "~/server/auth";
 import { db } from "~/server/db";
 import { createProvider } from "~/server/providers";
+import { invalidateGitHubInstallationToken } from "~/server/providers/credentials";
 import {
   exchangeGitHubUserCode,
   githubAppJwt,
@@ -349,6 +350,7 @@ async function completeProviderAuthorization(
         metadata: { credentialKind: "github_app" },
       });
     });
+    invalidateGitHubInstallationToken(pendingInstallationId);
     return securedCallbackResponse(
       NextResponse.redirect(
         new URL(state.redirectPath ?? "/settings/providers", env.APP_URL),
