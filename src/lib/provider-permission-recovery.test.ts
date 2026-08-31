@@ -137,5 +137,12 @@ describe("providerPermissionRecovery", () => {
         canReconnect: false,
       }).settingsLabel,
     ).toBe("Open provider settings");
+    expect(providerRequiredAccess("github", "sync")).toBe(
+      "Contents: Read-only and Pull requests: Read-only",
+    );
+    expect(providerRequiredAccess("gitlab", "sync")).toBe(
+      "api or read_api scope",
+    );
+    expect(providerRequiredAccess("azure_devops", "sync")).toBe("Code: Read");
   });
 });
