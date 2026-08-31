@@ -5041,11 +5041,20 @@ export function ReviewWorkspace({
     conceptActionAvailable &&
     activeConceptSourcesAvailable &&
     activeConceptProgress?.status !== "signed_off";
+  const outstandingFileMembersForSignOff = activeFileCardMembers.filter(
+    (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
+  );
+  const activeFileOutstandingSourceAvailable =
+    outstandingFileMembersForSignOff.length > 0 &&
+    outstandingFileMembersForSignOff.every(
+      (member) => member.kind === "binary" || hydratedUnitIds.has(member.id),
+    );
   const canSignOffActiveFile =
     reviewMode === "files" &&
     !!activeReviewFile &&
     activeReviewFile.totalUnits > 0 &&
     activeFileOutstandingUnits > 0 &&
+    activeFileOutstandingSourceAvailable &&
     !fileSignOffBlocked;
   const fileWaitingUnitIds =
     reviewMode === "files" && activeReviewFile
