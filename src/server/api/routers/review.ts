@@ -855,6 +855,7 @@ async function providerLifecycleForConnection(
   repositoryExternalId: string,
   pullRequestNumber: number,
 ) {
+  /** Loads merge state, optionally reminting a GitHub App installation token. */
   const load = async (refreshInstallation?: boolean) => {
     const provider = await providerForConnection(db, connection, {
       refreshInstallation,
@@ -880,7 +881,11 @@ async function providerLifecycleForConnection(
     return first;
   }
   githubAppMergeRemints.set(connection.installationId, Date.now());
-  return load(true);
+  try {
+    return await load(true);
+  } catch {
+    return first;
+  }
 }
 
 /** Converts a live provider failure into a safe user-facing review message. */
