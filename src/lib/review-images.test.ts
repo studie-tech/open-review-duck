@@ -24,7 +24,26 @@ describe("review image preview", () => {
     expect(
       reviewImageMediaType("public/duck.png", new Uint8Array([0, 1, 2])),
     ).toBe(undefined);
+    expect(
+      reviewImageMediaType(
+        "public/duck.png",
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x00]),
+      ),
+    ).toBeUndefined();
     expect(reviewImageMediaType("public/duck.pdf", png)).toBeUndefined();
+  });
+
+  it("accepts only GIF87a and GIF89a headers", () => {
+    const gif87a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]);
+    const gif89a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+    expect(reviewImageMediaType("brand/logo.gif", gif87a)).toBe("image/gif");
+    expect(reviewImageMediaType("brand/logo.gif", gif89a)).toBe("image/gif");
+    expect(
+      reviewImageMediaType(
+        "brand/logo.gif",
+        new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x00, 0x00]),
+      ),
+    ).toBeUndefined();
   });
 
   it("builds a cookie-gated preview URL for one unit", () => {

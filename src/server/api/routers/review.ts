@@ -5100,6 +5100,9 @@ export const reviewRouter = createTRPCRouter({
             message: "This file has no semantic review units to sign off",
           });
         }
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${file.pullRequestId}:${ctx.auth.userId}`}))`,
+        );
         const waits = await tx
           .select({ unitId: reviewWaits.unitId })
           .from(reviewWaits)
@@ -5112,9 +5115,25 @@ export const reviewRouter = createTRPCRouter({
               ),
             ),
           );
-        const waitingIds = new Set(waits.map(({ unitId }) => unitId));
+        const active = await tx
+          .select({ unitId: signOffs.unitId })
+          .from(signOffs)
+          .where(
+            and(
+              eq(signOffs.userId, ctx.auth.userId),
+              isNull(signOffs.invalidatedAt),
+              inArray(
+                signOffs.unitId,
+                members.map(({ id }) => id),
+              ),
+            ),
+          );
+        const skippedIds = new Set([
+          ...waits.map(({ unitId }) => unitId),
+          ...active.map(({ unitId }) => unitId),
+        ]);
         const outstanding = members.filter(
-          (member) => !waitingIds.has(member.id),
+          (member) => !skippedIds.has(member.id),
         );
         if (outstanding.length === 0) {
           throw new TRPCError({
@@ -5157,7 +5176,9 @@ export const reviewRouter = createTRPCRouter({
         await finalizeSignOffs(tx, ctx.auth.userId, writes);
         return {
           snapshotFileId: file.id,
-          signedUnitIds: outstanding.map(({ id }) => id),
+          signedUnitIds: writes
+            .filter((write) => write.added)
+            .map(({ signOff }) => signOff.unitId),
         };
       }),
     ),
