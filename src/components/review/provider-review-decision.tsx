@@ -66,7 +66,7 @@ export function ProviderReviewDecision({
       ),
   );
   const showPermissionRecovery = Boolean(
-    error || permissionDenied || permissionLikeUnavailable,
+    permissionDenied || permissionLikeUnavailable || (error && !state),
   );
   const decisionLabel =
     state?.decision === "approved"

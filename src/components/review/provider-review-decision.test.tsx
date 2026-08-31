@@ -164,4 +164,28 @@ describe("ProviderReviewDecision", () => {
       screen.getByRole("link", { name: /Finish on GitHub/i }),
     ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
   });
+
+  it("keeps an ordinary review error visible when approval state is already loaded", () => {
+    render(
+      <ProviderReviewDecision
+        state={githubState}
+        error="GitHub review state could not be synchronized"
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        repositoryUrl="https://github.com/acme/review"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("GitHub review state could not be synchronized"),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: /Open provider settings/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
+  });
 });

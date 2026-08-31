@@ -7807,7 +7807,11 @@ export function ReviewWorkspace({
                   provider={initialData.pullRequest.provider}
                   pullRequestUrl={initialData.pullRequest.webUrl}
                   reviewPath={`/review/${initialData.pullRequest.id}`}
-                  onRefresh={() => void providerLifecycle.refetch()}
+                  onRefresh={() => {
+                    void providerLifecycle.refetch().then((result) => {
+                      if (!result.error) mergePullRequest.reset();
+                    });
+                  }}
                   onMerge={() =>
                     mergePullRequest.mutate({
                       pullRequestId: initialData.pullRequest.id,
@@ -7833,7 +7837,11 @@ export function ReviewWorkspace({
                   repositoryUrl={initialData.pullRequest.repositoryWebUrl}
                   pullRequestUrl={initialData.pullRequest.webUrl}
                   reviewPath={`/review/${initialData.pullRequest.id}`}
-                  onRefresh={() => void providerReviewState.refetch()}
+                  onRefresh={() => {
+                    void providerReviewState.refetch().then((result) => {
+                      if (!result.error) setProviderReviewDecision.reset();
+                    });
+                  }}
                   onDecision={(action, body) =>
                     setProviderReviewDecision.mutate({
                       pullRequestId: initialData.pullRequest.id,

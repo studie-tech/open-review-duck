@@ -32,6 +32,12 @@ const reviewAccess: Record<ProviderPermissionName, string> = {
   azure_devops: "Code: Read & write",
 };
 
+const syncAccess: Record<ProviderPermissionName, string> = {
+  github: "Contents: Read-only and Pull requests: Read-only",
+  gitlab: "api or read_api scope",
+  azure_devops: "Code: Read",
+};
+
 /** Builds the provider-settings URL that focuses one connection. */
 export function providerSettingsHref(connectionId: string, repair?: "token") {
   const params = new URLSearchParams({ connection: connectionId });
@@ -49,7 +55,9 @@ export function providerRequiredAccess(
   provider: ProviderPermissionName,
   kind: ProviderPermissionKind,
 ) {
-  return kind === "review" ? reviewAccess[provider] : mergeAccess[provider];
+  if (kind === "review") return reviewAccess[provider];
+  if (kind === "sync") return syncAccess[provider];
+  return mergeAccess[provider];
 }
 
 /** Builds the recovery metadata stored on live provider review payloads. */
