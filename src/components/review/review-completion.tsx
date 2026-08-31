@@ -165,61 +165,65 @@ export function ReviewCompletion({
       >
         <div className="from-lime/10 via-code to-code pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b" />
         <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-8 lg:px-8 xl:px-10">
-            <span className="border-lime/25 bg-lime/10 text-lime grid size-12 place-items-center rounded-2xl border shadow-[0_10px_36px_var(--app-shadow)] sm:size-14">
-              <CheckCheck className="size-6 sm:size-7" strokeWidth={1.8} />
-            </span>
+          <div className="w-full px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
+            <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
+              <div className="min-w-0 max-w-2xl">
+                <span className="border-lime/25 bg-lime/10 text-lime grid size-12 place-items-center rounded-2xl border shadow-[0_10px_36px_var(--app-shadow)] sm:size-14">
+                  <CheckCheck className="size-6 sm:size-7" strokeWidth={1.8} />
+                </span>
 
-            <p className="text-lime mt-5 flex items-center gap-2 text-[10px] font-semibold tracking-[.18em] uppercase sm:mt-6">
-              <Sparkles className="size-3.5" />
-              Review finished
-            </p>
-            <h2
-              id="review-completion-title"
-              className="font-editorial mt-2 text-3xl font-medium tracking-[-.035em] text-cloud sm:text-4xl lg:text-5xl"
-            >
-              Review complete.
-            </h2>
-            <p
-              id="review-completion-description"
-              className="text-mist mt-3 max-w-2xl text-sm leading-6"
-            >
-              You made it through every review unit. Your sign-offs are saved
-              and this pull request is fully reviewed at its current revision.
-              Check the pipelines, merge when they are ready, or continue to the
-              next pull request.
-            </p>
+                <p className="text-lime mt-5 flex items-center gap-2 text-[10px] font-semibold tracking-[.18em] uppercase sm:mt-6">
+                  <Sparkles className="size-3.5" />
+                  Review finished
+                </p>
+                <h2
+                  id="review-completion-title"
+                  className="font-editorial mt-2 text-3xl font-medium tracking-[-.035em] text-cloud sm:text-4xl lg:text-5xl"
+                >
+                  Review complete.
+                </h2>
+                <p
+                  id="review-completion-description"
+                  className="text-mist mt-3 text-sm leading-6"
+                >
+                  You made it through every review unit. Your sign-offs are
+                  saved and this pull request is fully reviewed at its current
+                  revision. Check the pipelines, merge when they are ready, or
+                  continue to the next pull request.
+                </p>
+              </div>
 
-            <dl className="mt-6 grid grid-cols-3 gap-2 sm:mt-8 sm:gap-3">
-              <div className="rounded-2xl border border-line bg-surface/55 px-3 py-4 text-center sm:px-5 sm:py-5">
-                <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                  Units
-                </dt>
-                <dd className="mt-1 font-mono text-lg text-cloud sm:text-xl">
-                  {completedUnits}
-                </dd>
-              </div>
-              <div className="rounded-2xl border border-line bg-surface/55 px-3 py-4 text-center sm:px-5 sm:py-5">
-                <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                  Files
-                </dt>
-                <dd className="mt-1 font-mono text-lg text-cloud sm:text-xl">
-                  {completedFiles}
-                </dd>
-              </div>
-              <div className="rounded-2xl border border-lime/20 bg-lime/[.06] px-3 py-4 text-center sm:px-5 sm:py-5">
-                <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                  Progress
-                </dt>
-                <dd className="text-lime mt-1 font-mono text-lg sm:text-xl">
-                  100%
-                </dd>
-              </div>
-            </dl>
+              <dl className="grid w-full grid-cols-3 gap-2 sm:gap-3 xl:w-[min(100%,32rem)] xl:shrink-0">
+                <div className="rounded-2xl border border-line bg-surface/55 px-3 py-4 text-center sm:px-5 sm:py-5">
+                  <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
+                    Units
+                  </dt>
+                  <dd className="mt-1 font-mono text-lg text-cloud sm:text-xl">
+                    {completedUnits}
+                  </dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-surface/55 px-3 py-4 text-center sm:px-5 sm:py-5">
+                  <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
+                    Files
+                  </dt>
+                  <dd className="mt-1 font-mono text-lg text-cloud sm:text-xl">
+                    {completedFiles}
+                  </dd>
+                </div>
+                <div className="rounded-2xl border border-lime/20 bg-lime/[.06] px-3 py-4 text-center sm:px-5 sm:py-5">
+                  <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
+                    Progress
+                  </dt>
+                  <dd className="text-lime mt-1 font-mono text-lg sm:text-xl">
+                    100%
+                  </dd>
+                </div>
+              </dl>
+            </div>
 
-            <div className="mt-6 space-y-4 lg:mt-8">
+            <div className="mt-8 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(20rem,24rem)] lg:items-start xl:mt-10 xl:gap-6">
               {lifecycle}
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(16rem,1fr)] lg:items-start xl:gap-6">
+              <div className="space-y-4">
                 {providerReview}
 
                 {nextReview ? (
@@ -290,7 +294,7 @@ export function ReviewCompletion({
         </div>
 
         <div className="relative shrink-0 border-t border-line bg-panel/90 px-4 py-3 backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8">
-          <div className="mx-auto flex w-full max-w-6xl flex-col-reverse gap-2 sm:flex-row sm:items-center">
+          <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center">
             <Button
               ref={initialFocusRef}
               type="button"

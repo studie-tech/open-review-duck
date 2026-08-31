@@ -202,6 +202,7 @@ describe("ReviewCompletion", () => {
       "flex-col",
     );
     expect(page).not.toHaveClass("place-items-center");
+    expect(page?.innerHTML).not.toMatch(/max-w-6xl/);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

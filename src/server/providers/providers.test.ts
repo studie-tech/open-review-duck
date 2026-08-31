@@ -1965,6 +1965,7 @@ describe("provider normalization", () => {
       canMerge: true,
       mergeBlockedReason: undefined,
       mergeActionLabel: "Merge",
+      hasMergePermission: true,
     });
     await provider.mergePullRequest({
       repositoryExternalId: "42",
@@ -2110,6 +2111,69 @@ describe("provider normalization", () => {
       canMerge: true,
       mergeBlockedReason: undefined,
       mergeActionLabel: "Merge",
+      hasMergePermission: true,
+    });
+  });
+
+  it("blocks GitHub merge when the token cannot write repository contents", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/pulls/12")) {
+        return jsonResponse({
+          id: 12,
+          number: 12,
+          title: "Checks",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/12",
+          user: { id: 9, login: "author", avatar_url: "" },
+          head: { ref: "feature", sha: "head-sha" },
+          base: { ref: "main", sha: "base-sha" },
+          mergeable: true,
+          mergeable_state: "clean",
+        });
+      }
+      if (url.includes("/check-runs")) {
+        return jsonResponse({ check_runs: [] });
+      }
+      if (url.includes("/status")) {
+        return jsonResponse({ statuses: [] });
+      }
+      if (url.includes("graphql")) {
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewDecision: "APPROVED",
+                statusCheckRollup: { contexts: { nodes: [] } },
+              },
+            },
+          },
+        });
+      }
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+          permissions: { pull: true, push: false },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    await expect(
+      provider.getPullRequestLifecycle("42", 12),
+    ).resolves.toMatchObject({
+      canMerge: false,
+      hasMergePermission: false,
+      mergeable: true,
+      pullRequestState: "open",
     });
   });
 
@@ -2224,6 +2288,7 @@ describe("provider normalization", () => {
       canMerge: false,
       mergeBlockedReason: "Pipeline must succeed before this can be merged",
       mergeActionLabel: "Merge",
+      hasMergePermission: true,
     });
     await provider.mergePullRequest({
       repositoryExternalId: "42",
@@ -2310,6 +2375,7 @@ describe("provider normalization", () => {
       canMerge: true,
       mergeBlockedReason: undefined,
       mergeActionLabel: "Merge",
+      hasMergePermission: true,
     });
   });
 
@@ -2436,6 +2502,7 @@ describe("provider normalization", () => {
         canMerge: true,
         mergeBlockedReason: undefined,
         mergeActionLabel: "Complete",
+        hasMergePermission: true,
       },
     );
     await provider.mergePullRequest({
@@ -2557,6 +2624,7 @@ describe("provider normalization", () => {
         canMerge: true,
         mergeBlockedReason: undefined,
         mergeActionLabel: "Complete",
+        hasMergePermission: true,
       },
     );
   });
@@ -2648,6 +2716,7 @@ describe("provider normalization", () => {
         canMerge: true,
         mergeBlockedReason: undefined,
         mergeActionLabel: "Complete",
+        hasMergePermission: true,
       },
     );
   });

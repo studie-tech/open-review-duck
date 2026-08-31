@@ -12,6 +12,12 @@ type ReviewState = RouterOutputs["review"]["providerReviewState"];
 afterEach(cleanup);
 
 const githubState: ReviewState = {
+  connection: {
+    canReconnect: false,
+    canReplaceToken: true,
+    connectionId: "conn-github",
+    credentialKind: "pat",
+  },
   actorName: "Duck Reviewer",
   approvedCount: 1,
   approvalsRemaining: undefined,
@@ -37,6 +43,7 @@ describe("ProviderReviewDecision", () => {
         state={githubState}
         loading={false}
         mutationPending={false}
+        provider="github"
         repositoryUrl="https://github.com/acme/review"
         pullRequestUrl="https://github.com/acme/review/pull/12"
         onRefresh={vi.fn()}
@@ -72,6 +79,7 @@ describe("ProviderReviewDecision", () => {
         state={githubState}
         loading={false}
         mutationPending={false}
+        provider="github"
         repositoryUrl="https://github.com/acme/review"
         pullRequestUrl="https://github.com/acme/review/pull/12"
         onRefresh={vi.fn()}
@@ -103,11 +111,18 @@ describe("ProviderReviewDecision", () => {
           ...githubState,
           canApprove: false,
           canRequestChanges: false,
+          connection: {
+            canReconnect: true,
+            canReplaceToken: false,
+            connectionId: "app",
+            credentialKind: "github_app",
+          },
           unavailableReason:
-            "GitHub App installations cannot submit a personal approval.",
+            "GitHub App installations can synchronize approval state, but a personal approval must be submitted with your GitHub user identity.",
         }}
         loading={false}
         mutationPending={false}
+        provider="github"
         repositoryUrl="https://github.com/acme/review"
         pullRequestUrl="https://github.com/acme/review/pull/12"
         onRefresh={vi.fn()}
@@ -115,14 +130,38 @@ describe("ProviderReviewDecision", () => {
       />,
     );
 
+    expect(screen.getByText(/personal approval/i)).toBeVisible();
     expect(
-      screen.getByText(/cannot submit a personal approval/i),
-    ).toBeVisible();
+      screen.getByRole("link", { name: /Finish on GitHub/i }),
+    ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
     expect(
       screen.queryByRole("button", { name: "Approve" }),
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /Open pull request/i }),
     ).toBeVisible();
+  });
+
+  it("helps update permissions when review state cannot be synchronized", () => {
+    render(
+      <ProviderReviewDecision
+        error="GitHub review state could not be synchronized"
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        repositoryUrl="https://github.com/acme/review"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/could not be synchronized/i)).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /Open provider settings/i }),
+    ).toHaveAttribute("href", "/settings/providers");
+    expect(
+      screen.getByRole("link", { name: /Finish on GitHub/i }),
+    ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
   });
 });

@@ -106,7 +106,7 @@ describe("provider sync errors", () => {
         new ProviderError("github", "403 Forbidden", 403),
       ),
     ).toBe(
-      "GitHub blocked access to this pull request. Confirm the token includes this repository with Contents: Read-only and Pull requests: Read and write.",
+      "GitHub blocked access to this pull request. Confirm the token includes this repository with Contents: Read and write and Pull requests: Read and write.",
     );
   });
 

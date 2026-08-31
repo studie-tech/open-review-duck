@@ -8,7 +8,7 @@ const providerLabels: Record<ProviderName, string> = {
 
 const permissionHelp: Record<ProviderName, string> = {
   github:
-    "Confirm Contents: Read-only and Pull requests: Read and write, and approve the token for the organization if required.",
+    "Confirm Contents: Read and write and Pull requests: Read and write, and approve the token for the organization if required.",
   gitlab:
     "Confirm the token has the api scope and Developer access or higher so its identity can approve merge requests.",
   azure_devops:

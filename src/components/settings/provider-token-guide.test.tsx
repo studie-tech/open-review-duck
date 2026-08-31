@@ -15,7 +15,7 @@ describe("ProviderTokenGuide", () => {
       screen.getByText("Create a GitHub access token"),
     ).toBeInTheDocument();
     expect(screen.getByText("Selected repositories")).toBeInTheDocument();
-    expect(screen.getByText("Read and write")).toBeInTheDocument();
+    expect(screen.getAllByText("Read and write").length).toBeGreaterThan(0);
     expect(screen.queryByText("Corporate setup")).not.toBeInTheDocument();
     expect(container.querySelector("details")).toHaveAttribute("open");
     expect(

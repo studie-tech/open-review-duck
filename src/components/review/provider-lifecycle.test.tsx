@@ -11,8 +11,17 @@ type LifecycleState = RouterOutputs["review"]["providerLifecycle"];
 
 afterEach(cleanup);
 
+const githubConnection = {
+  canReconnect: false,
+  canReplaceToken: true,
+  connectionId: "conn-github",
+  credentialKind: "pat",
+};
+
 const githubLifecycle: LifecycleState = {
   canMerge: true,
+  connection: githubConnection,
+  hasMergePermission: true,
   checks: [
     {
       id: "check-1",
@@ -48,6 +57,8 @@ describe("ProviderLifecycle", () => {
         state={githubLifecycle}
         loading={false}
         mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
         onRefresh={vi.fn()}
         onMerge={onMerge}
       />,
@@ -102,6 +113,8 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -132,6 +145,8 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -165,6 +180,8 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
+        provider="azure_devops"
+        pullRequestUrl="https://dev.azure.com/acme/review/_git/review/pullrequest/12"
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -177,5 +194,35 @@ describe("ProviderLifecycle", () => {
     expect(
       screen.queryByRole("button", { name: "Complete" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("explains a missing merge permission and links to update it", () => {
+    render(
+      <ProviderLifecycle
+        state={{
+          ...githubLifecycle,
+          canMerge: false,
+          hasMergePermission: false,
+        }}
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/cannot merge on GitHub/i)).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /Update token permissions/i }),
+    ).toHaveAttribute(
+      "href",
+      "/settings/providers?connection=conn-github&repair=token",
+    );
+    expect(
+      screen.getByRole("link", { name: /Merge on GitHub/i }),
+    ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
+    expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
   });
 });

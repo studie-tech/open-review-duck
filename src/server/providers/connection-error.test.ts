@@ -20,7 +20,7 @@ describe("providerConnectionErrorMessage", () => {
         "github",
         new ProviderError("github", "403 Forbidden", 403),
       ),
-    ).toContain("Contents: Read-only and Pull requests: Read and write");
+    ).toContain("Contents: Read and write and Pull requests: Read and write");
   });
 
   it("distinguishes rate limits from missing permissions", () => {

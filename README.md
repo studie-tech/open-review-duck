@@ -87,8 +87,9 @@ members. ReviewDuck uses that permission to verify organization membership
 before accepting an installation callback; it does not infer membership from
 the installation account alone.
 
-- GitHub needs a fine-grained token with read access to repository contents and
-  read/write access to pull requests.
+- GitHub needs a fine-grained token with read/write access to repository
+  contents and pull requests. Contents write is required to merge from
+  ReviewDuck.
 - GitLab needs an `api`-scoped personal, project, or group token. The token's
   identity must be allowed to approve merge requests if you want to approve
   them from ReviewDuck.

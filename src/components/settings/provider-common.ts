@@ -22,7 +22,7 @@ export const providers: Array<{
   {
     id: "github",
     label: "GitHub",
-    description: "Fine-grained token · code read + PR comments",
+    description: "Fine-grained token · code write + PR comments",
     hostedDescription: "GitHub App or fine-grained token",
   },
   {
