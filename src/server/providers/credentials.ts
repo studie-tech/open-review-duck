@@ -20,6 +20,7 @@ import type { PullRequestProvider } from "./types";
 type Database = typeof database;
 
 interface GitHubInstallationToken {
+  contents: "read" | "write";
   expiresAt: number;
   token: string;
 }
@@ -29,10 +30,20 @@ const githubInstallationTokens = new Map<
   Promise<GitHubInstallationToken>
 >();
 
+const githubAppWritePermissions = {
+  contents: "write",
+  pull_requests: "write",
+} as const;
+const githubAppReadPermissions = {
+  contents: "read",
+  pull_requests: "write",
+} as const;
+
 /** Mints one short-lived GitHub App installation token. */
-async function mintGitHubInstallationToken(
+async function requestGitHubInstallationToken(
   installationId: string,
-): Promise<GitHubInstallationToken> {
+  permissions: { contents: "read" | "write"; pull_requests: "write" },
+): Promise<Omit<GitHubInstallationToken, "contents"> | undefined> {
   const jwt = await githubAppJwt({
     appId: env.GITHUB_APP_ID,
     privateKey: env.GITHUB_APP_PRIVATE_KEY,
@@ -47,13 +58,15 @@ async function mintGitHubInstallationToken(
         "content-type": "application/json",
         "x-github-api-version": "2022-11-28",
       },
-      body: JSON.stringify({
-        permissions: { contents: "read", pull_requests: "write" },
-      }),
+      body: JSON.stringify({ permissions }),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     },
   );
+  if (response.status === 422) {
+    await response.body?.cancel();
+    return undefined;
+  }
   if (!response.ok) {
     throw new Error(`GitHub installation token failed (${response.status})`);
   }
@@ -69,8 +82,39 @@ async function mintGitHubInstallationToken(
   return { token: body.token, expiresAt };
 }
 
+/**
+ * Prefers Contents write so merge works after an installation grants it.
+ *
+ * Installations that still only have Contents read get a 422 for write, then
+ * fall back to the review-only token.
+ */
+async function mintGitHubInstallationToken(installationId: string) {
+  const write = await requestGitHubInstallationToken(
+    installationId,
+    githubAppWritePermissions,
+  );
+  if (write) return { ...write, contents: "write" as const };
+  const read = await requestGitHubInstallationToken(
+    installationId,
+    githubAppReadPermissions,
+  );
+  if (read) return { ...read, contents: "read" as const };
+  throw new Error("GitHub installation token failed (422)");
+}
+
+/** Drops a cached installation token so the next mint can pick up new access. */
+export function invalidateGitHubInstallationToken(installationId: string) {
+  githubInstallationTokens.delete(installationId);
+}
+
 /** Reuses an installation token until shortly before GitHub expires it. */
-async function githubInstallationToken(installationId: string) {
+async function githubInstallationToken(
+  installationId: string,
+  options?: { refresh?: boolean },
+) {
+  if (options?.refresh) {
+    githubInstallationTokens.delete(installationId);
+  }
   const cached = githubInstallationTokens.get(installationId);
   if (cached) {
     try {
@@ -384,6 +428,7 @@ async function refreshOauthToken(db: Database, connectionId: string) {
 export async function providerForConnection(
   db: Database,
   connection: typeof providerConnections.$inferSelect,
+  options?: { refreshInstallation?: boolean },
 ): Promise<PullRequestProvider> {
   if (connection.credentialStatus !== "active") {
     throw new Error(
@@ -406,7 +451,9 @@ export async function providerForConnection(
     if (!connection.installationId) {
       throw new Error("GitHub App installation identity is missing");
     }
-    token = await githubInstallationToken(connection.installationId);
+    token = await githubInstallationToken(connection.installationId, {
+      refresh: options?.refreshInstallation,
+    });
   } else if (connection.credentialKind === "oauth") {
     token = await oauthToken(db, connection);
   } else if (!local && connection.credentialKind === "pat") {

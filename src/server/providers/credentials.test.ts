@@ -148,7 +148,95 @@ describe("hosted provider credential resolution", () => {
     await second.getConnectionIdentity();
 
     expect(installationFetch).toHaveBeenCalledOnce();
+    expect(
+      JSON.parse(String(installationFetch.mock.calls[0]?.[1]?.body)),
+    ).toEqual({
+      permissions: { contents: "write", pull_requests: "write" },
+    });
     expect(safeRemoteFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to Contents read when the installation cannot grant write", async () => {
+    const installationFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 422 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            token: "read-installation-token",
+            expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", installationFetch);
+    safeRemoteFetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 42,
+          account: { id: 7, login: "acme", name: "Acme" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const { providerForConnection } = await import("./credentials");
+    const provider = await providerForConnection({} as never, {
+      ...connection,
+      credentialKind: "github_app",
+      installationId: "installation-read-fallback-test",
+    });
+    await provider.getConnectionIdentity();
+
+    expect(installationFetch).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(String(installationFetch.mock.calls[0]?.[1]?.body)),
+    ).toEqual({
+      permissions: { contents: "write", pull_requests: "write" },
+    });
+    expect(
+      JSON.parse(String(installationFetch.mock.calls[1]?.[1]?.body)),
+    ).toEqual({
+      permissions: { contents: "read", pull_requests: "write" },
+    });
+  });
+
+  it("remints a GitHub App installation token when refresh is requested", async () => {
+    const installationFetch = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "installation-token",
+            expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", installationFetch);
+    safeRemoteFetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 42,
+            account: { id: 7, login: "acme", name: "Acme" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const { providerForConnection } = await import("./credentials");
+    const appConnection = {
+      ...connection,
+      credentialKind: "github_app" as const,
+      installationId: "installation-token-refresh-test",
+    };
+
+    const first = await providerForConnection({} as never, appConnection);
+    await first.getConnectionIdentity();
+    const second = await providerForConnection({} as never, appConnection, {
+      refreshInstallation: true,
+    });
+    await second.getConnectionIdentity();
+
+    expect(installationFetch).toHaveBeenCalledTimes(2);
   });
 
   it("rejects Azure DevOps OAuth credentials", async () => {

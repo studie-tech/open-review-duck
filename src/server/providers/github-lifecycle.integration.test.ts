@@ -82,6 +82,15 @@ describe("GitHub App lifecycle handling", () => {
     ).resolves.toBe(false);
   });
 
+  it("accepts new installation permissions so the next token can include them", async () => {
+    await expect(
+      applyGitHubLifecycleEvent(db, "installation", {
+        action: "new_permissions_accepted",
+        installation: { id: fixture.installationId },
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("disables a suspended installation and fails automatic intake closed", async () => {
     await expect(
       applyGitHubLifecycleEvent(db, "installation", {

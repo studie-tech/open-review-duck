@@ -839,6 +839,50 @@ async function providerScopeForPullRequest(
   return { ...scope, snapshot };
 }
 
+const githubAppMergeRemints = new Map<string, number>();
+const GITHUB_APP_MERGE_REMINT_MS = 60_000;
+
+/**
+ * Reloads GitHub App lifecycle after Contents write is granted on the install.
+ *
+ * Cached installation tokens can still be Contents: read from before the
+ * grant. Remint at most once a minute so pending-check polling does not mint
+ * on every refresh.
+ */
+async function providerLifecycleForConnection(
+  db: typeof database,
+  connection: typeof providerConnections.$inferSelect,
+  repositoryExternalId: string,
+  pullRequestNumber: number,
+) {
+  const load = async (refreshInstallation?: boolean) => {
+    const provider = await providerForConnection(db, connection, {
+      refreshInstallation,
+    });
+    const [lifecycle, remotePullRequest] = await Promise.all([
+      provider.getPullRequestLifecycle(repositoryExternalId, pullRequestNumber),
+      provider.getPullRequest(repositoryExternalId, pullRequestNumber),
+    ]);
+    return { provider, lifecycle, remotePullRequest };
+  };
+
+  const first = await load();
+  if (
+    first.lifecycle.hasMergePermission !== false ||
+    connection.credentialKind !== "github_app" ||
+    !connection.installationId
+  ) {
+    return first;
+  }
+
+  const lastRemint = githubAppMergeRemints.get(connection.installationId) ?? 0;
+  if (Date.now() - lastRemint < GITHUB_APP_MERGE_REMINT_MS) {
+    return first;
+  }
+  githubAppMergeRemints.set(connection.installationId, Date.now());
+  return load(true);
+}
+
 /** Converts a live provider failure into a safe user-facing review message. */
 function providerOperationError(
   provider: ProviderName,
@@ -2695,17 +2739,13 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
-        const [lifecycle, remotePullRequest] = await Promise.all([
-          provider.getPullRequestLifecycle(
+        const { lifecycle, remotePullRequest } =
+          await providerLifecycleForConnection(
+            ctx.db,
+            scope.connection,
             scope.repositoryExternalId,
             scope.pullRequestNumber,
-          ),
-          provider.getPullRequest(
-            scope.repositoryExternalId,
-            scope.pullRequestNumber,
-          ),
-        ]);
+          );
         return scopedProviderLifecycle(scope, lifecycle, remotePullRequest);
       } catch (cause) {
         throw providerOperationError(
@@ -2761,17 +2801,16 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
-        const [remotePullRequest, currentLifecycle] = await Promise.all([
-          provider.getPullRequest(
-            scope.repositoryExternalId,
-            scope.pullRequestNumber,
-          ),
-          provider.getPullRequestLifecycle(
-            scope.repositoryExternalId,
-            scope.pullRequestNumber,
-          ),
-        ]);
+        const {
+          provider,
+          lifecycle: currentLifecycle,
+          remotePullRequest,
+        } = await providerLifecycleForConnection(
+          ctx.db,
+          scope.connection,
+          scope.repositoryExternalId,
+          scope.pullRequestNumber,
+        );
         if (
           remotePullRequest.headSha !== scope.headSha ||
           remotePullRequest.baseSha !== scope.baseSha
