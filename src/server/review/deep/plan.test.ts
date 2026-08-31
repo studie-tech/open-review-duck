@@ -95,6 +95,7 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
     [sourceBlobs, []],
   ]);
   const operations: string[] = [];
+  const insertBatchSizes = { jobs: [] as number[], items: [] as number[] };
   files.forEach((file, index) => {
     /** Registers one fixture revision as a readable source blob. */
     const blob = (side: string, source: string | null | undefined) => {
@@ -155,6 +156,9 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
           ),
       );
       operations.push(`insert:${table === aiJobs ? "job" : "item"}`);
+      insertBatchSizes[table === aiJobs ? "jobs" : "items"].push(
+        incoming.length,
+      );
       stored.push(...accepted);
       return {
         /** Ends the item insert, which is always awaited straight away. */
@@ -190,6 +194,7 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
   };
   return {
     db: fake as unknown as Database,
+    insertBatchSizes,
     operations,
     jobs: () => rowsOf(aiJobs),
     items: () => rowsOf(aiReviewItems),
@@ -279,11 +284,15 @@ describe("sealReviewPlan", () => {
     expect(plan.itemCount).toBe(files.length);
     expect(plan.selectedCount).toBe(files.length);
     expect(fake.items()).toHaveLength(files.length);
+    expect(Math.max(...fake.insertBatchSizes.jobs)).toBeLessThanOrEqual(500);
+    expect(Math.max(...fake.insertBatchSizes.items)).toBeLessThanOrEqual(500);
+    expect(fake.insertBatchSizes.jobs).toHaveLength(11);
+    expect(fake.insertBatchSizes.items).toHaveLength(11);
     const last = files.at(-1)?.path;
     expect(plan.items.some((item) => item.path === last)).toBe(true);
   });
 
-  it("writes every child job of the fan-out in one insert", async () => {
+  it("writes a small fan-out in one insert", async () => {
     const fake = createFakeDatabase([
       { path: "src/a.ts" },
       { path: "src/b.ts" },

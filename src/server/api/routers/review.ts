@@ -157,17 +157,18 @@ async function reviewThreadScope(
 ) {
   // Two gates, as everywhere else provider work is reached from: what one
   // reviewer may ask for at all, and what they may ask of one repository.
-  // Only the second one needs the lookup, so the first shares its round trip.
-  const [scope] = await Promise.all([
-    providerScopeForUnit(db, userId, input.unitId),
+  // Both wait on the lookup, so a request that never reaches the provider
+  // reports why it was refused rather than spending limiter budget.
+  const scope = await providerScopeForUnit(db, userId, input.unitId);
+  await Promise.all([
     enforceRateLimit(db, `${action}:${userId}`, 60, 60_000),
+    enforceRateLimit(
+      db,
+      `${action}-resource:${userId}:${scope.pullRequestId}`,
+      30,
+      60_000,
+    ),
   ]);
-  await enforceRateLimit(
-    db,
-    `${action}-resource:${userId}:${scope.pullRequestId}`,
-    30,
-    60_000,
-  );
   return { provider: await providerForConnection(db, scope.connection), scope };
 }
 

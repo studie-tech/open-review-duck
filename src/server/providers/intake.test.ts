@@ -65,7 +65,7 @@ describe("repository pull-request intake", () => {
 });
 
 describe("workspace intake reconciliation", () => {
-  it("refreshes several repositories at once and sums their work", async () => {
+  it("refreshes three repositories at a time and sums their work", async () => {
     const db = {
       query: {
         repositories: {
@@ -90,7 +90,7 @@ describe("workspace intake reconciliation", () => {
 
     const result = await reconcileWorkspaceIntake(db, "workspace-1");
 
-    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBe(3);
     expect(result).toEqual({ checked: 0, queued: 12, stateChanges: 6 });
   });
 

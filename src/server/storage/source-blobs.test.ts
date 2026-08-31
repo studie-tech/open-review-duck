@@ -26,6 +26,7 @@ vi.mock("./index", () => ({ sourceObjectStore: mocks.sourceObjectStore }));
 import {
   loadSourceBlobsByDigest,
   persistSourceBlob,
+  prepareSourceBlobs,
   pruneOrphanSourceBlobs,
   sourceDigest,
 } from "./source-blobs";
@@ -170,6 +171,60 @@ describe("source blob pruning", () => {
     expect(blobs.get(stored)?.id).toBe("first");
     expect(blobs.get(missing)).toBeUndefined();
     expect(blobs.get(alsoStored)?.id).toBe("third");
+  });
+
+  it("prepares digests without holding the encoded bytes", async () => {
+    const encoder = new TextEncoder();
+    const findMany = vi.fn(async () => []);
+    const database = { query: { sourceBlobs: { findMany } } };
+
+    const { prepared } = await prepareSourceBlobs(
+      database as never,
+      "workspace",
+      [
+        { content: "current text", previousContent: "previous text" },
+        { content: "added text" },
+      ],
+    );
+
+    expect(prepared[0]?.current).toEqual({
+      content: "current text",
+      digest: sourceDigest(encoder.encode("current text")),
+    });
+    expect(prepared[0]?.previous).toEqual({
+      content: "previous text",
+      digest: sourceDigest(encoder.encode("previous text")),
+    });
+    expect(prepared[1]?.previous).toBeUndefined();
+  });
+
+  it("splits a digest list past the bind-parameter ceiling", async () => {
+    const digests = Array.from({ length: 10_001 }, (_, index) =>
+      String(index).padStart(64, "0"),
+    );
+    const served: { digest: string; id: string }[] = [];
+    const findMany = vi.fn(async () => {
+      const index = served.length * 10_000;
+      const row = {
+        digest: String(index).padStart(64, "0"),
+        id: `row-${index}`,
+      };
+      served.push(row);
+      return [row];
+    });
+    const database = { query: { sourceBlobs: { findMany } } };
+
+    const blobs = await loadSourceBlobsByDigest(
+      database as never,
+      "workspace",
+      digests,
+    );
+
+    expect(findMany.mock.calls).toHaveLength(2);
+    expect(served).toHaveLength(2);
+    for (const row of served) {
+      expect(blobs.get(row.digest)?.id).toBe(row.id);
+    }
   });
 
   it("revalidates and refreshes an old deduplicated blob", async () => {

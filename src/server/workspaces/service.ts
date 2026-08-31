@@ -90,13 +90,14 @@ async function resolvePersonalWorkspace(db: Database, userId: string) {
 }
 
 /**
- * Resolves the caller's personal workspace once per server request.
+ * Resolves the caller's personal workspace once per React render pass.
  *
- * Nearly every protected procedure opens by asking for the workspace, and the
- * tRPC client batches a page's procedures into a single HTTP request, so an
- * uncached resolver repeats the same member-workspace read for each of them.
- * React's request cache collapses those into one; outside a request scope
- * `cache` calls straight through, so worker callers are unaffected.
+ * Nearly every protected procedure opens by asking for the workspace, and a
+ * server-rendered route awaits several of them across its layout and page, so
+ * an uncached resolver repeats the same member-workspace read for each one.
+ * React's render cache collapses those into a single read. Route handlers and
+ * workers install no cache dispatcher, so there `cache` calls straight
+ * through and each caller reads for itself.
  */
 export const personalWorkspace = cache(resolvePersonalWorkspace);
 

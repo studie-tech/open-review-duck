@@ -73,8 +73,8 @@ import {
   compactSideBySideDiff,
   focusedRowRegions,
   focusedRowSpan,
-  sideBySideDiff,
   type SideBySideDiffRow,
+  sideBySideDiff,
 } from "~/lib/side-by-side-diff";
 import { isPeekableToken, symbolPeekAttributes } from "~/lib/symbol-peek";
 import {
@@ -1660,10 +1660,10 @@ export function InlineAiQuestion({
     function finishDrag(pointerEvent: PointerEvent) {
       if (pointerEvent.pointerId !== pointerId) return;
       pointerEvent.preventDefault();
-      const nearest =
-        pendingClientY === undefined
-          ? undefined
-          : nearestMeasuredReviewLine(measuredLines, pendingClientY);
+      const nearest = nearestMeasuredReviewLine(
+        measuredLines,
+        pointerEvent.clientY,
+      );
       cleanupDrag();
       onPreview(undefined);
       onMove(nearest ?? previewLine.current);

@@ -148,9 +148,10 @@ export async function pullRequestsMissingSnapshotSources(
       probeKeys,
       SOURCE_OBJECT_PROBE_CONCURRENCY,
       async (objectKey) => {
-        try {
-          if (!(await probe(objectKey))) presentObjectKeys.delete(objectKey);
-        } catch {
+        // A probe answers false only for a proven absence and throws
+        // otherwise, so an outage leaves the object's verdict alone rather
+        // than scheduling a repair sync for every snapshot that names it.
+        if (!(await probe(objectKey).catch(() => true))) {
           presentObjectKeys.delete(objectKey);
         }
       },

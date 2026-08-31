@@ -14,6 +14,7 @@ import {
   groupDeepReviewFindings,
   releaseWaitingUnits,
   reshapeProviderThreads,
+  restoreProviderThread,
   useReviewExitPrefetch,
   useTerminalReviewRefetch,
 } from "./review-workspace";
@@ -312,6 +313,45 @@ describe("reshapeProviderThreads", () => {
 
     expect(threads[0]?.comments).toHaveLength(2);
     expect(threads[0]?.status).toBe("open");
+  });
+
+  it("rolls back one failed change without erasing a sibling success", () => {
+    const firstOptimistic = reshapeProviderThreads(threads, {
+      kind: "resolution",
+      threadExternalId: "901",
+      resolved: true,
+    });
+    const bothOptimistic = reshapeProviderThreads(firstOptimistic, {
+      kind: "edit-comment",
+      threadExternalId: "910",
+      commentExternalId: "910",
+      body: "Confirmed by the provider.",
+    });
+
+    const rolledBack = restoreProviderThread(bothOptimistic, threads, "901");
+
+    expect(rolledBack[0]?.status).toBe("open");
+    expect(rolledBack[1]?.comments[0]?.body).toBe("Confirmed by the provider.");
+  });
+
+  it("restores a deleted thread in order without erasing a sibling success", () => {
+    const deleted = reshapeProviderThreads(threads, {
+      kind: "delete-thread",
+      threadExternalId: "901",
+    });
+    const siblingUpdated = reshapeProviderThreads(deleted, {
+      kind: "resolution",
+      threadExternalId: "910",
+      resolved: false,
+    });
+
+    const rolledBack = restoreProviderThread(siblingUpdated, threads, "901");
+
+    expect(rolledBack.map(({ externalId }) => externalId)).toEqual([
+      "901",
+      "910",
+    ]);
+    expect(rolledBack[1]?.status).toBe("open");
   });
 });
 

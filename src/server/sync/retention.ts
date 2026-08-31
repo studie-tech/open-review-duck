@@ -74,6 +74,17 @@ export async function pruneExpiredReviewSnapshots(
       ),
     })
     .from(reviewSnapshots)
+    .where(
+      repositoryId
+        ? inArray(
+            reviewSnapshots.pullRequestId,
+            db
+              .select({ id: pullRequests.id })
+              .from(pullRequests)
+              .where(eq(pullRequests.repositoryId, repositoryId)),
+          )
+        : undefined,
+    )
     .groupBy(reviewSnapshots.pullRequestId)
     .as("snapshot_boundaries");
   // Every scope below costs a transaction that takes an advisory lock, so

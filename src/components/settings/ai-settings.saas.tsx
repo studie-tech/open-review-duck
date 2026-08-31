@@ -10,6 +10,7 @@ import { PageContainer } from "~/components/page-container";
 import { AiPromptEditor } from "~/components/settings/ai-prompt-editor";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { clampToClientClock } from "~/lib/hydration-clock";
 import {
   formatTokenCount,
   parseOptionalReviewTokenCap,
@@ -56,7 +57,7 @@ export function SaasAiSettings({
   // refreshes it on mount only when the render actually predates it.
   const planUsage = api.ai.planUsage.useQuery(undefined, {
     initialData: initialPlanUsage,
-    initialDataUpdatedAt: fetchedAt,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
     refetchOnMount: true,
     refetchOnWindowFocus: true,
   });

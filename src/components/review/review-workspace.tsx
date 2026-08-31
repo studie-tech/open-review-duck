@@ -261,7 +261,7 @@ export function aiJobActive(status: string | null | undefined) {
 }
 
 /** One conversation change a reviewer just asked the provider to make. */
-export type ProviderThreadChange = { threadExternalId: string } & (
+type ProviderThreadChange = { threadExternalId: string } & (
   | { kind: "resolution"; resolved: boolean }
   | { kind: "edit-comment"; commentExternalId: string; body: string }
   | { kind: "delete-comment"; commentExternalId: string }
@@ -308,6 +308,32 @@ export function reshapeProviderThreads(
       ),
     };
   });
+}
+
+/** Restores one failed optimistic change without disturbing sibling threads. */
+export function restoreProviderThread(
+  current: ProviderConversationThread[],
+  previous: ProviderConversationThread[],
+  threadExternalId: string,
+): ProviderConversationThread[] {
+  const previousIndex = previous.findIndex(
+    (thread) => thread.externalId === threadExternalId,
+  );
+  const previousThread = previous[previousIndex];
+  if (!previousThread) {
+    return current.filter((thread) => thread.externalId !== threadExternalId);
+  }
+  const currentIndex = current.findIndex(
+    (thread) => thread.externalId === threadExternalId,
+  );
+  if (currentIndex >= 0) {
+    return current.map((thread, index) =>
+      index === currentIndex ? previousThread : thread,
+    );
+  }
+  const restored = [...current];
+  restored.splice(Math.min(previousIndex, restored.length), 0, previousThread);
+  return restored;
 }
 
 interface RefetchableQuery {
@@ -3914,10 +3940,23 @@ export function ReviewWorkspace({
   }
 
   /** Puts back the conversations an optimistic change was rolled off. */
-  function restoreCachedConversations(previous?: ProviderConversations) {
+  function restoreCachedConversations(
+    previous: ProviderConversations | undefined,
+    threadExternalId: string,
+  ) {
     utils.review.providerConversations.setData(
       { pullRequestId: initialData.pullRequest.id },
-      previous,
+      (current) =>
+        previous && current
+          ? {
+              ...current,
+              threads: restoreProviderThread(
+                current.threads,
+                previous.threads,
+                threadExternalId,
+              ),
+            }
+          : (previous ?? current),
     );
   }
 
@@ -3956,8 +3995,10 @@ export function ReviewWorkspace({
       );
       void reconcileConversations();
     },
-    onError: (error, _input, context) => {
-      restoreCachedConversations(context?.previous);
+    onError: (error, input, context) => {
+      if (context) {
+        restoreCachedConversations(context.previous, input.threadExternalId);
+      }
       toast.error(error.message);
     },
   });
@@ -3975,8 +4016,10 @@ export function ReviewWorkspace({
       });
       void Promise.all([discussion.refetch(), reconcileConversations()]);
     },
-    onError: (error, _input, context) => {
-      restoreCachedConversations(context?.previous);
+    onError: (error, input, context) => {
+      if (context) {
+        restoreCachedConversations(context.previous, input.threadExternalId);
+      }
       toast.error(error.message);
     },
   });
@@ -3993,8 +4036,10 @@ export function ReviewWorkspace({
       });
       void Promise.all([discussion.refetch(), reconcileConversations()]);
     },
-    onError: (error, _input, context) => {
-      restoreCachedConversations(context?.previous);
+    onError: (error, input, context) => {
+      if (context) {
+        restoreCachedConversations(context.previous, input.threadExternalId);
+      }
       toast.error(error.message);
     },
   });
@@ -4007,8 +4052,10 @@ export function ReviewWorkspace({
       });
       void Promise.all([discussion.refetch(), reconcileConversations()]);
     },
-    onError: (error, _input, context) => {
-      restoreCachedConversations(context?.previous);
+    onError: (error, input, context) => {
+      if (context) {
+        restoreCachedConversations(context.previous, input.threadExternalId);
+      }
       toast.error(error.message);
     },
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   compactSideBySideDiff,
   currentChangedLineIndexes,
@@ -22,11 +22,47 @@ describe("sideBySideDiff", () => {
     );
   });
 
-  it("reuses the rows already aligned for the same revision pair", () => {
+  it("reuses the rows already aligned for the same pair in a browser", () => {
+    const previous = "one\nold\nthree";
+    const current = "one\nnew\nextra\nthree";
+    vi.stubGlobal("window", {});
+
+    try {
+      expect(sideBySideDiff(previous, current)).toBe(
+        sideBySideDiff(previous, current),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("drops the oldest pair once the browser cache is full", () => {
+    /** Builds the sources of the nth pair in a run of distinct pairs. */
+    const pair = (index: number) =>
+      [`alpha ${index}\nold ${index}`, `alpha ${index}\nnew ${index}`] as const;
+    vi.stubGlobal("window", {});
+
+    try {
+      const first = sideBySideDiff(...pair(0));
+      for (let index = 1; index < 8; index += 1) {
+        sideBySideDiff(...pair(index));
+      }
+      const last = sideBySideDiff(...pair(8));
+      const refreshed = sideBySideDiff(...pair(0));
+
+      expect(sideBySideDiff(...pair(8))).toBe(last);
+      expect(refreshed).not.toBe(first);
+      expect(refreshed).toEqual(first);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("holds on to no source it aligned on the server", () => {
     const previous = "one\nold\nthree";
     const current = "one\nnew\nextra\nthree";
 
-    expect(sideBySideDiff(previous, current)).toBe(
+    expect(sideBySideDiff(previous, current)).not.toBe(
       sideBySideDiff(previous, current),
     );
   });

@@ -22,6 +22,7 @@ import {
   LinkNavigationStatus,
   LinkPendingSpinner,
 } from "~/components/ui/link-status";
+import { clampToClientClock } from "~/lib/hydration-clock";
 import { prioritizeInbox } from "~/lib/priority-inbox";
 import { activeRunStatuses } from "~/lib/repository-run-progress";
 import { partitionReviewQueue } from "~/lib/review-queue";
@@ -151,13 +152,13 @@ export function DashboardOverview({
   // shared stale time decide whether hydration has to refresh it.
   const pullRequestsQuery = api.review.dashboard.useQuery(undefined, {
     initialData: initialPullRequests,
-    initialDataUpdatedAt: fetchedAt,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
     refetchOnMount: true,
     refetchOnWindowFocus: true,
   });
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
     initialData: initialMonitors,
-    initialDataUpdatedAt: fetchedAt,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
     refetchOnMount: true,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>

@@ -68,7 +68,7 @@ export async function consumeAiQuestionStream(
 }
 
 /** Milliseconds a streamed answer update waits for a later one to supersede it. */
-export const AI_QUESTION_STREAM_FLUSH_MS = 100;
+const AI_QUESTION_STREAM_FLUSH_MS = 100;
 
 /**
  * Throttles streamed answer updates onto one flush window.
