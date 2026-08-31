@@ -494,6 +494,60 @@ describe("ReviewFilesPanel", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("collapses a folder the query forced open and forgets it after", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ReviewFilesPanel
+        files={files}
+        search="workspace"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /workspace\.ts/i }),
+    ).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Collapse review" }));
+
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand review" })).toBeVisible();
+
+    rerender(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Expand review" })).toBeVisible();
+  });
+
+  it("collapses a query-opened folder with ArrowLeft instead of leaving it", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search="workspace"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    screen.getByRole("button", { name: "Collapse review" }).focus();
+    await user.keyboard("{ArrowLeft}");
+
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand review" })).toHaveFocus();
+  });
+
   it("keeps its rows mounted when the view around it renders", async () => {
     const user = userEvent.setup();
     let progressReads = 0;

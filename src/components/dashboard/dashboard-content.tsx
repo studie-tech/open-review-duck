@@ -30,6 +30,7 @@ import {
   dashboardFilters,
   rememberDashboardFilters,
 } from "~/lib/dashboard-filters";
+import { clampToClientClock } from "~/lib/hydration-clock";
 import {
   comparePriorityInboxText,
   filterPriorityInbox,
@@ -130,7 +131,7 @@ export function PullRequestsContent({
   const pullRequests = api.review.dashboard.useQuery(undefined, {
     enabled: activeSyncs.isFetched,
     initialData: initialPullRequests,
-    initialDataUpdatedAt: fetchedAt,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
     refetchOnMount: true,
     refetchOnWindowFocus: true,
   });

@@ -43,6 +43,11 @@ const DEFAULT_MAX_SOURCE_BYTES = 2 << 20;
 // held at a handful of files.
 const SOURCE_POLICY_CONCURRENCY = 8;
 
+// Keep bulk inserts comfortably below PostgreSQL's 65,535 bind-parameter
+// ceiling even if a row gains another explicit column later.
+const CHILD_JOB_INSERT_BATCH_SIZE = 500;
+const REVIEW_ITEM_INSERT_BATCH_SIZE = 500;
+
 /** The parent columns a child job copies instead of re-resolving. */
 type ReviewChildJobParent = Pick<
   ReviewParentJob,
@@ -473,8 +478,9 @@ export async function sealReviewPlan(
         fingerprint,
       });
     };
-    // Ids are generated here rather than returned by the insert, so the whole
-    // fan-out is one round trip while the plan advisory lock is held.
+    // Ids are generated here rather than returned by the insert, so item rows
+    // can name their child before the bounded batches are written under the
+    // plan advisory lock.
     const childRows: (typeof aiJobs.$inferInsert)[] = [];
     for (const candidate of selected) {
       const childId = randomUUID();
@@ -506,11 +512,23 @@ export async function sealReviewPlan(
         }),
       );
     }
-    if (childRows.length > 0) await tx.insert(aiJobs).values(childRows);
-    if (rows.length > 0) {
+    for (
+      let offset = 0;
+      offset < childRows.length;
+      offset += CHILD_JOB_INSERT_BATCH_SIZE
+    ) {
+      await tx
+        .insert(aiJobs)
+        .values(childRows.slice(offset, offset + CHILD_JOB_INSERT_BATCH_SIZE));
+    }
+    for (
+      let offset = 0;
+      offset < rows.length;
+      offset += REVIEW_ITEM_INSERT_BATCH_SIZE
+    ) {
       await tx
         .insert(aiReviewItems)
-        .values(rows)
+        .values(rows.slice(offset, offset + REVIEW_ITEM_INSERT_BATCH_SIZE))
         // Replay is free: the unique index on (parentJobId, path) is what the
         // denominator's identity is, so a second attempt writes nothing.
         .onConflictDoNothing({

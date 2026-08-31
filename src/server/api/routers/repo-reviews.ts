@@ -357,6 +357,9 @@ export const repoReviewsRouter = createTRPCRouter({
         snapshots.map(({ id }) => id),
       ),
     ]);
+    const snapshotByPullRequest = new Map(
+      snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot]),
+    );
     const activeSyncByMonitor = new Map(
       activeSyncs.map((run) => [run.monitorId, run]),
     );
@@ -364,6 +367,7 @@ export const repoReviewsRouter = createTRPCRouter({
 
     return monitors.map((monitor) => ({
       monitorId: monitor.id,
+      snapshotId: snapshotByPullRequest.get(monitor.pullRequestId)?.id ?? null,
       activeSync: syncProgressView(activeSyncByMonitor.get(monitor.id)),
       latestCodeRun:
         jobsByPullRequestAndPurpose.get(`${monitor.pullRequestId}:code`) ??

@@ -36,6 +36,7 @@ import { PageContainer } from "~/components/page-container";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
+import { clampToClientClock } from "~/lib/hydration-clock";
 import {
   repositoryReportFilename,
   repositoryReviewReport,
@@ -126,7 +127,7 @@ export function RepoReviewsContent({
   // shared stale time decide whether hydration has to refresh it.
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
     initialData: initialMonitors,
-    initialDataUpdatedAt: fetchedAt,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
     refetchOnMount: true,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
@@ -151,7 +152,10 @@ export function RepoReviewsContent({
   }, [runProgress, utils]);
   const repositoriesQuery = api.provider.listImportedRepositories.useQuery(
     undefined,
-    { initialData: initialRepositories, initialDataUpdatedAt: fetchedAt },
+    {
+      initialData: initialRepositories,
+      initialDataUpdatedAt: clampToClientClock(fetchedAt),
+    },
   );
   const [selectedMonitorId, setSelectedMonitorId] = useState(
     initialMonitors.some(({ id }) => id === initialMonitorId)

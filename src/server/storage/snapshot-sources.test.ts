@@ -253,6 +253,26 @@ describe("snapshot source availability", () => {
     ).resolves.toEqual(new Set(["pull-request-2"]));
   });
 
+  it("keeps a pull request whose probe failed instead of answering", async () => {
+    mocks.exists.mockReset();
+    mocks.exists.mockRejectedValue(new Error("probe failed"));
+    const database = batchedDatabase({
+      snapshots: [{ id: "snapshot-1", pullRequestId: "pull-request-1" }],
+      units: [
+        {
+          snapshotId: "snapshot-1",
+          currentBlobId: "kept",
+          previousBlobId: null,
+        },
+      ],
+      blobIds: ["kept"],
+    });
+
+    await expect(
+      pullRequestsMissingSnapshotSources(database as never, ["pull-request-1"]),
+    ).resolves.toEqual(new Set());
+  });
+
   it("reports a pull request whose snapshot lost a blob row", async () => {
     mocks.exists.mockReset();
     mocks.exists.mockResolvedValue(true);

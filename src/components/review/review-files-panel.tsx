@@ -307,6 +307,10 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
         files.flatMap((file) => reviewFileAncestorPaths(file.path).slice(0, 1)),
       ),
   );
+  // A folder the reviewer closes while the query forces it open. The override
+  // has to be tracked apart from `expanded` because the forced-open set would
+  // otherwise reinstate the folder on the next render.
+  const [collapsed, setCollapsed] = useState(() => new Set<string>());
   const filtered = useMemo(
     () => filterReviewFiles(files, filter, search),
     [files, filter, search],
@@ -316,20 +320,26 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   // ancestors of every surviving file. Keeping that out of `expanded` leaves
   // the reviewer's own folders untouched once the query clears.
   const searching = search.trim().length > 0 || filter !== "all";
-  const openPaths = useMemo(
-    () =>
-      searching
-        ? new Set([
-            ...expanded,
-            ...filtered.flatMap((file) => reviewFileAncestorPaths(file.path)),
-          ])
-        : expanded,
-    [expanded, filtered, searching],
-  );
+  const openPaths = useMemo(() => {
+    if (!searching) return expanded;
+    const next = new Set([
+      ...expanded,
+      ...filtered.flatMap((file) => reviewFileAncestorPaths(file.path)),
+    ]);
+    for (const path of collapsed) next.delete(path);
+    return next;
+  }, [collapsed, expanded, filtered, searching]);
   const visibleItems = useMemo(
     () => visibleReviewFileTreeItems(tree, openPaths),
     [openPaths, tree],
   );
+
+  // The override only makes sense against a forced-open folder, so it ends
+  // with the query or filter that forced the folder open.
+  useEffect(() => {
+    if (searching) return;
+    setCollapsed((current) => (current.size > 0 ? new Set() : current));
+  }, [searching]);
 
   // Sign-off and next/previous file change `selectedPath` from outside the
   // tree. Expand any collapsed ancestors so the row exists, then scroll it
@@ -341,6 +351,12 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
       if (ancestors.every((path) => current.has(path))) return current;
       const next = new Set(current);
       for (const path of ancestors) next.add(path);
+      return next;
+    });
+    setCollapsed((current) => {
+      if (!ancestors.some((path) => current.has(path))) return current;
+      const next = new Set(current);
+      for (const path of ancestors) next.delete(path);
       return next;
     });
   }, [selectedPath]);
@@ -357,10 +373,19 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
 
   /** Expands or collapses one folder without rebuilding the rest of the tree. */
   function onExpandedChange(path: string) {
+    const open = openPaths.has(path);
     setExpanded((current) => {
       const next = new Set(current);
-      if (next.has(path)) next.delete(path);
+      if (open) next.delete(path);
       else next.add(path);
+      return next;
+    });
+    if (!searching) return;
+    setCollapsed((current) => {
+      if (open) return new Set(current).add(path);
+      if (!current.has(path)) return current;
+      const next = new Set(current);
+      next.delete(path);
       return next;
     });
   }
@@ -426,14 +451,14 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
       return;
     }
     if (event.key === "ArrowRight") {
-      if (current.kind === "directory" && !expanded.has(current.path)) {
+      if (current.kind === "directory" && !openPaths.has(current.path)) {
         event.preventDefault();
         onExpandedChange(current.path);
       }
       return;
     }
     if (event.key === "ArrowLeft") {
-      if (current.kind === "directory" && expanded.has(current.path)) {
+      if (current.kind === "directory" && openPaths.has(current.path)) {
         event.preventDefault();
         onExpandedChange(current.path);
         return;

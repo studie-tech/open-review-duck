@@ -20,16 +20,33 @@ export function hasActiveRepositoryRun(monitors: readonly RunState[]) {
   );
 }
 
-/** Folds live run rows into cached monitors so the heavy list stays put. */
+/**
+ * Folds live run rows into cached monitors so the heavy list stays put.
+ *
+ * A progress read resolved against a snapshot the list has since replaced
+ * carries run state that belongs to the old snapshot, so its runs are dropped
+ * and only the sync — which is keyed on the monitor — is taken.
+ */
 export function mergeRepositoryRunProgress<
-  Live extends { monitorId: string },
-  Monitor extends { id: string } & Omit<Live, "monitorId">,
+  Live extends {
+    monitorId: string;
+    snapshotId: string | null;
+    activeSync: unknown;
+  },
+  Monitor extends { id: string; snapshot: { id: string } | null } & Omit<
+    Live,
+    "monitorId" | "snapshotId"
+  >,
 >(monitors: readonly Monitor[], live: readonly Live[]): Monitor[] {
   const byMonitor = new Map(
     live.map(({ monitorId, ...fields }) => [monitorId, fields]),
   );
   return monitors.map((monitor) => {
     const fields = byMonitor.get(monitor.id);
-    return fields ? { ...monitor, ...fields } : monitor;
+    if (!fields) return monitor;
+    const { snapshotId, activeSync, ...runs } = fields;
+    return snapshotId === (monitor.snapshot?.id ?? null)
+      ? { ...monitor, activeSync, ...runs }
+      : { ...monitor, activeSync };
   });
 }

@@ -2,6 +2,7 @@
 
 import { Award, Check, Clock3, Flame, Star } from "lucide-react";
 import { PageContainer } from "~/components/page-container";
+import { clampToClientClock } from "~/lib/hydration-clock";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Gamification = RouterOutputs["review"]["gamification"];
@@ -19,7 +20,7 @@ export function AchievementsContent({
   // shared stale time decide whether hydration has to refresh it.
   const progress = api.review.gamification.useQuery(undefined, {
     initialData: initialStats,
-    initialDataUpdatedAt: fetchedAt,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
     refetchOnMount: true,
     refetchOnWindowFocus: true,
   });

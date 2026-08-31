@@ -369,22 +369,27 @@ function alignedDiffRows(previousSource: string, currentSource: string) {
   return rows;
 }
 
-// A single unit navigation asks for the same file pair three times: the
-// overview map, the changed-line set, and the remounted diff pane. The bound
-// keeps a handful of recently opened files aligned without pinning whole-file
-// row arrays for a whole session.
+// In the browser a single unit navigation asks for the same file pair three
+// times: the overview map, the changed-line set, and the remounted diff pane.
+// The bound keeps a handful of recently opened files aligned without pinning
+// whole-file row arrays for a whole session. Server callers diff a file once
+// per request and share one long-lived process, so they skip the cache rather
+// than keep decrypted source reachable past the request that read it.
 const DIFF_CACHE_LIMIT = 8;
 const diffRowCache = new Map<string, readonly SideBySideDiffRow[]>();
 
 /**
  * Produces aligned line rows for a side-by-side source diff.
  *
- * Rows are shared between callers, so treat the result as read-only.
+ * Rows are shared between browser callers, so treat the result as read-only.
  */
 export function sideBySideDiff(
   previousSource: string,
   currentSource: string,
 ): readonly SideBySideDiffRow[] {
+  if (typeof window === "undefined") {
+    return alignedDiffRows(previousSource, currentSource);
+  }
   const key = `${previousSource.length}\0${previousSource}\0${currentSource}`;
   const cached = diffRowCache.get(key);
   if (cached) return cached;

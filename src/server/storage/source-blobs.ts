@@ -74,6 +74,45 @@ export async function loadSourceBlobsByDigest(
   return new Map(rows.map((row) => [row.digest, row]));
 }
 
+/** Pairs one text with the content identity the store keys on. */
+function materializeSourceContent(content: string) {
+  return { content, digest: sourceDigest(Buffer.from(content)) };
+}
+
+/**
+ * Hashes these files and loads the workspace rows already holding them.
+ *
+ * Both synchronization paths store every file's current text and, for changed
+ * files, the text it replaced. Hashing that whole set up front lets each
+ * `persistSourceBlob` call skip its own dedup query and round trip, and the
+ * returned digests carry into those calls so no file is hashed a second time.
+ * Only the digest is kept: the whole set encoded at once would duplicate the
+ * synchronization's entire source budget, so each caller encodes a file inside
+ * the bounded worker that stores it.
+ */
+export async function prepareSourceBlobs<
+  File extends { content: string; previousContent?: string },
+>(db: Database, workspaceId: string, files: readonly File[]) {
+  const prepared = files.map((file) => ({
+    file,
+    current: materializeSourceContent(file.content),
+    previous:
+      file.previousContent === undefined
+        ? undefined
+        : materializeSourceContent(file.previousContent),
+  }));
+  const knownBlobs = await loadSourceBlobsByDigest(
+    db,
+    workspaceId,
+    prepared.flatMap((entry) =>
+      entry.previous === undefined
+        ? [entry.current.digest]
+        : [entry.current.digest, entry.previous.digest],
+    ),
+  );
+  return { knownBlobs, prepared };
+}
+
 /** Persists one immutable workspace-scoped object exactly once. */
 export async function persistSourceBlob(
   db: Database,
@@ -82,10 +121,11 @@ export async function persistSourceBlob(
     bytes: Uint8Array;
     encoding?: string;
     mediaType?: string;
+    digest?: string;
     knownBlobs?: ReadonlyMap<string, typeof sourceBlobs.$inferSelect>;
   },
 ) {
-  const digest = sourceDigest(input.bytes);
+  const digest = input.digest ?? sourceDigest(input.bytes);
   const store = await sourceObjectStore();
   const uploadLeaseToken = randomUUID();
   const putInput = {

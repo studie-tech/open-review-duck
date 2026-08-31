@@ -79,6 +79,25 @@ function createListingAccess(open: PullRequestSummary[]) {
   } as unknown as ConnectionAccess;
 }
 
+/** Builds connection access that records the detail fetches it serves. */
+function createDetailAccess(
+  open: PullRequestSummary[],
+  details: Map<number, PullRequestSummary>,
+) {
+  const getPullRequest = vi.fn(
+    async (_externalId: string, pullRequestNumber: number) =>
+      details.get(pullRequestNumber),
+  );
+  const access = {
+    connection: async () => ({ provider: "github" }),
+    provider: async () => ({
+      listOpenPullRequests: async () => open,
+      getPullRequest,
+    }),
+  } as unknown as ConnectionAccess;
+  return { access, getPullRequest };
+}
+
 const repository = {
   id: "repository-1",
   workspaceId: "workspace-1",
@@ -229,5 +248,41 @@ describe("repository pull-request state refresh", () => {
       deletions: 3,
       changedFiles: 2,
     });
+  });
+
+  it("fetches the detail of a pull request that left the open listing", async () => {
+    const { db, writes } = createClaimedDb([createTracked()]);
+    const { access, getPullRequest } = createDetailAccess(
+      [],
+      new Map([
+        [
+          10,
+          createSummary({
+            state: "merged",
+            additions: 40,
+            deletions: 5,
+            changedFiles: 4,
+          }),
+        ],
+      ]),
+    );
+
+    const result = await refreshRepositoryPullRequestStates(
+      db,
+      repository,
+      access,
+    );
+
+    expect(getPullRequest).toHaveBeenCalledTimes(1);
+    expect(getPullRequest).toHaveBeenCalledWith(repository.externalId, 10);
+    const [write] = writes.filter((entry) => entry.table === pullRequests);
+    expect(write?.values).toMatchObject({
+      state: "merged",
+      additions: 40,
+      deletions: 5,
+      changedFiles: 4,
+    });
+    expect(result).toEqual({ checked: true, changed: 1, queued: 0 });
+    expect(mocks.startPullRequestSync).not.toHaveBeenCalled();
   });
 });

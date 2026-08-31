@@ -269,6 +269,7 @@ describe("repoReviews.runProgress", () => {
 
     expect(progress).toEqual({
       monitorId: fixture.monitorId,
+      snapshotId: fixture.snapshotId,
       activeSync: {
         id: fixture.syncRunId,
         status: "running",

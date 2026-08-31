@@ -17,7 +17,6 @@ type ReviewUnit = RouterOutputs["review"]["workspace"]["units"][number];
 
 type ReviewCardMemberState = {
   revisionState?: string;
-  startLine?: number;
   status: string;
 };
 
