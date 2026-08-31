@@ -133,6 +133,23 @@ describe("reviewCardRanges", () => {
 });
 
 describe("ReviewFileCardHeader", () => {
+  it("does not call a waiting-only card reviewed", () => {
+    render(
+      <ReviewFileCardHeader
+        members={[{ ...units[0], status: "waiting" }] as never}
+        index={0}
+        count={1}
+        selected
+        onResumeWaiting={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Resume waiting on this file" }),
+    ).toBeInTheDocument();
+  });
+
   it("excludes waiting members from the card action count", () => {
     render(
       <ReviewFileCardHeader
@@ -273,6 +290,24 @@ describe("ReviewFileCardHeader", () => {
     ).toBeInTheDocument();
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it("turns a waiting card pill into a resume control", () => {
+    const onResumeWaiting = vi.fn();
+    render(
+      <ReviewFileCardHeader
+        members={[{ ...units[0], status: "waiting" }] as never}
+        index={0}
+        count={1}
+        selected
+        onResumeWaiting={onResumeWaiting}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resume waiting on this file" }),
+    );
+    expect(onResumeWaiting).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("CopyReviewPathButton", () => {
@@ -344,5 +379,31 @@ describe("ReviewFileUnitMarker", () => {
     expect(
       screen.getByText("TypePlot").closest("[data-review-unit-start]"),
     ).toHaveAttribute("data-review-unit-start", "type-plot");
+  });
+
+  it("lets a waiting unit marker take the wait back", () => {
+    const onStopWaiting = vi.fn();
+    render(
+      <ReviewFileUnitMarker
+        member={
+          {
+            id: "held",
+            name: "STORE_FEDERAL_PRODUCTS",
+            startLine: 12,
+            endLine: 18,
+            status: "waiting",
+            revisionState: "unchanged",
+          } as never
+        }
+        onStopWaiting={onStopWaiting}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Resume waiting on STORE_FEDERAL_PRODUCTS",
+      }),
+    );
+    expect(onStopWaiting).toHaveBeenCalledTimes(1);
   });
 });

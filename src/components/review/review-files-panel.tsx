@@ -8,9 +8,12 @@ import {
   Clock3,
   FileCode2,
   FileDiff,
+  FileImage,
   Folder,
   FolderOpen,
+  FoldVertical,
   List,
+  UnfoldVertical,
 } from "lucide-react";
 import {
   type KeyboardEvent,
@@ -24,11 +27,14 @@ import {
 import {
   buildReviewFileTree,
   filterReviewFiles,
+  outstandingReviewFileUnits,
   type ReviewFileEntry,
   type ReviewFileFilter,
   type ReviewFileTreeNode,
+  reviewFileTreeDirectoryPaths,
   visibleReviewFileTreeItems,
 } from "~/lib/review-files";
+import { isPreviewableReviewImage } from "~/lib/review-images";
 import { cn } from "~/lib/utils";
 
 /** Stable id for the focusable control of one tree row. */
@@ -53,15 +59,22 @@ function FileReviewCheckbox({
   file,
   pending,
   onToggle,
+  onResumeWaiting,
 }: {
   file: ReviewFileEntry;
   pending: boolean;
   onToggle: (file: ReviewFileEntry) => void;
+  onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   const checked = file.state === "reviewed";
-  const mixed = file.state === "partial" || file.state === "waiting";
-  const disabled = file.totalUnits === 0 || (!checked && file.waitingUnits > 0);
-  const action = checked ? "Return" : "Sign off";
+  const waitingOnly = file.state === "waiting";
+  const outstanding = outstandingReviewFileUnits(file).length;
+  const mixed = file.state === "partial" || waitingOnly;
+  const canResume = waitingOnly && Boolean(onResumeWaiting);
+  const canSignOff = !checked && outstanding > 0;
+  const disabled =
+    file.totalUnits === 0 || (!checked && !canSignOff && !canResume);
+  const action = checked ? "Return" : canResume ? "Resume" : "Sign off";
   const checkboxRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (checkboxRef.current) checkboxRef.current.indeterminate = mixed;
@@ -72,9 +85,11 @@ function FileReviewCheckbox({
   return (
     <label
       title={
-        disabled && file.waitingUnits > 0
-          ? `Resolve ${file.waitingUnits} waiting ${file.waitingUnits === 1 ? "unit" : "units"} first`
-          : `${action} this file`
+        canResume
+          ? `Resume ${file.waitingUnits} waiting ${file.waitingUnits === 1 ? "unit" : "units"}`
+          : canSignOff && file.waitingUnits > 0
+            ? `Sign off ${outstanding} outstanding ${outstanding === 1 ? "unit" : "units"}. ${file.waitingUnits} stay waiting.`
+            : `${action} this file`
       }
       className={cn(
         // The control is visually hidden with `sr-only` (`position: absolute`).
@@ -98,11 +113,16 @@ function FileReviewCheckbox({
         aria-label={`${action} ${file.totalUnits} review ${file.totalUnits === 1 ? "unit" : "units"} in ${file.path}.${waitReason}`}
         disabled={disabled || pending}
         onMouseDown={(event) => event.preventDefault()}
-        onChange={() => onToggle(file)}
+        onChange={() => {
+          if (canResume) onResumeWaiting?.(file);
+          else onToggle(file);
+        }}
         className="sr-only"
       />
       {checked ? (
         <Check className="size-3" strokeWidth={3} />
+      ) : waitingOnly ? (
+        <Clock3 className="size-3" strokeWidth={2.5} />
       ) : mixed ? (
         <span className="h-0.5 w-2 rounded-full bg-current" />
       ) : null}
@@ -118,6 +138,7 @@ function ReviewFileRow({
   level,
   onSelect,
   onToggle,
+  onResumeWaiting,
 }: {
   file: ReviewFileEntry;
   selected: boolean;
@@ -125,8 +146,10 @@ function ReviewFileRow({
   level: number;
   onSelect: (file: ReviewFileEntry) => void;
   onToggle: (file: ReviewFileEntry) => void;
+  onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   const name = file.path.split("/").at(-1) ?? file.path;
+  const waitLabel = `${file.waitingUnits} waiting ${file.waitingUnits === 1 ? "unit" : "units"}`;
   return (
     <div
       role="treeitem"
@@ -140,7 +163,12 @@ function ReviewFileRow({
       )}
       style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
     >
-      <FileReviewCheckbox file={file} pending={pending} onToggle={onToggle} />
+      <FileReviewCheckbox
+        file={file}
+        pending={pending}
+        onToggle={onToggle}
+        onResumeWaiting={onResumeWaiting}
+      />
       <button
         type="button"
         id={reviewFileTreeControlId(file.path)}
@@ -148,7 +176,9 @@ function ReviewFileRow({
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         title={file.path}
       >
-        {file.isBinary ? (
+        {isPreviewableReviewImage(file.path) ? (
+          <FileImage className="text-fog size-3 shrink-0" />
+        ) : file.isBinary ? (
           <FileCode2 className="text-fog size-3 shrink-0" />
         ) : (
           <FileDiff className="text-fog size-3 shrink-0" />
@@ -156,7 +186,7 @@ function ReviewFileRow({
         <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-cloud">
           {name}
         </span>
-        {file.waitingUnits > 0 && (
+        {file.waitingUnits > 0 && !onResumeWaiting && (
           <span className="text-cyan flex shrink-0 items-center gap-0.5 text-[8px]">
             <Clock3 className="size-2.5" />
             {file.waitingUnits}
@@ -173,6 +203,19 @@ function ReviewFileRow({
           </span>
         )}
       </button>
+      {file.waitingUnits > 0 && onResumeWaiting && (
+        <button
+          type="button"
+          aria-label={`Resume ${waitLabel} in ${file.path}`}
+          title={`Resume ${waitLabel}`}
+          disabled={pending}
+          onClick={() => onResumeWaiting(file)}
+          className="text-cyan hover:bg-cyan/10 flex shrink-0 items-center gap-0.5 rounded px-0.5 text-[8px] transition disabled:opacity-55"
+        >
+          <Clock3 className="size-2.5" />
+          {file.waitingUnits}
+        </button>
+      )}
     </div>
   );
 }
@@ -187,6 +230,7 @@ function ReviewFileTreeRows({
   onExpandedChange,
   onSelect,
   onToggle,
+  onResumeWaiting,
 }: {
   nodes: ReviewFileTreeNode[];
   level: number;
@@ -196,6 +240,7 @@ function ReviewFileTreeRows({
   onExpandedChange: (path: string) => void;
   onSelect: (file: ReviewFileEntry) => void;
   onToggle: (file: ReviewFileEntry) => void;
+  onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   return nodes.map((node) => {
     if (node.kind === "file") {
@@ -208,6 +253,7 @@ function ReviewFileTreeRows({
           pending={Boolean(pendingFileIds?.has(node.file.id))}
           onSelect={onSelect}
           onToggle={onToggle}
+          onResumeWaiting={onResumeWaiting}
         />
       );
     }
@@ -261,6 +307,7 @@ function ReviewFileTreeRows({
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}
               onToggle={onToggle}
+              onResumeWaiting={onResumeWaiting}
             />
           </div>
         )}
@@ -286,6 +333,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   emptyLabel = "No changed files match this view.",
   onSelect,
   onToggle,
+  onResumeWaiting,
 }: {
   files: ReviewFileEntry[];
   search: string;
@@ -295,6 +343,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   emptyLabel?: string;
   onSelect: (file: ReviewFileEntry) => void;
   onToggle: (file: ReviewFileEntry) => void;
+  onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   const [filter, setFilter] = useState<ReviewFileFilter>("all");
   // Only the top-level folders start open. Seeding every ancestor mounts a
@@ -390,6 +439,25 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
     });
   }
 
+  const directoryPaths = useMemo(
+    () => reviewFileTreeDirectoryPaths(tree),
+    [tree],
+  );
+  const allFoldersOpen =
+    directoryPaths.length > 0 &&
+    directoryPaths.every((path) => openPaths.has(path));
+
+  /** Opens or closes every folder in the current tree. */
+  function toggleAllFolders() {
+    if (allFoldersOpen) {
+      setExpanded(new Set());
+      if (searching) setCollapsed(new Set(directoryPaths));
+      return;
+    }
+    setExpanded(new Set(directoryPaths));
+    if (searching) setCollapsed(new Set());
+  }
+
   /** Moves keyboard focus across visible tree rows without changing mouse behavior. */
   function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const keys = [
@@ -474,35 +542,56 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-line px-4 py-2.5">
-        <fieldset
-          aria-label="Filter files"
-          className="bg-ink/55 m-0 flex w-full min-w-0 rounded-lg border border-line p-0.5 shadow-inner"
-        >
-          {filters.map((option) => {
-            const Icon = option.icon;
-            const selected = filter === option.id;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => setFilter(option.id)}
-                className={cn(
-                  "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-[10px] font-medium transition",
-                  selected
-                    ? "bg-surface text-cloud shadow-sm ring-1 ring-line-strong"
-                    : "text-fog hover:bg-surface/60 hover:text-mist",
-                )}
-              >
-                <Icon
-                  className={cn("size-3", selected && "text-cyan")}
-                  aria-hidden="true"
-                />
-                {option.label}
-              </button>
-            );
-          })}
-        </fieldset>
+        <div className="flex items-center gap-1.5">
+          <fieldset
+            aria-label="Filter files"
+            className="bg-ink/55 m-0 flex min-w-0 flex-1 rounded-lg border border-line p-0.5 shadow-inner"
+          >
+            {filters.map((option) => {
+              const Icon = option.icon;
+              const selected = filter === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setFilter(option.id)}
+                  className={cn(
+                    "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-[10px] font-medium transition",
+                    selected
+                      ? "bg-surface text-cloud shadow-sm ring-1 ring-line-strong"
+                      : "text-fog hover:bg-surface/60 hover:text-mist",
+                  )}
+                >
+                  <Icon
+                    className={cn("size-3", selected && "text-cyan")}
+                    aria-hidden="true"
+                  />
+                  {option.label}
+                </button>
+              );
+            })}
+          </fieldset>
+          {directoryPaths.length > 0 && (
+            <button
+              type="button"
+              aria-label={
+                allFoldersOpen ? "Collapse all folders" : "Expand all folders"
+              }
+              title={
+                allFoldersOpen ? "Collapse all folders" : "Expand all folders"
+              }
+              onClick={toggleAllFolders}
+              className="text-fog hover:bg-surface/60 hover:text-mist grid size-7 shrink-0 place-items-center rounded-md border border-line transition"
+            >
+              {allFoldersOpen ? (
+                <FoldVertical className="size-3.5" aria-hidden="true" />
+              ) : (
+                <UnfoldVertical className="size-3.5" aria-hidden="true" />
+              )}
+            </button>
+          )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {tree.length > 0 ? (
@@ -521,6 +610,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}
               onToggle={onToggle}
+              onResumeWaiting={onResumeWaiting}
             />
           </div>
         ) : (

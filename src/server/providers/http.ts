@@ -269,3 +269,62 @@ export async function providerText(
   }
   return boundedResponseText(response, maximumBytes);
 }
+
+/** Reads a binary body without buffering more than the configured limit. */
+async function boundedResponseBytes(
+  response: Response,
+  maximumBytes: number,
+): Promise<Uint8Array | undefined> {
+  const declaredLength = Number(response.headers.get("content-length") ?? 0);
+  if (declaredLength > maximumBytes) {
+    await response.body?.cancel();
+    return undefined;
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    bytesRead += chunk.value.byteLength;
+    if (bytesRead > maximumBytes) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(chunk.value);
+  }
+  const bytes = new Uint8Array(bytesRead);
+  let offset = 0;
+  for (const part of chunks) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+  return bytes;
+}
+
+/** Performs a provider request and returns its bytes within the size limit. */
+export async function providerBytes(
+  provider: ProviderName,
+  url: string,
+  init: RequestInit,
+  maximumBytes = PROVIDER_TEXT_MAXIMUM_BYTES,
+): Promise<Uint8Array | undefined> {
+  const response = await requestProvider(url, init);
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    throw new ProviderError(
+      provider,
+      "Provider redirects are disabled to prevent requests to unvalidated hosts",
+      response.status,
+    );
+  }
+  if (!response.ok) {
+    throw new ProviderError(
+      provider,
+      await providerFailureMessage(provider, response),
+      response.status,
+    );
+  }
+  return boundedResponseBytes(response, maximumBytes);
+}

@@ -5111,23 +5111,25 @@ export const reviewRouter = createTRPCRouter({
                 members.map(({ id }) => id),
               ),
             ),
-          )
-          .limit(1);
-        if (waits.length > 0) {
+          );
+        const waitingIds = new Set(waits.map(({ unitId }) => unitId));
+        const outstanding = members.filter(
+          (member) => !waitingIds.has(member.id),
+        );
+        if (outstanding.length === 0) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message:
-              "Resolve the units waiting for a provider response before signing off this file",
+            message: "This file has no outstanding review units to sign off",
           });
         }
-        const complexity = members.reduce(
+        const complexity = outstanding.reduce(
           (total, member) => total + Math.max(1, member.complexity),
           0,
         );
         let allocated = 0;
-        const memberInputs = members.map((member, index) => {
+        const memberInputs = outstanding.map((member, index) => {
           const durationSeconds =
-            index === members.length - 1
+            index === outstanding.length - 1
               ? input.durationSeconds - allocated
               : Math.floor(
                   (input.durationSeconds * Math.max(1, member.complexity)) /
@@ -5155,7 +5157,7 @@ export const reviewRouter = createTRPCRouter({
         await finalizeSignOffs(tx, ctx.auth.userId, writes);
         return {
           snapshotFileId: file.id,
-          signedUnitIds: members.map(({ id }) => id),
+          signedUnitIds: outstanding.map(({ id }) => id),
         };
       }),
     ),

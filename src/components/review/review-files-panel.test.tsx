@@ -295,7 +295,7 @@ describe("ReviewFilesPanel", () => {
     );
 
     const group = screen.getByRole("group", { name: "Filter files" });
-    expect(group).toHaveClass("flex", "w-full");
+    expect(group).toHaveClass("flex", "flex-1");
     expect(group).not.toHaveClass("flex-col");
     expect(group.querySelectorAll("button.flex-1")).toHaveLength(2);
     expect(
@@ -431,6 +431,97 @@ describe("ReviewFilesPanel", () => {
     expect(workspace).toBeVisible();
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
     expect(scrollIntoView.mock.instances).toContain(workspace);
+  });
+
+  it("expands and collapses every folder from one control", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand all folders" }),
+    );
+    expect(
+      screen.getByRole("button", { name: /workspace\.ts/i }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Collapse all folders" }),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Collapse all folders" }),
+    );
+    expect(
+      screen.queryByRole("button", { name: /workspace\.ts/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand src" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand public" })).toBeVisible();
+  });
+
+  it("lets a waiting file resume instead of blocking the checkbox", async () => {
+    const user = userEvent.setup();
+    const onResumeWaiting = vi.fn();
+    const waiting = reviewFileEntries(
+      [
+        {
+          id: "held-file",
+          path: "src/review/constants.ts",
+          previousPath: null,
+          changeType: "modified",
+          additions: 2,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+      ],
+      [
+        {
+          id: "held",
+          path: "src/review/constants.ts",
+          status: "waiting",
+          revisionState: "unchanged",
+        },
+      ],
+    );
+    render(
+      <ReviewFilesPanel
+        files={waiting}
+        search=""
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+        onResumeWaiting={onResumeWaiting}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Expand review" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Resume 1 waiting unit in src/review/constants.ts",
+      }),
+    );
+    expect(onResumeWaiting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "held-file" }),
+    );
+
+    onResumeWaiting.mockClear();
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Resume 1 review unit in src\/review\/constants.ts/i,
+      }),
+    );
+    expect(onResumeWaiting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "held-file" }),
+    );
   });
 
   it("opens only the top-level folders so a large tree stays cheap", () => {

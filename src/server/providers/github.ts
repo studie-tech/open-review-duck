@@ -8,6 +8,7 @@ import {
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
+  providerBytes,
   providerFetch,
   providerResponse,
   providerText,
@@ -1241,10 +1242,7 @@ export class GitHubProvider implements PullRequestProvider {
   ) {
     return providerText(
       this.name,
-      `${this.apiUrl}/repositories/${repositoryExternalId}/contents/${path
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}?ref=${encodeURIComponent(ref)}`,
+      this.fileContentUrl(repositoryExternalId, path, ref),
       {
         headers: {
           ...this.headers,
@@ -1253,6 +1251,38 @@ export class GitHubProvider implements PullRequestProvider {
       },
       maximumBytes,
     );
+  }
+
+  /** Fetches raw file bytes at a provider revision within the configured size limit. */
+  getFileBytes(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+    maximumBytes?: number,
+  ) {
+    return providerBytes(
+      this.name,
+      this.fileContentUrl(repositoryExternalId, path, ref),
+      {
+        headers: {
+          ...this.headers,
+          Accept: "application/vnd.github.raw+json",
+        },
+      },
+      maximumBytes,
+    );
+  }
+
+  /** Builds the GitHub contents URL for one exact-revision path. */
+  private fileContentUrl(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+  ) {
+    return `${this.apiUrl}/repositories/${repositoryExternalId}/contents/${path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}?ref=${encodeURIComponent(ref)}`;
   }
 
   /** Prefers check runs and fills gaps from the older commit-status API. */

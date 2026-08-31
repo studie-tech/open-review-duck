@@ -91,6 +91,7 @@ import {
   reviewCardRanges,
   reviewedFileCard,
 } from "./review-file-card";
+import { ReviewBinaryPreview } from "./review-image-preview";
 import { SourceLineWindow } from "./source-line-window";
 
 /** Height a folded block reserves per row: the pane sets `leading-[21px]`. */
@@ -325,7 +326,8 @@ function ReviewConceptFileCardSource({
         .join("\n"),
     [endLine, fileSource, startLine],
   );
-  const lines = useHighlightedSource(source, members[0]?.language ?? "text");
+  const first = members[0];
+  const lines = useHighlightedSource(source, first?.language ?? "text");
   // Every rendered line asks which member owns it, so ownership is indexed
   // once per member rather than scanned per line. Where member ranges overlap
   // the earliest member in the card owns the shared lines.
@@ -342,6 +344,9 @@ function ReviewConceptFileCardSource({
     }
     return owners;
   }, [members]);
+  if (first?.kind === "binary") {
+    return <ReviewBinaryPreview path={first.path} unitId={first.id} />;
+  }
   return (
     <div className="overflow-x-auto py-2">
       {fileSource ? (
@@ -1118,9 +1123,7 @@ export function ReviewConceptMemberPreview({
           Source unavailable. Concept sign-off is blocked.
         </p>
       ) : unit.kind === "binary" ? (
-        <p className="text-mist px-3 py-4 font-sans text-[10px]">
-          Binary change · explicit acknowledgement required
-        </p>
+        <ReviewBinaryPreview path={unit.path} unitId={unit.id} />
       ) : (
         <ReviewConceptMemberSource unit={unit} onCommentLine={onCommentLine} />
       )}

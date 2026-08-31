@@ -7,6 +7,7 @@ import {
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
+  providerBytes,
   providerFetch,
   providerResponse,
   providerText,
@@ -807,7 +808,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
   ) {
     return providerText(
       this.name,
-      `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/items?path=${encodeURIComponent(path)}&versionDescriptor.versionType=commit&versionDescriptor.version=${ref}&download=true&api-version=7.1`,
+      this.fileContentUrl(repositoryExternalId, path, ref),
       {
         headers: {
           ...this.headers,
@@ -816,6 +817,35 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       },
       maximumBytes,
     );
+  }
+
+  /** Fetches raw file bytes at a provider revision within the configured size limit. */
+  getFileBytes(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+    maximumBytes?: number,
+  ) {
+    return providerBytes(
+      this.name,
+      this.fileContentUrl(repositoryExternalId, path, ref),
+      {
+        headers: {
+          ...this.headers,
+          Accept: "application/octet-stream",
+        },
+      },
+      maximumBytes,
+    );
+  }
+
+  /** Builds the Azure items URL for one exact-revision path. */
+  private fileContentUrl(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+  ) {
+    return `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/items?path=${encodeURIComponent(path)}&versionDescriptor.versionType=commit&versionDescriptor.version=${ref}&download=true&api-version=7.1`;
   }
   /** Reads blocking Azure branch-policy evaluations for this pull request. */
   private async policyEvaluations(pull: AzurePull, number: number) {
