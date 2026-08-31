@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { safeRemoteFetch } from "~/server/security/remote-url";
-import { providerFetch, providerText } from "./http";
+import { providerBytes, providerFetch, providerText } from "./http";
 
 vi.mock("~/server/security/remote-url", () => ({
   safeRemoteFetch: vi.fn(),
@@ -11,6 +11,18 @@ const fetchMock = vi.mocked(safeRemoteFetch);
 afterEach(() => vi.resetAllMocks());
 
 describe("provider HTTP safeguards", () => {
+  it("rejects oversized binary content before buffering it", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("not read", {
+        headers: { "Content-Length": "2000001" },
+      }),
+    );
+
+    await expect(
+      providerBytes("github", "https://example.com/icon.png", {}),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects oversized source content before buffering it", async () => {
     fetchMock.mockResolvedValue(
       new Response("not read", {

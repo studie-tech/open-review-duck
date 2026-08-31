@@ -214,6 +214,13 @@ export interface PullRequestProvider {
     ref: string,
     maximumBytes?: number,
   ): Promise<string | undefined>;
+  /** Fetches raw file bytes at a provider revision within the requested limit. */
+  getFileBytes(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+    maximumBytes?: number,
+  ): Promise<Uint8Array | undefined>;
   /**
    * Fetches several exact-revision sources in one provider operation.
    *

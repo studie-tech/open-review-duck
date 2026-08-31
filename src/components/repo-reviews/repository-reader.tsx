@@ -36,13 +36,13 @@ import {
 } from "~/components/command-center";
 import { useRegisterPageCommands } from "~/components/page-command-center";
 import { HighlightedSourceLines } from "~/components/review/highlighted-source-lines";
-import { ReviewFilesPanel } from "~/components/review/review-files-panel";
 import {
+  actionableReviewCardMember,
   ReviewFileCardHeader,
   ReviewFileUnitMarker,
-  actionableReviewCardMember,
   reviewCardRanges,
 } from "~/components/review/review-file-card";
+import { ReviewFilesPanel } from "~/components/review/review-files-panel";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
@@ -671,8 +671,7 @@ export function RepositoryReader({
   const canSignOff = Boolean(
     activeFile &&
       activeFile.state !== "reviewed" &&
-      activeFile.totalUnits > 0 &&
-      activeFile.waitingUnits === 0 &&
+      outstandingReviewFileUnits(activeFile).length > 0 &&
       !activeFilePending,
   );
   const canUnreview = Boolean(

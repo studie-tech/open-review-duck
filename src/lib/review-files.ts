@@ -114,6 +114,13 @@ export function outstandingReviewFileUnits<Unit extends FileReviewUnit>(
   );
 }
 
+/** Selects the units a file-level resume can return to the review path. */
+export function waitingReviewFileUnits<Unit extends FileReviewUnit>(
+  file: Pick<ReviewFileEntry<Unit>, "units">,
+) {
+  return file.units.filter((unit) => unit.status === "waiting");
+}
+
 /** Walks the changed-file tree in the same order the sidebar renders. */
 export function flattenReviewFileTree(
   nodes: readonly ReviewFileTreeNode[],
@@ -252,6 +259,17 @@ export function filterReviewFiles(
 export type ReviewFileTreeFocus =
   | { kind: "directory"; path: string }
   | { kind: "file"; path: string; file: ReviewFileEntry };
+
+/** Lists every folder path in a changed-file tree, in render order. */
+export function reviewFileTreeDirectoryPaths(
+  nodes: readonly ReviewFileTreeNode[],
+): string[] {
+  return nodes.flatMap((node) =>
+    node.kind === "directory"
+      ? [node.path, ...reviewFileTreeDirectoryPaths(node.children)]
+      : [],
+  );
+}
 
 /** Lists currently visible tree rows in render order, honoring collapsed folders. */
 export function visibleReviewFileTreeItems(

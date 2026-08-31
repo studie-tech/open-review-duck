@@ -9,9 +9,11 @@ import {
   rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
+  reviewFileTreeDirectoryPaths,
   sortByReviewFileTreeOrder,
   storedReviewMode,
   visibleReviewFileTreeItems,
+  waitingReviewFileUnits,
   windowReviewFileCards,
 } from "./review-files";
 
@@ -100,6 +102,9 @@ describe("reviewFileEntries", () => {
     expect(
       partial ? outstandingReviewFileUnits(partial).map(({ id }) => id) : [],
     ).toEqual(["updated"]);
+    expect(
+      partial ? waitingReviewFileUnits(partial).map(({ id }) => id) : [],
+    ).toEqual(["waiting"]);
   });
 
   it("keeps revision attention independent from review progress", () => {
@@ -127,6 +132,11 @@ describe("review file browsing", () => {
       totalUnits: 3,
       attentionUnits: 2,
     });
+    expect(reviewFileTreeDirectoryPaths(tree)).toEqual([
+      "public",
+      "src",
+      "src/review",
+    ]);
   });
 
   it("filters new and updated files without hiding zero-unit files from All", () => {

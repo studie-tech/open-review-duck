@@ -95,6 +95,7 @@ import {
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
   storedReviewMode,
+  waitingReviewFileUnits,
   windowReviewFileCards,
 } from "~/lib/review-files";
 import {
@@ -169,6 +170,7 @@ import {
   reviewedFileCard,
 } from "./review-file-card";
 import { ReviewFilesPanel } from "./review-files-panel";
+import { ReviewBinaryPreview } from "./review-image-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   overviewMarksFromDiffRows,
@@ -2507,7 +2509,7 @@ export function ReviewWorkspace({
    * and every other file stays clickable while one of them saves.
    */
   function applyReviewFileToggle(file: ReviewFileEntry) {
-    if (file.totalUnits === 0 || file.waitingUnits > 0) return;
+    if (file.totalUnits === 0) return;
     if (file.state === "reviewed") {
       if (
         pendingFiles.has(file.id) ||
@@ -3906,6 +3908,15 @@ export function ReviewWorkspace({
       toast.error(error.message);
     },
   });
+  /** Returns every waiting unit in one changed file to the review path. */
+  const resumeReviewFile = useCallback(
+    (file: ReviewFileEntry) => {
+      const unitIds = waitingReviewFileUnits(file).map(({ id }) => id);
+      if (unitIds.length === 0) return;
+      releaseReviewWaits.mutate({ unitIds });
+    },
+    [releaseReviewWaits.mutate],
+  );
   const publishComment = api.review.publishComment.useMutation({
     onSuccess: () => {
       toast.success("Comment published", {
@@ -5006,6 +5017,14 @@ export function ReviewWorkspace({
     undoConcept.isPending ||
     awaitPending ||
     resetReview.isPending;
+  const fileSignOffBlocked =
+    !activeUnit ||
+    reviewComplete ||
+    activeSignOffPending ||
+    undoSignOff.isPending ||
+    undoConcept.isPending ||
+    awaitPending ||
+    resetReview.isPending;
   // One unit needs only its own source; the concept needs every member's,
   // because it records all of them at once.
   const canSignOffUnit =
@@ -5027,10 +5046,20 @@ export function ReviewWorkspace({
     !!activeReviewFile &&
     activeReviewFile.totalUnits > 0 &&
     activeFileOutstandingUnits > 0 &&
-    activeReviewFile.waitingUnits === 0 &&
-    !reviewActionBlocked;
-  const canUsePrimaryAction =
-    activeWaitStatus === "signed_off" || activeWaitStatus === "waiting"
+    !fileSignOffBlocked;
+  const fileWaitingUnitIds =
+    reviewMode === "files" && activeReviewFile
+      ? waitingReviewFileUnits(activeReviewFile).map(({ id }) => id)
+      : [];
+  const fileIsFullyWaiting =
+    reviewMode === "files" &&
+    !!activeReviewFile &&
+    activeFileOutstandingUnits === 0 &&
+    fileWaitingUnitIds.length > 0;
+  const canUsePrimaryAction = fileIsFullyWaiting
+    ? !awaitPending
+    : activeWaitStatus === "signed_off" ||
+        (activeWaitStatus === "waiting" && !canSignOffActiveFile)
       ? !!activeUnit &&
         !reviewComplete &&
         !activeSignOffPending &&
@@ -5048,18 +5077,22 @@ export function ReviewWorkspace({
           ? canSignOffCard
           : canSignOffUnit;
   const primaryIsContinue =
-    activeWaitStatus === "signed_off" || activeWaitStatus === "waiting";
+    !fileIsFullyWaiting &&
+    !canSignOffActiveFile &&
+    (activeWaitStatus === "signed_off" || activeWaitStatus === "waiting");
   // The scope the plain key commits to, named the same way wherever it is
   // read: the footer, and the command centre entry that carries it.
-  const primaryScopeLabel = primaryIsContinue
-    ? filteredReviewActive
-      ? "Next match"
-      : "Continue"
-    : reviewMode === "files" && activeReviewFile
-      ? `Sign off file (${activeFileOutstandingUnits})`
-      : cardActionAvailable
-        ? `Sign off card (${outstandingCardMembers.length})`
-        : "Sign off";
+  const primaryScopeLabel = fileIsFullyWaiting
+    ? `Resume waiting (${fileWaitingUnitIds.length})`
+    : primaryIsContinue
+      ? filteredReviewActive
+        ? "Next match"
+        : "Continue"
+      : reviewMode === "files" && activeReviewFile
+        ? `Sign off file (${activeFileOutstandingUnits})`
+        : cardActionAvailable
+          ? `Sign off card (${outstandingCardMembers.length})`
+          : "Sign off";
   const primaryActionLabel = activeConceptSignOffPending
     ? "Saving concept…"
     : activeSignOffPending
@@ -5073,11 +5106,12 @@ export function ReviewWorkspace({
     !activeSignOffPending;
   const canAwaitUnit = canAwaitResponse && activeUnitHasConversation;
   const heldWaitUnitIds =
-    activeUnit?.status === "waiting" ? [activeUnit.id] : [];
-  const canStopWaiting =
-    activeWaitStatus === "waiting" &&
-    heldWaitUnitIds.length > 0 &&
-    !awaitPending;
+    fileWaitingUnitIds.length > 0
+      ? fileWaitingUnitIds
+      : activeUnit?.status === "waiting"
+        ? [activeUnit.id]
+        : [];
+  const canStopWaiting = heldWaitUnitIds.length > 0 && !awaitPending;
   const undoableSignOff = nextUndoableSignOff(signOffUndoHistory, units);
   const canUndoSignOff =
     !!undoableSignOff &&
@@ -5582,7 +5616,15 @@ export function ReviewWorkspace({
   /** Runs the status-appropriate action for the active review unit. */
   function runPrimaryAction() {
     if (!activeUnit || !canUsePrimaryAction) return;
+    if (fileIsFullyWaiting) {
+      stopWaitingOnActive();
+      return;
+    }
     if (activeWaitStatus === "signed_off" || activeWaitStatus === "waiting") {
+      if (canSignOffActiveFile && activeReviewFile) {
+        toggleReviewFile(activeReviewFile);
+        return;
+      }
       continueReview();
       return;
     }
@@ -6778,24 +6820,31 @@ export function ReviewWorkspace({
       // its shortcut matches and would stop at a disabled twin. Waiting and
       // signed off never hold at once, so the state picks the wording.
       id: "unreview-unit",
-      label: activeWaitStatus === "waiting" ? "Stop waiting" : "Undo review",
-      description:
-        activeWaitStatus === "waiting"
-          ? "Take back the wait and return this work to your review path"
-          : "Return this unit to the review queue",
+      label: canStopWaiting
+        ? fileWaitingUnitIds.length > 1
+          ? `Resume waiting (${fileWaitingUnitIds.length})`
+          : activeUnitAnswered
+            ? "Resume review"
+            : "Stop waiting"
+        : "Undo review",
+      description: canStopWaiting
+        ? fileWaitingUnitIds.length > 1
+          ? "Take back the waits in this file and return them to the review path"
+          : "Take back the wait and return this work to your review path"
+        : "Return this unit to the review queue",
       group: "Review actions",
-      icon: <Undo2 className="size-4" />,
+      icon: canStopWaiting ? (
+        <Clock3 className="size-4" />
+      ) : (
+        <Undo2 className="size-4" />
+      ),
       shortcut: reviewShortcuts.undoReview,
-      disabled:
-        activeWaitStatus === "waiting"
-          ? !canStopWaiting
-          : activeUnit?.status !== "signed_off" ||
-            activeSignOffPending ||
-            undoSignOff.isPending,
-      onSelect:
-        activeWaitStatus === "waiting"
-          ? stopWaitingOnActive
-          : unreviewActiveUnit,
+      disabled: canStopWaiting
+        ? false
+        : activeUnit?.status !== "signed_off" ||
+          activeSignOffPending ||
+          undoSignOff.isPending,
+      onSelect: canStopWaiting ? stopWaitingOnActive : unreviewActiveUnit,
     },
     {
       id: "await-response",
@@ -7683,6 +7732,7 @@ export function ReviewWorkspace({
               pendingFileIds={pendingFiles}
               onSelect={selectReviewFile}
               onToggle={toggleReviewFile}
+              onResumeWaiting={resumeReviewFile}
             />
           )}
           <div className="shrink-0 border-t border-line p-3">
@@ -8147,6 +8197,11 @@ export function ReviewWorkspace({
                       itemLabel={reviewMode === "files" ? "File" : "Card"}
                       selected
                       sourceBytes={reviewSourceByteLength(activeModule)}
+                      onResumeWaiting={
+                        fileWaitingUnitIds.length > 0
+                          ? stopWaitingOnActive
+                          : undefined
+                      }
                       expanded={selectedFileSourceExpanded}
                       onToggleExpanded={() => {
                         setFileSourceReveal({
@@ -8271,6 +8326,11 @@ export function ReviewWorkspace({
                           <ReviewFileUnitMarker
                             key={member.id}
                             member={member}
+                            onStopWaiting={
+                              member.status === "waiting"
+                                ? () => stopWaitingOnUnit(member.id)
+                                : undefined
+                            }
                           />
                         ))
                       }
@@ -8367,24 +8427,10 @@ export function ReviewWorkspace({
                   {selectedFileSourceExpanded &&
                     activeFileCardSourceAvailable &&
                     activeUnit.kind === "binary" && (
-                      <div className="mx-auto grid min-h-72 max-w-lg place-items-center px-6 py-12 font-sans">
-                        <div className="w-full rounded-2xl border border-line bg-surface/45 p-8 text-center shadow-[0_18px_60px_var(--app-shadow)]">
-                          <span className="bg-cyan/10 text-cyan mx-auto grid size-11 place-items-center rounded-xl">
-                            <FileCode2 className="size-5" aria-hidden="true" />
-                          </span>
-                          <p className="text-cloud mt-4 text-sm font-medium">
-                            Binary file
-                          </p>
-                          <p className="text-mist mt-2 text-xs leading-5">
-                            ReviewDuck detected binary content. Its bytes are
-                            not displayed, sent to AI, or available for line
-                            comments.
-                          </p>
-                          <p className="text-fog mt-3 truncate font-mono text-[10px]">
-                            {activeUnit.path}
-                          </p>
-                        </div>
-                      </div>
+                      <ReviewBinaryPreview
+                        path={activeUnit.path}
+                        unitId={activeUnit.id}
+                      />
                     )}
                   {selectedFileSourceExpanded &&
                     !sideBySideVisible &&
@@ -8415,6 +8461,11 @@ export function ReviewWorkspace({
                                 <ReviewFileUnitMarker
                                   key={member.id}
                                   member={member}
+                                  onStopWaiting={
+                                    member.status === "waiting"
+                                      ? () => stopWaitingOnUnit(member.id)
+                                      : undefined
+                                  }
                                 />
                               ))}
                               {contextBefore > 0 &&
@@ -8841,12 +8892,11 @@ export function ReviewWorkspace({
                 </div>
               ) : reviewCaughtUp ? (
                 <div className="flex min-w-0 items-center justify-end gap-2">
-                  {activeWaitStatus === "waiting" && (
+                  {canStopWaiting && (
                     <Button
                       variant={activeUnitAnswered ? "primary" : "secondary"}
                       className="h-10 px-3 sm:h-11 sm:px-4"
                       onClick={stopWaitingOnActive}
-                      disabled={!canStopWaiting}
                     >
                       {activeUnitAnswered ? (
                         <MessageSquareText className="size-4" />
@@ -8854,7 +8904,11 @@ export function ReviewWorkspace({
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {activeUnitAnswered ? "Resume review" : "Stop waiting"}
+                        {fileWaitingUnitIds.length > 1
+                          ? `Resume waiting (${fileWaitingUnitIds.length})`
+                          : activeUnitAnswered
+                            ? "Resume review"
+                            : "Stop waiting"}
                       </span>
                     </Button>
                   )}
@@ -8934,20 +8988,21 @@ export function ReviewWorkspace({
                         />
                       </Button>
                     )}
-                  {activeWaitStatus === "waiting" ? (
-                    // The header already says this unit is waiting, so the
-                    // footer spends the slot on the way out of it instead of
-                    // repeating the state as a button nobody can press.
+                  {canStopWaiting && !fileIsFullyWaiting ? (
+                    // Waiting is reversible from the file itself: the clock
+                    // in the sidebar, the card pill, and this footer control
+                    // all return the paused units without a detour.
                     <Button
                       variant={activeUnitAnswered ? "primary" : "secondary"}
                       className="h-10 whitespace-nowrap px-3 sm:h-11 sm:px-4"
                       title={
-                        activeUnitAnswered
-                          ? "The conversation has a response — return this work to your review path"
-                          : "Take back the wait and return this work to your review path"
+                        fileWaitingUnitIds.length > 1
+                          ? `Take back ${fileWaitingUnitIds.length} waits in this file and return them to the review path`
+                          : activeUnitAnswered
+                            ? "The conversation has a response — return this work to your review path"
+                            : "Take back the wait and return this work to your review path"
                       }
                       onClick={stopWaitingOnActive}
-                      disabled={!canStopWaiting}
                     >
                       {activeUnitAnswered ? (
                         <MessageSquareText className="size-4" />
@@ -8955,7 +9010,11 @@ export function ReviewWorkspace({
                         <Clock3 className="size-4" />
                       )}
                       <span className="hidden sm:inline">
-                        {activeUnitAnswered ? "Resume review" : "Stop waiting"}
+                        {fileWaitingUnitIds.length > 1
+                          ? `Resume waiting (${fileWaitingUnitIds.length})`
+                          : activeUnitAnswered
+                            ? "Resume review"
+                            : "Stop waiting"}
                       </span>
                       <span className="sm:hidden">Resume</span>
                       <ShortcutHint

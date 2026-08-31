@@ -3,6 +3,7 @@ import { gitlabMergeGate } from "~/lib/provider-merge-gate";
 import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
+  providerBytes,
   providerFetch,
   providerResponse,
   providerText,
@@ -749,10 +750,34 @@ export class GitLabProvider implements PullRequestProvider {
   ) {
     return providerText(
       this.name,
-      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`,
+      this.fileContentUrl(repositoryExternalId, path, ref),
       { headers: this.headers },
       maximumBytes,
     );
+  }
+
+  /** Fetches raw file bytes at a provider revision within the configured size limit. */
+  getFileBytes(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+    maximumBytes?: number,
+  ) {
+    return providerBytes(
+      this.name,
+      this.fileContentUrl(repositoryExternalId, path, ref),
+      { headers: this.headers },
+      maximumBytes,
+    );
+  }
+
+  /** Builds the GitLab raw-file URL for one exact-revision path. */
+  private fileContentUrl(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+  ) {
+    return `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`;
   }
   /** Keeps the newest pipeline for each named workflow. */
   private latestPipelines(pipelines: GitLabPipeline[]) {

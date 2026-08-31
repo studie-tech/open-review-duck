@@ -227,6 +227,7 @@ export function ReviewFileCardHeader({
   expanded,
   onToggleExpanded,
   sourceBytes,
+  onResumeWaiting,
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -238,11 +239,15 @@ export function ReviewFileCardHeader({
   expanded?: boolean;
   onToggleExpanded?: () => void;
   sourceBytes?: number;
+  onResumeWaiting?: () => void;
 }) {
   const first = members[0];
   if (!first) return null;
   const outstanding = members.filter(outstandingReviewCardMember).length;
-  const fullyReviewed = reviewedFileCard(members);
+  const waitingCount = members.filter(
+    (member) => member.status === "waiting",
+  ).length;
+  const fullyReviewed = reviewedFileCard(members) && waitingCount === 0;
   const changedLines = members.reduce(
     (total, member) => total + member.changedLineCount,
     0,
@@ -302,15 +307,32 @@ export function ReviewFileCardHeader({
                 Reviewed
               </span>
             )}
-            {selected && (
-              <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
-                {outstanding > 0
-                  ? `${outstanding} remaining`
-                  : fullyReviewed
-                    ? "Selected"
-                    : "Waiting"}
-              </span>
-            )}
+            {selected &&
+              (outstanding > 0 ? (
+                <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+                  {outstanding} remaining
+                </span>
+              ) : fullyReviewed ? (
+                <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+                  Selected
+                </span>
+              ) : onResumeWaiting ? (
+                <button
+                  type="button"
+                  aria-label="Resume waiting on this file"
+                  title="Take back the wait and return this file to the review path"
+                  onClick={onResumeWaiting}
+                  className="border-cyan/25 bg-cyan/10 text-cyan hover:bg-cyan/15 flex items-center gap-1 rounded-full border px-2 py-0.5 transition"
+                >
+                  <Clock3 className="size-2.5" aria-hidden />
+                  Waiting
+                </button>
+              ) : (
+                <span className="border-cyan/25 bg-cyan/10 text-cyan flex items-center gap-1 rounded-full border px-2 py-0.5">
+                  <Clock3 className="size-2.5" aria-hidden />
+                  Waiting
+                </span>
+              ))}
           </>
         }
       />
@@ -324,7 +346,13 @@ export function ReviewFileCardHeader({
  * A rule carrying the unit name and its line span makes each banner an
  * opener for the code that follows rather than a closer for the code above.
  */
-export function ReviewFileUnitMarker({ member }: { member: ReviewUnit }) {
+export function ReviewFileUnitMarker({
+  member,
+  onStopWaiting,
+}: {
+  member: ReviewUnit;
+  onStopWaiting?: () => void;
+}) {
   const lineLabel =
     member.endLine > member.startLine
       ? `L${member.startLine}–${member.endLine}`
@@ -358,10 +386,23 @@ export function ReviewFileUnitMarker({ member }: { member: ReviewUnit }) {
             : "Reviewed"}
         </Badge>
       ) : member.status === "waiting" ? (
-        <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
-          <Clock3 className="size-3" />
-          Waiting
-        </Badge>
+        onStopWaiting ? (
+          <button
+            type="button"
+            aria-label={`Resume waiting on ${member.name}`}
+            title="Take back the wait and return this unit to the review path"
+            onClick={onStopWaiting}
+            className="border-cyan/25 bg-cyan/10 text-cyan hover:bg-cyan/15 inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition"
+          >
+            <Clock3 className="size-3" />
+            Waiting
+          </button>
+        ) : (
+          <Badge className="border-cyan/25 bg-cyan/10 text-cyan">
+            <Clock3 className="size-3" />
+            Waiting
+          </Badge>
+        )
       ) : (
         <Badge>Not reviewed</Badge>
       )}
