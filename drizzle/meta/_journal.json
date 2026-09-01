@@ -85,6 +85,13 @@
       "when": 1788100743388,
       "tag": "0011_sync_run_workspace_recent_index",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788247924226,
+      "tag": "0012_perpetual_toro",
+      "breakpoints": true
     }
   ]
 }

@@ -12,8 +12,8 @@ import {
   workspaceMembers,
   workspaces,
 } from "@/drizzle/schema";
-import { createCallerFactory } from "~/server/api/trpc";
 import { CURRENT_AI_AGENT_VERSION } from "~/server/ai/service";
+import { createCallerFactory } from "~/server/api/trpc";
 import { db } from "~/server/db";
 import { reviewRouter } from "./review";
 

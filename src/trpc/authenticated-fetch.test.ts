@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createAuthenticatedFetch,
   createAuthenticatedTransport,
   isUnauthorizedError,
   refreshAuthenticationForRetry,
@@ -22,7 +21,7 @@ describe("authenticated tRPC fetch", () => {
       .fn()
       .mockResolvedValue(new Response(null, { status: 200 }));
 
-    await createAuthenticatedFetch(getToken, fetcher)("/api/trpc", {
+    await createAuthenticatedTransport(getToken, fetcher).fetch("/api/trpc", {
       headers: { "x-trpc-source": "test" },
     });
 
@@ -46,10 +45,10 @@ describe("authenticated tRPC fetch", () => {
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
 
-    const response = await createAuthenticatedFetch(
+    const response = await createAuthenticatedTransport(
       getToken,
       fetcher,
-    )("/api/trpc");
+    ).fetch("/api/trpc");
 
     expect(response.status).toBe(200);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -65,7 +64,7 @@ describe("authenticated tRPC fetch", () => {
       .fn()
       .mockResolvedValue(new Response(null, { status: 200 }));
 
-    await createAuthenticatedFetch(getToken, fetcher)("/api/trpc");
+    await createAuthenticatedTransport(getToken, fetcher).fetch("/api/trpc");
 
     expect(fetcher).toHaveBeenCalledOnce();
     expect(requestHeaders(fetcher, 0).credentials).toBe("include");
@@ -77,7 +76,10 @@ describe("authenticated tRPC fetch", () => {
     const fetcher = vi
       .fn()
       .mockResolvedValue(new Response(null, { status: 200 }));
-    const authenticatedFetch = createAuthenticatedFetch(getToken, fetcher);
+    const authenticatedFetch = createAuthenticatedTransport(
+      getToken,
+      fetcher,
+    ).fetch;
 
     await Promise.all([
       authenticatedFetch("/api/trpc?request=1"),
@@ -109,7 +111,10 @@ describe("authenticated tRPC fetch", () => {
               : 401,
         }),
     );
-    const authenticatedFetch = createAuthenticatedFetch(getToken, fetcher);
+    const authenticatedFetch = createAuthenticatedTransport(
+      getToken,
+      fetcher,
+    ).fetch;
 
     const responses = await Promise.all([
       authenticatedFetch("/api/trpc?request=1"),

@@ -99,11 +99,3 @@ export function createAuthenticatedTransport(
     refreshSession: () => readToken(true),
   };
 }
-
-/** Adds current Clerk authentication and retries one HTTP rejection safely. */
-export function createAuthenticatedFetch(
-  getToken: SessionTokenGetter,
-  fetcher: typeof fetch = globalThis.fetch,
-): typeof fetch {
-  return createAuthenticatedTransport(getToken, fetcher).fetch;
-}

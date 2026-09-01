@@ -8,14 +8,9 @@
   "files": {
     "includes": [
       "**",
-      "!!**/.claude",
-      "!!**/.codex",
-      "!!**/.cursor",
-      "!!**/.next",
-      "!!**/coverage",
-      "!!**/dist",
       "!!drizzle/meta",
       "!!pnpm-lock.yaml",
+      "!!repo-review-report.html",
       "!!src/server/review/deep/rulebooks"
     ]
   },

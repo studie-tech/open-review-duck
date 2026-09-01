@@ -36,7 +36,10 @@ import { PageContainer } from "~/components/page-container";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
-import { clampToClientClock } from "~/lib/hydration-clock";
+import {
+  clampToClientClock,
+  hydratedQueryOptions,
+} from "~/lib/hydration-clock";
 import { providerLabel } from "~/lib/provider-labels";
 import { formatRelativeTime, useRelativeClock } from "~/lib/relative-time";
 import {
@@ -45,10 +48,12 @@ import {
 } from "~/lib/repository-review-report";
 import {
   activeRunStatuses,
+  followActiveRepositorySyncs,
   hasActiveRepositoryRun,
   mergeRepositoryRunProgress,
 } from "~/lib/repository-run-progress";
 import { repositorySyncActivity } from "~/lib/repository-sync-progress";
+import { shortRevision } from "~/lib/review-revision";
 import { cockpitShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
@@ -64,11 +69,6 @@ const sectionShortcuts = {
   rules: cockpitShortcuts.rules,
   history: cockpitShortcuts.history,
 } as const;
-
-/** Formats a provider revision for compact display. */
-function shortSha(value: string | null | undefined) {
-  return value?.slice(0, 7) ?? "Waiting";
-}
 
 /** Renders a durable review run's compact live state. */
 function RunStatus({ status, progress }: { status: string; progress: number }) {
@@ -92,7 +92,7 @@ function RunStatus({ status, progress }: { status: string; progress: number }) {
   );
 }
 
-/** Renders Option A: a repo cockpit with one deliberate workflow per action. */
+/** Renders the repository review cockpit and its action workflows. */
 export function RepoReviewsContent({
   initialMonitors,
   initialRepositories,
@@ -106,16 +106,9 @@ export function RepoReviewsContent({
 }) {
   const utils = api.useUtils();
   const now = useRelativeClock(fetchedAt);
-  // The sidebar prefetches this route eagerly, so the server payload can
-  // predate the navigation. Stamping it with the time it was read lets the
-  // shared stale time decide whether hydration has to refresh it.
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
-    initialData: initialMonitors,
-    initialDataUpdatedAt: clampToClientClock(fetchedAt),
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
-    refetchInterval: (query) =>
-      query.state.data?.some(({ activeSync }) => activeSync) ? 1_500 : false,
+    ...hydratedQueryOptions(initialMonitors, fetchedAt),
+    refetchInterval: followActiveRepositorySyncs,
   });
   const monitors = monitorsQuery.data ?? initialMonitors;
   const runsActive = hasActiveRepositoryRun(monitors);
@@ -607,7 +600,9 @@ function RepositoryCockpit({
                 <GitBranch className="size-3.5" /> {monitor.branch}
               </span>
               <span className="font-mono">
-                {shortSha(monitor.snapshot?.headSha)}
+                {monitor.snapshot
+                  ? shortRevision(monitor.snapshot.headSha)
+                  : "Waiting"}
               </span>
               <span>
                 Checked{" "}

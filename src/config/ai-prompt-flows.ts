@@ -1,12 +1,6 @@
 import { AI_PROMPT_KEYS, type AiPromptKey } from "~/config/ai-prompt-catalog";
 
-export const AI_PROMPT_FLOW_IDS = [
-  "explanations",
-  "deep_review",
-  "grouping",
-] as const;
-
-export type AiPromptFlowId = (typeof AI_PROMPT_FLOW_IDS)[number];
+export type AiPromptFlowId = "explanations" | "deep_review" | "grouping";
 
 export interface AiPromptFlowPart {
   key: AiPromptKey;

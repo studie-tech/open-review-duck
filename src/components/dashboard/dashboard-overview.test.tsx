@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { followActiveRepositorySyncs } from "~/lib/repository-run-progress";
 import { api } from "~/trpc/react";
 import { DashboardOverview } from "./dashboard-overview";
 
@@ -131,8 +132,15 @@ describe("DashboardOverview", () => {
         expect.objectContaining({
           initialDataUpdatedAt: fetchedAt,
           refetchOnMount: true,
+          refetchOnWindowFocus: true,
         }),
       );
     }
+    expect(api.repoReviews.list.useQuery).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        refetchInterval: followActiveRepositorySyncs,
+      }),
+    );
   });
 });

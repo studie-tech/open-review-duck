@@ -68,6 +68,10 @@ interface InsertedRow {
   values: Record<string, unknown>[];
 }
 
+interface FakeDatabaseOptions {
+  beforeInsert?: (table: string) => Promise<void>;
+}
+
 /** Names the table an insert or select targeted, for the doubles below. */
 function tableName(table: unknown): string {
   if (table === aiReviewFindings) return "ai_review_finding";
@@ -81,17 +85,19 @@ function tableName(table: unknown): string {
 /** Collects inserted rows and honours the primary keys the schema declares. */
 function fakeDatabase(
   rows: Partial<Record<string, Record<string, unknown>[]>> = {},
+  options: FakeDatabaseOptions = {},
 ) {
   const inserts: InsertedRow[] = [];
   const updates: { table: string; values: Record<string, unknown> }[] = [];
   const stored = new Map<string, Map<string, Record<string, unknown>>>();
   /** Records one insert once per primary key, as the real conflict clause does. */
-  const write = (
+  const write = async (
     table: unknown,
     values: Record<string, unknown> | Record<string, unknown>[],
   ) => {
     const list = Array.isArray(values) ? values : [values];
     const name = tableName(table);
+    await options.beforeInsert?.(name);
     inserts.push({ table: name, values: list });
     const byId = stored.get(name) ?? new Map();
     for (const row of list) {
@@ -122,7 +128,7 @@ function fakeDatabase(
       values: (
         values: Record<string, unknown> | Record<string, unknown>[],
       ) => ({
-        onConflictDoNothing: async () => write(table, values),
+        onConflictDoNothing: () => write(table, values),
       }),
     }),
     select: () => ({
@@ -152,8 +158,32 @@ function fakeDatabase(
         },
       }),
     }),
+    transaction: async <T>(execute: (tx: never) => Promise<T>) => {
+      const insertCount = inserts.length;
+      const snapshot = new Map(
+        [...stored].map(([table, values]) => [table, new Map(values)]),
+      );
+      try {
+        return await execute(database as never);
+      } catch (error) {
+        inserts.length = insertCount;
+        stored.clear();
+        for (const [table, values] of snapshot) stored.set(table, values);
+        throw error;
+      }
+    },
   };
   return { database: database as never, inserts, updates, stored };
+}
+
+/** Exposes a promise and its resolver for deliberately interleaved calls. */
+function deferred() {
+  /** Resolves the promise once the test reaches its intended interleave. */
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 /** Mimics `persistToolCall`: a replay returns the stored output verbatim. */
@@ -428,10 +458,9 @@ describe("report_survey_finding", () => {
     const locations = inserts.filter(
       (insert) => insert.table === "ai_review_finding_location",
     );
-    expect(locations).toHaveLength(2);
-    expect(
-      locations.map((row) => [row.values[0]?.position, row.values[0]?.path]),
-    ).toEqual([
+    expect(locations).toHaveLength(1);
+    const locationRows = locations[0]?.values ?? [];
+    expect(locationRows.map((row) => [row.position, row.path])).toEqual([
       [0, "src/a.ts"],
       [1, "src/b.ts"],
     ]);
@@ -439,10 +468,10 @@ describe("report_survey_finding", () => {
       openVaultSecret(
         {
           workspaceId,
-          recordId: String(locations[0]?.values[0]?.id),
+          recordId: String(locationRows[0]?.id),
           provider: "ai-review-finding-location",
         },
-        String(locations[0]?.values[0]?.encryptedExistingCode),
+        String(locationRows[0]?.encryptedExistingCode),
       ),
     ).resolves.toBe("const value = compute();");
   });
@@ -495,6 +524,81 @@ describe("report_survey_finding", () => {
     )) as { accepted: number; declined: number };
     expect(output).toMatchObject({ accepted: 0, declined: 1 });
     expect(inserts).toEqual([]);
+  });
+
+  it("reserves the cap before concurrent survey writes can overlap", async () => {
+    const entered = deferred();
+    const release = deferred();
+    let findingInserts = 0;
+    const { database, inserts } = fakeDatabase(
+      {},
+      {
+        beforeInsert: async (table) => {
+          if (table !== "ai_review_finding") return;
+          findingInserts += 1;
+          if (findingInserts !== 1) return;
+          entered.resolve();
+          await release.promise;
+        },
+      },
+    );
+    const tools = deepReviewSurveyTools({
+      db: database,
+      job,
+      itemId,
+      repository: fakeRepository(),
+      execute: fakeExecutor().execute,
+      limits: { maxFindings: 1 },
+    });
+    const first = tools.report_survey_finding.execute?.(
+      input,
+      toolOptions("concurrent-1"),
+    );
+    await entered.promise;
+    const second = await tools.report_survey_finding.execute?.(
+      input,
+      toolOptions("concurrent-2"),
+    );
+    release.resolve();
+
+    await expect(first).resolves.toMatchObject({ accepted: 1, declined: 0 });
+    expect(second).toMatchObject({ accepted: 0, declined: 1 });
+    expect(
+      inserts.filter((insert) => insert.table === "ai_review_finding"),
+    ).toHaveLength(1);
+  });
+
+  it("rolls back a partial survey write and releases its reservation", async () => {
+    let failLocation = true;
+    const { database, inserts, stored } = fakeDatabase(
+      {},
+      {
+        beforeInsert: async (table) => {
+          if (table !== "ai_review_finding_location" || !failLocation) return;
+          failLocation = false;
+          throw new Error("injected location insert failure");
+        },
+      },
+    );
+    const tools = deepReviewSurveyTools({
+      db: database,
+      job,
+      itemId,
+      repository: fakeRepository(),
+      execute: fakeExecutor().execute,
+      limits: { maxFindings: 1 },
+    });
+
+    await expect(
+      tools.report_survey_finding.execute?.(input, toolOptions("failed-call")),
+    ).rejects.toThrow("injected location insert failure");
+    expect(inserts).toEqual([]);
+    expect(stored.get("ai_review_finding")?.size ?? 0).toBe(0);
+    await expect(
+      tools.report_survey_finding.execute?.(input, toolOptions("retry-call")),
+    ).resolves.toMatchObject({ accepted: 1, declined: 0 });
+    expect(stored.get("ai_review_finding")?.size).toBe(1);
+    expect(stored.get("ai_review_finding_location")?.size).toBe(2);
   });
 });
 

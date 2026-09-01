@@ -24,6 +24,7 @@ import {
 } from "~/server/analysis/tree-sitter";
 import { type AnalyzedUnit, applySourceBudget } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
+import { selectByIdsInChunks } from "~/server/db/select-in-chunks";
 import { observeOperation } from "~/server/observability/sentry";
 import { providerForConnection } from "~/server/providers/credentials";
 import { reviewSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
@@ -41,22 +42,6 @@ import {
 type Database = typeof database;
 
 const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
-/** Keeps one `inArray` under PostgreSQL's 65,535 bind-parameter ceiling. */
-const QUERY_CHUNK_SIZE = 10_000;
-
-/** Loads rows keyed by previous unit ids without overflowing one bind list. */
-async function selectByUnitIds<Row>(
-  unitIds: string[],
-  load: (chunk: string[]) => Promise<Row[]>,
-) {
-  const rows: Row[] = [];
-  for (let offset = 0; offset < unitIds.length; offset += QUERY_CHUNK_SIZE) {
-    rows.push(
-      ...(await load(unitIds.slice(offset, offset + QUERY_CHUNK_SIZE))),
-    );
-  }
-  return rows;
-}
 
 /** Synchronizes provider data and review state for one pull request. */
 export async function syncPullRequest(
@@ -334,14 +319,14 @@ export async function syncPullRequest(
     }
     const previousUnits = preexistingUnits;
     const previousUnitIds = previousUnits.map((unit) => unit.id);
-    const previousDependencyRows = previousUnitIds.length
-      ? await selectByUnitIds(previousUnitIds, (chunk) =>
-          tx
-            .select()
-            .from(reviewUnitDependencies)
-            .where(inArray(reviewUnitDependencies.unitId, chunk)),
-        )
-      : [];
+    const previousDependencyRows = await selectByIdsInChunks(
+      previousUnitIds,
+      (chunk) =>
+        tx
+          .select()
+          .from(reviewUnitDependencies)
+          .where(inArray(reviewUnitDependencies.unitId, chunk)),
+    );
     const previousStableKeyById = new Map(
       previousUnits.map((unit) => [unit.id, unit.stableKey]),
     );
@@ -385,27 +370,20 @@ export async function syncPullRequest(
     const priorByKey = new Map(
       previousUnits.map((unit) => [unit.stableKey, unit]),
     );
-    const priorSignOffs = previousUnitIds.length
-      ? await selectByUnitIds(previousUnitIds, (chunk) =>
-          tx
-            .select()
-            .from(signOffs)
-            .where(
-              and(
-                inArray(signOffs.unitId, chunk),
-                sql`${signOffs.invalidatedAt} is null`,
-              ),
-            ),
-        )
-      : [];
-    const priorWaits = previousUnitIds.length
-      ? await selectByUnitIds(previousUnitIds, (chunk) =>
-          tx
-            .select()
-            .from(reviewWaits)
-            .where(inArray(reviewWaits.unitId, chunk)),
-        )
-      : [];
+    const priorSignOffs = await selectByIdsInChunks(previousUnitIds, (chunk) =>
+      tx
+        .select()
+        .from(signOffs)
+        .where(
+          and(
+            inArray(signOffs.unitId, chunk),
+            sql`${signOffs.invalidatedAt} is null`,
+          ),
+        ),
+    );
+    const priorWaits = await selectByIdsInChunks(previousUnitIds, (chunk) =>
+      tx.select().from(reviewWaits).where(inArray(reviewWaits.unitId, chunk)),
+    );
     const signOffsByUnit = new Map<string, typeof priorSignOffs>();
     for (const signOff of priorSignOffs) {
       const collection = signOffsByUnit.get(signOff.unitId) ?? [];

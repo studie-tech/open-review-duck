@@ -18,7 +18,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("ai", () => ({ generateText: mocks.generateText }));
 vi.mock("~/server/ai/models", () => ({ resolveAiModel: mocks.resolveAiModel }));
 
-import { aiJobs } from "@/drizzle/schema";
+import { aiJobs, aiJobToolCalls } from "@/drizzle/schema";
+import { AI_PROMPT_KEYS } from "~/config/ai-prompt-catalog";
+import { defaultAiPromptBody } from "~/server/ai/prompt-defaults";
 import { sealVaultSecret } from "~/server/security/vault";
 import {
   collapseIdenticalFindings,
@@ -83,6 +85,11 @@ interface RecordedUpdate {
   values: Record<string, unknown>;
 }
 
+interface FakeDbOptions {
+  /** Throws once as the named finding update reaches its database boundary. */
+  failFindingUpdateAt?: number;
+}
+
 /** Seals a finding's wording exactly as `report_finding` persists it. */
 async function fakeRow(
   id: string,
@@ -111,12 +118,32 @@ async function fakeRow(
 }
 
 /** Builds the smallest database double the dedupe path exercises. */
-function createFakeDb(rows: FakeFindingRow[]) {
+function createFakeDb(rows: FakeFindingRow[], options: FakeDbOptions = {}) {
   const updates: RecordedUpdate[] = [];
-  const db = {
+  let checkpoint:
+    | {
+        id: string;
+        status: string;
+        encryptedOutput: string | null;
+      }
+    | undefined;
+  let findingUpdateCount = 0;
+  let faultArmed = options.failFindingUpdateAt !== undefined;
+
+  /** Creates one connection view over the fake database's shared state. */
+  const client = () => ({
     query: {
-      aiReviewItems: {
-        findMany: async () => [{ id: "item-1" }],
+      aiReviewItems: { findMany: async () => [{ id: "item-1" }] },
+      aiJobToolCalls: {
+        findFirst: async () => checkpoint,
+      },
+      aiPrompts: {
+        /** Returns the shipped catalog, matching an initialized prompt store. */
+        findMany: async () =>
+          AI_PROMPT_KEYS.map((key) => ({
+            key,
+            body: defaultAiPromptBody(key),
+          })),
       },
     },
     select() {
@@ -127,13 +154,66 @@ function createFakeDb(rows: FakeFindingRow[]) {
     update(table: unknown) {
       return {
         set(values: Record<string, unknown>) {
-          updates.push({
-            table: table === aiJobs ? "aiJobs" : "aiReviewFindings",
-            values,
-          });
-          return { where: async () => [] };
+          return {
+            where: async () => {
+              if (table === aiJobToolCalls) {
+                checkpoint = checkpoint
+                  ? { ...checkpoint, ...values }
+                  : checkpoint;
+                return [];
+              }
+              const recordedTable =
+                table === aiJobs ? "aiJobs" : "aiReviewFindings";
+              if (recordedTable === "aiReviewFindings") {
+                findingUpdateCount += 1;
+                if (
+                  faultArmed &&
+                  findingUpdateCount === options.failFindingUpdateAt
+                ) {
+                  faultArmed = false;
+                  throw new Error("injected finding persistence failure");
+                }
+              }
+              updates.push({ table: recordedTable, values });
+              return [];
+            },
+          };
         },
       };
+    },
+    insert(table: unknown) {
+      return {
+        values: async (values: Record<string, unknown>) => {
+          if (table === aiJobToolCalls) {
+            checkpoint = {
+              id: String(values.id),
+              status: String(values.status),
+              encryptedOutput:
+                typeof values.encryptedOutput === "string"
+                  ? values.encryptedOutput
+                  : null,
+            };
+          }
+          return [];
+        },
+      };
+    },
+    execute: async () => [],
+  });
+  const db = {
+    ...client(),
+    async transaction<T>(
+      operation: (tx: ReturnType<typeof client>) => Promise<T>,
+    ) {
+      const updateCount = updates.length;
+      const previousCheckpoint = checkpoint;
+      try {
+        return await operation(client());
+      } catch (cause) {
+        updates.length = updateCount;
+        checkpoint = previousCheckpoint;
+        throw cause;
+      }
     },
   };
   return { db: db as never, updates };
@@ -423,6 +503,103 @@ describe("runDeepReviewDedupe", () => {
     ).toBe(true);
   });
 
+  it("replays the checkpoint after a fault between member merge and reseal", async () => {
+    const rows = await Promise.all(
+      ["a", "b", "c", "d"].map((id, index) =>
+        fakeRow(id, { title: `Finding ${id}`, startLine: 10 + index }),
+      ),
+    );
+    mocks.generateText.mockResolvedValue(
+      modelResponse(
+        JSON.stringify({
+          groups: [
+            {
+              canonicalId: "a",
+              memberIds: ["a", "b"],
+              title: "Merged title",
+              body: "Merged body",
+            },
+            { canonicalId: "c", memberIds: ["c"] },
+            { canonicalId: "d", memberIds: ["d"] },
+          ],
+        }),
+      ),
+    );
+    const { db, updates } = createFakeDb(rows, {
+      failFindingUpdateAt: 2,
+    });
+
+    await expect(runDeepReviewDedupe(db, { parentJobId, job })).rejects.toThrow(
+      "injected finding persistence failure",
+    );
+    expect(
+      updates.filter((update) => update.table === "aiReviewFindings"),
+    ).toEqual([]);
+
+    const replay = await runDeepReviewDedupe(db, { parentJobId, job });
+    expect(replay.mergedCount).toBe(1);
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    expect(
+      updates.filter(
+        (update) => update.table === "aiJobs" && "inputTokens" in update.values,
+      ),
+    ).toHaveLength(1);
+    expect(
+      updates.filter((update) => update.table === "aiReviewFindings"),
+    ).toHaveLength(2);
+    const committedUpdateCount = updates.length;
+    expect(
+      (await runDeepReviewDedupe(db, { parentJobId, job })).mergedCount,
+    ).toBe(1);
+    expect(updates).toHaveLength(committedUpdateCount);
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back complete groups when persistence faults between groups", async () => {
+    const rows = await Promise.all(
+      ["a", "b", "c", "d", "e"].map((id, index) =>
+        fakeRow(id, { title: `Finding ${id}`, startLine: 10 + index }),
+      ),
+    );
+    mocks.generateText.mockResolvedValue(
+      modelResponse(
+        JSON.stringify({
+          groups: [
+            { canonicalId: "a", memberIds: ["a", "b"] },
+            { canonicalId: "c", memberIds: ["c", "d"] },
+            { canonicalId: "e", memberIds: ["e"] },
+          ],
+        }),
+      ),
+    );
+    const { db, updates } = createFakeDb(rows, {
+      failFindingUpdateAt: 2,
+    });
+
+    await expect(runDeepReviewDedupe(db, { parentJobId, job })).rejects.toThrow(
+      "injected finding persistence failure",
+    );
+    expect(
+      updates.filter((update) => update.table === "aiReviewFindings"),
+    ).toEqual([]);
+
+    const replay = await runDeepReviewDedupe(db, { parentJobId, job });
+    expect(replay.mergedCount).toBe(2);
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    expect(
+      updates.filter(
+        (update) => update.table === "aiJobs" && "inputTokens" in update.values,
+      ),
+    ).toHaveLength(1);
+    expect(
+      updates.filter(
+        (update) =>
+          update.table === "aiReviewFindings" &&
+          update.values.state === "merged",
+      ),
+    ).toHaveLength(2);
+  });
+
   it("keeps every finding when the model collapses them into one group", async () => {
     const rows = await Promise.all(
       ["a", "b", "c", "d", "e"].map((id, index) =>
@@ -465,6 +642,9 @@ describe("runDeepReviewDedupe", () => {
     expect(
       updates.filter((update) => update.values.state === "merged"),
     ).toEqual([]);
+    const replay = await runDeepReviewDedupe(db, { parentJobId, job });
+    expect(replay.errors[0]).toContain("provider exploded");
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
   });
 
   it("spreads the resolved provider options onto the clustering call", async () => {

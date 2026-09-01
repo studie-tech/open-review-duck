@@ -28,11 +28,14 @@ function synchronizationFailureText(cause: unknown) {
 }
 
 /** Durably synchronizes one pull request using identifier-only workflow state. */
-export async function syncPullRequestWorkflow(syncId: string) {
+export async function syncPullRequestWorkflow(
+  syncId: string,
+  startToken?: string,
+) {
   "use workflow";
   const { workflowRunId } = getWorkflowMetadata();
   try {
-    return await executeSynchronization(syncId, workflowRunId);
+    return await executeSynchronization(syncId, workflowRunId, startToken);
   } catch (cause) {
     await recordTerminalSynchronizationFailure(
       syncId,
@@ -71,13 +74,19 @@ async function recordTerminalSynchronizationFailure(
 }
 
 /** Runs one coarse, idempotent synchronization step from persisted identity. */
-async function executeSynchronization(syncId: string, providerRunId: string) {
+async function executeSynchronization(
+  syncId: string,
+  providerRunId: string,
+  startToken?: string,
+) {
   "use step";
   const workflow = await ensureWorkflowRunLink(db, {
     kind: "sync_pull_request",
     targetId: syncId,
     providerRunId,
+    startToken,
   });
+  if (!workflow) return { syncId, superseded: true as const };
   const sync = await db.query.syncRuns.findFirst({
     where: eq(syncRuns.id, syncId),
   });

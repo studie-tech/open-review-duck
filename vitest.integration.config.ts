@@ -8,7 +8,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.integration.test.ts"],
-    setupFiles: ["./src/test/setup-tree-sitter.ts"],
+    setupFiles: [
+      "./src/test/setup-environment.ts",
+      "./src/test/setup-tree-sitter.ts",
+    ],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     sequence: { concurrent: false },

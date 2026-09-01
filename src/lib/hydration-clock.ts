@@ -10,3 +10,22 @@
 export function clampToClientClock(fetchedAt: number) {
   return Math.min(fetchedAt, Date.now());
 }
+
+/**
+ * Builds the common options for refreshable server-hydrated queries.
+ *
+ * The server read time, capped to the browser clock, lets the shared stale
+ * time age prefetched data correctly. Mount and focus refetches then refresh
+ * stale route payloads while React Query still suppresses unnecessary reads.
+ */
+export function hydratedQueryOptions<Data>(
+  initialData: Data,
+  fetchedAt: number,
+) {
+  return {
+    initialData,
+    initialDataUpdatedAt: clampToClientClock(fetchedAt),
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+  } as const;
+}

@@ -20,6 +20,7 @@ import {
 } from "~/lib/symbol-peek";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
+import { HighlightedTokens } from "./highlighted-tokens";
 
 /** The name the pointer is resting on, and where on screen it sits. */
 export interface PeekedSymbol {
@@ -317,16 +318,7 @@ export function SymbolPeekCard({
               {definition.startLine + index}
             </span>
             <pre className="syntax-code overflow-visible text-xs font-medium text-cloud">
-              {line.tokens.length
-                ? line.tokens.map((token, tokenIndex) => (
-                    <span
-                      key={`${tokenIndex}-${token.text.length}`}
-                      className={token.className || undefined}
-                    >
-                      {token.text}
-                    </span>
-                  ))
-                : " "}
+              <HighlightedTokens tokens={line.tokens} />
             </pre>
           </div>
         ))}

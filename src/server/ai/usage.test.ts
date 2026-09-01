@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nonReducingAiUsage } from "./usage";
+import { addAiUsage, nonReducingAiUsage, providerUsage } from "./usage";
 
 const persisted = {
   inputTokens: 120,
@@ -39,6 +39,57 @@ describe("nonReducingAiUsage", () => {
       cacheWrite: 5,
       totalTokens: 150,
       microUsd: 700,
+    });
+  });
+});
+
+describe("providerUsage", () => {
+  it("normalizes optional token details and OpenRouter cost", () => {
+    expect(
+      providerUsage({
+        usage: {
+          inputTokens: 12,
+          outputTokens: 4,
+          totalTokens: 16,
+        },
+        providerMetadata: { openrouter: { usage: { cost: 0.000_001_2 } } },
+      }),
+    ).toEqual({
+      input: 12,
+      output: 4,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 16,
+      microUsd: 2,
+    });
+  });
+
+  it("adds usage from multiple provider calls", () => {
+    expect(
+      addAiUsage(
+        {
+          input: 10,
+          output: 3,
+          cacheRead: 2,
+          cacheWrite: 1,
+          totalTokens: 13,
+          microUsd: 4,
+        },
+        {
+          input: 7,
+          output: 5,
+          cacheRead: 1,
+          cacheWrite: 0,
+          totalTokens: 12,
+        },
+      ),
+    ).toEqual({
+      input: 17,
+      output: 8,
+      cacheRead: 3,
+      cacheWrite: 1,
+      totalTokens: 25,
+      microUsd: 4,
     });
   });
 });

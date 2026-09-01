@@ -10,7 +10,19 @@ import {
   type ReviewCompletionCandidate,
 } from "./review-completion";
 
-afterEach(cleanup);
+const pendingNavigation = vi.hoisted(() => ({ pending: false }));
+
+vi.mock("~/components/navigation-progress", () => ({
+  usePendingNavigation: () => ({
+    navigate: vi.fn(),
+    pending: pendingNavigation.pending,
+  }),
+}));
+
+afterEach(() => {
+  cleanup();
+  pendingNavigation.pending = false;
+});
 
 const reviews: ReviewCompletionCandidate[] = [
   {
@@ -174,6 +186,35 @@ describe("ReviewCompletion", () => {
 
     await user.click(screen.getByRole("button", { name: /Pull requests/i }));
     expect(onDashboard).toHaveBeenCalledOnce();
+  });
+
+  it("disables both exit navigations while routing remains pending", () => {
+    pendingNavigation.pending = true;
+    render(
+      <ReviewCompletion
+        completedFiles={7}
+        completedUnits={24}
+        dashboardShortcut={[{ key: "g" }, { key: "r" }]}
+        dismissShortcut={[{ key: "Escape" }]}
+        nextReview={reviews[3]}
+        nextReviewShortcut={[{ key: "n", shift: true }]}
+        providerReview={<div>Provider approval</div>}
+        queueLoading={false}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+      />,
+    );
+
+    for (const name of [/Pull requests/i, /Review next PR/i]) {
+      const action = screen.getByRole("button", { name });
+      expect(action).toBeDisabled();
+      expect(action).toHaveAttribute("aria-busy", "true");
+      expect(action.querySelector(".animate-spin")).toBeInTheDocument();
+    }
+    expect(
+      screen.getByRole("button", { name: /Browse reviewed files/i }),
+    ).toBeEnabled();
   });
 
   it("fills the review pane instead of floating a card over the last file", () => {

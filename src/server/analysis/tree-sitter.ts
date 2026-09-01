@@ -213,7 +213,7 @@ export function withSyntaxTree<T>(
   if (cached) cachedTrees.delete(key);
   const entry = cached ?? {
     tree: parseSource(language, source),
-    bytes: source.length,
+    bytes: Buffer.byteLength(source),
     borrowed: 0,
   };
   if (!cached) cachedParseBytes += entry.bytes;

@@ -54,6 +54,7 @@ describe("deep review rulebook resolution", () => {
 
   it("normalizes separators and leading path noise", () => {
     expect(resolveRulebooks("./src/main.rs").primary).toBe("rust.md");
+    expect(resolveRulebooks("/src/main.rs").primary).toBe("rust.md");
     expect(resolveRulebooks("src\\main.rs").primary).toBe("rust.md");
   });
 

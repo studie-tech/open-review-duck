@@ -63,6 +63,10 @@ export type UnitKind =
   | "test_hook"
   | "binary"
   | "file";
+export type RawUnit = Omit<
+  AnalyzedUnit,
+  "changedLineCount" | "depth" | "reviewOrder"
+>;
 type SourceChangeType = "added" | "modified" | "deleted" | "renamed";
 
 export interface ReviewUnitRange {
@@ -125,20 +129,6 @@ export const lexicalSyntaxes = Object.fromEntries(
 /** Returns the lexical syntax declared for a language, when it has one. */
 export function lexicalSyntaxFor(language: string) {
   return lexicalSyntaxes[language as SupportedLanguage];
-}
-
-/** Checks whether a repository path uses a supported source extension. */
-export function isSupportedSourcePath(path: string) {
-  const normalized = path.toLowerCase();
-  const name = normalized.split("/").at(-1) ?? normalized;
-  return (
-    Object.values(supportedExtensions).some((extensions) =>
-      extensions.some((extension) => normalized.endsWith(extension)),
-    ) ||
-    Object.values(supportedFileNames).some((names) =>
-      (names as readonly string[]).includes(name),
-    )
-  );
 }
 
 /** Selects complete source files without exceeding the configured byte budget. */

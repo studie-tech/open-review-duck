@@ -165,16 +165,6 @@ export function nextPendingReviewIndexPreferring<
     : nextPendingReviewIndex(units, matches);
 }
 
-/** Marks one unit as reviewed locally before its sign-off reaches the server. */
-export function optimisticallySignOffReviewUnit<
-  T extends ReviewNavigationUnit & {
-    id: string;
-    changedSinceSignOff: boolean;
-  },
->(units: T[], unitId: string) {
-  return optimisticallySignOffReviewUnits(units, [unitId]);
-}
-
 /** Marks several units as reviewed in one immutable update. */
 export function optimisticallySignOffReviewUnits<
   T extends ReviewNavigationUnit & {
@@ -199,9 +189,8 @@ export function optimisticallySignOffReviewUnits<
 /**
  * Returns signed-off units to the review path before the server confirms it.
  *
- * File checkboxes have to flip as soon as they are clicked. Waiting for the
- * unreview request left the mark in place for seconds, which reads as the
- * control doing nothing.
+ * File checkboxes remain responsive while the unreview request persists the
+ * same state on the server.
  */
 export function optimisticallyUnreviewReviewUnits<
   T extends ReviewNavigationUnit & {

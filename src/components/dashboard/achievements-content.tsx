@@ -2,7 +2,7 @@
 
 import { Award, Check, Clock3, Flame, Star } from "lucide-react";
 import { PageContainer } from "~/components/page-container";
-import { clampToClientClock } from "~/lib/hydration-clock";
+import { hydratedQueryOptions } from "~/lib/hydration-clock";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Gamification = RouterOutputs["review"]["gamification"];
@@ -15,15 +15,10 @@ export function AchievementsContent({
   initialStats: Gamification;
   fetchedAt: number;
 }) {
-  // The sidebar prefetches this route eagerly, so the server payload can
-  // predate the navigation. Stamping it with the time it was read lets the
-  // shared stale time decide whether hydration has to refresh it.
-  const progress = api.review.gamification.useQuery(undefined, {
-    initialData: initialStats,
-    initialDataUpdatedAt: clampToClientClock(fetchedAt),
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
-  });
+  const progress = api.review.gamification.useQuery(
+    undefined,
+    hydratedQueryOptions(initialStats, fetchedAt),
+  );
   const stats = progress.data ?? initialStats;
   const achievements = [
     {

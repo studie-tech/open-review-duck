@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
+import {
+  AiPreferencesForm,
+  useAiPreferenceDraft,
+} from "~/components/settings/ai-preferences-form";
 import { AiPromptEditor } from "~/components/settings/ai-prompt-editor";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -13,11 +17,21 @@ import {
   aiProviderPresets,
   matchingAiProviderPreset,
 } from "~/lib/ai-provider-presets";
-import { parseOptionalReviewTokenCap } from "~/lib/token-usage";
-import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Configuration = RouterOutputs["ai"]["configuration"];
+
+const localPreferenceDeployment = {
+  kind: "local",
+  introduction:
+    "Choose when ReviewDuck should call your provider. These save with the connection below.",
+  deepReviewDescription: {
+    available:
+      "Ask the assistant for evidence-backed findings when a new revision syncs. One agent runs per changed file.",
+    unavailable: "This deployment cannot run a pull-request review.",
+  },
+  tokenCapDescription: "Optional cap on one review. Leave empty for no limit.",
+} as const;
 
 /** Parses and validates custom provider headers from JSON input. */
 function parseHeaders(value: string) {
@@ -45,15 +59,7 @@ export function LocalAiSettings({
 }) {
   const router = useRouter();
   const utils = api.useUtils();
-  const [mode, setMode] = useState(initialConfiguration.mode);
-  const [reviewPullRequests, setReviewPullRequests] = useState(
-    initialConfiguration.reviewPullRequests,
-  );
-  const [maxReviewTokensInput, setMaxReviewTokensInput] = useState(
-    initialConfiguration.maxReviewTokens?.toString() ?? "",
-  );
-  const maxReviewTokensField =
-    parseOptionalReviewTokenCap(maxReviewTokensInput);
+  const preferences = useAiPreferenceDraft(initialConfiguration);
   const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
   const savedConfiguration = initialConfiguration.configuration;
   const configuredPreset = savedConfiguration
@@ -129,9 +135,9 @@ export function LocalAiSettings({
     headers: parsedHeaders ?? {},
     baseUrl: baseUrl || undefined,
     useManagedModels: false as const,
-    mode,
-    reviewPullRequests,
-    maxReviewTokens: maxReviewTokensField.cap,
+    mode: preferences.values.mode,
+    reviewPullRequests: preferences.values.reviewPullRequests,
+    maxReviewTokens: preferences.maxReviewTokens.cap,
   });
 
   /** Tests the current model configuration and stores its verification proof. */
@@ -164,7 +170,10 @@ export function LocalAiSettings({
     : null;
   const canTest = byokIsValid && !testConnection.isPending && !save.isPending;
   const canSave =
-    byokIsValid && isVerified && maxReviewTokensField.valid && !save.isPending;
+    byokIsValid &&
+    isVerified &&
+    preferences.maxReviewTokens.valid &&
+    !save.isPending;
 
   return (
     <PageContainer>
@@ -280,116 +289,13 @@ export function LocalAiSettings({
           )}
         </section>
 
-        <section
-          aria-labelledby="ai-preferences-heading"
-          className="bg-surface/70 overflow-hidden rounded-2xl border border-line"
-        >
-          <div className="border-b border-line px-5 py-5 sm:px-6">
-            <h2 id="ai-preferences-heading" className="text-base font-medium">
-              Assistant preferences
-            </h2>
-            <p className="text-mist mt-1 text-xs leading-5">
-              Choose when ReviewDuck should call your provider. These save with
-              the connection below.
-            </p>
-          </div>
-          <div className="divide-y divide-line">
-            <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
-              <label htmlFor="ai-assistance-timing" className="min-w-0">
-                <span className="text-cloud block text-sm font-medium">
-                  Assistance timing
-                </span>
-                <span className="text-mist mt-1 block text-xs leading-5">
-                  Off, on demand, or automatic explanations for each review
-                  unit.
-                </span>
-              </label>
-              <select
-                id="ai-assistance-timing"
-                value={mode}
-                onChange={(event) =>
-                  setMode(
-                    event.target.value as "off" | "on_demand" | "automatic",
-                  )
-                }
-                className="bg-surface text-cloud focus:border-violet/40 h-11 w-full rounded-xl border border-line px-3 text-sm outline-none"
-              >
-                <option value="off">Off</option>
-                <option value="on_demand">On demand</option>
-                <option value="automatic">Automatic</option>
-              </select>
-            </div>
-            <div
-              className={cn(
-                "grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:gap-6 sm:px-6",
-                !deepReviewAvailable && "bg-surface-subtle/60",
-              )}
-            >
-              <div className="min-w-0">
-                <p className="text-cloud text-sm font-medium">
-                  Review the full pull request
-                </p>
-                <p className="text-mist mt-1 text-xs leading-5">
-                  {deepReviewAvailable
-                    ? "Ask the assistant for evidence-backed findings when a new revision syncs. One agent runs per changed file."
-                    : "This deployment cannot run a pull-request review."}
-                </p>
-              </div>
-              <label className="inline-flex shrink-0 items-center gap-2 sm:mt-0.5">
-                <span className="sr-only">Review the full pull request</span>
-                <span className="relative inline-flex">
-                  <input
-                    type="checkbox"
-                    checked={reviewPullRequests}
-                    // The appliance always satisfies the gate today, but
-                    // reading the flag rather than hardcoding `true` keeps
-                    // entitlement expressed in exactly one place.
-                    disabled={!deepReviewAvailable}
-                    onChange={(event) =>
-                      setReviewPullRequests(event.target.checked)
-                    }
-                    className="peer sr-only"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="bg-surface-subtle peer-checked:bg-lime peer-focus-visible:ring-lime/55 peer-disabled:opacity-45 block h-6 w-10 rounded-full border border-line transition peer-checked:border-lime peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-ink peer-disabled:cursor-not-allowed"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="bg-cloud pointer-events-none absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition peer-checked:translate-x-4 peer-checked:bg-accent-foreground peer-disabled:opacity-45"
-                  />
-                </span>
-              </label>
-            </div>
-            <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
-              <label htmlFor="ai-review-token-cap" className="min-w-0">
-                <span className="text-cloud block text-sm font-medium">
-                  Tokens per review
-                </span>
-                <span className="text-mist mt-1 block text-xs leading-5">
-                  Optional cap on one review. Leave empty for no limit.
-                </span>
-              </label>
-              <div className="min-w-0">
-                <input
-                  id="ai-review-token-cap"
-                  inputMode="numeric"
-                  value={maxReviewTokensInput}
-                  placeholder="No limit"
-                  onChange={(event) =>
-                    setMaxReviewTokensInput(event.target.value)
-                  }
-                  className="bg-surface text-cloud focus:border-violet/40 h-11 w-full rounded-xl border border-line px-3 text-sm outline-none"
-                />
-                {!maxReviewTokensField.valid && (
-                  <p className="mt-2 text-xs text-red-700 dark:text-red-300">
-                    Enter a whole number of tokens, or leave this empty.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
+        <AiPreferencesForm
+          values={preferences.values}
+          onValuesChange={preferences.setValues}
+          deepReviewAvailable={deepReviewAvailable}
+          deployment={localPreferenceDeployment}
+          persistence={{ kind: "with-provider", pending: save.isPending }}
+        />
       </div>
 
       <section

@@ -153,9 +153,8 @@ const PROVIDER_MARKERS = [
   "socket hang up",
   "econnreset",
   "econnrefused",
-  // Transport failures reaching the provider. A real run lost a file to
-  // "ssl3_read_bytes ... bad record mac", which landed in `unknown` while the
-  // child job itself had already recorded `provider_failure`.
+  // Raw TLS and socket errors are provider transport failures even when their
+  // text does not name the provider.
   "ssl routines",
   "bad record mac",
   "epipe",
@@ -164,8 +163,6 @@ const PROVIDER_MARKERS = [
   "eai_again",
   "certificate",
   "tls",
-  "enotfound",
-  "epipe",
   "overloaded",
   "upstream",
   "api error",

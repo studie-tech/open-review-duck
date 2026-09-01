@@ -54,7 +54,7 @@ export function mergeGatingChecks<T extends ProviderMergeGateCheck>(
 }
 
 /** Why required checks currently block merge, if they do. */
-export function requiredChecksBlockReason(
+function requiredChecksBlockReason(
   checks: readonly ProviderMergeGateCheck[],
 ): "pending" | "failing" | undefined {
   const required = checks.filter((check) => check.required === true);

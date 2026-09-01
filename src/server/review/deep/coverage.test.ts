@@ -320,8 +320,6 @@ describe("classifyReviewItemError", () => {
     expect(classifyReviewItemError(error)).toBe("unknown");
   });
   it("classifies a transport failure to the provider as provider", () => {
-    // Observed live: a single review lost one file to this, and the child job
-    // recorded provider_failure while the item recorded unknown.
     expect(
       classifyReviewItemError(
         new Error(

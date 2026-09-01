@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  followActiveRepositorySyncs,
   hasActiveRepositoryRun,
   mergeRepositoryRunProgress,
 } from "./repository-run-progress";
@@ -8,6 +9,24 @@ const idle = {
   latestCodeRun: { status: "completed" },
   latestComplianceRun: null,
 };
+
+describe("followActiveRepositorySyncs", () => {
+  it("polls only while a monitor has an active source sync", () => {
+    expect(followActiveRepositorySyncs({ state: { data: [] } })).toBe(false);
+    expect(
+      followActiveRepositorySyncs({
+        state: {
+          data: [{ activeSync: null }, { activeSync: { progress: 1 } }],
+        },
+      }),
+    ).toBe(1_500);
+    expect(
+      followActiveRepositorySyncs({
+        state: { data: [{ activeSync: null }] },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("hasActiveRepositoryRun", () => {
   it("follows a repository run through every in-flight status", () => {

@@ -8,11 +8,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
-import { ShortcutHint } from "~/components/command-center";
 import { usePendingNavigation } from "~/components/navigation-progress";
-import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
+import { ReviewExitActions } from "./review-exit-actions";
 
 export interface ReviewCompletionCandidate {
   id: string;
@@ -294,45 +293,16 @@ export function ReviewCompletion({
         </div>
 
         <div className="relative shrink-0 border-t border-line bg-panel/90 px-4 py-3 backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8">
-          <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center">
-            <Button
-              ref={initialFocusRef}
-              type="button"
-              variant="ghost"
-              className="sm:mr-auto"
-              onClick={onDismiss}
-            >
-              Browse reviewed files
-              <ShortcutHint shortcut={dismissShortcut} />
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              loading={navigationPending}
-              onClick={onDashboard}
-            >
-              {!navigationPending && <GitPullRequest className="size-4" />}
-              Pull requests
-              <ShortcutHint
-                shortcut={dashboardShortcut}
-                className="hidden sm:inline-flex"
-              />
-            </Button>
-            {nextReview && (
-              <Button
-                type="button"
-                loading={navigationPending}
-                onClick={onNextReview}
-              >
-                Review next PR
-                {!navigationPending && <ArrowRight className="size-4" />}
-                <ShortcutHint
-                  shortcut={nextReviewShortcut}
-                  className="hidden sm:inline-flex"
-                />
-              </Button>
-            )}
-          </div>
+          <ReviewExitActions
+            dashboardShortcut={dashboardShortcut}
+            dismissButtonRef={initialFocusRef}
+            dismissLabel="Browse reviewed files"
+            dismissShortcut={dismissShortcut}
+            nextReviewShortcut={nextReviewShortcut}
+            onDashboard={onDashboard}
+            onDismiss={onDismiss}
+            onNextReview={nextReview ? onNextReview : undefined}
+          />
         </div>
       </section>
     </div>

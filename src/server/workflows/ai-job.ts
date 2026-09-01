@@ -11,16 +11,21 @@ import { db } from "~/server/db";
 import { ensureWorkflowRunLink } from "./run-link";
 
 /** Runs the bounded investigation as individually durable model turns. */
-export async function aiJobWorkflow(jobId: string) {
+export async function aiJobWorkflow(jobId: string, startToken?: string) {
   "use workflow";
 
   const { workflowRunId } = getWorkflowMetadata();
 
   for (let turn = 0; turn < env.AI_MAX_MODEL_STEPS; turn += 1) {
-    const result = await executeDurableAiTurn(jobId, turn, workflowRunId);
+    const result = await executeDurableAiTurn(
+      jobId,
+      turn,
+      workflowRunId,
+      startToken,
+    );
     if (result.done) return result;
   }
-  await finishDurableAiJobAtLimit(jobId, workflowRunId);
+  await finishDurableAiJobAtLimit(jobId, workflowRunId, startToken);
   return { done: true, status: "completed" as const };
 }
 
@@ -29,6 +34,7 @@ async function executeDurableAiTurn(
   jobId: string,
   turn: number,
   providerRunId: string,
+  startToken?: string,
 ) {
   "use step";
 
@@ -37,7 +43,9 @@ async function executeDurableAiTurn(
       kind: "ai_job",
       targetId: jobId,
       providerRunId,
+      startToken,
     });
+    if (!workflow) return { done: true, superseded: true as const };
     const result = await executeAiTurn(db, jobId, turn);
     if (result.done) {
       await db
@@ -52,7 +60,9 @@ async function executeDurableAiTurn(
       kind: "ai_job",
       targetId: jobId,
       providerRunId,
+      startToken,
     });
+    if (!workflow) return { done: true, superseded: true as const };
     await db
       .update(workflowRuns)
       .set({
@@ -68,14 +78,20 @@ async function executeDurableAiTurn(
 }
 
 /** Records the investigation-limit terminal state after all durable turns. */
-async function finishDurableAiJobAtLimit(jobId: string, providerRunId: string) {
+async function finishDurableAiJobAtLimit(
+  jobId: string,
+  providerRunId: string,
+  startToken?: string,
+) {
   "use step";
 
   const workflow = await ensureWorkflowRunLink(db, {
     kind: "ai_job",
     targetId: jobId,
     providerRunId,
+    startToken,
   });
+  if (!workflow) return;
   await finishAiJobAtInvestigationLimit(db, jobId);
   await db
     .update(workflowRuns)

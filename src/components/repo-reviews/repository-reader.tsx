@@ -35,6 +35,7 @@ import {
   ShortcutHint,
 } from "~/components/command-center";
 import { useRegisterPageCommands } from "~/components/page-command-center";
+import { ContextRevealControl } from "~/components/review/context-reveal-control";
 import { HighlightedSourceLines } from "~/components/review/highlighted-source-lines";
 import {
   actionableReviewCardMember,
@@ -42,8 +43,8 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
 } from "~/components/review/review-file-card";
-import { CONTEXT_PAGE_LINES } from "~/components/review/review-workspace-constants";
 import { ReviewFilesPanel } from "~/components/review/review-files-panel";
+import { CONTEXT_PAGE_LINES } from "~/components/review/review-workspace-constants";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
@@ -60,9 +61,14 @@ import {
   optimisticallySignOffReviewUnits,
   optimisticallyUnreviewReviewUnits,
 } from "~/lib/review-navigation";
+import { shortRevision } from "~/lib/review-revision";
 import { readerShortcuts } from "~/lib/review-shortcuts";
 import { reviewSourceByteLength } from "~/lib/review-source-display";
 import { knownLanguage, useHighlightedSource } from "~/lib/syntax-highlighting";
+import {
+  preservePrivateSourceReviewState,
+  usePrivateSourceHydration,
+} from "~/lib/use-private-source-hydration";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
@@ -106,7 +112,51 @@ export function RepositoryReader({
   initialData: Workspace;
   monitor: Monitor;
 }) {
-  const [units, setUnits] = useState(initialData.units);
+  // A snapshot is immutable. Keep its prioritized manifest stable so a same-
+  // snapshot refresh does not abort and restart verified source downloads.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot identity owns its immutable source manifest
+  const hydrationPlan = useMemo(() => {
+    const firstPending =
+      initialData.units.find(({ status }) => status !== "signed_off")?.id ??
+      initialData.units[0]?.id;
+    return {
+      snapshotId: initialData.snapshot?.id,
+      units: prioritizePrivateReviewSources(initialData.units, {
+        activeId: firstPending,
+        activePath: initialData.units.find(({ id }) => id === firstPending)
+          ?.path,
+      }),
+      fileContexts: initialData.fileContexts,
+    };
+  }, [initialData.snapshot?.id]);
+  const {
+    pending: sourceLoading,
+    setSources: setUnits,
+    sources: units,
+  } = usePrivateSourceHydration({
+    snapshotId: hydrationPlan.snapshotId,
+    sources: initialData.units,
+    hydrationSources: hydrationPlan.units,
+    sourceKey: ({ id }) => id,
+    sourceConcurrency: 6,
+    preserveSourceState: preservePrivateSourceReviewState,
+    onFailures: (failures) => {
+      const affectedFiles = new Set(
+        failures.map(({ path }) => path).filter(Boolean),
+      ).size;
+      if (affectedFiles > 0) {
+        toast.error(
+          `${affectedFiles} source file${affectedFiles === 1 ? "" : "s"} could not be loaded`,
+        );
+        return;
+      }
+      const cause = failures[0]?.cause;
+      toast.error("Repository source files could not be loaded", {
+        description:
+          cause instanceof Error ? cause.message : "Please try again.",
+      });
+    },
+  });
   const [hydratedFileContext, setHydratedFileContext] = useState<{
     snapshotId: string;
     context: Workspace["fileContexts"][number];
@@ -127,9 +177,6 @@ export function RepositoryReader({
   const [ruleForm, setRuleForm] = useState(() =>
     newRuleForm(initialData.units[0]?.path ?? "**/*"),
   );
-  const [sourceLoading, setSourceLoading] = useState(
-    Boolean(initialData.snapshot),
-  );
   const [pendingFiles, setPendingFiles] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -145,93 +192,6 @@ export function RepositoryReader({
   // The reader takes over the viewport like the pull-request workspace, so
   // the shell behind it must stop scrolling out of view.
   useLayoutEffect(() => lockDocumentScroll(document), []);
-
-  // A snapshot is immutable. Keep its download manifest stable so a same-
-  // snapshot refresh does not abort and restart verified source downloads.
-  // The unit you opened first downloads ahead of everything else.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot identity owns its immutable source manifest
-  const hydrationPlan = useMemo(() => {
-    const firstPending =
-      initialData.units.find(({ status }) => status !== "signed_off")?.id ??
-      initialData.units[0]?.id;
-    return {
-      snapshotId: initialData.snapshot?.id,
-      units: prioritizePrivateReviewSources(initialData.units, {
-        activeId: firstPending,
-        activePath: initialData.units.find(({ id }) => id === firstPending)
-          ?.path,
-      }),
-      fileContexts: initialData.fileContexts,
-    };
-  }, [initialData.snapshot?.id]);
-
-  useEffect(() => {
-    if (!hydrationPlan.snapshotId) return;
-    let live = true;
-    const controller = new AbortController();
-    const cache = new Map<string, Promise<Uint8Array>>();
-    const hydratedById = new Map<string, Workspace["units"][number]>();
-    let flushTimer: ReturnType<typeof setTimeout> | undefined;
-    /** Applies all source files hydrated in the same event-loop turn at once. */
-    const flushHydrated = () => {
-      flushTimer = undefined;
-      if (!live || hydratedById.size === 0) return;
-      const hydrated = new Map(hydratedById);
-      hydratedById.clear();
-      setUnits((current) =>
-        current.map((unit) => {
-          const replacement = hydrated.get(unit.id);
-          return replacement
-            ? {
-                ...replacement,
-                status: unit.status,
-                changedSinceSignOff: unit.changedSinceSignOff,
-                waitingSince: unit.waitingSince,
-              }
-            : unit;
-        }),
-      );
-    };
-    setSourceLoading(true);
-    void hydratePrivateReviewSources(
-      hydrationPlan.units,
-      hydrationPlan.snapshotId,
-      cache,
-      6,
-      controller.signal,
-      (_index, hydrated) => {
-        if (!live) return;
-        hydratedById.set(hydrated.id, hydrated);
-        flushTimer ??= setTimeout(flushHydrated, 0);
-      },
-    )
-      .then((result) => {
-        if (!live) return;
-        if (flushTimer !== undefined) clearTimeout(flushTimer);
-        flushHydrated();
-        if (result.failures.length > 0) {
-          toast.error(
-            `${result.failures.length} source file${result.failures.length === 1 ? "" : "s"} could not be loaded`,
-          );
-        }
-      })
-      .catch((cause: unknown) => {
-        if (!live || controller.signal.aborted) return;
-        toast.error("Repository source files could not be loaded", {
-          description:
-            cause instanceof Error ? cause.message : "Please try again.",
-        });
-      })
-      .finally(() => {
-        if (live) setSourceLoading(false);
-      });
-    return () => {
-      live = false;
-      controller.abort();
-      if (flushTimer !== undefined) clearTimeout(flushTimer);
-      cache.clear();
-    };
-  }, [hydrationPlan]);
 
   // Full-file context can be much larger than the focused review units. Load
   // only the active path and replace it on navigation so the reader never
@@ -464,7 +424,7 @@ export function RepositoryReader({
         durationSeconds: 0,
       });
     },
-    [pendingFiles, signOffFileStart, units, unreviewFileStart],
+    [pendingFiles, setUnits, signOffFileStart, units, unreviewFileStart],
   );
 
   /** Advances to the next unread unit, wrapping once past the end. */
@@ -917,7 +877,9 @@ export function RepositoryReader({
             <GitBranch className="size-3" /> {monitor.branch}
             <span>·</span>
             <span className="font-mono">
-              {initialData.snapshot?.headSha.slice(0, 7)}
+              {initialData.snapshot
+                ? shortRevision(initialData.snapshot.headSha)
+                : undefined}
             </span>
           </div>
         </div>
@@ -1066,29 +1028,14 @@ export function RepositoryReader({
                       selected
                       sourceBytes={reviewSourceByteLength(activeFileContext)}
                     />
-                    {contextBefore < availableBefore && (
-                      <div className="flex items-center gap-3 px-4 pt-3 font-sans">
-                        <span className="h-px flex-1 bg-line" />
-                        <button
-                          type="button"
-                          onClick={revealContextAbove}
-                          className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
-                        >
-                          <ChevronUp className="size-3" />
-                          Show{" "}
-                          {Math.min(
-                            CONTEXT_PAGE_LINES,
-                            availableBefore - contextBefore,
-                          )}{" "}
-                          {contextBefore > 0 ? "more " : ""}lines above
-                          <ShortcutHint
-                            shortcut={readerShortcuts.revealContextAbove}
-                            className="ml-1"
-                          />
-                        </button>
-                        <span className="h-px flex-1 bg-line" />
-                      </div>
-                    )}
+                    <ContextRevealControl
+                      availableLines={availableBefore}
+                      className="pt-3"
+                      direction="above"
+                      onReveal={revealContextAbove}
+                      revealedLines={contextBefore}
+                      shortcut={readerShortcuts.revealContextAbove}
+                    />
                     <HighlightedSourceLines
                       key={active.id}
                       lines={highlightedLines}
@@ -1269,29 +1216,14 @@ export function RepositoryReader({
                         </>
                       )}
                     />
-                    {contextAfter < availableAfter && (
-                      <div className="flex items-center gap-3 px-4 pb-3 font-sans">
-                        <span className="h-px flex-1 bg-line" />
-                        <button
-                          type="button"
-                          onClick={revealContextBelow}
-                          className="text-fog hover:border-cyan/25 hover:bg-cyan/[.05] hover:text-cyan flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
-                        >
-                          <ChevronDown className="size-3" />
-                          Show{" "}
-                          {Math.min(
-                            CONTEXT_PAGE_LINES,
-                            availableAfter - contextAfter,
-                          )}{" "}
-                          {contextAfter > 0 ? "more " : ""}lines below
-                          <ShortcutHint
-                            shortcut={readerShortcuts.revealContextBelow}
-                            className="ml-1"
-                          />
-                        </button>
-                        <span className="h-px flex-1 bg-line" />
-                      </div>
-                    )}
+                    <ContextRevealControl
+                      availableLines={availableAfter}
+                      className="pb-3"
+                      direction="below"
+                      onReveal={revealContextBelow}
+                      revealedLines={contextAfter}
+                      shortcut={readerShortcuts.revealContextBelow}
+                    />
                   </>
                 )}
               </div>

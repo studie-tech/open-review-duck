@@ -33,6 +33,7 @@ import {
   type SourceFile,
 } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
+import { selectByIdsInChunks } from "~/server/db/select-in-chunks";
 import { providerForConnection } from "~/server/providers/credentials";
 import {
   persistSourceBlob,
@@ -87,14 +88,6 @@ interface PreviousRepositoryFile {
   isBinary: boolean;
 }
 
-/**
- * Keeps one `inArray` under PostgreSQL's 65,535 bind-parameter ceiling.
- *
- * A full monorepo snapshot can exceed that in a single query, which would
- * fail the entire synchronization, so identifier lists are bound in chunks.
- */
-const QUERY_CHUNK_SIZE = 10_000;
-
 /** Counts displayed source lines without the trailing-newline phantom row. */
 function countLines(content: string) {
   if (!content) return 0;
@@ -117,17 +110,11 @@ async function previousRepositoryFiles(
   const blobIds = currentFiles.flatMap((file) =>
     file.currentBlobId ? [file.currentBlobId] : [],
   );
-  const blobs: Array<typeof sourceBlobs.$inferSelect> = [];
-  for (let offset = 0; offset < blobIds.length; offset += QUERY_CHUNK_SIZE) {
-    blobs.push(
-      ...(await db.query.sourceBlobs.findMany({
-        where: inArray(
-          sourceBlobs.id,
-          blobIds.slice(offset, offset + QUERY_CHUNK_SIZE),
-        ),
-      })),
-    );
-  }
+  const blobs = await selectByIdsInChunks(blobIds, (chunk) =>
+    db.query.sourceBlobs.findMany({
+      where: inArray(sourceBlobs.id, chunk),
+    }),
+  );
   const blobById = new Map(blobs.map((blob) => [blob.id, blob]));
   const loaded = await mapWithLimit(currentFiles, 4, async (file) => {
     const blob = file.currentBlobId
@@ -378,15 +365,14 @@ async function previousAnalysisUnits(
   units: Array<typeof reviewUnits.$inferSelect>,
 ) {
   if (units.length === 0) return [];
-  const dependencies = await db
-    .select()
-    .from(reviewUnitDependencies)
-    .where(
-      inArray(
-        reviewUnitDependencies.unitId,
-        units.map((unit) => unit.id),
-      ),
-    );
+  const dependencies = await selectByIdsInChunks(
+    units.map((unit) => unit.id),
+    (chunk) =>
+      db
+        .select()
+        .from(reviewUnitDependencies)
+        .where(inArray(reviewUnitDependencies.unitId, chunk)),
+  );
   const stableKeyById = new Map(units.map((unit) => [unit.id, unit.stableKey]));
   const dependenciesByUnit = new Map<string, string[]>();
   for (const dependency of dependencies) {
@@ -586,30 +572,15 @@ export async function syncRepositoryBranch(
   const priorByKey = new Map(
     previousUnits.map((unit) => [unit.stableKey, unit]),
   );
-  const priorSignOffs: (typeof signOffs.$inferSelect)[] = [];
-  if (previousUnits.length) {
-    const previousUnitIds = previousUnits.map((unit) => unit.id);
-    for (
-      let offset = 0;
-      offset < previousUnitIds.length;
-      offset += QUERY_CHUNK_SIZE
-    ) {
-      priorSignOffs.push(
-        ...(await db
-          .select()
-          .from(signOffs)
-          .where(
-            and(
-              inArray(
-                signOffs.unitId,
-                previousUnitIds.slice(offset, offset + QUERY_CHUNK_SIZE),
-              ),
-              isNull(signOffs.invalidatedAt),
-            ),
-          )),
-      );
-    }
-  }
+  const previousUnitIds = previousUnits.map((unit) => unit.id);
+  const priorSignOffs = await selectByIdsInChunks(previousUnitIds, (chunk) =>
+    db
+      .select()
+      .from(signOffs)
+      .where(
+        and(inArray(signOffs.unitId, chunk), isNull(signOffs.invalidatedAt)),
+      ),
+  );
   const signOffsByUnit = new Map<string, typeof priorSignOffs>();
   for (const signOff of priorSignOffs) {
     signOffsByUnit.set(signOff.unitId, [
@@ -617,27 +588,9 @@ export async function syncRepositoryBranch(
       signOff,
     ]);
   }
-  const priorWaits: (typeof reviewWaits.$inferSelect)[] = [];
-  if (previousUnits.length) {
-    const previousUnitIds = previousUnits.map((unit) => unit.id);
-    for (
-      let offset = 0;
-      offset < previousUnitIds.length;
-      offset += QUERY_CHUNK_SIZE
-    ) {
-      priorWaits.push(
-        ...(await db
-          .select()
-          .from(reviewWaits)
-          .where(
-            inArray(
-              reviewWaits.unitId,
-              previousUnitIds.slice(offset, offset + QUERY_CHUNK_SIZE),
-            ),
-          )),
-      );
-    }
-  }
+  const priorWaits = await selectByIdsInChunks(previousUnitIds, (chunk) =>
+    db.select().from(reviewWaits).where(inArray(reviewWaits.unitId, chunk)),
+  );
   const waitsByUnit = new Map<string, typeof priorWaits>();
   for (const wait of priorWaits) {
     waitsByUnit.set(wait.unitId, [

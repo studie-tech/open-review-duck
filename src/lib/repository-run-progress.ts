@@ -11,6 +11,15 @@ type RunState = {
   latestComplianceRun: { status: string } | null;
 };
 
+/** Polls while at least one repository monitor is synchronizing source. */
+export function followActiveRepositorySyncs(query: {
+  state: { data?: readonly { activeSync: unknown }[] };
+}) {
+  return query.state.data?.some(({ activeSync }) => Boolean(activeSync))
+    ? 1_500
+    : false;
+}
+
 /** Reports whether any monitor still has an AI repository run in flight. */
 export function hasActiveRepositoryRun(monitors: readonly RunState[]) {
   return monitors.some(

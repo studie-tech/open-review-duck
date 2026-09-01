@@ -46,7 +46,7 @@ export function isDataOrGeneratedReviewPath(path: string) {
 }
 
 /** Reports whether a stored review language is a data document. */
-export function isDataReviewLanguage(language: string | undefined) {
+function isDataReviewLanguage(language: string | undefined) {
   return DATA_REVIEW_LANGUAGES.has((language ?? "").trim().toLowerCase());
 }
 

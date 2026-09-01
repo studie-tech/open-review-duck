@@ -30,6 +30,7 @@ import { ProviderRail } from "~/components/settings/provider-rail";
 import { RepositoryDetail } from "~/components/settings/repository-detail";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import { startHostedProviderAuthorization } from "~/lib/hosted-provider-authorization";
 import {
   supportsManagedReauthorization,
   supportsTokenReplacement,
@@ -295,22 +296,10 @@ export function ProviderSettings({
     if (authorizationProvider === "azure_devops") return;
     setAuthorizationPending(true);
     try {
-      const response = await fetch(
-        `/api/integrations/${authorizationProvider}/start`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ redirectPath: "/settings/providers" }),
-        },
+      await startHostedProviderAuthorization(
+        authorizationProvider,
+        "/settings/providers",
       );
-      const result = (await response.json()) as {
-        authorizationUrl?: string;
-        error?: string;
-      };
-      if (!response.ok || !result.authorizationUrl) {
-        throw new Error(result.error ?? "Authorization could not be started");
-      }
-      window.location.assign(result.authorizationUrl);
     } catch (cause) {
       setAuthorizationPending(false);
       toast.error(

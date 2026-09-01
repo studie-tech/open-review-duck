@@ -44,8 +44,6 @@ start: check-ports check-dependencies start-database prepare-local-development #
 		node scripts/migrate.mjs; \
 		echo "$(YELLOW)Initializing the durable workflow database$(RESET)"; \
 		node scripts/setup-workflow.mjs; \
-		echo "$(YELLOW)Preparing Tree-sitter grammar assets$(RESET)"; \
-		node scripts/prepare-tree-sitter.mjs; \
 		echo "$(YELLOW)Initializing the local owner workspace$(RESET)"; \
 		PORT=$(PORT) node scripts/local-bootstrap.mjs; \
 		echo "$(GREEN)Starting ReviewDuck on http://localhost:$(PORT)$(RESET)"; \
@@ -56,8 +54,7 @@ start: check-ports check-dependencies start-database prepare-local-development #
 			[[ -z "$$web_pid" ]] || wait "$$web_pid" 2>/dev/null || true; \
 		}; \
 		trap cleanup EXIT INT TERM; \
-		PORT=$(PORT) \
-			./node_modules/.bin/next dev --turbo --hostname 127.0.0.1 --port $(PORT) & web_pid=$$!; \
+		pnpm dev --port $(PORT) & web_pid=$$!; \
 		wait "$$web_pid"; \
 		echo "$(YELLOW)A ReviewDuck development service stopped unexpectedly.$(RESET)"; \
 		exit 1
@@ -84,16 +81,13 @@ bootstrap: check-ports check-dependencies start-database prepare-local-bootstrap
 .PHONY: build
 build: check-dependencies # Create an optimized production build
 	@echo "$(GREEN)Building ReviewDuck$(RESET)"
-	@./node_modules/.bin/next build
+	@pnpm build
 
 ----------------Quality------------------: # -------------------------------------------------------
 .PHONY: check
 check: check-dependencies # Run formatting, linting, type checking, and tests
 	@echo "$(YELLOW)Running project checks$(RESET)"
-	@node scripts/check-docstrings.mjs
-	@./node_modules/.bin/biome check .
-	@./node_modules/.bin/tsc --noEmit
-	@./node_modules/.bin/vitest run
+	@pnpm check
 
 .PHONY: format
 format: check-dependencies # Format the project with Biome

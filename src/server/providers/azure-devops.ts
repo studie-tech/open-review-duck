@@ -95,7 +95,7 @@ interface AzureChange {
     gitObjectType?: string;
   };
   changeType: string;
-  sourceServerItem?: string;
+  originalPath?: string;
 }
 interface AzureItem {
   path: string;
@@ -535,7 +535,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         return loadChangedSource({
           path,
           fetchPath: change.item.path,
-          previousFetchPath: change.sourceServerItem ?? change.item.path,
+          previousFetchPath: change.originalPath ?? change.item.path,
           ref,
           previousRef: pull.baseSha,
           changeType: deleted

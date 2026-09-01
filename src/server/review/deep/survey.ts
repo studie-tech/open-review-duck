@@ -29,6 +29,7 @@ import {
   type DeepReviewToolLimits,
   deepReviewFileTools,
 } from "./file-tools";
+import { findingCapacity } from "./finding-cap";
 import {
   deepReviewFindingId,
   type FindingSeverity,
@@ -275,7 +276,7 @@ export async function ensureDeepReviewSurveyItem(
 export function deepReviewSurveyTools(context: DeepReviewSurveyToolContext) {
   const { db, job, itemId, repository } = context;
   const maxFindings = context.limits?.maxFindings ?? MAX_SURVEY_FINDINGS;
-  let reportedFindings = context.reportedFindings ?? 0;
+  const findings = findingCapacity(maxFindings, context.reportedFindings ?? 0);
   let finished = false;
 
   const { list_files, search_code, read_file, read_diff } = deepReviewFileTools(
@@ -309,76 +310,86 @@ export function deepReviewSurveyTools(context: DeepReviewSurveyToolContext) {
             // Rows are written inside the tool body because a replayed durable
             // step returns the stored output without running this handler, so
             // anything buffered for a post-turn flush would be lost on replay.
-            const room = Math.max(0, maxFindings - reportedFindings);
-            const accepted = input.findings
-              .filter(
-                (finding) =>
-                  new Set(finding.locations.map((location) => location.path))
-                    .size >= 2,
-              )
-              .slice(0, room);
-            const findingIds: string[] = [];
-            for (const [index, finding] of accepted.entries()) {
-              const id = deepReviewFindingId({
-                toolCallId: options.toolCallId,
-                index,
-              });
-              await db
-                .insert(aiReviewFindings)
-                .values({
-                  id,
-                  itemId,
-                  jobId: job.id,
-                  workspaceId: job.workspaceId,
-                  // A cross-file finding names no single file until its
-                  // locations anchor, so the column stays null on purpose.
-                  path: null,
-                  severity: normalizeFindingSeverity(finding.severity),
-                  category: normalizeFindingCategory(finding.category),
-                  encryptedContent: await sealVaultSecret(
-                    {
+            const eligible = input.findings.filter(
+              (finding) =>
+                new Set(finding.locations.map((location) => location.path))
+                  .size >= 2,
+            );
+            return findings.withReservation(eligible.length, async (count) => {
+              const accepted = eligible.slice(0, count);
+              const rows = await Promise.all(
+                accepted.map(async (finding, index) => {
+                  const id = deepReviewFindingId({
+                    toolCallId: options.toolCallId,
+                    index,
+                  });
+                  return {
+                    finding: {
+                      id,
+                      itemId,
+                      jobId: job.id,
                       workspaceId: job.workspaceId,
-                      recordId: id,
-                      provider: "ai-review-finding",
+                      // A cross-file finding names no single file until its
+                      // locations anchor, so the column stays null on purpose.
+                      path: null,
+                      severity: normalizeFindingSeverity(finding.severity),
+                      category: normalizeFindingCategory(finding.category),
+                      encryptedContent: await sealVaultSecret(
+                        {
+                          workspaceId: job.workspaceId,
+                          recordId: id,
+                          provider: "ai-review-finding",
+                        },
+                        JSON.stringify({
+                          title: finding.title,
+                          body: finding.body,
+                        }),
+                      ),
                     },
-                    JSON.stringify({
-                      title: finding.title,
-                      body: finding.body,
-                    }),
-                  ),
-                })
-                .onConflictDoNothing();
-              for (const [
-                locationIndex,
-                location,
-              ] of finding.locations.entries()) {
-                const locationId = surveyLocationId(id, locationIndex);
-                await db
-                  .insert(aiReviewFindingLocations)
-                  .values({
-                    id: locationId,
-                    findingId: id,
-                    position: locationIndex,
-                    path: location.path,
-                    encryptedExistingCode: await sealVaultSecret(
-                      {
-                        workspaceId: job.workspaceId,
-                        recordId: locationId,
-                        provider: "ai-review-finding-location",
-                      },
-                      location.existing_code,
+                    locations: await Promise.all(
+                      finding.locations.map(async (location, locationIndex) => {
+                        const locationId = surveyLocationId(id, locationIndex);
+                        return {
+                          id: locationId,
+                          findingId: id,
+                          position: locationIndex,
+                          path: location.path,
+                          encryptedExistingCode: await sealVaultSecret(
+                            {
+                              workspaceId: job.workspaceId,
+                              recordId: locationId,
+                              provider: "ai-review-finding-location",
+                            },
+                            location.existing_code,
+                          ),
+                        };
+                      }),
                     ),
-                  })
-                  .onConflictDoNothing();
+                  };
+                }),
+              );
+              if (rows.length > 0) {
+                await db.transaction(async (tx) => {
+                  await tx
+                    .insert(aiReviewFindings)
+                    .values(rows.map((row) => row.finding))
+                    .onConflictDoNothing();
+                  const locations = rows.flatMap((row) => row.locations);
+                  if (locations.length > 0) {
+                    await tx
+                      .insert(aiReviewFindingLocations)
+                      .values(locations)
+                      .onConflictDoNothing();
+                  }
+                });
               }
-              findingIds.push(id);
-            }
-            reportedFindings += findingIds.length;
-            return {
-              accepted: findingIds.length,
-              declined: input.findings.length - findingIds.length,
-              findingIds,
-            };
+              const findingIds = rows.map((row) => row.finding.id);
+              return {
+                accepted: findingIds.length,
+                declined: input.findings.length - findingIds.length,
+                findingIds,
+              };
+            });
           },
         }),
     }),

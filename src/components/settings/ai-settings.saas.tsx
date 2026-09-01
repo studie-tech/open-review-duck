@@ -2,25 +2,38 @@
 
 import { PricingTable, Show } from "@clerk/nextjs";
 import { SubscriptionDetailsButton } from "@clerk/nextjs/experimental";
-import { ArrowUpRight, Loader2 } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
+import {
+  AiPreferencesForm,
+  useAiPreferenceDraft,
+} from "~/components/settings/ai-preferences-form";
 import { AiPromptEditor } from "~/components/settings/ai-prompt-editor";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { clampToClientClock } from "~/lib/hydration-clock";
-import {
-  formatTokenCount,
-  parseOptionalReviewTokenCap,
-} from "~/lib/token-usage";
+import { hydratedQueryOptions } from "~/lib/hydration-clock";
+import { formatTokenCount } from "~/lib/token-usage";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type Configuration = RouterOutputs["ai"]["configuration"];
 type PlanUsage = NonNullable<RouterOutputs["ai"]["planUsage"]>;
-type AssistanceMode = Configuration["mode"];
+
+const saasPreferenceDeployment = {
+  kind: "saas",
+  introduction:
+    "Choose when ReviewDuck should spend tokens. The managed model and privacy controls are fixed by the SaaS deployment.",
+  deepReviewDescription: {
+    available: "Request evidence-backed findings after a new revision syncs.",
+    unavailable:
+      "Pull-request review is a Pro capability. A full review fans out one agent per changed file, which the free monthly token allowance cannot fund.",
+  },
+  tokenCapDescription:
+    "Optional cap on one review. Leave empty for no limit. New reviews cannot start after your monthly plan tokens are used up.",
+  unavailableBadge: "Pro",
+} as const;
 
 const planDetails = {
   free: { name: "Free", monthlyPrice: null },
@@ -41,26 +54,14 @@ export function SaasAiSettings({
 }) {
   const router = useRouter();
   const utils = api.useUtils();
-  const [mode, setMode] = useState(initialConfiguration.mode);
-  const [reviewPullRequests, setReviewPullRequests] = useState(
-    initialConfiguration.reviewPullRequests,
-  );
-  const [maxReviewTokensInput, setMaxReviewTokensInput] = useState(
-    initialConfiguration.maxReviewTokens?.toString() ?? "",
-  );
-  const maxReviewTokensField =
-    parseOptionalReviewTokenCap(maxReviewTokensInput);
+  const preferences = useAiPreferenceDraft(initialConfiguration);
   // Read from the configuration rather than from `planUsage.subscribed`, so
   // this page and the review workspace gate on exactly one predicate.
   const deepReviewAvailable = initialConfiguration.deepReviewAvailable;
-  // The server payload carries the time it was read, so the shared stale time
-  // refreshes it on mount only when the render actually predates it.
-  const planUsage = api.ai.planUsage.useQuery(undefined, {
-    initialData: initialPlanUsage,
-    initialDataUpdatedAt: clampToClientClock(fetchedAt),
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
-  });
+  const planUsage = api.ai.planUsage.useQuery(
+    undefined,
+    hydratedQueryOptions(initialPlanUsage, fetchedAt),
+  );
   const usage = planUsage.data ?? initialPlanUsage;
   const currentPlan = planDetails[usage.tier];
   const usagePercent = Math.min(
@@ -73,10 +74,6 @@ export function SaasAiSettings({
     day: "numeric",
   });
   const planTokenLimit = usage.limitTokens.toLocaleString("en-US");
-  const dirty =
-    mode !== initialConfiguration.mode ||
-    reviewPullRequests !== initialConfiguration.reviewPullRequests ||
-    maxReviewTokensField.cap !== (initialConfiguration.maxReviewTokens ?? null);
   const save = api.ai.saveConfiguration.useMutation({
     onSuccess: () => {
       void Promise.all([
@@ -198,150 +195,29 @@ export function SaasAiSettings({
           </div>
         </section>
 
-        <section
-          aria-labelledby="ai-preferences-heading"
-          className="bg-surface/70 flex h-full flex-col overflow-hidden rounded-2xl border border-line"
-        >
-          <div className="border-b border-line px-5 py-5 sm:px-6">
-            <h2 id="ai-preferences-heading" className="text-base font-medium">
-              Assistant preferences
-            </h2>
-            <p className="text-mist mt-1 text-xs leading-5">
-              Choose when ReviewDuck should spend tokens. The managed model and
-              privacy controls are fixed by the SaaS deployment.
-            </p>
-          </div>
-
-          <div className="flex-1 divide-y divide-line">
-            <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
-              <label htmlFor="ai-assistance-timing" className="min-w-0">
-                <span className="text-cloud block text-sm font-medium">
-                  Assistance timing
-                </span>
-                <span className="text-mist mt-1 block text-xs leading-5">
-                  Off, on demand, or automatic explanations for each review
-                  unit.
-                </span>
-              </label>
-              <select
-                id="ai-assistance-timing"
-                value={mode}
-                onChange={(event) =>
-                  setMode(event.target.value as AssistanceMode)
-                }
-                className="bg-surface text-cloud focus:border-violet/40 h-11 w-full rounded-xl border border-line px-3 text-sm outline-none"
-              >
-                <option value="off">Off</option>
-                <option value="on_demand">On demand</option>
-                <option value="automatic">Automatic</option>
-              </select>
-            </div>
-
-            <div
-              className={cn(
-                "grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:gap-6 sm:px-6",
-                !deepReviewAvailable && "bg-surface-subtle/60",
-              )}
-            >
-              <div className="min-w-0">
-                <p className="flex flex-wrap items-center gap-2">
-                  <span className="text-cloud text-sm font-medium">
-                    Review the full pull request
-                  </span>
-                  {!deepReviewAvailable && (
-                    <Badge className="border-violet/25 bg-violet/10 text-violet">
-                      Pro
-                    </Badge>
-                  )}
-                </p>
-                <p className="text-mist mt-1 text-xs leading-5">
-                  {deepReviewAvailable
-                    ? "Request evidence-backed findings after a new revision syncs."
-                    : "Pull-request review is a Pro capability. A full review fans out one agent per changed file, which the free monthly token allowance cannot fund."}
-                </p>
-              </div>
-              <label className="inline-flex shrink-0 items-center gap-2 sm:mt-0.5">
-                <span className="sr-only">Review the full pull request</span>
-                <span className="relative inline-flex">
-                  <input
-                    type="checkbox"
-                    checked={reviewPullRequests}
-                    // Disabled rather than hidden: the preference persists across a
-                    // downgrade, so a reader needs to see that it is on and why it is
-                    // not running.
-                    disabled={!deepReviewAvailable}
-                    onChange={(event) =>
-                      setReviewPullRequests(event.target.checked)
-                    }
-                    className="peer sr-only"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="bg-surface-subtle peer-checked:bg-lime peer-focus-visible:ring-lime/55 peer-disabled:opacity-45 block h-6 w-10 rounded-full border border-line transition peer-checked:border-lime peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-ink peer-disabled:cursor-not-allowed"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="bg-cloud pointer-events-none absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition peer-checked:translate-x-4 peer-checked:bg-accent-foreground peer-disabled:opacity-45"
-                  />
-                </span>
-              </label>
-            </div>
-
-            <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
-              <label htmlFor="ai-review-token-cap" className="min-w-0">
-                <span className="text-cloud block text-sm font-medium">
-                  Tokens per review
-                </span>
-                <span className="text-mist mt-1 block text-xs leading-5">
-                  Optional cap on one review. Leave empty for no limit. New
-                  reviews cannot start after your monthly plan tokens are used
-                  up.
-                </span>
-              </label>
-              <div className="min-w-0">
-                <input
-                  id="ai-review-token-cap"
-                  inputMode="numeric"
-                  value={maxReviewTokensInput}
-                  placeholder="No limit"
-                  onChange={(event) =>
-                    setMaxReviewTokensInput(event.target.value)
-                  }
-                  className="bg-surface text-cloud focus:border-violet/40 h-11 w-full rounded-xl border border-line px-3 text-sm outline-none"
-                />
-                {!maxReviewTokensField.valid && (
-                  <p className="mt-2 text-xs text-red-700 dark:text-red-300">
-                    Enter a whole number of tokens, or leave this empty.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-line px-5 py-4 sm:flex sm:justify-end sm:px-6">
-            <Button
-              className="w-full sm:w-auto"
-              variant={dirty ? "primary" : "secondary"}
-              disabled={!dirty || !maxReviewTokensField.valid || save.isPending}
-              onClick={() =>
-                save.mutate({
-                  provider: "openrouter",
-                  model: initialConfiguration.managedModel,
-                  clearApiKey: false,
-                  clearHeaders: false,
-                  headers: {},
-                  useManagedModels: true,
-                  mode,
-                  reviewPullRequests,
-                  maxReviewTokens: maxReviewTokensField.cap,
-                })
-              }
-            >
-              {save.isPending && <Loader2 className="size-4 animate-spin" />}
-              Save preferences
-            </Button>
-          </div>
-        </section>
+        <AiPreferencesForm
+          values={preferences.values}
+          onValuesChange={preferences.setValues}
+          deepReviewAvailable={deepReviewAvailable}
+          deployment={saasPreferenceDeployment}
+          persistence={{
+            kind: "standalone",
+            pending: save.isPending,
+            dirty: preferences.dirty,
+            onSave: () =>
+              save.mutate({
+                provider: "openrouter",
+                model: initialConfiguration.managedModel,
+                clearApiKey: false,
+                clearHeaders: false,
+                headers: {},
+                useManagedModels: true,
+                mode: preferences.values.mode,
+                reviewPullRequests: preferences.values.reviewPullRequests,
+                maxReviewTokens: preferences.maxReviewTokens.cap,
+              }),
+          }}
+        />
       </div>
 
       {initialConfiguration.canEditPrompts && <AiPromptEditor />}

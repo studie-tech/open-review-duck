@@ -26,8 +26,12 @@ interface InsertedRow {
   values: Record<string, unknown>[];
 }
 
+interface FakeDatabaseOptions {
+  beforeFindingInsert?: () => Promise<void>;
+}
+
 /** Collects inserted rows and enforces the primary keys the schema declares. */
-function fakeDatabase() {
+function fakeDatabase(options: FakeDatabaseOptions = {}) {
   const inserts: InsertedRow[] = [];
   const findings = new Map<string, Record<string, unknown>>();
   const evidence: Record<string, unknown>[] = [];
@@ -40,6 +44,9 @@ function fakeDatabase() {
             table === aiReviewFindings
               ? "ai_review_finding"
               : "ai_job_evidence";
+          if (name === "ai_review_finding") {
+            await options.beforeFindingInsert?.();
+          }
           inserts.push({ table: name, values: list });
           for (const row of list) {
             if (name === "ai_review_finding") {
@@ -55,6 +62,16 @@ function fakeDatabase() {
     }),
   };
   return { database: database as never, inserts, findings, evidence };
+}
+
+/** Exposes a promise and its resolver for deliberately interleaved calls. */
+function deferred() {
+  /** Resolves the promise once the test reaches its intended interleave. */
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 /**
@@ -298,6 +315,67 @@ describe("report_finding persistence", () => {
     );
 
     expect(second).toMatchObject({ accepted: 0, declined: 1, findingIds: [] });
+    expect(db.findings.size).toBe(1);
+  });
+
+  it("reserves the cap before concurrent finding preparation can overlap", async () => {
+    const entered = deferred();
+    const release = deferred();
+    let inserts = 0;
+    const db = fakeDatabase({
+      beforeFindingInsert: async () => {
+        inserts += 1;
+        if (inserts !== 1) return;
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const context = fakeToolContext({
+      db: db.database,
+      limits: { maxFindings: 1 },
+    }).context;
+    const tools = deepReviewFileTools(context);
+    const first = callTool(
+      tools,
+      "report_finding",
+      { findings: [finding] },
+      "concurrent-1",
+    );
+    await entered.promise;
+    const second = await callTool(
+      tools,
+      "report_finding",
+      { findings: [{ ...finding, title: "Second" }] },
+      "concurrent-2",
+    );
+    release.resolve();
+
+    await expect(first).resolves.toMatchObject({ accepted: 1, declined: 0 });
+    expect(second).toMatchObject({ accepted: 0, declined: 1 });
+    expect(db.findings.size).toBe(1);
+  });
+
+  it("releases a reservation when finding persistence fails", async () => {
+    let fail = true;
+    const db = fakeDatabase({
+      beforeFindingInsert: async () => {
+        if (!fail) return;
+        fail = false;
+        throw new Error("injected finding insert failure");
+      },
+    });
+    const context = fakeToolContext({
+      db: db.database,
+      limits: { maxFindings: 1 },
+    }).context;
+    const tools = deepReviewFileTools(context);
+
+    await expect(
+      callTool(tools, "report_finding", { findings: [finding] }, "failed-call"),
+    ).rejects.toThrow("injected finding insert failure");
+    await expect(
+      callTool(tools, "report_finding", { findings: [finding] }, "retry-call"),
+    ).resolves.toMatchObject({ accepted: 1, declined: 0 });
     expect(db.findings.size).toBe(1);
   });
 });
