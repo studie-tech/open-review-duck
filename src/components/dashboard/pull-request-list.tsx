@@ -20,17 +20,12 @@ import { Badge } from "~/components/ui/badge";
 import { LinkNavigationStatus } from "~/components/ui/link-status";
 import { Spinner } from "~/components/ui/spinner";
 import { priorityInboxGroup } from "~/lib/priority-inbox";
+import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 
 type PullRequests = RouterOutputs["review"]["dashboard"];
 export type PullRequestListKind = "active" | "reviewed" | "closed" | "removed";
-
-const providerLabel = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-};
 
 /** Returns the numeric keyboard shortcut for a pull request position. */
 function positionShortcut(position: number) {
@@ -203,7 +198,7 @@ export function PullRequestList({
                 </span>
                 <span className={cn("min-w-0", !compact && "sm:flex-1")}>
                   <span className="flex min-w-0 items-center gap-2">
-                    <Badge>{providerLabel[pullRequest.provider]}</Badge>
+                    <Badge>{providerLabel(pullRequest.provider)}</Badge>
                     <span className="text-fog truncate text-xs">
                       {pullRequest.repositoryOwner}/{pullRequest.repositoryName}{" "}
                       #{pullRequest.number}
@@ -279,8 +274,8 @@ export function PullRequestList({
                     href={pullRequest.webUrl}
                     target="_blank"
                     rel="noreferrer"
-                    aria-label={`Open ${pullRequest.title} on ${providerLabel[pullRequest.provider]}`}
-                    title={`Open on ${providerLabel[pullRequest.provider]}`}
+                    aria-label={`Open ${pullRequest.title} on ${providerLabel(pullRequest.provider)}`}
+                    title={`Open on ${providerLabel(pullRequest.provider)}`}
                     className="text-mist hover:text-cloud hover:bg-surface-subtle grid size-9 place-items-center rounded-lg transition"
                   >
                     <ExternalLink className="size-4" />

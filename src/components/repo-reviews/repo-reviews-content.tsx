@@ -37,6 +37,8 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { clampToClientClock } from "~/lib/hydration-clock";
+import { providerLabel } from "~/lib/provider-labels";
+import { formatRelativeTime } from "~/lib/relative-time";
 import {
   repositoryReportFilename,
   repositoryReviewReport,
@@ -56,12 +58,6 @@ type Repositories = RouterOutputs["provider"]["listImportedRepositories"];
 type Section = "overview" | "findings" | "rules" | "history";
 const EMPTY_UUID = "00000000-0000-4000-8000-000000000000";
 
-const providerLabel = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-} as const;
-
 const sectionShortcuts = {
   overview: cockpitShortcuts.overview,
   findings: cockpitShortcuts.findings,
@@ -72,19 +68,6 @@ const sectionShortcuts = {
 /** Formats a provider revision for compact display. */
 function shortSha(value: string | null | undefined) {
   return value?.slice(0, 7) ?? "Waiting";
-}
-
-/** Formats a timestamp relative to the current browser time. */
-function relativeTime(value: Date | null | undefined) {
-  if (!value) return "Not yet";
-  const seconds = Math.round((value.getTime() - Date.now()) / 1_000);
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  if (Math.abs(seconds) < 60) return formatter.format(seconds, "second");
-  const minutes = Math.round(seconds / 60);
-  if (Math.abs(minutes) < 60) return formatter.format(minutes, "minute");
-  const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
-  return formatter.format(Math.round(hours / 24), "day");
 }
 
 /** Renders a durable review run's compact live state. */
@@ -399,6 +382,7 @@ export function RepoReviewsContent({
               section={section}
               onSection={setSection}
               onRemoved={() => setSelectedMonitorId(undefined)}
+              fetchedAt={fetchedAt}
             />
           )}
         </div>
@@ -462,11 +446,13 @@ function RepositoryCockpit({
   section,
   onSection,
   onRemoved,
+  fetchedAt,
 }: {
   monitor: Monitors[number];
   section: Section;
   onSection: (section: Section) => void;
   onRemoved: () => void;
+  fetchedAt: number;
 }) {
   const utils = api.useUtils();
   const { navigate } = usePendingNavigation();
@@ -602,7 +588,7 @@ function RepositoryCockpit({
               <h2 className="truncate text-xl font-semibold text-cloud">
                 {monitor.repositoryOwner}/{monitor.repositoryName}
               </h2>
-              <Badge>{providerLabel[monitor.provider]}</Badge>
+              <Badge>{providerLabel(monitor.provider)}</Badge>
               {monitor.activeSync && (
                 <Badge
                   className="border-amber-400/25 bg-amber-400/8 text-amber-300"
@@ -622,8 +608,11 @@ function RepositoryCockpit({
               <span className="font-mono">
                 {shortSha(monitor.snapshot?.headSha)}
               </span>
-              <span suppressHydrationWarning>
-                Checked {relativeTime(monitor.lastCheckedAt)}
+              <span>
+                Checked{" "}
+                {monitor.lastCheckedAt
+                  ? formatRelativeTime(monitor.lastCheckedAt, fetchedAt)
+                  : "Not yet"}
               </span>
             </div>
           </div>
@@ -707,6 +696,7 @@ function RepositoryCockpit({
             runPendingPurpose={
               run.isPending ? (run.variables?.purpose ?? undefined) : undefined
             }
+            fetchedAt={fetchedAt}
           />
         )}
         {section === "findings" && (
@@ -735,6 +725,7 @@ function Overview({
   enabledRuleCount,
   startRun,
   runPendingPurpose,
+  fetchedAt,
 }: {
   monitor: Monitors[number];
   onSection: (section: Section) => void;
@@ -744,6 +735,7 @@ function Overview({
   enabledRuleCount: number;
   startRun: (purpose: "code" | "compliance") => void;
   runPendingPurpose?: "code" | "compliance";
+  fetchedAt: number;
 }) {
   const total = monitor.progress.total;
   const percent = total
@@ -777,7 +769,7 @@ function Overview({
           value={`v${monitor.snapshot?.version ?? 0}`}
           detail={
             monitor.snapshot
-              ? relativeTime(monitor.snapshot.createdAt)
+              ? formatRelativeTime(monitor.snapshot.createdAt, fetchedAt)
               : "Preparing first snapshot"
           }
         />
@@ -959,9 +951,7 @@ function Metric({
       >
         {value}
       </div>
-      <div className="mt-1 text-xs text-mist" suppressHydrationWarning>
-        {detail}
-      </div>
+      <div className="mt-1 text-xs text-mist">{detail}</div>
     </div>
   );
 }
@@ -1816,7 +1806,7 @@ function AddRepositoryDialog({
               {repositories.map((repository) => (
                 <option key={repository.id} value={repository.id}>
                   {repository.owner}/{repository.name} ·{" "}
-                  {providerLabel[repository.provider]}
+                  {providerLabel(repository.provider)}
                 </option>
               ))}
             </select>

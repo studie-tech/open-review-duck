@@ -3,10 +3,6 @@ import {
   providerConnections,
   pullRequests,
   repositories,
-  reviewConceptDependencies,
-  reviewConceptLayouts,
-  reviewConceptMembers,
-  reviewConcepts,
   reviewSnapshots,
   reviewUnitDependencies,
   reviewUnits,
@@ -16,10 +12,6 @@ import {
 } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
-import {
-  clusterReviewConcepts,
-  validateConceptPartition,
-} from "~/server/analysis/concepts";
 import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
@@ -34,27 +26,20 @@ import { type AnalyzedUnit, applySourceBudget } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { providerForConnection } from "~/server/providers/credentials";
-import { canCarryReviewWait } from "~/server/review/waiting";
 import { reviewSnapshotSourcesAvailable } from "~/server/storage/snapshot-sources";
 import {
   persistSourceBlob,
   prepareSourceBlobs,
 } from "~/server/storage/source-blobs";
+import { persistSnapshotAnalysis } from "./persist-snapshot-analysis";
 import { pruneExpiredReviewSnapshots } from "./retention";
 import {
   assertCompleteChangedFileSet,
   reviewSnapshotCanBeReused,
 } from "./revision";
-import { persistedUnitSourceRange, previousSourceRange } from "./source-range";
 
 type Database = typeof database;
 
-const UNIT_INSERT_BATCH_SIZE = 100;
-const DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
-const CONCEPT_INSERT_BATCH_SIZE = 500;
-const CONCEPT_MEMBER_INSERT_BATCH_SIZE = 1_000;
-const CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE = 1_000;
-const REVIEW_STATE_INSERT_BATCH_SIZE = 500;
 const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
 /** Keeps one `inArray` under PostgreSQL's 65,535 bind-parameter ceiling. */
 const QUERY_CHUNK_SIZE = 10_000;
@@ -483,227 +468,6 @@ export async function syncPullRequest(
     const storedFileByPath = new Map(
       storedFiles.map((file) => [file.file.path, file]),
     );
-
-    const unitValues = analysis.units.map((unit) => {
-      const prior = priorByKey.get(unit.stableKey);
-      const unchanged =
-        prior?.semanticHash === unit.semanticHash &&
-        !reviewImpact.get(unit.stableKey);
-      const snapshotFile = snapshotFileByPath.get(unit.path);
-      const storedFile = storedFileByPath.get(unit.path);
-      if (!snapshotFile || !storedFile) {
-        throw new Error(`Source object is missing for ${unit.path}`);
-      }
-      const persistedSource = persistedUnitSourceRange(storedFile.file, unit);
-      return {
-        snapshotId: snapshot.id,
-        snapshotFileId: snapshotFile.id,
-        currentBlobId:
-          persistedSource.objectSide === "previous"
-            ? (storedFile.previousBlob?.id ?? storedFile.currentBlob?.id)
-            : (storedFile.currentBlob?.id ?? storedFile.previousBlob?.id),
-        previousBlobId: storedFile.previousBlob?.id,
-        stableKey: unit.stableKey,
-        path: unit.path,
-        language: unit.language,
-        kind: unit.kind,
-        name: unit.name,
-        signature: unit.signature,
-        startLine: unit.startLine,
-        endLine: unit.endLine,
-        startByte: persistedSource.startByte,
-        endByte: persistedSource.endByte,
-        ...previousSourceRange(storedFile.file.previousContent ?? "", unit),
-        relatedRanges: unit.relatedRanges,
-        contentHash: unit.contentHash,
-        semanticHash: unit.semanticHash,
-        changeType: unit.changeType,
-        depth: unit.depth,
-        reviewOrder: unit.reviewOrder,
-        complexity: unit.complexity,
-        changedLineCount: unit.changedLineCount,
-        requiresReReview: Boolean(prior && !unchanged),
-      };
-    });
-    const insertedUnits: (typeof reviewUnits.$inferSelect)[] = [];
-    for (
-      let offset = 0;
-      offset < unitValues.length;
-      offset += UNIT_INSERT_BATCH_SIZE
-    ) {
-      insertedUnits.push(
-        ...(await tx
-          .insert(reviewUnits)
-          .values(unitValues.slice(offset, offset + UNIT_INSERT_BATCH_SIZE))
-          .returning()),
-      );
-    }
-    const insertedByKey = new Map(
-      insertedUnits.map((unit) => [unit.stableKey, unit]),
-    );
-
-    const dependencyRows = analysis.units.flatMap((unit) => {
-      const inserted = insertedByKey.get(unit.stableKey);
-      if (!inserted) return [];
-      return unit.dependencies.flatMap((dependencyKey) => {
-        const dependency = insertedByKey.get(dependencyKey);
-        return dependency
-          ? [{ unitId: inserted.id, dependencyId: dependency.id }]
-          : [];
-      });
-    });
-    for (
-      let offset = 0;
-      offset < dependencyRows.length;
-      offset += DEPENDENCY_INSERT_BATCH_SIZE
-    ) {
-      await tx
-        .insert(reviewUnitDependencies)
-        .values(
-          dependencyRows.slice(offset, offset + DEPENDENCY_INSERT_BATCH_SIZE),
-        );
-    }
-
-    const reviewableAnalysisUnits = analysis.units.filter(
-      ({ kind }) => kind !== "file",
-    );
-    const conceptDefinitions = clusterReviewConcepts(reviewableAnalysisUnits);
-    validateConceptPartition(
-      reviewableAnalysisUnits,
-      conceptDefinitions,
-      budgetedFiles,
-    );
-    const [baselineLayout] = await tx
-      .insert(reviewConceptLayouts)
-      .values({
-        snapshotId: snapshot.id,
-        source: "deterministic",
-        version: 1,
-      })
-      .returning();
-    if (!baselineLayout) {
-      throw new Error("The deterministic review concept layout was not saved");
-    }
-    const conceptRows = conceptDefinitions.map((concept) => ({
-      layoutId: baselineLayout.id,
-      stableKey: concept.stableKey,
-      title: concept.title,
-      rationale: concept.rationale,
-      reviewOrder: concept.reviewOrder,
-      changedLineCount: concept.changedLineCount,
-      fileCount: concept.fileCount,
-      oversized: concept.oversized,
-    }));
-    const insertedConcepts: (typeof reviewConcepts.$inferSelect)[] = [];
-    for (
-      let offset = 0;
-      offset < conceptRows.length;
-      offset += CONCEPT_INSERT_BATCH_SIZE
-    ) {
-      insertedConcepts.push(
-        ...(await tx
-          .insert(reviewConcepts)
-          .values(conceptRows.slice(offset, offset + CONCEPT_INSERT_BATCH_SIZE))
-          .returning()),
-      );
-    }
-    const insertedConceptByKey = new Map(
-      insertedConcepts.map((concept) => [concept.stableKey, concept]),
-    );
-    const conceptMemberRows = conceptDefinitions.flatMap((concept) => {
-      const insertedConcept = insertedConceptByKey.get(concept.stableKey);
-      if (!insertedConcept) return [];
-      return concept.memberStableKeys.map((stableKey, memberOrder) => {
-        const unit = insertedByKey.get(stableKey);
-        if (!unit) {
-          throw new Error(`Review concept member ${stableKey} was not saved`);
-        }
-        return {
-          layoutId: baselineLayout.id,
-          conceptId: insertedConcept.id,
-          unitId: unit.id,
-          snapshotId: snapshot.id,
-          memberOrder,
-        };
-      });
-    });
-    for (
-      let offset = 0;
-      offset < conceptMemberRows.length;
-      offset += CONCEPT_MEMBER_INSERT_BATCH_SIZE
-    ) {
-      await tx
-        .insert(reviewConceptMembers)
-        .values(
-          conceptMemberRows.slice(
-            offset,
-            offset + CONCEPT_MEMBER_INSERT_BATCH_SIZE,
-          ),
-        );
-    }
-    const conceptDependencyRows = conceptDefinitions.flatMap((concept) => {
-      const insertedConcept = insertedConceptByKey.get(concept.stableKey);
-      if (!insertedConcept) return [];
-      return concept.dependencies.flatMap((dependencyKey) => {
-        const dependency = insertedConceptByKey.get(dependencyKey);
-        return dependency
-          ? [
-              {
-                layoutId: baselineLayout.id,
-                conceptId: insertedConcept.id,
-                dependencyId: dependency.id,
-              },
-            ]
-          : [];
-      });
-    });
-    for (
-      let offset = 0;
-      offset < conceptDependencyRows.length;
-      offset += CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE
-    ) {
-      await tx
-        .insert(reviewConceptDependencies)
-        .values(
-          conceptDependencyRows.slice(
-            offset,
-            offset + CONCEPT_DEPENDENCY_INSERT_BATCH_SIZE,
-          ),
-        );
-    }
-
-    const carriedSignOffs = insertedUnits.flatMap((unit) => {
-      const prior = priorByKey.get(unit.stableKey);
-      if (
-        prior?.semanticHash !== unit.semanticHash ||
-        reviewImpact.get(unit.stableKey)
-      ) {
-        return [];
-      }
-      return (signOffsByUnit.get(prior.id) ?? []).map((signOff) => ({
-        unitId: unit.id,
-        userId: signOff.userId,
-        semanticHash: unit.semanticHash,
-        note: signOff.note,
-        durationSeconds: signOff.durationSeconds,
-        signedOffAt: signOff.signedOffAt,
-      }));
-    });
-    for (
-      let offset = 0;
-      offset < carriedSignOffs.length;
-      offset += REVIEW_STATE_INSERT_BATCH_SIZE
-    ) {
-      await tx
-        .insert(signOffs)
-        .values(
-          carriedSignOffs.slice(
-            offset,
-            offset + REVIEW_STATE_INSERT_BATCH_SIZE,
-          ),
-        );
-    }
-
     const waitsByUnit = new Map<string, typeof priorWaits>();
     for (const wait of priorWaits) {
       waitsByUnit.set(wait.unitId, [
@@ -711,30 +475,21 @@ export async function syncPullRequest(
         wait,
       ]);
     }
-    const carriedWaits = insertedUnits.flatMap((unit) => {
-      const prior = priorByKey.get(unit.stableKey);
-      if (!prior || !canCarryReviewWait(prior.contentHash, unit.contentHash)) {
-        return [];
-      }
-      return (waitsByUnit.get(prior.id) ?? []).map((wait) => ({
-        unitId: unit.id,
-        userId: wait.userId,
-        providerThreadIds: wait.providerThreadIds,
-        observedCommentIds: wait.observedCommentIds,
-        waitingSince: wait.waitingSince,
-      }));
+    const insertedUnits = await persistSnapshotAnalysis(tx, {
+      snapshotId: snapshot.id,
+      units: analysis.units,
+      snapshotFileByPath,
+      storedFileByPath,
+      priorByKey,
+      reviewImpact,
+      signOffsByUnit,
+      waitsByUnit,
+      partitionFiles: budgetedFiles,
+      missingLayoutError:
+        "The deterministic review concept layout was not saved",
+      missingMemberError: (stableKey) =>
+        `Review concept member ${stableKey} was not saved`,
     });
-    for (
-      let offset = 0;
-      offset < carriedWaits.length;
-      offset += REVIEW_STATE_INSERT_BATCH_SIZE
-    ) {
-      await tx
-        .insert(reviewWaits)
-        .values(
-          carriedWaits.slice(offset, offset + REVIEW_STATE_INSERT_BATCH_SIZE),
-        );
-    }
 
     const reviewableUnits = insertedUnits.filter(({ kind }) => kind !== "file");
     const changedUnitCount = reviewableUnits.filter(

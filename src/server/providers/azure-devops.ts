@@ -4,7 +4,6 @@ import {
   azureMergeGate,
   azurePolicyCheckState,
 } from "~/lib/provider-merge-gate";
-import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -13,7 +12,7 @@ import {
   providerText,
   providerVoid,
 } from "./http";
-import { collectProviderSourceFiles } from "./source-budget";
+import { collectProviderSourceFiles, loadChangedSource } from "./source-budget";
 import type {
   ChangedFilesOptions,
   ProviderCheckState,
@@ -526,80 +525,33 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     return collectProviderSourceFiles(
       sourceChanges,
       options?.maximumSourceBytes,
-      async (change) => {
+      (change) => {
         const normalizedChangeType = change.changeType.toLowerCase();
         const deleted = normalizedChangeType.includes("delete");
         const added = normalizedChangeType.includes("add");
         const ref = deleted ? pull.baseSha : pull.headSha;
         const path = change.item.path.replace(/^\//, "");
-        const knownBinary = isLikelyBinaryFile(path);
-        const changeType = deleted
-          ? ("deleted" as const)
-          : added
-            ? ("added" as const)
-            : normalizedChangeType.includes("rename")
-              ? ("renamed" as const)
-              : ("modified" as const);
-        const skippedFile = {
+        const oversizedHash = change.item.objectId ?? `${ref}:${path}`;
+        return loadChangedSource({
           path,
-          content: "",
-          skipReason: "too_large" as const,
-          isBinary: false,
-          binaryHash: change.item.objectId ?? `${ref}:${path}`,
-          changeType,
-        };
-        if (knownBinary) {
-          return {
-            file: {
-              path,
-              content: "",
-              isBinary: true,
-              binaryHash: change.item.objectId ?? `${ref}:${path}`,
-              changeType,
-            },
-          };
-        }
-        const content = await this.getFileContent(
-          repositoryExternalId,
-          change.item.path,
+          fetchPath: change.item.path,
+          previousFetchPath: change.sourceServerItem ?? change.item.path,
           ref,
-        );
-        if (content === undefined) {
-          return { file: skippedFile };
-        }
-        if (isLikelyBinaryFile(path, content)) {
-          return {
-            file: {
-              path,
-              content: "",
-              isBinary: true,
-              binaryHash:
-                change.item.objectId ?? `${ref}:${path}:${content.length}`,
-              changeType,
-            },
-          };
-        }
-        const previousContent =
-          !added && !deleted
-            ? await this.getFileContent(
-                repositoryExternalId,
-                change.sourceServerItem ?? change.item.path,
-                pull.baseSha,
-              )
-            : undefined;
-        if (!added && !deleted && previousContent === undefined) {
-          return { file: skippedFile };
-        }
-        return {
-          file: {
-            path,
-            content,
-            previousContent,
-            isBinary: false,
-            changeType,
-          },
-          oversizedHash: change.item.objectId ?? `${ref}:${path}`,
-        };
+          previousRef: pull.baseSha,
+          changeType: deleted
+            ? "deleted"
+            : added
+              ? "added"
+              : normalizedChangeType.includes("rename")
+                ? "renamed"
+                : "modified",
+          needsPrevious: !added && !deleted,
+          oversizedHash,
+          contentBinaryHash: (content) =>
+            change.item.objectId ?? `${ref}:${path}:${content.length}`,
+          getFileContent: (contentPath, contentRef) =>
+            this.getFileContent(repositoryExternalId, contentPath, contentRef),
+        });
       },
     );
   }

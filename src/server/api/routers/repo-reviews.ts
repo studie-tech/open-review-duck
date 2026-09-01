@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
-import { z } from "zod";
 import {
   aiJobs,
   providerConnections,
@@ -17,6 +16,7 @@ import {
 } from "@/drizzle/schema";
 import { managedAiPlanTier } from "~/server/ai/plan";
 import { createAiJob, scheduleAiJob } from "~/server/ai/service";
+import { mapAiStartError } from "~/server/ai/start-errors";
 import type { db as database } from "~/server/db";
 import { providerConnectionErrorMessage } from "~/server/providers/connection-error";
 import { providerForConnection } from "~/server/providers/credentials";
@@ -29,23 +29,23 @@ import {
   type RepositoryReviewRuleSnapshot,
   repositoryRuleDigest,
 } from "~/server/repo-reviews/rules";
+import { deepReviewRunPayload } from "~/server/review/deep/payload";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { startRepositoryBranchSync } from "~/server/workflows/service";
 import { ensurePersonalWorkspace } from "~/server/workspaces/service";
+import {
+  addMonitorSchema,
+  addRuleSchema,
+  archiveRuleSchema,
+  listBranchesSchema,
+  monitorIdSchema,
+  reportIdSchema,
+  ruleScopeSchema,
+  startRunSchema,
+  updateRuleSchema,
+} from "~/validators/repo-reviews";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
-import { deepReviewRunPayload } from "./review";
 
-const monitorIdSchema = z.object({ monitorId: z.uuid() });
-const reportIdSchema = z.object({ monitorId: z.uuid(), jobId: z.uuid() });
-const ruleScopeSchema = z.enum(["file", "repository"]);
-const ruleSeveritySchema = z.enum(["critical", "high", "medium", "low"]);
-const ruleFields = {
-  title: z.string().trim().min(1).max(200),
-  instruction: z.string().trim().min(1).max(8_000),
-  pathGlob: z.string().trim().min(1).max(500),
-  scope: ruleScopeSchema,
-  severity: ruleSeveritySchema,
-} as const;
 type Database = typeof database;
 
 /** Authorizes a repository monitor and loads its provider scope. */
@@ -408,7 +408,7 @@ export const repoReviewsRouter = createTRPCRouter({
     }),
 
   listBranches: protectedProcedure
-    .input(z.object({ repositoryId: z.uuid() }))
+    .input(listBranchesSchema)
     .query(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
       const [scope] = await ctx.db
@@ -447,12 +447,7 @@ export const repoReviewsRouter = createTRPCRouter({
     }),
 
   add: protectedProcedure
-    .input(
-      z.object({
-        repositoryId: z.uuid(),
-        branch: z.string().trim().min(1).max(255),
-      }),
-    )
+    .input(addMonitorSchema)
     .mutation(async ({ ctx, input }) => {
       const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
       await enforceRateLimit(
@@ -626,7 +621,7 @@ export const repoReviewsRouter = createTRPCRouter({
     }),
 
   addRule: protectedProcedure
-    .input(z.object({ monitorId: z.uuid(), ...ruleFields }))
+    .input(addRuleSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await monitorScope(
         ctx.db,
@@ -651,24 +646,7 @@ export const repoReviewsRouter = createTRPCRouter({
     }),
 
   updateRule: protectedProcedure
-    .input(
-      z
-        .object({
-          monitorId: z.uuid(),
-          ruleId: z.uuid(),
-          enabled: z.boolean().optional(),
-          title: ruleFields.title.optional(),
-          instruction: ruleFields.instruction.optional(),
-          pathGlob: ruleFields.pathGlob.optional(),
-          scope: ruleFields.scope.optional(),
-          severity: ruleFields.severity.optional(),
-        })
-        .refine(
-          ({ monitorId: _monitorId, ruleId: _ruleId, ...updates }) =>
-            Object.values(updates).some((value) => value !== undefined),
-          "Supply at least one rule change",
-        ),
-    )
+    .input(updateRuleSchema)
     .mutation(async ({ ctx, input }) => {
       await monitorScope(ctx.db, ctx.auth.userId, input.monitorId);
       const [updated] = await ctx.db
@@ -695,7 +673,7 @@ export const repoReviewsRouter = createTRPCRouter({
     }),
 
   archiveRule: protectedProcedure
-    .input(z.object({ monitorId: z.uuid(), ruleId: z.uuid() }))
+    .input(archiveRuleSchema)
     .mutation(async ({ ctx, input }) => {
       await monitorScope(ctx.db, ctx.auth.userId, input.monitorId);
       const [archived] = await ctx.db
@@ -714,12 +692,7 @@ export const repoReviewsRouter = createTRPCRouter({
     }),
 
   startRun: protectedProcedure
-    .input(
-      z.object({
-        monitorId: z.uuid(),
-        purpose: z.enum(["code", "compliance"]),
-      }),
-    )
+    .input(startRunSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await monitorScope(
         ctx.db,
@@ -795,19 +768,13 @@ export const repoReviewsRouter = createTRPCRouter({
         const run = await scheduleAiJob(ctx.db, job.id);
         return { job, run };
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : "";
-        const safe = new Set([
-          "Deep review requires a paid plan",
-          "Monthly AI token limit reached",
-          "Workspace monthly AI budget is exhausted",
-          "Configure a local AI provider before using AI",
-          "Too many requests. Wait a moment and try again.",
-        ]);
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: safe.has(message)
-            ? message
-            : "Could not start the repository review. Try again.",
+          message: mapAiStartError(
+            cause,
+            "Could not start the repository review. Try again.",
+            ["Workspace monthly AI budget is exhausted"],
+          ),
           cause,
         });
       }

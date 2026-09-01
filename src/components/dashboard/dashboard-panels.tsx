@@ -3,6 +3,7 @@ import Link from "next/link";
 import { SyncProgressMeter } from "~/components/review/sync-progress-meter";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
+import { providerLabel } from "~/lib/provider-labels";
 import { syncProgressLabel } from "~/lib/sync-progress";
 import type { RouterOutputs } from "~/trpc/react";
 
@@ -37,12 +38,7 @@ export function DashboardSyncPanel({
       </div>
       <ul className="mt-3 space-y-2 border-t border-cyan/10 pt-3">
         {synchronizing.map((sync) => {
-          const provider =
-            sync.provider === "azure_devops"
-              ? "Azure DevOps"
-              : sync.provider === "gitlab"
-                ? "GitLab"
-                : "GitHub";
+          const provider = providerLabel(sync.provider);
           return (
             <li key={sync.id} className="min-w-0">
               <div className="min-w-0">
@@ -103,12 +99,7 @@ export function DashboardFailurePanel({
           </p>
           <ul className="mt-3 space-y-3 border-t border-coral/10 pt-3">
             {failedSyncs.map((sync) => {
-              const provider =
-                sync.provider === "azure_devops"
-                  ? "Azure DevOps"
-                  : sync.provider === "gitlab"
-                    ? "GitLab"
-                    : "GitHub";
+              const provider = providerLabel(sync.provider);
               return (
                 <li key={sync.id} className="min-w-0 text-xs">
                   <p className="text-cloud font-medium">

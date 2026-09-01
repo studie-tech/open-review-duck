@@ -1,3 +1,5 @@
+import { deepestCause } from "~/lib/error-cause";
+
 const INTERNAL_ERROR_MESSAGE =
   "ReviewDuck could not complete this request. Please try again.";
 
@@ -16,18 +18,7 @@ export function publicTrpcErrorMessage(code: string, message: string) {
 
 /** Extracts non-secret structural diagnostics from the deepest server failure. */
 export function internalErrorDetails(cause: unknown): InternalErrorDetails {
-  let current = cause;
-  for (let depth = 0; depth < 5; depth += 1) {
-    if (
-      typeof current !== "object" ||
-      current === null ||
-      !("cause" in current) ||
-      current.cause === undefined
-    ) {
-      break;
-    }
-    current = current.cause;
-  }
+  const current = deepestCause(cause);
   const record =
     typeof current === "object" && current !== null
       ? (current as Record<string, unknown>)

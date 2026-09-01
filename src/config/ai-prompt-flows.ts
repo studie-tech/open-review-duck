@@ -349,15 +349,6 @@ export const AI_PROMPT_FLOWS: readonly AiPromptFlow[] = [
   },
 ];
 
-/** Returns the flow that owns a prompt key. */
-export function aiPromptFlowForKey(key: AiPromptKey) {
-  for (const flow of AI_PROMPT_FLOWS) {
-    const node = flow.nodes.find((entry) => entry.keys.includes(key));
-    if (node) return { flow, node };
-  }
-  return undefined;
-}
-
 /** Returns whether every catalog key appears in exactly one flow node. */
 export function aiPromptFlowCoverage() {
   const seen = new Map<AiPromptKey, string>();

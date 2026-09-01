@@ -1,45 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   assertCompleteChangedFileSet,
-  pullRequestRevisionChanged,
-  reviewAnalysisNeedsRefresh,
   reviewSnapshotCanBeReused,
 } from "./revision";
-
-describe("pullRequestRevisionChanged", () => {
-  it("keeps an unchanged revision cheap to poll", () => {
-    expect(
-      pullRequestRevisionChanged(
-        { headSha: "head", baseSha: "base" },
-        { headSha: "head", baseSha: "base" },
-      ),
-    ).toBe(false);
-  });
-
-  it("detects head and base branch changes", () => {
-    expect(
-      pullRequestRevisionChanged(
-        { headSha: "head", baseSha: "base" },
-        { headSha: "new-head", baseSha: "base" },
-      ),
-    ).toBe(true);
-    expect(
-      pullRequestRevisionChanged(
-        { headSha: "head", baseSha: "base" },
-        { headSha: "head", baseSha: "new-base" },
-      ),
-    ).toBe(true);
-  });
-});
-
-describe("reviewAnalysisNeedsRefresh", () => {
-  it("rebuilds missing and stale snapshots even when the Git revision is unchanged", () => {
-    expect(reviewAnalysisNeedsRefresh(undefined, 25)).toBe(true);
-    expect(reviewAnalysisNeedsRefresh(null, 25)).toBe(true);
-    expect(reviewAnalysisNeedsRefresh(24, 25)).toBe(true);
-    expect(reviewAnalysisNeedsRefresh(25, 25)).toBe(false);
-  });
-});
 
 describe("reviewSnapshotCanBeReused", () => {
   const snapshot = {

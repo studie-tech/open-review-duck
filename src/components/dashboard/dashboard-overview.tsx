@@ -24,6 +24,7 @@ import {
 } from "~/components/ui/link-status";
 import { clampToClientClock } from "~/lib/hydration-clock";
 import { prioritizeInbox } from "~/lib/priority-inbox";
+import { formatRelativeTime } from "~/lib/relative-time";
 import { activeRunStatuses } from "~/lib/repository-run-progress";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
@@ -42,18 +43,6 @@ interface WorkspaceActivity {
   detail: string;
   date: Date;
   href: string;
-}
-
-/** Formats a recent timestamp without exposing clock precision as important UI. */
-function relativeTime(value: Date) {
-  const seconds = Math.round((value.getTime() - Date.now()) / 1_000);
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  if (Math.abs(seconds) < 60) return formatter.format(seconds, "second");
-  const minutes = Math.round(seconds / 60);
-  if (Math.abs(minutes) < 60) return formatter.format(minutes, "minute");
-  const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
-  return formatter.format(Math.round(hours / 24), "day");
 }
 
 /** Chooses the latest durable timestamp represented by one monitor. */
@@ -394,7 +383,7 @@ export function DashboardOverview({
           {activities.length > 0 ? (
             <div className="divide-y divide-line">
               {activities.map((item) => (
-                <ActivityRow key={item.id} item={item} />
+                <ActivityRow key={item.id} item={item} now={fetchedAt} />
               ))}
             </div>
           ) : (
@@ -541,7 +530,13 @@ function ModeEmptyState({
 }
 
 /** Renders one event in the cross-workspace activity feed. */
-function ActivityRow({ item }: { item: WorkspaceActivity }) {
+function ActivityRow({
+  item,
+  now,
+}: {
+  item: WorkspaceActivity;
+  now: number;
+}) {
   const Icon =
     item.kind === "pull-request"
       ? GitPullRequest
@@ -571,11 +566,8 @@ function ActivityRow({ item }: { item: WorkspaceActivity }) {
           {item.detail}
         </span>
       </span>
-      <span
-        suppressHydrationWarning
-        className="hidden shrink-0 text-[11px] text-fog sm:block"
-      >
-        {relativeTime(item.date)}
+      <span className="hidden shrink-0 text-[11px] text-fog sm:block">
+        {formatRelativeTime(item.date, now)}
       </span>
       <ArrowRight className="size-3.5 shrink-0 text-fog transition group-hover:translate-x-0.5 group-hover:text-cloud" />
     </Link>

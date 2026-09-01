@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import type { RouterInputs, RouterOutputs } from "~/trpc/react";
 import { ProviderPermissionRecovery } from "./provider-permission-recovery";
@@ -23,12 +24,6 @@ import { ProviderPermissionRecovery } from "./provider-permission-recovery";
 type ReviewState = RouterOutputs["review"]["providerReviewState"];
 type ReviewAction =
   RouterInputs["review"]["setProviderReviewDecision"]["action"];
-
-const providerNames = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-} as const;
 
 /** Renders live provider review state and exact-revision decision controls. */
 export function ProviderReviewDecision({
@@ -58,7 +53,7 @@ export function ProviderReviewDecision({
 }) {
   const [confirmation, setConfirmation] = useState<ReviewAction>();
   const [reason, setReason] = useState("");
-  const providerName = providerNames[provider];
+  const providerName = providerLabel(provider);
   const permissionLikeUnavailable = Boolean(
     state?.unavailableReason &&
       /permission|reconnect|GitHub App installations/i.test(

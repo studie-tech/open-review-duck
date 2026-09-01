@@ -6,7 +6,6 @@ import {
   githubMergeGate,
 } from "~/lib/provider-merge-gate";
 import { githubViewerCanMerge } from "~/lib/provider-permission-recovery";
-import { isLikelyBinaryFile } from "~/server/analysis/types";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -15,7 +14,7 @@ import {
   providerText,
   providerVoid,
 } from "./http";
-import { collectProviderSourceFiles } from "./source-budget";
+import { collectProviderSourceFiles, loadChangedSource } from "./source-budget";
 import {
   type ChangedFilesOptions,
   type ProviderCheckState,
@@ -599,73 +598,24 @@ export class GitHubProvider implements PullRequestProvider {
     return collectProviderSourceFiles(
       files,
       options?.maximumSourceBytes,
-      async (file) => {
+      (file) => {
         const deleted = file.status === "removed";
         const path =
           deleted && file.previous_filename
             ? file.previous_filename
             : file.filename;
         const ref = deleted ? pull.baseSha : pull.headSha;
-        const knownBinary = isLikelyBinaryFile(path);
-        const changeType = this.changeType(file.status);
-        const oversizedHash = file.sha ?? `${ref}:${path}`;
-        const skippedFile = {
+        return loadChangedSource({
           path,
-          content: "",
-          skipReason: "too_large" as const,
-          isBinary: false,
-          binaryHash: oversizedHash,
-          changeType,
-        };
-        if (knownBinary) {
-          return {
-            file: {
-              path,
-              content: "",
-              isBinary: true,
-              binaryHash: oversizedHash,
-              changeType,
-            },
-          };
-        }
-        const content = await this.getFileContent(
-          repositoryExternalId,
-          path,
+          previousFetchPath: file.previous_filename ?? path,
           ref,
-        );
-        if (content === undefined) return { file: skippedFile };
-        if (isLikelyBinaryFile(path, content)) {
-          return {
-            file: {
-              path,
-              content: "",
-              isBinary: true,
-              binaryHash: oversizedHash,
-              changeType,
-            },
-          };
-        }
-        const needsPrevious = file.status !== "added" && !deleted;
-        const previousContent = needsPrevious
-          ? await this.getFileContent(
-              repositoryExternalId,
-              file.previous_filename ?? path,
-              pull.baseSha,
-            )
-          : undefined;
-        if (needsPrevious && previousContent === undefined) {
-          return { file: skippedFile };
-        }
-        return {
-          file: {
-            path,
-            content,
-            previousContent,
-            isBinary: false,
-            changeType,
-          },
-          oversizedHash,
-        };
+          previousRef: pull.baseSha,
+          changeType: this.changeType(file.status),
+          needsPrevious: file.status !== "added" && !deleted,
+          oversizedHash: file.sha ?? `${ref}:${path}`,
+          getFileContent: (contentPath, contentRef) =>
+            this.getFileContent(repositoryExternalId, contentPath, contentRef),
+        });
       },
     );
   }

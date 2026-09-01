@@ -3,10 +3,10 @@
 import { Fragment, type ReactNode } from "react";
 import type { HighlightedLine } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
-import { SourceLineWindow } from "./source-line-window";
-
-/** Height a folded block reserves per row: `min-h-6` on every source row. */
-const SOURCE_ROW_HEIGHT_PX = 24;
+import {
+  HIGHLIGHTED_SOURCE_ROW_HEIGHT_PX,
+  SourceLineWindow,
+} from "./source-line-window";
 
 /**
  * Renders syntax-highlighted source rows with a sticky line-number gutter.
@@ -49,7 +49,7 @@ export function HighlightedSourceLines({
       <SourceLineWindow
         items={lines}
         pinnedLines={pinnedLines}
-        rowHeight={SOURCE_ROW_HEIGHT_PX}
+        rowHeight={HIGHLIGHTED_SOURCE_ROW_HEIGHT_PX}
         startLine={startLine}
         renderLine={(line, lineNumber) => {
           const selected = Boolean(

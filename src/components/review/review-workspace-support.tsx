@@ -57,6 +57,7 @@ import {
   pairImportStatements,
 } from "~/lib/import-navigation";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
+import { providerLabel } from "~/lib/provider-labels";
 import type {
   IndexedReviewUnit,
   ReviewHierarchyNode,
@@ -92,10 +93,11 @@ import {
   reviewedFileCard,
 } from "./review-file-card";
 import { ReviewBinaryPreview } from "./review-image-preview";
-import { SourceLineWindow } from "./source-line-window";
-
-/** Height a folded block reserves per row: the pane sets `leading-[21px]`. */
-const SOURCE_ROW_HEIGHT_PX = 21;
+import { CONTEXT_PAGE_LINES } from "./review-workspace-constants";
+import {
+  SourceLineWindow,
+  WORKSPACE_SOURCE_ROW_HEIGHT_PX,
+} from "./source-line-window";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
@@ -117,7 +119,7 @@ export const ProviderCommentBody = dynamic(() =>
 
 export const INITIAL_PATH_ITEMS = 10;
 export const PATH_PAGE_SIZE = 20;
-export const CONTEXT_PAGE_LINES = 20;
+export { CONTEXT_PAGE_LINES };
 /**
  * How long a fetched provider conversation snapshot is treated as current.
  *
@@ -126,7 +128,6 @@ export const CONTEXT_PAGE_LINES = 20;
  * conversations may become before the workspace refreshes it in the background.
  */
 export const PROVIDER_CONVERSATION_REFRESH_MS = 45_000;
-const DIFF_CONTEXT_PAGE_LINES = 20;
 
 export { reviewShortcuts } from "~/lib/review-shortcuts";
 
@@ -252,7 +253,7 @@ function ReviewConceptFileCardFallbackMember({
     <div className="border-b border-line/60 last:border-b-0">
       <SourceLineWindow
         items={lines}
-        rowHeight={SOURCE_ROW_HEIGHT_PX}
+        rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
         startLine={member.startLine}
         renderLine={(line, lineNumber) => {
           const owner = reviewCardMemberForLine([member], lineNumber);
@@ -352,7 +353,7 @@ function ReviewConceptFileCardSource({
       {fileSource ? (
         <SourceLineWindow
           items={lines}
-          rowHeight={SOURCE_ROW_HEIGHT_PX}
+          rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
           startLine={startLine}
           renderLine={(line, lineNumber) => {
             const owner = ownerByLine.get(lineNumber);
@@ -730,7 +731,7 @@ function ReviewConceptMemberSource({
     <div className="overflow-x-auto py-2">
       <SourceLineWindow
         items={lines}
-        rowHeight={SOURCE_ROW_HEIGHT_PX}
+        rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
         startLine={unit.startLine}
         renderLine={(line, lineNumber) => {
           const commentable =
@@ -2088,7 +2089,7 @@ function DiffEdgeRevealButton({
 }) {
   const totalRemaining = collapsedRemaining + externalRemaining;
   if (totalRemaining <= 0) return null;
-  const pageSize = Math.min(DIFF_CONTEXT_PAGE_LINES, totalRemaining);
+  const pageSize = Math.min(CONTEXT_PAGE_LINES, totalRemaining);
   const directionLabel = direction === -1 ? "above" : "below";
   const ariaLabel =
     collapsedRemaining > 0 && externalRemaining > 0
@@ -2144,7 +2145,7 @@ function DiffCollapsedContextButton({
   onReveal: () => void;
 }) {
   const remaining = count - revealed;
-  const pageSize = Math.min(DIFF_CONTEXT_PAGE_LINES, remaining);
+  const pageSize = Math.min(CONTEXT_PAGE_LINES, remaining);
   return (
     <button
       type="button"
@@ -2961,7 +2962,7 @@ export const SideBySideUnitDiff = forwardRef<
               key,
               Math.min(
                 gap.count,
-                (current.get(key) ?? 0) + DIFF_CONTEXT_PAGE_LINES,
+                (current.get(key) ?? 0) + CONTEXT_PAGE_LINES,
               ),
             );
             return next;
@@ -2971,7 +2972,7 @@ export const SideBySideUnitDiff = forwardRef<
       }
       if (direction === -1 && visibleRowStart > 0) {
         setContextBeforeRows((current) =>
-          Math.min(focusRange.start, current + DIFF_CONTEXT_PAGE_LINES),
+          Math.min(focusRange.start, current + CONTEXT_PAGE_LINES),
         );
         return true;
       }
@@ -2979,7 +2980,7 @@ export const SideBySideUnitDiff = forwardRef<
         setContextAfterRows((current) =>
           Math.min(
             rows.length - focusRange.end,
-            current + DIFF_CONTEXT_PAGE_LINES,
+            current + CONTEXT_PAGE_LINES,
           ),
         );
         return true;
@@ -3139,7 +3140,7 @@ export const SideBySideUnitDiff = forwardRef<
                       key,
                       Math.min(
                         item.count,
-                        (current.get(key) ?? 0) + DIFF_CONTEXT_PAGE_LINES,
+                        (current.get(key) ?? 0) + CONTEXT_PAGE_LINES,
                       ),
                     );
                     return next;
@@ -3253,7 +3254,7 @@ export const SideBySideUnitDiff = forwardRef<
                     key,
                     Math.min(
                       item.count,
-                      (current.get(key) ?? 0) + DIFF_CONTEXT_PAGE_LINES,
+                      (current.get(key) ?? 0) + CONTEXT_PAGE_LINES,
                     ),
                   );
                   return next;
@@ -3439,15 +3440,6 @@ export function ReviewPathUnit({
       </span>
     </button>
   );
-}
-
-/** Returns the display name for a connected code provider. */
-export function providerLabel(
-  provider: WorkspaceData["pullRequest"]["provider"],
-) {
-  if (provider === "azure_devops") return "Azure DevOps";
-  if (provider === "gitlab") return "GitLab";
-  return "GitHub";
 }
 
 /**

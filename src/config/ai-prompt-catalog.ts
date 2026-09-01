@@ -354,15 +354,6 @@ export const AI_PROMPT_CATALOG: Record<AiPromptKey, AiPromptDefinition> = {
   },
 };
 
-/** Returns catalog metadata for a known prompt key. */
-export function aiPromptDefinition(
-  key: string,
-): AiPromptDefinition | undefined {
-  return key in AI_PROMPT_CATALOG
-    ? AI_PROMPT_CATALOG[key as AiPromptKey]
-    : undefined;
-}
-
 /** Returns whether a string is a known prompt key. */
 export function isAiPromptKey(key: string): key is AiPromptKey {
   return key in AI_PROMPT_CATALOG;
