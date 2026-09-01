@@ -11,12 +11,34 @@ import {
   type WaitingReviewUnit,
 } from "./review-waiting-completion";
 
-afterEach(cleanup);
+const pendingNavigation = vi.hoisted(() => ({ pending: false }));
+
+vi.mock("~/components/navigation-progress", () => ({
+  usePendingNavigation: () => ({
+    navigate: vi.fn(),
+    pending: pendingNavigation.pending,
+  }),
+}));
+
+afterEach(() => {
+  cleanup();
+  pendingNavigation.pending = false;
+});
 
 const shortcutProps = {
   dashboardShortcut: [{ key: "g" }, { key: "r" }],
   dismissShortcut: [{ key: "Escape" }],
   nextReviewShortcut: [{ key: "n", shift: true }],
+};
+
+const nextReview = {
+  id: "next-pr",
+  number: 7,
+  repositoryName: "open-review-duck",
+  repositoryOwner: "studie-tech",
+  signedUnits: 2,
+  title: "Improve settings UX",
+  totalUnits: 9,
 };
 
 /** Builds a waiting-unit fixture with focused per-test overrides. */
@@ -159,15 +181,7 @@ describe("ReviewWaitingCompletion", () => {
       <ReviewWaitingCompletion
         {...shortcutProps}
         units={[waitingUnit(1)]}
-        nextReview={{
-          id: "next-pr",
-          number: 7,
-          repositoryName: "open-review-duck",
-          repositoryOwner: "studie-tech",
-          signedUnits: 2,
-          title: "Improve settings UX",
-          totalUnits: 9,
-        }}
+        nextReview={nextReview}
         providerName="GitHub"
         queueLoading={false}
         reviewedConcepts={9}
@@ -189,6 +203,87 @@ describe("ReviewWaitingCompletion", () => {
         screen.getByRole("button", { name }).querySelector("kbd"),
       ).toBeInTheDocument();
     }
+  });
+
+  it("uses the same exit actions in the waiting-room detail", async () => {
+    const onDashboard = vi.fn();
+    const onDismiss = vi.fn();
+    const onNextReview = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReviewWaitingCompletion
+        {...shortcutProps}
+        units={[waitingUnit(1)]}
+        nextReview={nextReview}
+        providerName="GitHub"
+        queueLoading={false}
+        reviewedConcepts={9}
+        totalConcepts={10}
+        onDashboard={onDashboard}
+        onDismiss={onDismiss}
+        onNextReview={onNextReview}
+        onOpenUnit={vi.fn()}
+        onStopWaiting={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /View 1 unit/i }));
+    await user.click(screen.getByRole("button", { name: /Pull requests/i }));
+    await user.click(screen.getByRole("button", { name: /Review next PR/i }));
+    await user.click(
+      screen.getByRole("button", { name: /^Keep review open/i }),
+    );
+    expect(onDashboard).toHaveBeenCalledOnce();
+    expect(onNextReview).toHaveBeenCalledOnce();
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it("preserves queue loading and pending navigation in the summary actions", () => {
+    pendingNavigation.pending = true;
+    const { rerender } = render(
+      <ReviewWaitingCompletion
+        {...shortcutProps}
+        units={[waitingUnit(1)]}
+        providerName="GitHub"
+        queueLoading
+        reviewedConcepts={9}
+        totalConcepts={10}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenUnit={vi.fn()}
+        onStopWaiting={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Checking review queue/i }),
+    ).toBeDisabled();
+    const dashboard = screen.getByRole("button", { name: /Pull requests/i });
+    expect(dashboard).toBeDisabled();
+    expect(dashboard).toHaveAttribute("aria-busy", "true");
+
+    rerender(
+      <ReviewWaitingCompletion
+        {...shortcutProps}
+        units={[waitingUnit(1)]}
+        nextReview={nextReview}
+        providerName="GitHub"
+        queueLoading={false}
+        reviewedConcepts={9}
+        totalConcepts={10}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+        onOpenUnit={vi.fn()}
+        onStopWaiting={vi.fn()}
+      />,
+    );
+
+    const next = screen.getByRole("button", { name: /Review next PR/i });
+    expect(next).toBeDisabled();
+    expect(next).toHaveAttribute("aria-busy", "true");
+    expect(next.querySelector(".animate-spin")).toBeInTheDocument();
   });
 
   it("explains when provider activity has no known wait timestamp", async () => {

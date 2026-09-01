@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
+import { startHostedProviderAuthorization } from "~/lib/hosted-provider-authorization";
 import {
   type ProviderConnectionRecovery,
   type ProviderPermissionKind,
@@ -31,24 +32,13 @@ export function ProviderPermissionRecovery({
 
   /** Restarts hosted authorization and returns the reviewer to this pull request. */
   async function reconnect() {
-    if (!recovery.reconnect) return;
+    if (!recovery.reconnect || provider === "azure_devops") return;
     setReconnectPending(true);
     try {
-      const response = await fetch(`/api/integrations/${provider}/start`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          redirectPath: reviewPath ?? "/settings/providers",
-        }),
-      });
-      const result = (await response.json()) as {
-        authorizationUrl?: string;
-        error?: string;
-      };
-      if (!response.ok || !result.authorizationUrl) {
-        throw new Error(result.error ?? "Authorization could not be started");
-      }
-      window.location.assign(result.authorizationUrl);
+      await startHostedProviderAuthorization(
+        provider,
+        reviewPath ?? "/settings/providers",
+      );
     } catch (cause) {
       setReconnectPending(false);
       toast.error(

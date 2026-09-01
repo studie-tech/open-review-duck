@@ -9,7 +9,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    setupFiles: ["./src/test/setup-tree-sitter.ts"],
+    setupFiles: [
+      "./src/test/setup-environment.ts",
+      "./src/test/setup-tree-sitter.ts",
+    ],
     exclude: [
       ...configDefaults.exclude,
       "**/.claude/**",

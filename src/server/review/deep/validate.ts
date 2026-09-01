@@ -1,10 +1,10 @@
 import "server-only";
 
 import { generateText } from "ai";
-import { type SQL, and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { PgColumn, PgUpdateSetSource } from "drizzle-orm/pg-core";
 import {
-  aiJobs,
+  type aiJobs,
   aiReviewFindingEvidence,
   aiReviewFindings,
   type aiReviewItems,
@@ -12,6 +12,7 @@ import {
 import { env } from "~/env";
 import { mapWithLimit } from "~/lib/concurrency";
 import { resolveAiModel } from "~/server/ai/models";
+import { accumulateAiUsage, providerUsage } from "~/server/ai/usage";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
@@ -833,45 +834,8 @@ export function deepReviewValidationModel(
             telemetry: { isEnabled: false },
           }),
       );
-      await accumulateValidationUsage(db, job.id, result);
+      await accumulateAiUsage(db, job.id, providerUsage(result));
       return result.text ?? "";
     },
   };
-}
-
-/** Adds one validation call's provider usage to the child job's ledger. */
-async function accumulateValidationUsage(
-  db: Database,
-  jobId: string,
-  result: {
-    usage: {
-      inputTokens?: number;
-      outputTokens?: number;
-      totalTokens?: number;
-      inputTokenDetails?: {
-        cacheReadTokens?: number;
-        cacheWriteTokens?: number;
-      };
-    };
-    providerMetadata?: unknown;
-  },
-): Promise<void> {
-  const usage = result.usage;
-  const metadata = result.providerMetadata as
-    | { openrouter?: { usage?: { cost?: number } } }
-    | undefined;
-  const microUsd = Math.ceil(
-    (metadata?.openrouter?.usage?.cost ?? 0) * 1_000_000,
-  );
-  await db
-    .update(aiJobs)
-    .set({
-      inputTokens: sql`${aiJobs.inputTokens} + ${usage.inputTokens ?? 0}`,
-      outputTokens: sql`${aiJobs.outputTokens} + ${usage.outputTokens ?? 0}`,
-      cacheReadTokens: sql`${aiJobs.cacheReadTokens} + ${usage.inputTokenDetails?.cacheReadTokens ?? 0}`,
-      cacheWriteTokens: sql`${aiJobs.cacheWriteTokens} + ${usage.inputTokenDetails?.cacheWriteTokens ?? 0}`,
-      totalTokens: sql`${aiJobs.totalTokens} + ${usage.totalTokens ?? 0}`,
-      actualMicroUsd: sql`${aiJobs.actualMicroUsd} + ${microUsd}`,
-    })
-    .where(eq(aiJobs.id, jobId));
 }

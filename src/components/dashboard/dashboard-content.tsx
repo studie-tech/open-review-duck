@@ -30,7 +30,7 @@ import {
   dashboardFilters,
   rememberDashboardFilters,
 } from "~/lib/dashboard-filters";
-import { clampToClientClock } from "~/lib/hydration-clock";
+import { hydratedQueryOptions } from "~/lib/hydration-clock";
 import {
   comparePriorityInboxText,
   filterPriorityInbox,
@@ -53,6 +53,27 @@ import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 type DashboardPullRequests = RouterOutputs["review"]["dashboard"];
+type UnimportedInboxSectionProps = {
+  draftsHidden: boolean;
+  errorMessage?: string;
+  errors: Array<{
+    message: string;
+    repositoryId: string;
+    repositoryName: string;
+    repositoryOwner: string;
+  }>;
+  filtersActive: boolean;
+  heading?: boolean;
+  isError: boolean;
+  isLoading: boolean;
+  onClearFilters: () => void;
+  onPrepare: (pullRequest: UnimportedPullRequest) => void;
+  onRetry: () => void;
+  onShowDrafts: () => void;
+  pendingKey?: string;
+  pullRequests: UnimportedPullRequest[];
+  totalCount: number;
+};
 type WorkView =
   | PriorityInboxView
   | "reviewed"
@@ -120,15 +141,9 @@ export function PullRequestsContent({
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
-  // The sidebar prefetches this route eagerly, so the server payload can
-  // predate the navigation. Stamping it with the time it was read lets the
-  // shared stale time decide whether hydration has to refresh it.
   const pullRequests = api.review.dashboard.useQuery(undefined, {
+    ...hydratedQueryOptions(initialPullRequests, fetchedAt),
     enabled: activeSyncs.isFetched,
-    initialData: initialPullRequests,
-    initialDataUpdatedAt: clampToClientClock(fetchedAt),
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
   });
   const unimportedPullRequests =
     api.provider.listUnimportedPullRequests.useQuery(undefined, {
@@ -490,6 +505,26 @@ export function PullRequestsContent({
     setSearchQuery("");
   }
 
+  const unimportedSectionProps = {
+    draftsHidden,
+    errorMessage: unimportedPullRequests.error?.message,
+    errors: unimportedPullRequests.data?.errors ?? [],
+    filtersActive,
+    isError: unimportedPullRequests.isError,
+    isLoading: unimportedPullRequests.isLoading,
+    onClearFilters: clearFilters,
+    onPrepare: (pullRequest: UnimportedPullRequest) =>
+      prepareReview.mutate({
+        repositoryId: pullRequest.repositoryId,
+        number: pullRequest.number,
+      }),
+    onRetry: () => void unimportedPullRequests.refetch(),
+    onShowDrafts: () => setShowDrafts(true),
+    pendingKey: pendingUnimportedKey,
+    pullRequests: visibleUnimported,
+    totalCount: availableUnimported.length,
+  } satisfies Omit<UnimportedInboxSectionProps, "heading">;
+
   return (
     <PageContainer>
       <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
@@ -765,26 +800,7 @@ export function PullRequestsContent({
                 )}
 
                 {workView === "unimported" ? (
-                  <UnimportedInboxSection
-                    errors={unimportedPullRequests.data?.errors ?? []}
-                    isError={unimportedPullRequests.isError}
-                    isLoading={unimportedPullRequests.isLoading}
-                    errorMessage={unimportedPullRequests.error?.message}
-                    onPrepare={(pullRequest) =>
-                      prepareReview.mutate({
-                        repositoryId: pullRequest.repositoryId,
-                        number: pullRequest.number,
-                      })
-                    }
-                    onRetry={() => void unimportedPullRequests.refetch()}
-                    pendingKey={pendingUnimportedKey}
-                    pullRequests={visibleUnimported}
-                    totalCount={availableUnimported.length}
-                    draftsHidden={draftsHidden}
-                    filtersActive={filtersActive}
-                    onClearFilters={clearFilters}
-                    onShowDrafts={() => setShowDrafts(true)}
-                  />
+                  <UnimportedInboxSection {...unimportedSectionProps} />
                 ) : visibleItems.length === 0 &&
                   !(
                     workView === "all" &&
@@ -864,25 +880,8 @@ export function PullRequestsContent({
                         (unimportedPullRequests.data?.errors.length ?? 0) >
                           0) && (
                         <UnimportedInboxSection
-                          errors={unimportedPullRequests.data?.errors ?? []}
-                          isError={unimportedPullRequests.isError}
-                          isLoading={unimportedPullRequests.isLoading}
-                          errorMessage={unimportedPullRequests.error?.message}
+                          {...unimportedSectionProps}
                           heading
-                          onPrepare={(pullRequest) =>
-                            prepareReview.mutate({
-                              repositoryId: pullRequest.repositoryId,
-                              number: pullRequest.number,
-                            })
-                          }
-                          onRetry={() => void unimportedPullRequests.refetch()}
-                          pendingKey={pendingUnimportedKey}
-                          pullRequests={visibleUnimported}
-                          totalCount={availableUnimported.length}
-                          draftsHidden={draftsHidden}
-                          filtersActive={filtersActive}
-                          onClearFilters={clearFilters}
-                          onShowDrafts={() => setShowDrafts(true)}
                         />
                       )}
                   </div>
@@ -912,27 +911,7 @@ function UnimportedInboxSection({
   pendingKey,
   pullRequests,
   totalCount,
-}: {
-  draftsHidden: boolean;
-  errorMessage?: string;
-  errors: Array<{
-    message: string;
-    repositoryId: string;
-    repositoryName: string;
-    repositoryOwner: string;
-  }>;
-  filtersActive: boolean;
-  heading?: boolean;
-  isError: boolean;
-  isLoading: boolean;
-  onClearFilters: () => void;
-  onPrepare: (pullRequest: UnimportedPullRequest) => void;
-  onRetry: () => void;
-  onShowDrafts: () => void;
-  pendingKey?: string;
-  pullRequests: UnimportedPullRequest[];
-  totalCount: number;
-}) {
+}: UnimportedInboxSectionProps) {
   return (
     <div className="space-y-3">
       {heading && (

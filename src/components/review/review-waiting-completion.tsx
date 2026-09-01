@@ -4,21 +4,18 @@ import {
   ArrowLeft,
   ArrowRight,
   Clock3,
-  GitPullRequest,
-  LoaderCircle,
   MessageSquareText,
   Search,
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { ShortcutHint } from "~/components/command-center";
-import { usePendingNavigation } from "~/components/navigation-progress";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
 import {
   type ReviewCompletionCandidate,
   useReviewDialogFocus,
 } from "./review-completion";
+import { ReviewExitActions } from "./review-exit-actions";
 
 export interface WaitingReviewUnit {
   answered: boolean;
@@ -116,7 +113,6 @@ export function ReviewWaitingCompletion({
   onStopWaiting,
 }: ReviewWaitingCompletionProps) {
   const { dialogRef, initialFocusRef } = useReviewDialogFocus();
-  const { pending: navigationPending } = usePendingNavigation();
   const [waitingRoomOpen, setWaitingRoomOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ordered = useMemo(() => orderWaitingReviewUnits(units), [units]);
@@ -311,39 +307,16 @@ export function ReviewWaitingCompletion({
               )}
             </div>
 
-            <footer className="relative flex shrink-0 flex-col-reverse gap-2 border-t border-line bg-surface/35 px-5 py-4 sm:flex-row sm:items-center sm:px-8">
-              <Button type="button" variant="ghost" onClick={onDismiss}>
-                Keep review open
-                <ShortcutHint shortcut={dismissShortcut} />
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="sm:ml-auto"
-                loading={navigationPending}
-                onClick={onDashboard}
-              >
-                {!navigationPending && <GitPullRequest className="size-4" />}
-                Pull requests
-                <ShortcutHint
-                  shortcut={dashboardShortcut}
-                  className="hidden sm:inline-flex"
-                />
-              </Button>
-              {nextReview && (
-                <Button
-                  type="button"
-                  loading={navigationPending}
-                  onClick={onNextReview}
-                >
-                  Review next PR
-                  {!navigationPending && <ArrowRight className="size-4" />}
-                  <ShortcutHint
-                    shortcut={nextReviewShortcut}
-                    className="hidden sm:inline-flex"
-                  />
-                </Button>
-              )}
+            <footer className="relative shrink-0 border-t border-line bg-surface/35 px-5 py-4 sm:px-8">
+              <ReviewExitActions
+                dashboardShortcut={dashboardShortcut}
+                dismissLabel="Keep review open"
+                dismissShortcut={dismissShortcut}
+                nextReviewShortcut={nextReviewShortcut}
+                onDashboard={onDashboard}
+                onDismiss={onDismiss}
+                onNextReview={nextReview ? onNextReview : undefined}
+              />
             </footer>
           </>
         ) : (
@@ -428,48 +401,17 @@ export function ReviewWaitingCompletion({
               </button>
             </div>
 
-            <footer className="relative flex flex-col-reverse gap-2 border-t border-line bg-surface/35 px-5 py-5 sm:flex-row sm:items-center sm:px-8">
-              <Button
-                type="button"
-                variant="ghost"
-                className="sm:mr-auto"
-                onClick={onDismiss}
-              >
-                Keep review open
-                <ShortcutHint shortcut={dismissShortcut} />
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                loading={navigationPending}
-                onClick={onDashboard}
-              >
-                {!navigationPending && <GitPullRequest className="size-4" />}
-                Pull requests
-                <ShortcutHint
-                  shortcut={dashboardShortcut}
-                  className="hidden sm:inline-flex"
-                />
-              </Button>
-              {nextReview ? (
-                <Button
-                  type="button"
-                  loading={navigationPending}
-                  onClick={onNextReview}
-                >
-                  Review next PR
-                  {!navigationPending && <ArrowRight className="size-4" />}
-                  <ShortcutHint
-                    shortcut={nextReviewShortcut}
-                    className="hidden sm:inline-flex"
-                  />
-                </Button>
-              ) : queueLoading ? (
-                <Button type="button" disabled>
-                  <LoaderCircle className="size-4 animate-spin" />
-                  Checking review queue…
-                </Button>
-              ) : null}
+            <footer className="relative border-t border-line bg-surface/35 px-5 py-5 sm:px-8">
+              <ReviewExitActions
+                dashboardShortcut={dashboardShortcut}
+                dismissLabel="Keep review open"
+                dismissShortcut={dismissShortcut}
+                nextReviewShortcut={nextReviewShortcut}
+                onDashboard={onDashboard}
+                onDismiss={onDismiss}
+                onNextReview={nextReview ? onNextReview : undefined}
+                queueLoading={queueLoading}
+              />
             </footer>
           </>
         )}

@@ -1,40 +1,43 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { generateText, stepCountIs, type ToolSet } from "ai";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobEvidence,
   aiJobs,
   aiJobToolCalls,
-  aiJobTurns,
   aiReviewFindings,
   aiReviewItems,
   managedAiModels,
   pullRequests,
 } from "@/drizzle/schema";
-import { env } from "~/env";
 import type { AiPromptKey } from "~/config/ai-prompt-catalog";
+import { env } from "~/env";
+import { createBoundedSemaphore } from "~/lib/concurrency";
 import { explanationChangedLineRanges } from "~/server/ai/change-scope";
+import {
+  executeDurableToolCall,
+  loadAiMessages,
+  persistAiMessage,
+} from "~/server/ai/durable-state";
 import { resolveAiModel } from "~/server/ai/models";
 import {
   deepReviewPromptBodies,
   loadAiPromptBodies,
 } from "~/server/ai/prompt-store";
-import type { TokenUsage } from "~/server/ai/service";
 import {
   boundedTurnOutput,
   estimatePendingInputTokens,
 } from "~/server/ai/turn-guards";
+import { accumulateAiUsage, providerUsage } from "~/server/ai/usage";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import {
   applicableRepositoryRules,
   repositoryRulebookText,
 } from "~/server/repo-reviews/rules";
-import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { createDeepReviewContext, type DeepReviewContext } from "./context";
 import {
   classifyReviewItemError,
@@ -46,6 +49,7 @@ import {
   deepReviewFileFinished,
   deepReviewFileTools,
 } from "./file-tools";
+import { deepReviewTreeLockKey } from "./finalize";
 import { sanitizeReason } from "./redaction";
 import {
   DEEP_REVIEW_PLAN_MAX_CHECKPOINTS,
@@ -66,6 +70,7 @@ import {
 import { deepReviewValidationModel, validateFileFindings } from "./validate";
 
 type Database = typeof database;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type ReviewJob = typeof aiJobs.$inferSelect;
 type ReviewItem = typeof aiReviewItems.$inferSelect;
 
@@ -234,238 +239,11 @@ interface DeepReviewAgent {
 }
 
 /**
- * Bounds how many tool bodies one file scout runs at the same time.
- *
- * The single-agent loop's semaphore is fixed at four because only one agent
- * ever holds it. Under a fan-out the capacity has to be a parameter, or the
- * pool sees slots times files concurrent statements.
- */
-function boundedSemaphore(capacity: number) {
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  /** Runs one operation once a slot frees, releasing it however it settles. */
-  const run = async <T>(operation: () => Promise<T>): Promise<T> => {
-    if (active >= capacity) {
-      await new Promise<void>((resolve) => waiting.push(resolve));
-    }
-    active += 1;
-    try {
-      return await operation();
-    } finally {
-      active -= 1;
-      waiting.shift()?.();
-    }
-  };
-  return { run };
-}
-
-/**
- * Persists one encrypted model message idempotently by turn sequence.
- *
- * A local mirror of the single-agent loop's private helper rather than a shared
- * import: that module is deliberately untouched by deep review, so the two
- * paths share the durable contract — the table and the vault provider string —
- * instead of sharing code that would couple their execution models.
- */
-async function persistMessage(
-  db: Database,
-  job: ReviewJob,
-  sequence: number,
-  message: ModelMessage,
-) {
-  const id = randomUUID();
-  await db
-    .insert(aiJobTurns)
-    .values({
-      id,
-      jobId: job.id,
-      sequence,
-      role: message.role,
-      encryptedContent: await sealVaultSecret(
-        { workspaceId: job.workspaceId, recordId: id, provider: "ai-turn" },
-        JSON.stringify(message),
-      ),
-    })
-    .onConflictDoNothing({
-      target: [aiJobTurns.jobId, aiJobTurns.sequence],
-    });
-}
-
-/**
  * Reports whether a file already spoke, so a token-cap stop has something to
  * harvest. A prompt-only transcript has no findings to extract.
  */
 function transcriptHasInvestigation(messages: readonly ModelMessage[]) {
   return messages.some((message) => message.role !== "user");
-}
-
-/**
- * Restores the encrypted durable transcript of one file scout.
- *
- * Unchanged from the single-agent loop, and unchanged deliberately: the filter
- * is `jobId` alone, and every child of a fan-out has its own job, so per-file
- * transcript partitioning needs no sequence banding.
- */
-async function loadMessages(db: Database, job: ReviewJob) {
-  const turns = await db.query.aiJobTurns.findMany({
-    where: eq(aiJobTurns.jobId, job.id),
-    orderBy: [asc(aiJobTurns.sequence)],
-  });
-  return Promise.all(
-    turns.map(async (turn) =>
-      z.custom<ModelMessage>().parse(
-        JSON.parse(
-          await openVaultSecret(
-            {
-              workspaceId: job.workspaceId,
-              recordId: turn.id,
-              provider: "ai-turn",
-            },
-            turn.encryptedContent,
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-/**
- * Executes and persists one idempotent tool call, replaying stored output.
- *
- * The replay branch never re-runs the handler, which is why `report_finding`
- * writes its rows inside its own body: anything this function returns from
- * storage was produced by an execution that will not happen again.
- */
-async function persistToolCall(
-  db: Database,
-  job: ReviewJob,
-  turnSequence: number,
-  input: {
-    callId: string;
-    name: string;
-    arguments: unknown;
-    execute: () => Promise<unknown>;
-  },
-) {
-  const existing = await db.query.aiJobToolCalls.findFirst({
-    where: and(
-      eq(aiJobToolCalls.jobId, job.id),
-      eq(aiJobToolCalls.toolCallId, input.callId),
-    ),
-  });
-  if (existing?.status === "completed" && existing.encryptedOutput) {
-    return JSON.parse(
-      await openVaultSecret(
-        {
-          workspaceId: job.workspaceId,
-          recordId: existing.id,
-          provider: "ai-tool-output",
-        },
-        existing.encryptedOutput,
-      ),
-    ) as unknown;
-  }
-  const id = existing?.id ?? randomUUID();
-  if (!existing) {
-    await db.insert(aiJobToolCalls).values({
-      id,
-      jobId: job.id,
-      turnSequence,
-      toolCallId: input.callId,
-      toolName: input.name,
-      encryptedInput: await sealVaultSecret(
-        {
-          workspaceId: job.workspaceId,
-          recordId: id,
-          provider: "ai-tool-input",
-        },
-        JSON.stringify(input.arguments),
-      ),
-    });
-  }
-  const started = Date.now();
-  try {
-    const output = await input.execute();
-    await db
-      .update(aiJobToolCalls)
-      .set({
-        status: "completed",
-        encryptedOutput: await sealVaultSecret(
-          {
-            workspaceId: job.workspaceId,
-            recordId: id,
-            provider: "ai-tool-output",
-          },
-          JSON.stringify(output),
-        ),
-        durationMs: Date.now() - started,
-        completedAt: new Date(),
-      })
-      .where(eq(aiJobToolCalls.id, id));
-    return output;
-  } catch (cause) {
-    await db
-      .update(aiJobToolCalls)
-      .set({
-        status: "failed",
-        encryptedOutput: await sealVaultSecret(
-          {
-            workspaceId: job.workspaceId,
-            recordId: id,
-            provider: "ai-tool-output",
-          },
-          JSON.stringify({
-            error: sanitizeReason(cause),
-          }),
-        ),
-        durationMs: Date.now() - started,
-        completedAt: new Date(),
-      })
-      .where(eq(aiJobToolCalls.id, id));
-    throw cause;
-  }
-}
-
-/** Normalizes provider usage into the application ledger representation. */
-function usageFromResult(result: {
-  usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    inputTokenDetails: {
-      cacheReadTokens?: number;
-      cacheWriteTokens?: number;
-    };
-  };
-  providerMetadata?: unknown;
-}): TokenUsage {
-  const usage = result.usage;
-  const metadata = result.providerMetadata as
-    | { openrouter?: { usage?: { cost?: number } } }
-    | undefined;
-  return {
-    input: usage.inputTokens ?? 0,
-    output: usage.outputTokens ?? 0,
-    cacheRead: usage.inputTokenDetails.cacheReadTokens ?? 0,
-    cacheWrite: usage.inputTokenDetails.cacheWriteTokens ?? 0,
-    totalTokens: usage.totalTokens ?? 0,
-    microUsd: Math.ceil((metadata?.openrouter?.usage?.cost ?? 0) * 1_000_000),
-  };
-}
-
-/** Adds one model call's usage to the child that made it, never to the parent. */
-async function accumulateUsage(db: Database, jobId: string, usage: TokenUsage) {
-  await db
-    .update(aiJobs)
-    .set({
-      inputTokens: sql`${aiJobs.inputTokens} + ${usage.input}`,
-      outputTokens: sql`${aiJobs.outputTokens} + ${usage.output}`,
-      cacheReadTokens: sql`${aiJobs.cacheReadTokens} + ${usage.cacheRead}`,
-      cacheWriteTokens: sql`${aiJobs.cacheWriteTokens} + ${usage.cacheWrite}`,
-      totalTokens: sql`${aiJobs.totalTokens} + ${usage.totalTokens}`,
-      actualMicroUsd: sql`${aiJobs.actualMicroUsd} + ${usage.microUsd ?? 0}`,
-    })
-    .where(eq(aiJobs.id, jobId));
 }
 
 /**
@@ -688,16 +466,9 @@ async function executeDeepReviewTurn(
   ]);
   if (!item) throw new Error("Deep review item not found for this child job");
   if (item.state !== "selected") {
-    // A replayed step, or a tree the cancel sweep already closed. Either way
-    // the item has its coverage and must not be reviewed a second time.
-    return {
-      done: true,
-      state: item.state,
-      itemId: item.id,
-      path: item.path,
-      failureClass: item.failureClass,
-      reason: item.reason,
-    };
+    // A replay also repairs a terminal item whose child disagrees. The item is
+    // the coverage record, so its terminal result is canonical.
+    return await reconcileTerminalItem(db, { job, item });
   }
   if (!parent) throw new Error("Deep review parent job not found");
 
@@ -726,7 +497,7 @@ async function executeDeepReviewTurn(
   }
   const forceClose =
     Boolean(stop?.allowClosingTurn) &&
-    transcriptHasInvestigation(await loadMessages(db, job));
+    transcriptHasInvestigation(await loadAiMessages(db, job));
   if (stop && !forceClose) {
     return await closeItem(db, {
       job,
@@ -790,13 +561,13 @@ async function runAgentTurn(
     })
     .where(eq(aiJobs.id, job.id));
 
-  let messages = await loadMessages(db, job);
+  let messages = await loadAiMessages(db, job);
   if (messages.length === 0) {
-    await persistMessage(db, job, 0, await agent.buildPrompt());
+    await persistAiMessage(db, job, 0, await agent.buildPrompt());
     // Re-read rather than trusting the value just built: the insert ignores a
     // conflict, so a racing attempt's prompt may be the stored one, and the
     // turn has to send exactly what the transcript holds.
-    messages = await loadMessages(db, job);
+    messages = await loadAiMessages(db, job);
   }
 
   const resolved = await resolveAiModel(db, {
@@ -846,15 +617,19 @@ async function runAgentTurn(
     });
   }
 
-  const semaphore = boundedSemaphore(DEEP_REVIEW_TOOL_SLOTS);
-  // On its last turn the agent must conclude. Left with the investigation
-  // tools it will keep investigating and run out of budget having reported
-  // nothing, which is exactly what a whole first run of this reviewer did.
+  const semaphore = createBoundedSemaphore(DEEP_REVIEW_TOOL_SLOTS);
+  // The last turn exposes conclusion tools only so investigation cannot consume
+  // the remaining budget without terminating the item.
   const finalTurn = tokenCapClose || turnIndex + 1 >= maxTurns;
   let finished = false;
   const allTools = agent.buildTools({
     execute: (invocation) =>
-      semaphore.run(() => persistToolCall(db, job, turnIndex, invocation)),
+      semaphore.run(() =>
+        executeDurableToolCall(db, job, turnIndex, {
+          ...invocation,
+          sanitizeError: sanitizeReason,
+        }),
+      ),
     // Charged against the tree, not this child: the byte ceiling bounds how
     // much of the repository one review exposes, however many agents read it.
     sourceBytesRead: usage.sourceBytes,
@@ -894,9 +669,9 @@ async function runAgentTurn(
   );
   const sequenceStart = messages.length;
   for (const [offset, message] of result.responseMessages.entries()) {
-    await persistMessage(db, job, sequenceStart + offset, message);
+    await persistAiMessage(db, job, sequenceStart + offset, message);
   }
-  await accumulateUsage(db, job.id, usageFromResult(result));
+  await accumulateAiUsage(db, job.id, providerUsage(result));
 
   // The callback fires only for a freshly executed tool body, so a replayed
   // step has to read the durable tool-call row to learn the agent is finished.
@@ -1212,7 +987,7 @@ async function resolvePlanCheckpoints(
           telemetry: { isEnabled: false },
         }),
     );
-    await accumulateUsage(db, job.id, usageFromResult(result));
+    await accumulateAiUsage(db, job.id, providerUsage(result));
     return parsePlanCheckpoints(result.text);
   } catch {
     return undefined;
@@ -1290,50 +1065,165 @@ async function countReportedFindings(db: Database, itemId: string) {
 }
 
 /**
- * Moves one item and its child job to a terminal state, exactly once.
+ * Moves one item and its child job to a terminal state atomically.
  *
- * Both updates are guarded on the state they expect to leave, so a replayed
- * step neither reopens a closed file nor overwrites the class a cancel sweep
- * already recorded.
+ * Every tree closer takes the same advisory lock. Re-reading the item after
+ * taking it lets a concurrent cancellation win without this turn overwriting
+ * its failure class, while the transaction prevents either terminal write
+ * from becoming visible alone.
  */
 async function closeItem(
   db: Database,
   input: CloseItemInput,
 ): Promise<ReviewFileTurnResult> {
-  const { job, item } = input;
-  const failureClass =
-    input.state === "failed" ? (input.failureClass ?? "unknown") : null;
-  const reason = input.reason ?? null;
-  await db
-    .update(aiReviewItems)
-    .set({ state: input.state, failureClass, reason })
-    .where(
-      and(eq(aiReviewItems.id, item.id), eq(aiReviewItems.state, "selected")),
+  const result = await db.transaction(async (tx) => {
+    await lockReviewTree(tx, input.job.parentJobId);
+    const [current, currentJob] = await readReviewPair(
+      tx,
+      input.item.id,
+      input.job.id,
     );
-  await db
+    if (current.state !== "selected") {
+      return await reconcileTerminalItemInTransaction(tx, currentJob, current);
+    }
+
+    const failureClass =
+      input.state === "failed" ? (input.failureClass ?? "unknown") : null;
+    const reason = input.reason ?? null;
+    await tx
+      .update(aiReviewItems)
+      .set({ state: input.state, failureClass, reason })
+      .where(eq(aiReviewItems.id, current.id));
+    await writeTerminalJob(tx, input.job.id, {
+      state: input.state,
+      failureClass,
+      error: input.error ?? null,
+    });
+    return terminalResult(current, input.state, failureClass, reason);
+  });
+  if (input.job.parentJobId) {
+    await advanceParentProgress(db, input.job.parentJobId);
+  }
+  return result;
+}
+
+/** Repairs any persisted terminal item/child disagreement during replay. */
+async function reconcileTerminalItem(
+  db: Database,
+  input: Pick<CloseItemInput, "job" | "item">,
+): Promise<ReviewFileTurnResult> {
+  const result = await db.transaction(async (tx) => {
+    await lockReviewTree(tx, input.job.parentJobId);
+    const [current, currentJob] = await readReviewPair(
+      tx,
+      input.item.id,
+      input.job.id,
+    );
+    if (current.state !== "completed" && current.state !== "failed") {
+      return terminalResult(
+        current,
+        current.state,
+        current.failureClass,
+        current.reason,
+      );
+    }
+    return await reconcileTerminalItemInTransaction(tx, currentJob, current);
+  });
+  if (input.job.parentJobId) {
+    await advanceParentProgress(db, input.job.parentJobId);
+  }
+  return result;
+}
+
+/** Makes the child agree with its canonical terminal coverage item. */
+async function reconcileTerminalItemInTransaction(
+  tx: Transaction,
+  job: ReviewJob,
+  item: ReviewItem,
+): Promise<ReviewFileTurnResult> {
+  if (item.state !== "completed" && item.state !== "failed") {
+    return terminalResult(item, item.state, item.failureClass, item.reason);
+  }
+  const failureClass = item.state === "failed" ? item.failureClass : null;
+  const agrees =
+    job.status === (item.state === "completed" ? "completed" : "failed") ||
+    (item.state === "failed" &&
+      failureClass === "cancelled" &&
+      job.status === "cancelled");
+  if (!agrees) {
+    await writeTerminalJob(tx, job.id, {
+      state: item.state,
+      failureClass,
+      error: item.state === "failed" ? item.reason : null,
+    });
+  }
+  return terminalResult(item, item.state, failureClass, item.reason);
+}
+
+/** Reads the pair only after its tree lock has fixed the competing writer. */
+async function readReviewPair(
+  tx: Transaction,
+  itemId: string,
+  jobId: string,
+): Promise<[ReviewItem, ReviewJob]> {
+  const [item, job] = await Promise.all([
+    tx.query.aiReviewItems.findFirst({
+      where: eq(aiReviewItems.id, itemId),
+    }),
+    tx.query.aiJobs.findFirst({ where: eq(aiJobs.id, jobId) }),
+  ]);
+  if (!item || !job) {
+    throw new Error("Deep review item or child disappeared while closing");
+  }
+  return [item, job];
+}
+
+/** Writes the complete child terminal projection in the caller's transaction. */
+async function writeTerminalJob(
+  tx: Transaction,
+  jobId: string,
+  input: {
+    state: Extract<DeepReviewItemState, "completed" | "failed">;
+    failureClass: ReviewFailureClass | null;
+    error: string | null;
+  },
+) {
+  await tx
     .update(aiJobs)
     .set({
       status: input.state === "completed" ? "completed" : "failed",
       completionReason:
         input.state === "completed"
           ? "answered"
-          : failureClass === "cancelled"
+          : input.failureClass === "cancelled"
             ? "cancelled"
             : "provider_failure",
-      error: input.error ?? null,
+      error: input.error,
       progress: 100,
       completedAt: new Date(),
+      cancelledAt: null,
     })
-    .where(
-      and(
-        eq(aiJobs.id, job.id),
-        sql`${aiJobs.status} not in ('completed', 'failed', 'cancelled')`,
-      ),
-    );
-  if (job.parentJobId) await advanceParentProgress(db, job.parentJobId);
+    .where(eq(aiJobs.id, jobId));
+}
+
+/** Serializes item closes with cancellation and finalization of the same tree. */
+async function lockReviewTree(tx: Transaction, parentJobId: string | null) {
+  if (!parentJobId) throw new Error("Deep review child job has no parent");
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${deepReviewTreeLockKey(parentJobId)}))`,
+  );
+}
+
+/** Returns the durable item projection used by workflow replay. */
+function terminalResult(
+  item: ReviewItem,
+  state: DeepReviewItemState,
+  failureClass: ReviewFailureClass | null,
+  reason: string | null,
+): ReviewFileTurnResult {
   return {
-    done: true,
-    state: input.state,
+    done: state !== "selected",
+    state,
     itemId: item.id,
     path: item.path,
     failureClass,

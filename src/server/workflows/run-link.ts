@@ -10,20 +10,44 @@ import {
 import type { db as database } from "~/server/db";
 
 type Database = typeof database;
-type WorkflowKind = "sync_pull_request" | "sync_repository_branch" | "ai_job";
+export type WorkflowKind =
+  | "sync_pull_request"
+  | "sync_repository_branch"
+  | "ai_job";
+
+/** Uses one advisory-lock namespace for reservation takeover and durable linking. */
+export function workflowStartLockKey(kind: WorkflowKind, targetId: string) {
+  return `workflow-start:${kind}:${targetId}`;
+}
+
+type WorkflowRun = typeof workflowRuns.$inferSelect;
+interface WorkflowLinkInput {
+  kind: WorkflowKind;
+  targetId: string;
+  providerRunId: string;
+}
 
 /** Idempotently attaches a durable provider run to its persisted application target. */
+export function ensureWorkflowRunLink(
+  db: Database,
+  input: WorkflowLinkInput & { startToken?: undefined },
+): Promise<WorkflowRun>;
+export function ensureWorkflowRunLink(
+  db: Database,
+  input: WorkflowLinkInput & { startToken: string },
+): Promise<WorkflowRun | null>;
+export function ensureWorkflowRunLink(
+  db: Database,
+  input: WorkflowLinkInput & { startToken?: string },
+): Promise<WorkflowRun | null>;
+/** Implements token fencing and idempotent durable linking under the target lock. */
 export async function ensureWorkflowRunLink(
   db: Database,
-  input: {
-    kind: WorkflowKind;
-    targetId: string;
-    providerRunId: string;
-  },
-) {
+  input: WorkflowLinkInput & { startToken?: string },
+): Promise<WorkflowRun | null> {
   return db.transaction(async (tx) => {
     await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtext(${`workflow-link:${input.kind}:${input.targetId}`}))`,
+      sql`select pg_advisory_xact_lock(hashtext(${workflowStartLockKey(input.kind, input.targetId)}))`,
     );
 
     const target =
@@ -39,6 +63,12 @@ export async function ensureWorkflowRunLink(
               where: eq(aiJobs.id, input.targetId),
             });
     if (!target) throw new Error("Workflow target not found");
+    if (
+      input.startToken !== undefined &&
+      target.workflowStartToken !== input.startToken
+    ) {
+      return null;
+    }
 
     const linked = target.workflowRunId
       ? await tx.query.workflowRuns.findFirst({
@@ -58,17 +88,26 @@ export async function ensureWorkflowRunLink(
         if (input.kind === "sync_pull_request") {
           await tx
             .update(syncRuns)
-            .set({ workflowRunId: linked.id })
+            .set({
+              workflowRunId: linked.id,
+              workflowStartLeaseExpiresAt: null,
+            })
             .where(eq(syncRuns.id, input.targetId));
         } else if (input.kind === "sync_repository_branch") {
           await tx
             .update(repositoryBranchSyncRuns)
-            .set({ workflowRunId: linked.id })
+            .set({
+              workflowRunId: linked.id,
+              workflowStartLeaseExpiresAt: null,
+            })
             .where(eq(repositoryBranchSyncRuns.id, input.targetId));
         } else {
           await tx
             .update(aiJobs)
-            .set({ workflowRunId: linked.id })
+            .set({
+              workflowRunId: linked.id,
+              workflowStartLeaseExpiresAt: null,
+            })
             .where(eq(aiJobs.id, input.targetId));
         }
       }
@@ -97,17 +136,26 @@ export async function ensureWorkflowRunLink(
     if (input.kind === "sync_pull_request") {
       await tx
         .update(syncRuns)
-        .set({ workflowRunId: created.id })
+        .set({
+          workflowRunId: created.id,
+          workflowStartLeaseExpiresAt: null,
+        })
         .where(eq(syncRuns.id, input.targetId));
     } else if (input.kind === "sync_repository_branch") {
       await tx
         .update(repositoryBranchSyncRuns)
-        .set({ workflowRunId: created.id })
+        .set({
+          workflowRunId: created.id,
+          workflowStartLeaseExpiresAt: null,
+        })
         .where(eq(repositoryBranchSyncRuns.id, input.targetId));
     } else {
       await tx
         .update(aiJobs)
-        .set({ workflowRunId: created.id })
+        .set({
+          workflowRunId: created.id,
+          workflowStartLeaseExpiresAt: null,
+        })
         .where(eq(aiJobs.id, input.targetId));
     }
     return created;

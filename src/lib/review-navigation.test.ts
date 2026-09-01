@@ -5,7 +5,6 @@ import {
   deletedFileSignOffUnits,
   nextPendingReviewIndex,
   nextPendingReviewIndexPreferring,
-  optimisticallySignOffReviewUnit,
   optimisticallySignOffReviewUnits,
   optimisticallyUnreviewReviewUnits,
   resetSignedOffReviewUnits,
@@ -164,7 +163,7 @@ describe("nextPendingReviewIndexPreferring", () => {
   });
 });
 
-describe("optimisticallySignOffReviewUnit", () => {
+describe("optimisticallySignOffReviewUnits", () => {
   it("updates only the selected unit without mutating the prior state", () => {
     const units = [
       {
@@ -179,7 +178,7 @@ describe("optimisticallySignOffReviewUnit", () => {
       },
     ];
 
-    const updated = optimisticallySignOffReviewUnit(units, "first");
+    const updated = optimisticallySignOffReviewUnits(units, ["first"]);
 
     expect(updated).toEqual([
       {
@@ -201,7 +200,7 @@ describe("optimisticallySignOffReviewUnit", () => {
       },
     ];
 
-    expect(optimisticallySignOffReviewUnit(units, "missing")).toBe(units);
+    expect(optimisticallySignOffReviewUnits(units, ["missing"])).toBe(units);
   });
 
   it("signs off several selected units in one immutable update", () => {

@@ -6,18 +6,22 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouterOutputs } from "~/trpc/react";
 import {
-  aiJobActive,
-  applyAiQuestionStreamUpdate,
   DeepReviewFindingRow,
   DeepReviewInlineFinding,
   deepReviewFacetCounts,
   groupDeepReviewFindings,
-  releaseWaitingUnits,
+} from "./deep-review-findings";
+import {
+  aiJobActive,
   reshapeProviderThreads,
   restoreProviderThread,
   useReviewExitPrefetch,
   useTerminalReviewRefetch,
-} from "./review-workspace";
+} from "./review-workspace-hooks";
+import {
+  applyAiQuestionStreamUpdate,
+  releaseWaitingUnits,
+} from "./review-workspace-stream";
 
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];

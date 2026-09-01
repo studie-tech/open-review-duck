@@ -31,18 +31,12 @@ import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
 import { reviewJobTokenReservation } from "./turn-guards";
-import { nonReducingAiUsage } from "./usage";
+import { nonReducingAiUsage, type TokenUsage } from "./usage";
 
 type Database = typeof database;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-export type TokenUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  microUsd?: number;
-};
+
+export type { TokenUsage } from "./usage";
 
 export const CURRENT_AI_AGENT_VERSION = 14;
 

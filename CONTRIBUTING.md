@@ -16,9 +16,9 @@ pnpm audit:prod
 make build
 ```
 
-Schema changes also need a generated migration and the PostgreSQL integration
-suite. The same checks run in CI against PostgreSQL 18 and both deployment
-targets.
+Schema changes also need a generated migration and `pnpm test:integration`
+against an isolated PostgreSQL 18 database. The same checks run in CI against
+PostgreSQL 18 and both deployment targets.
 
 Database lifecycle, authorization, concurrency, quota, and retry changes need a
 PostgreSQL-backed integration test. Do not include credentials, private source,

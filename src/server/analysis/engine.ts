@@ -22,6 +22,7 @@ import { blockCloserLines, type TreeSitterLanguage } from "./tree-sitter";
 import type {
   AnalysisResult,
   AnalyzedUnit,
+  RawUnit,
   ReviewUnitRange,
   SourceFile,
   SupportedLanguage,
@@ -29,7 +30,6 @@ import type {
 
 export const CURRENT_ANALYSIS_VERSION = 43;
 
-type RawUnit = Omit<AnalyzedUnit, "changedLineCount" | "depth" | "reviewOrder">;
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
 interface LineChangeMasks {

@@ -10,13 +10,13 @@ import {
   aiJobEvidence,
   aiJobs,
   aiJobToolCalls,
-  aiJobTurns,
   managedAiModels,
   pullRequests,
   reviewUnits,
 } from "@/drizzle/schema";
 import { reviewDuckAgentPrompt } from "~/config/prompts";
 import { env } from "~/env";
+import { createBoundedSemaphore } from "~/lib/concurrency";
 import {
   explainPromptBodies,
   loadAiPromptBodies,
@@ -27,6 +27,11 @@ import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
 import { aiResultSchema } from "~/validators/ai";
 import { explanationChangedLineRanges } from "./change-scope";
+import {
+  executeDurableToolCall,
+  loadAiMessages,
+  persistAiMessage,
+} from "./durable-state";
 import { resolveAiModel } from "./models";
 import { loadPriorConversation } from "./prior-conversation";
 import { createAiRepositoryContext } from "./repository-context";
@@ -41,205 +46,10 @@ import {
   boundedTurnOutput,
   estimatePendingInputTokens,
 } from "./turn-guards";
+import { untrustedFileSource } from "./untrusted-content";
+import { accumulateAiUsage, providerUsage } from "./usage";
 
 type Database = typeof database;
-
-/** Frames repository text so model instructions cannot be confused with source. */
-function untrustedFileSource(path: string, source: string) {
-  /** Escapes text without changing its reviewer-visible content. */
-  const escapeXml = (value: string) =>
-    value
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
-  return `<untrusted-file path="${escapeXml(path).replaceAll('"', "&quot;")}">${escapeXml(source)}</untrusted-file>`;
-}
-
-class FourWaySemaphore {
-  private active = 0;
-  private readonly waiting: Array<() => void> = [];
-
-  /** Runs one operation after obtaining one of four read-only tool slots. */
-  async run<T>(operation: () => Promise<T>) {
-    if (this.active >= 4) {
-      await new Promise<void>((resolve) => this.waiting.push(resolve));
-    }
-    this.active += 1;
-    try {
-      return await operation();
-    } finally {
-      this.active -= 1;
-      this.waiting.shift()?.();
-    }
-  }
-}
-
-/** Persists one encrypted model message idempotently by turn sequence. */
-async function persistMessage(
-  db: Database,
-  job: typeof aiJobs.$inferSelect,
-  sequence: number,
-  message: ModelMessage,
-) {
-  const id = randomUUID();
-  await db
-    .insert(aiJobTurns)
-    .values({
-      id,
-      jobId: job.id,
-      sequence,
-      role: message.role,
-      encryptedContent: await sealVaultSecret(
-        { workspaceId: job.workspaceId, recordId: id, provider: "ai-turn" },
-        JSON.stringify(message),
-      ),
-    })
-    .onConflictDoNothing({
-      target: [aiJobTurns.jobId, aiJobTurns.sequence],
-    });
-}
-
-/** Restores the encrypted durable conversation for a resumed model turn. */
-async function loadMessages(db: Database, job: typeof aiJobs.$inferSelect) {
-  const turns = await db.query.aiJobTurns.findMany({
-    where: eq(aiJobTurns.jobId, job.id),
-    orderBy: [asc(aiJobTurns.sequence)],
-  });
-  return Promise.all(
-    turns.map(async (turn) =>
-      z.custom<ModelMessage>().parse(
-        JSON.parse(
-          await openVaultSecret(
-            {
-              workspaceId: job.workspaceId,
-              recordId: turn.id,
-              provider: "ai-turn",
-            },
-            turn.encryptedContent,
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-/** Executes and persists one idempotent read-only tool call. */
-async function persistToolCall(
-  db: Database,
-  job: typeof aiJobs.$inferSelect,
-  turnSequence: number,
-  input: {
-    callId: string;
-    name: string;
-    arguments: unknown;
-    execute: () => Promise<unknown>;
-  },
-) {
-  const existing = await db.query.aiJobToolCalls.findFirst({
-    where: and(
-      eq(aiJobToolCalls.jobId, job.id),
-      eq(aiJobToolCalls.toolCallId, input.callId),
-    ),
-  });
-  if (existing?.status === "completed" && existing.encryptedOutput) {
-    return JSON.parse(
-      await openVaultSecret(
-        {
-          workspaceId: job.workspaceId,
-          recordId: existing.id,
-          provider: "ai-tool-output",
-        },
-        existing.encryptedOutput,
-      ),
-    ) as unknown;
-  }
-  const id = existing?.id ?? randomUUID();
-  if (!existing) {
-    await db.insert(aiJobToolCalls).values({
-      id,
-      jobId: job.id,
-      turnSequence,
-      toolCallId: input.callId,
-      toolName: input.name,
-      encryptedInput: await sealVaultSecret(
-        {
-          workspaceId: job.workspaceId,
-          recordId: id,
-          provider: "ai-tool-input",
-        },
-        JSON.stringify(input.arguments),
-      ),
-    });
-  }
-  const started = Date.now();
-  try {
-    const output = await input.execute();
-    await db
-      .update(aiJobToolCalls)
-      .set({
-        status: "completed",
-        encryptedOutput: await sealVaultSecret(
-          {
-            workspaceId: job.workspaceId,
-            recordId: id,
-            provider: "ai-tool-output",
-          },
-          JSON.stringify(output),
-        ),
-        durationMs: Date.now() - started,
-        completedAt: new Date(),
-      })
-      .where(eq(aiJobToolCalls.id, id));
-    return output;
-  } catch (cause) {
-    await db
-      .update(aiJobToolCalls)
-      .set({
-        status: "failed",
-        encryptedOutput: await sealVaultSecret(
-          {
-            workspaceId: job.workspaceId,
-            recordId: id,
-            provider: "ai-tool-output",
-          },
-          JSON.stringify({
-            error: cause instanceof Error ? cause.message : "Tool failed",
-          }),
-        ),
-        durationMs: Date.now() - started,
-        completedAt: new Date(),
-      })
-      .where(eq(aiJobToolCalls.id, id));
-    throw cause;
-  }
-}
-
-/** Normalizes provider usage into the application ledger representation. */
-function usageFromResult(result: {
-  usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    inputTokenDetails: {
-      cacheReadTokens?: number;
-      cacheWriteTokens?: number;
-    };
-  };
-  providerMetadata?: unknown;
-}) {
-  const usage = result.usage;
-  const metadata = result.providerMetadata as
-    | { openrouter?: { usage?: { cost?: number } } }
-    | undefined;
-  return {
-    input: usage.inputTokens ?? 0,
-    output: usage.outputTokens ?? 0,
-    cacheRead: usage.inputTokenDetails.cacheReadTokens ?? 0,
-    cacheWrite: usage.inputTokenDetails.cacheWriteTokens ?? 0,
-    totalTokens: usage.totalTokens ?? 0,
-    microUsd: Math.ceil((metadata?.openrouter?.usage?.cost ?? 0) * 1_000_000),
-  } satisfies TokenUsage;
-}
 
 /** Executes exactly one non-retrying model turn for a durable AI job. */
 export async function executeAiTurn(
@@ -301,7 +111,7 @@ export async function executeAiTurn(
     })
     .where(eq(aiJobs.id, job.id));
 
-  let messages = await loadMessages(db, job);
+  let messages = await loadAiMessages(db, job);
   const storedUnits = await hydrateReviewUnits(
     db,
     await db.query.reviewUnits.findMany({
@@ -393,7 +203,7 @@ export async function executeAiTurn(
         explainPromptBodies(prompts),
       ),
     };
-    await persistMessage(db, job, 0, prompt);
+    await persistAiMessage(db, job, 0, prompt);
     messages = [prompt];
   }
   if (
@@ -426,7 +236,7 @@ export async function executeAiTurn(
   const submission: {
     value: z.infer<typeof aiResultSchema> | undefined;
   } = { value: undefined };
-  const semaphore = new FourWaySemaphore();
+  const semaphore = createBoundedSemaphore(4);
   /** Enforces the persisted global tool-call limit around one invocation. */
   const execute = (
     name: string,
@@ -435,11 +245,12 @@ export async function executeAiTurn(
     operation: () => Promise<unknown>,
   ) =>
     semaphore.run(() =>
-      persistToolCall(db, job, turnIndex, {
+      executeDurableToolCall(db, job, turnIndex, {
         callId,
         name,
         arguments: arguments_,
         execute: operation,
+        sanitizeError: () => "Tool execution failed",
       }),
     );
 
@@ -675,7 +486,7 @@ export async function executeAiTurn(
   );
   const sequenceStart = messages.length;
   for (const [offset, message] of result.responseMessages.entries()) {
-    await persistMessage(db, job, sequenceStart + offset, message);
+    await persistAiMessage(db, job, sequenceStart + offset, message);
   }
   if (result.text) {
     const chunkId = randomUUID();
@@ -705,29 +516,14 @@ export async function executeAiTurn(
       .set({ status: "streaming" })
       .where(eq(aiJobs.id, job.id));
   }
-  const usage = usageFromResult(result);
-  await accumulateUsage(db, job.id, usage);
+  const usage = providerUsage(result);
+  await accumulateAiUsage(db, job.id, usage);
   if (submission.value) {
     await acceptAiJobResult(db, job.id, submission.value);
     await settleAiJobQuota(db, job.id, await totalUsage(db, job.id));
     return { done: true, status: "completed" as const };
   }
   return { done: false, status: "running" as const };
-}
-
-/** Adds one model turn's provider usage to its job. */
-async function accumulateUsage(db: Database, jobId: string, usage: TokenUsage) {
-  await db
-    .update(aiJobs)
-    .set({
-      inputTokens: sql`${aiJobs.inputTokens} + ${usage.input}`,
-      outputTokens: sql`${aiJobs.outputTokens} + ${usage.output}`,
-      cacheReadTokens: sql`${aiJobs.cacheReadTokens} + ${usage.cacheRead}`,
-      cacheWriteTokens: sql`${aiJobs.cacheWriteTokens} + ${usage.cacheWrite}`,
-      totalTokens: sql`${aiJobs.totalTokens} + ${usage.totalTokens}`,
-      actualMicroUsd: sql`${aiJobs.actualMicroUsd} + ${usage.microUsd ?? 0}`,
-    })
-    .where(eq(aiJobs.id, jobId));
 }
 
 /** Reads the accumulated usage used for quota settlement. */

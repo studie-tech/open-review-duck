@@ -1,10 +1,15 @@
-interface SourceRange {
+export interface PrivateSourceRange {
   currentBlobId: string | null;
   previousBlobId: string | null;
   startByte: number;
   endByte: number;
   previousStartByte: number | null;
   previousEndByte: number | null;
+  path: string;
+}
+
+export interface PrivateSourceHydrationFailure {
+  cause: unknown;
   path: string;
 }
 
@@ -111,7 +116,7 @@ function decode(bytes: Uint8Array, start: number, end: number) {
 }
 
 /** Hydrates one review unit without retaining its signed URL. */
-async function hydratePrivateReviewSource<Unit extends SourceRange>(
+async function hydratePrivateReviewSource<Unit extends PrivateSourceRange>(
   unit: Unit,
   snapshotId: string,
   cache: Map<string, Promise<Uint8Array>>,
@@ -143,7 +148,9 @@ async function hydratePrivateReviewSource<Unit extends SourceRange>(
 }
 
 /** Hydrates private ranges with bounded concurrency and per-unit degradation. */
-export async function hydratePrivateReviewSources<Unit extends SourceRange>(
+export async function hydratePrivateReviewSources<
+  Unit extends PrivateSourceRange,
+>(
   units: readonly Unit[],
   snapshotId: string,
   cache: Map<string, Promise<Uint8Array>>,
@@ -153,7 +160,7 @@ export async function hydratePrivateReviewSources<Unit extends SourceRange>(
   onUnitFailed?: (index: number, unit: Unit, cause: unknown) => void,
 ) {
   const hydrated = new Array<Unit>(units.length);
-  const failures: Array<{ cause: unknown; path: string }> = [];
+  const failures: PrivateSourceHydrationFailure[] = [];
   const successfulIndexes: number[] = [];
   let nextIndex = 0;
   /** Claims and hydrates units until the shared work list is exhausted. */

@@ -4,6 +4,9 @@ import languageManifest from "../../../tree-sitter-languages.json";
 import { analyzeFiles } from "./engine";
 import { languageAdapterForPath } from "./parsers";
 import { semanticSymbolOccurrences } from "./parsers/tree-sitter-adapter";
+import { createCandidateExtractor } from "./parsers/tree-sitter-candidate-strategies";
+import type { CandidateToolkit } from "./parsers/tree-sitter-candidate-types";
+import { shapes } from "./parsers/tree-sitter-language-shapes";
 import { withSyntaxTree } from "./tree-sitter";
 import { grammarAssets, lexicalSyntaxes, supportedLanguages } from "./types";
 
@@ -13,6 +16,40 @@ const languageDefinitions = languageManifest.languages as Record<
 >;
 
 describe("complete Tree-sitter language support", () => {
+  it("keeps language shapes and candidate strategies complete", () => {
+    const languages = Object.keys(grammarAssets).sort();
+    const strategies = createCandidateExtractor(
+      {} as CandidateToolkit,
+    ).strategies;
+
+    expect(Object.keys(shapes).sort()).toEqual(languages);
+    expect(Object.keys(strategies).sort()).toEqual([
+      "clojure",
+      "elixir",
+      "hcl",
+      "javascript",
+      "lua",
+      "makefile",
+      "ruby",
+      "shell",
+      "typescript",
+    ]);
+    for (const language of languages) {
+      const shape = shapes[language as keyof typeof shapes];
+      expect(
+        Boolean(strategies[language as keyof typeof strategies]) ||
+          shape.reviewsWholeFile === true ||
+          Boolean(shape.sections) ||
+          shape.containers.size +
+            shape.functions.size +
+            shape.variables.size +
+            (shape.moduleUnits?.size ?? 0) >
+            0,
+        `${language} needs a common declaration shape or a specialized strategy`,
+      ).toBe(true);
+    }
+  });
+
   it("keeps every grammar, adapter, extension, and fixture in lockstep", () => {
     const grammarLanguages = supportedLanguages.filter(
       (language) => language !== "text",

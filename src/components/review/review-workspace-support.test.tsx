@@ -15,39 +15,45 @@ import { createRef } from "react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { sortByReviewFileTreeOrder } from "~/lib/review-files";
+import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
-  ConceptMoveDialog,
-  CopyRepositoryUrlButton,
-  conceptFileCardsInReadingOrder,
-  conceptMembersInReadingOrder,
   InlineAiQuestion,
   InlineCommentComposer,
-  nextAnchorableLine,
+  rememberAiConversationVisibility,
+  withoutDeletedAiQuestions,
+  withoutDeletedLiveAiQuestions,
+} from "./review-workspace-ai-conversation";
+import {
+  ConceptMoveDialog,
+  PullRequestDetailsDialog,
+} from "./review-workspace-dialogs";
+import {
+  SideBySideUnitDiff,
+  type SideBySideUnitDiffHandle,
+} from "./review-workspace-diff";
+import {
+  CopyRepositoryUrlButton,
   ProviderConversation,
   type ProviderConversationActions,
-  ProviderConversationHistory,
-  PullRequestDetailsDialog,
+  reviewProviderWebUrl,
+} from "./review-workspace-provider-conversation";
+import {
+  conceptFileCardsInReadingOrder,
+  conceptMembersInReadingOrder,
+  nextAnchorableLine,
   REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
-  ReviewConceptMemberPreview,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
-  rememberAiConversationVisibility,
   reviewCardMemberForLine,
-  reviewProviderWebUrl,
-  reviewShortcuts,
-  SideBySideUnitDiff,
-  type SideBySideUnitDiffHandle,
   SplitActionButton,
-  withoutDeletedAiQuestions,
-  withoutDeletedLiveAiQuestions,
-} from "./review-workspace-support";
+} from "./review-workspace-source";
 
 vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
   const actual =
@@ -229,306 +235,6 @@ describe("ReviewUnitViewOptions", () => {
     expect(onToggleImports).toHaveBeenCalledOnce();
     expect(onToggleFullFile).toHaveBeenCalledOnce();
   });
-});
-
-describe("ReviewConceptMemberPreview", () => {
-  it("shows highlighted source without an open-diff gate", async () => {
-    const onSelect = vi.fn();
-    render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: "unit-1",
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "const answer = 42;\nreturn answer;",
-            startLine: 10,
-            language: "typescript",
-            kind: "function",
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable
-        onSelect={onSelect}
-      />,
-    );
-
-    expect(screen.queryByText("Open diff")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("example · 2 changed lines · 33 B snippet"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Copy file path" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
-    expect(screen.getByRole("article")).toHaveTextContent("return answer;");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Select example" }),
-    );
-    expect(onSelect).toHaveBeenCalledOnce();
-  });
-
-  it("shows the file size on a member card when the file size is known", () => {
-    render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: "unit-1",
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "const answer = 42;",
-            startLine: 10,
-            language: "typescript",
-            kind: "function",
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable
-        sourceBytes={12_288}
-        onSelect={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByText("example · 2 changed lines · 12 KB"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/snippet/)).not.toBeInTheDocument();
-  });
-
-  it("uses a quiet loading state while private source is still pending", () => {
-    render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: "unit-pending-source",
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "",
-            startLine: 10,
-            language: "typescript",
-            kind: "function",
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable={false}
-        sourcePending
-        onSelect={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("status", { name: "Loading source for example" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Source unavailable. Concept sign-off is blocked."),
-    ).not.toBeInTheDocument();
-  });
-
-  it("reports unavailable source only after loading settles", () => {
-    render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: "unit-unavailable-source",
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "",
-            startLine: 10,
-            language: "typescript",
-            kind: "function",
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable={false}
-        onSelect={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByText("Source unavailable. Concept sign-off is blocked."),
-    ).toBeInTheDocument();
-  });
-
-  /** Renders one member card at the given review status. */
-  function renderMember(status: string) {
-    return render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: `unit-${status}`,
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "const answer = 42;",
-            startLine: 10,
-            language: "typescript",
-            kind: "function",
-            status,
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable
-        onSelect={vi.fn()}
-      />,
-    );
-  }
-
-  it("marks a member the reviewer has already signed off", () => {
-    renderMember("signed_off");
-
-    expect(screen.getByText("Reviewed")).toBeInTheDocument();
-  });
-
-  it("opens a signed-off member closed and an unreviewed one open", () => {
-    renderMember("signed_off");
-    expect(screen.getByRole("article")).not.toHaveTextContent(
-      "const answer = 42;",
-    );
-
-    cleanup();
-    renderMember("pending");
-    expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
-  });
-
-  it("spends no highlighting on a member nobody has opened", () => {
-    // The highlighter is a hook, so keeping it out of a collapsed card means
-    // the card's body must not mount at all — the bounded highlight cache is
-    // shared with the members the reviewer is actually reading.
-    const highlight = vi.mocked(useHighlightedSource);
-    highlight.mockClear();
-    renderMember("signed_off");
-    expect(highlight).not.toHaveBeenCalled();
-
-    cleanup();
-    highlight.mockClear();
-    renderMember("pending");
-    expect(highlight).toHaveBeenCalled();
-  });
-
-  it("lets the reviewer open a member back up and close it again", async () => {
-    renderMember("signed_off");
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Expand example" }),
-    );
-    expect(screen.getByRole("article")).toHaveTextContent("const answer = 42;");
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Collapse example" }),
-    );
-    expect(screen.getByRole("article")).not.toHaveTextContent(
-      "const answer = 42;",
-    );
-  });
-
-  it("lets a reviewer comment on a member card they have not opened", async () => {
-    // Reading a concept means reading every card in it, so a line worth
-    // commenting on is just as likely to sit in a card the reviewer has not
-    // selected as in the open one.
-    const onCommentLine = vi.fn();
-    render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: "unit-1",
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "const answer = 42;\nreturn answer;",
-            startLine: 10,
-            endLine: 11,
-            language: "typescript",
-            kind: "function",
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable
-        onSelect={vi.fn()}
-        onCommentLine={onCommentLine}
-      />,
-    );
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Comment on line 11 of example" }),
-    );
-    expect(onCommentLine).toHaveBeenCalledWith(11);
-  });
-
-  it("offers no composer on the lines between disjoint review ranges", () => {
-    // The card prints the stored source from its first line, so it runs past
-    // the gaps a disjoint unit leaves; the provider refuses a comment there.
-    render(
-      <ReviewConceptMemberPreview
-        unit={
-          {
-            id: "unit-1",
-            path: "src/example.ts",
-            name: "example",
-            changedLineCount: 2,
-            changeType: "added",
-            previousSource: null,
-            source: "const answer = 42;\nconst gap = 0;\nreturn answer;",
-            startLine: 10,
-            endLine: 12,
-            relatedRanges: [
-              { startLine: 10, endLine: 10 },
-              { startLine: 12, endLine: 12 },
-            ],
-            language: "typescript",
-            kind: "function",
-          } as never
-        }
-        index={1}
-        count={3}
-        sourceAvailable
-        onSelect={vi.fn()}
-        onCommentLine={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("button", { name: "Comment on line 10 of example" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Comment on line 12 of example" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Comment on line 11 of example" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it.each(["pending", "partial", "waiting", "changed"])(
-    "leaves a %s member unmarked",
-    (status) => {
-      // A unit whose code changed after sign-off is back in the queue, so
-      // calling it reviewed would send the reviewer past work still owed.
-      renderMember(status);
-
-      expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
-    },
-  );
 });
 
 describe("same-file concept cards", () => {
@@ -1109,7 +815,9 @@ describe("InlineAiQuestion", () => {
     );
 
     expect(
-      await screen.findByText("It narrows the retry boundary."),
+      await screen.findByText("It narrows the retry boundary.", undefined, {
+        timeout: 5_000,
+      }),
     ).toBeVisible();
     expect(priorControl).toHaveFocus();
     priorControl.remove();
@@ -2177,52 +1885,6 @@ describe("ProviderConversation", () => {
   });
 });
 
-describe("ProviderConversationHistory", () => {
-  it("starts closed when every conversation is resolved", () => {
-    const { container } = render(
-      <ProviderConversationHistory
-        threads={[
-          {
-            externalId: "901",
-            path: "src/retry.ts",
-            line: 17,
-            side: "right",
-            status: "resolved",
-            comments: [],
-            unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
-          },
-        ]}
-      >
-        <p>Resolved history</p>
-      </ProviderConversationHistory>,
-    );
-
-    expect(container.querySelector("details")).not.toHaveAttribute("open");
-  });
-
-  it("starts open while any conversation is unresolved", () => {
-    const { container } = render(
-      <ProviderConversationHistory
-        threads={[
-          {
-            externalId: "902",
-            path: "src/retry.ts",
-            line: 17,
-            side: "right",
-            status: "open",
-            comments: [],
-            unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
-          },
-        ]}
-      >
-        <p>Open history</p>
-      </ProviderConversationHistory>,
-    );
-
-    expect(container.querySelector("details")).toHaveAttribute("open");
-  });
-});
-
 describe("SideBySideUnitDiff", () => {
   it("shows aligned base and pull-request lines and opens current comments", async () => {
     const selectLine = vi.fn();
@@ -2741,6 +2403,83 @@ describe("SideBySideUnitDiff", () => {
 
     expect(diff).toHaveTextContent("distant before 15");
     expect(diff).toHaveTextContent("distant after 15");
+  });
+
+  it("reveals an addition-only collapsed gap in capped pages", async () => {
+    const user = userEvent.setup();
+    const additions = Array.from(
+      { length: 50 },
+      (_, index) => `const addition${index + 1} = true;`,
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={additions.join("\n")}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusRanges={[]}
+        currentFocusRanges={[
+          { startLine: 1, endLine: 1 },
+          { startLine: 50, endLine: 50 },
+        ]}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Added code diff" });
+    expect(diff).not.toHaveTextContent("const addition25 = true;");
+    for (const pageSize of [20, 20, 2]) {
+      await user.click(
+        screen.getByRole("button", {
+          name: `Show ${pageSize} more unchanged lines`,
+        }),
+      );
+    }
+
+    expect(diff).toHaveTextContent("const addition25 = true;");
+    expect(
+      screen.queryByRole("button", { name: /more unchanged lines/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reveals a split collapsed gap in capped pages", async () => {
+    const user = userEvent.setup();
+    const unchanged = Array.from(
+      { length: 60 },
+      (_, index) => `const retained${index + 1} = true;`,
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource={["const behavior = 'before';", ...unchanged].join("\n")}
+        currentSource={["const behavior = 'after';", ...unchanged].join("\n")}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={1}
+        previousFocusEndLine={61}
+        currentFocusStartLine={1}
+        currentFocusEndLine={61}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const diff = screen.getByRole("region", {
+      name: "Side-by-side code diff",
+    });
+    expect(diff).not.toHaveTextContent("const retained30 = true;");
+    for (const pageSize of [20, 20, 15]) {
+      await user.click(
+        screen.getByRole("button", {
+          name: `Show ${pageSize} more unchanged lines`,
+        }),
+      );
+    }
+
+    expect(diff).toHaveTextContent("const retained30 = true;");
+    expect(
+      screen.queryByRole("button", { name: /more unchanged lines/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the entire file without collapsed gaps when expanded", () => {

@@ -1414,6 +1414,89 @@ describe("provider normalization", () => {
     ]);
   });
 
+  it("loads the previous Azure source from a renamed file's original path", async () => {
+    const sourceRequests: Array<{
+      path: string | null;
+      revision: string | null;
+    }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/iterations?")) {
+        return jsonResponse({ value: [{ id: 3 }] });
+      }
+      if (url.includes("/iterations/3/changes?")) {
+        return jsonResponse({
+          changeEntries: [
+            {
+              item: {
+                path: "/shared/worker/worker-messages.ts",
+                gitObjectType: "blob",
+              },
+              originalPath: "/app/_shared/utils/worker/worker-messages.ts",
+              changeType: "edit, rename",
+            },
+          ],
+        });
+      }
+      if (url.includes("/items?")) {
+        const request = new URL(url);
+        const path = request.searchParams.get("path");
+        const revision = request.searchParams.get("versionDescriptor.version");
+        sourceRequests.push({ path, revision });
+        if (
+          path === "/app/_shared/utils/worker/worker-messages.ts" &&
+          revision === "base-sha"
+        ) {
+          return new Response("beforeRename()");
+        }
+        if (
+          path === "/shared/worker/worker-messages.ts" &&
+          revision === "head-sha"
+        ) {
+          return new Response("afterRename()");
+        }
+        return new Response("missing", { status: 404 });
+      }
+      return jsonResponse({
+        pullRequestId: 12,
+        title: "Move worker messages",
+        status: "active",
+        isDraft: false,
+        sourceRefName: "refs/heads/worker-move",
+        targetRefName: "refs/heads/main",
+        lastMergeSourceCommit: { commitId: "head-sha" },
+        lastMergeTargetCommit: { commitId: "base-sha" },
+        repository: { webUrl: "https://dev.azure.com/acme/repo" },
+        createdBy: { displayName: "Duck" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new AzureDevOpsProvider(
+        "token",
+        "https://dev.azure.com/acme",
+      ).getChangedFiles("repo", 12),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        path: "shared/worker/worker-messages.ts",
+        content: "afterRename()",
+        previousContent: "beforeRename()",
+        changeType: "renamed",
+      }),
+    ]);
+    expect(sourceRequests).toEqual([
+      {
+        path: "/shared/worker/worker-messages.ts",
+        revision: "head-sha",
+      },
+      {
+        path: "/app/_shared/utils/worker/worker-messages.ts",
+        revision: "base-sha",
+      },
+    ]);
+  });
+
   it("keeps smaller Azure sources when the pull request exceeds its budget", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);

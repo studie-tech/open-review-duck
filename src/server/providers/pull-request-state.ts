@@ -64,24 +64,38 @@ export async function refreshRepositoryPullRequestStates(
         ),
       }),
     ]);
+    const providerTracked = tracked.filter(
+      // Repository monitors use a synthetic pull-request row numbered zero.
+      // It has no provider counterpart and must never enter PR reconciliation.
+      (pullRequest) => pullRequest.number !== 0,
+    );
     const openByNumber = new Map(
       openPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]),
     );
     const remoteByNumber = new Map(openByNumber);
-    const absent = tracked.filter(
+    const absent = providerTracked.filter(
       (pullRequest) => !openByNumber.has(pullRequest.number),
     );
-    const absentRemotes = await mapWithLimit(absent, 4, (pullRequest) =>
-      provider.getPullRequest(repository.externalId, pullRequest.number),
-    );
+    const detailFailures: unknown[] = [];
+    const absentRemotes = await mapWithLimit(absent, 4, async (pullRequest) => {
+      try {
+        return await provider.getPullRequest(
+          repository.externalId,
+          pullRequest.number,
+        );
+      } catch (cause) {
+        detailFailures.push(cause);
+        return undefined;
+      }
+    });
     for (const pullRequest of absentRemotes) {
-      remoteByNumber.set(pullRequest.number, pullRequest);
+      if (pullRequest) remoteByNumber.set(pullRequest.number, pullRequest);
     }
 
     let changed = 0;
     const stale: { id: string; refreshed: Partial<TrackedPullRequest> }[] = [];
     const toResync: number[] = [];
-    for (const trackedPullRequest of tracked) {
+    for (const trackedPullRequest of providerTracked) {
       const remote = remoteByNumber.get(trackedPullRequest.number);
       if (!remote) continue;
       const revisionChanged =
@@ -152,6 +166,8 @@ export async function refreshRepositoryPullRequestStates(
         });
       },
     );
+    const [detailFailure] = detailFailures;
+    if (detailFailure) throw detailFailure;
     await db
       .update(repositories)
       .set({ pullRequestStateLastError: null })

@@ -1,10 +1,15 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { generateText } from "ai";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { aiJobs, aiReviewFindings, aiReviewItems } from "@/drizzle/schema";
+import {
+  type aiJobs,
+  aiJobToolCalls,
+  aiReviewFindings,
+  aiReviewItems,
+} from "@/drizzle/schema";
 import { env } from "~/env";
 import { resolveAiModel } from "~/server/ai/models";
 import {
@@ -12,6 +17,7 @@ import {
   loadAiPromptBodies,
 } from "~/server/ai/prompt-store";
 import type { TokenUsage } from "~/server/ai/service";
+import { accumulateAiUsage, providerUsage } from "~/server/ai/usage";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
@@ -25,6 +31,7 @@ import {
 } from "./review-prompts";
 
 type Database = typeof database;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * The smallest surviving set worth one clustering call.
@@ -48,6 +55,7 @@ const MAX_DEDUPE_OUTPUT_TOKENS = 8_000;
 const DEDUPE_TIMEOUT_MS = 120_000;
 const MAX_MERGED_TITLE_LENGTH = 200;
 const MAX_MERGED_BODY_LENGTH = 4_000;
+const DEDUPE_CHECKPOINT_TOOL_NAME = "dedupe_findings";
 
 /** The finding states that are still candidates for a merge. */
 const DEDUPE_FINDING_STATES = [
@@ -126,6 +134,38 @@ const findingContentSchema = z.object({
   existingCode: z.string().optional(),
   suggestionCode: z.string().optional(),
 });
+
+const tokenUsageSchema = z.object({
+  input: z.number().int().nonnegative(),
+  output: z.number().int().nonnegative(),
+  cacheRead: z.number().int().nonnegative(),
+  cacheWrite: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  microUsd: z.number().int().nonnegative().optional(),
+});
+
+const dedupeCheckpointSchema = z.object({
+  groups: z.array(
+    z.object({
+      canonicalId: z.string(),
+      memberIds: z.array(z.string()),
+      title: z.string().nullable(),
+      body: z.string().nullable(),
+    }),
+  ),
+  errors: z.array(z.string()),
+  rejected: z.boolean(),
+  mergedCount: z.number().int().nonnegative(),
+  candidateCount: z.number().int().nonnegative(),
+  clustered: z.boolean(),
+  usage: tokenUsageSchema,
+});
+
+interface DedupeCheckpoint {
+  id: string;
+  status: "running" | "completed";
+  result: DeepReviewDedupeResult;
+}
 
 const EMPTY_USAGE: TokenUsage = {
   input: 0,
@@ -391,49 +431,100 @@ function promptFinding(finding: DeepReviewDedupeFinding): DedupePromptFinding {
   };
 }
 
-/** Normalizes provider usage into the ledger representation a run rolls up. */
-function usageFromResult(result: {
-  usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    inputTokenDetails: {
-      cacheReadTokens?: number;
-      cacheWriteTokens?: number;
-    };
-  };
-  providerMetadata?: unknown;
-}): TokenUsage {
-  const metadata = result.providerMetadata as
-    | { openrouter?: { usage?: { cost?: number } } }
-    | undefined;
-  return {
-    input: result.usage.inputTokens ?? 0,
-    output: result.usage.outputTokens ?? 0,
-    cacheRead: result.usage.inputTokenDetails.cacheReadTokens ?? 0,
-    cacheWrite: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
-    totalTokens: result.usage.totalTokens ?? 0,
-    microUsd: Math.ceil((metadata?.openrouter?.usage?.cost ?? 0) * 1_000_000),
-  };
+/** Gives one run's replay record a stable identity within its survey job. */
+function dedupeCheckpointId(parentJobId: string): string {
+  return `deep-review-dedupe:${parentJobId}`;
 }
 
-/** Adds the clustering call's usage to the child that is billed for it. */
-async function accumulateUsage(
+/** Opens the durable clustering checkpoint, if this run already has one. */
+async function loadDedupeCheckpoint(
+  db: Pick<Transaction, "query">,
+  input: { parentJobId: string; job: typeof aiJobs.$inferSelect },
+): Promise<DedupeCheckpoint | undefined> {
+  const checkpoint = await db.query.aiJobToolCalls.findFirst({
+    where: and(
+      eq(aiJobToolCalls.jobId, input.job.id),
+      eq(aiJobToolCalls.toolCallId, dedupeCheckpointId(input.parentJobId)),
+    ),
+  });
+  if (!checkpoint) return undefined;
+  if (
+    (checkpoint.status !== "running" && checkpoint.status !== "completed") ||
+    !checkpoint.encryptedOutput
+  ) {
+    throw new Error("Deep-review dedupe checkpoint is incomplete");
+  }
+  try {
+    return {
+      id: checkpoint.id,
+      status: checkpoint.status,
+      result: dedupeCheckpointSchema.parse(
+        JSON.parse(
+          await openVaultSecret(
+            {
+              workspaceId: input.job.workspaceId,
+              recordId: checkpoint.id,
+              provider: "ai-tool-output",
+            },
+            checkpoint.encryptedOutput,
+          ),
+        ),
+      ),
+    };
+  } catch (cause) {
+    throw new Error("Deep-review dedupe checkpoint could not be opened", {
+      cause,
+    });
+  }
+}
+
+/**
+ * Stores the provider result before metering or changing any finding.
+ *
+ * The unique tool-call identity is the replay fence. A competing writer that
+ * wins the insert is re-read under the same run lock.
+ */
+async function saveDedupeCheckpoint(
   db: Database,
-  jobId: string,
-  usage: TokenUsage,
-): Promise<void> {
-  await db
-    .update(aiJobs)
-    .set({
-      inputTokens: sql`${aiJobs.inputTokens} + ${usage.input}`,
-      outputTokens: sql`${aiJobs.outputTokens} + ${usage.output}`,
-      cacheReadTokens: sql`${aiJobs.cacheReadTokens} + ${usage.cacheRead}`,
-      cacheWriteTokens: sql`${aiJobs.cacheWriteTokens} + ${usage.cacheWrite}`,
-      totalTokens: sql`${aiJobs.totalTokens} + ${usage.totalTokens}`,
-      actualMicroUsd: sql`${aiJobs.actualMicroUsd} + ${usage.microUsd ?? 0}`,
-    })
-    .where(eq(aiJobs.id, jobId));
+  input: {
+    parentJobId: string;
+    job: typeof aiJobs.$inferSelect;
+    result: DeepReviewDedupeResult;
+  },
+): Promise<DedupeCheckpoint> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`deep-review:dedupe:${input.parentJobId}`}))`,
+    );
+    const replay = await loadDedupeCheckpoint(tx, input);
+    if (replay) return replay;
+    const id = randomUUID();
+    await tx.insert(aiJobToolCalls).values({
+      id,
+      jobId: input.job.id,
+      turnSequence: -1,
+      toolCallId: dedupeCheckpointId(input.parentJobId),
+      toolName: DEDUPE_CHECKPOINT_TOOL_NAME,
+      encryptedInput: await sealVaultSecret(
+        {
+          workspaceId: input.job.workspaceId,
+          recordId: id,
+          provider: "ai-tool-input",
+        },
+        JSON.stringify({ parentJobId: input.parentJobId }),
+      ),
+      encryptedOutput: await sealVaultSecret(
+        {
+          workspaceId: input.job.workspaceId,
+          recordId: id,
+          provider: "ai-tool-output",
+        },
+        JSON.stringify(input.result),
+      ),
+      status: "running",
+    });
+    return { id, status: "running", result: input.result };
+  });
 }
 
 /** Asks the model for one grouping, treating every failure as no proposal. */
@@ -477,7 +568,7 @@ async function clusterDeepReviewFindings(
           telemetry: { isEnabled: false },
         }),
     );
-    const usage = usageFromResult(result);
+    const usage = providerUsage(result);
     const groups = parseDedupeResponse(result.text);
     return {
       groups,
@@ -580,79 +671,116 @@ async function readFindingContent(row: {
   }
 }
 
-/** Writes one settled grouping: members merge away, the canonical may reword. */
+/** Atomically applies, meters, and completes one durable grouping checkpoint. */
 async function persistDedupeGroups(
   db: Database,
   input: {
-    groups: readonly DeepReviewDedupeGroup[];
-    findings: readonly DeepReviewDedupeFinding[];
-    workspaceId: string;
+    checkpoint: DedupeCheckpoint;
+    job: typeof aiJobs.$inferSelect;
+    parentJobId: string;
   },
 ): Promise<void> {
-  if (input.findings.length === 0) return;
-  const rows = await db
-    .select({
-      id: aiReviewFindings.id,
-      encryptedContent: aiReviewFindings.encryptedContent,
-    })
-    .from(aiReviewFindings)
-    .where(
-      inArray(
-        aiReviewFindings.id,
-        input.findings.map((finding) => finding.id),
-      ),
-    );
+  const findingIds = input.checkpoint.result.groups.flatMap(
+    (group) => group.memberIds,
+  );
+  const rows =
+    findingIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: aiReviewFindings.id,
+            encryptedContent: aiReviewFindings.encryptedContent,
+          })
+          .from(aiReviewFindings)
+          .where(inArray(aiReviewFindings.id, findingIds));
   const sealed = new Map(rows.map((row) => [row.id, row.encryptedContent]));
-  for (const group of input.groups) {
-    const members = group.memberIds.filter((id) => id !== group.canonicalId);
-    if (members.length > 0) {
-      await db
-        .update(aiReviewFindings)
-        .set({ state: "merged", mergedIntoId: group.canonicalId })
-        .where(inArray(aiReviewFindings.id, members));
+  const canonicalContent = new Map<string, string>();
+  for (const group of input.checkpoint.result.groups) {
+    if (group.memberIds.length === 1 || (!group.title && !group.body)) {
+      continue;
     }
-    if (members.length === 0 || (!group.title && !group.body)) continue;
     const encryptedContent = sealed.get(group.canonicalId);
     if (!encryptedContent) continue;
     const content = await readFindingContent({
       id: group.canonicalId,
-      workspaceId: input.workspaceId,
+      workspaceId: input.job.workspaceId,
       encryptedContent,
     });
     if (!content) continue;
-    await db
-      .update(aiReviewFindings)
-      .set({
-        // Only the wording moves. The anchor, severity, side, unit and
-        // evidence stay exactly as the canonical finding reported them, so a
-        // merge can never relocate a comment or invent a location.
-        encryptedContent: await sealVaultSecret(
-          {
-            workspaceId: input.workspaceId,
-            recordId: group.canonicalId,
-            provider: "ai-review-finding",
-          },
-          JSON.stringify({
-            ...content,
-            title: group.title ?? content.title,
-            body: group.body ?? content.body,
-          }),
-        ),
-      })
-      .where(eq(aiReviewFindings.id, group.canonicalId));
+    canonicalContent.set(
+      group.canonicalId,
+      await sealVaultSecret(
+        {
+          workspaceId: input.job.workspaceId,
+          recordId: group.canonicalId,
+          provider: "ai-review-finding",
+        },
+        JSON.stringify({
+          ...content,
+          title: group.title ?? content.title,
+          body: group.body ?? content.body,
+        }),
+      ),
+    );
   }
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`deep-review:dedupe:${input.parentJobId}`}))`,
+    );
+    const checkpoint = await loadDedupeCheckpoint(tx, input);
+    if (!checkpoint) {
+      throw new Error("Deep-review dedupe checkpoint disappeared");
+    }
+    if (checkpoint.status === "completed") return;
+    for (const group of checkpoint.result.groups) {
+      const members = group.memberIds.filter((id) => id !== group.canonicalId);
+      if (members.length > 0) {
+        await tx
+          .update(aiReviewFindings)
+          .set({ state: "merged", mergedIntoId: group.canonicalId })
+          .where(inArray(aiReviewFindings.id, members));
+      }
+      const encryptedContent = canonicalContent.get(group.canonicalId);
+      if (!encryptedContent) continue;
+      await tx
+        .update(aiReviewFindings)
+        .set({ encryptedContent })
+        .where(eq(aiReviewFindings.id, group.canonicalId));
+    }
+    if (
+      checkpoint.result.usage.totalTokens > 0 ||
+      checkpoint.result.usage.input > 0
+    ) {
+      await accumulateAiUsage(tx, input.job.id, checkpoint.result.usage);
+    }
+    await tx
+      .update(aiJobToolCalls)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(eq(aiJobToolCalls.id, checkpoint.id));
+  });
 }
 
 /**
  * Collapses one run's duplicate findings, deterministically first.
  *
- * Safe to call twice: merged findings leave the candidate set, so a replayed
- * step reasons only over what survived the first pass and converges.
+ * Safe to call twice: a durable checkpoint retains the accepted complete
+ * partition before any finding or usage changes, and its completion transition
+ * commits atomically with those changes.
  */
 export async function runDeepReviewDedupe(
   db: Database,
   input: RunDeepReviewDedupeInput,
 ): Promise<DeepReviewDedupeResult> {
+  const checkpoint = await loadDedupeCheckpoint(db, input);
+  if (checkpoint) {
+    if (checkpoint.status === "completed") return checkpoint.result;
+    await persistDedupeGroups(db, {
+      checkpoint,
+      job: input.job,
+      parentJobId: input.parentJobId,
+    });
+    return checkpoint.result;
+  }
   const findings = await loadDedupeCandidates(db, input.parentJobId);
   const deterministic = collapseIdenticalFindings(findings);
   const minimum = input.minimumFindings ?? DEEP_REVIEW_DEDUPE_MIN;
@@ -671,27 +799,29 @@ export async function runDeepReviewDedupe(
         findings: representatives,
       })
     : { groups: null, usage: EMPTY_USAGE, error: null };
-  if (clustered.usage.totalTokens > 0 || clustered.usage.input > 0) {
-    await accumulateUsage(db, input.job.id, clustered.usage);
-  }
   const resolution = resolveDeepReviewDedupe({
     findings,
     deterministic,
     proposed: clustered.groups,
     maxGroupSize: input.maxGroupSize,
   });
-  await persistDedupeGroups(db, {
-    groups: resolution.groups,
-    findings,
-    workspaceId: input.job.workspaceId,
+  const saved = await saveDedupeCheckpoint(db, {
+    parentJobId: input.parentJobId,
+    job: input.job,
+    result: {
+      ...resolution,
+      errors: clustered.error
+        ? [clustered.error, ...resolution.errors]
+        : resolution.errors,
+      candidateCount: findings.length,
+      clustered: clusterable,
+      usage: clustered.usage,
+    },
   });
-  return {
-    ...resolution,
-    errors: clustered.error
-      ? [clustered.error, ...resolution.errors]
-      : resolution.errors,
-    candidateCount: findings.length,
-    clustered: clusterable,
-    usage: clustered.usage,
-  };
+  await persistDedupeGroups(db, {
+    checkpoint: saved,
+    job: input.job,
+    parentJobId: input.parentJobId,
+  });
+  return saved.result;
 }

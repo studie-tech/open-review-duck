@@ -83,10 +83,16 @@ function createListingAccess(open: PullRequestSummary[]) {
 function createDetailAccess(
   open: PullRequestSummary[],
   details: Map<number, PullRequestSummary>,
+  failures: Map<number, Error> = new Map(),
 ) {
   const getPullRequest = vi.fn(
-    async (_externalId: string, pullRequestNumber: number) =>
-      details.get(pullRequestNumber),
+    async (_externalId: string, pullRequestNumber: number) => {
+      const failure = failures.get(pullRequestNumber);
+      if (failure) throw failure;
+      const detail = details.get(pullRequestNumber);
+      if (!detail) throw new Error("unexpected detail fetch");
+      return detail;
+    },
   );
   const access = {
     connection: async () => ({ provider: "github" }),
@@ -284,5 +290,54 @@ describe("repository pull-request state refresh", () => {
     });
     expect(result).toEqual({ checked: true, changed: 1, queued: 0 });
     expect(mocks.startPullRequestSync).not.toHaveBeenCalled();
+  });
+
+  it("never asks the provider for a synthetic repository-monitor row", async () => {
+    const { db, writes } = createClaimedDb([
+      createTracked({
+        id: "monitor-pull-request",
+        externalId: "monitor",
+        number: 0,
+      }),
+      createTracked(),
+    ]);
+    const { access, getPullRequest } = createDetailAccess(
+      [],
+      new Map([[10, createSummary({ state: "merged" })]]),
+    );
+
+    await refreshRepositoryPullRequestStates(db, repository, access);
+
+    expect(getPullRequest).toHaveBeenCalledTimes(1);
+    expect(getPullRequest).toHaveBeenCalledWith(repository.externalId, 10);
+    expect(writes.filter((entry) => entry.table === pullRequests)).toEqual([
+      expect.objectContaining({
+        values: expect.objectContaining({ state: "merged" }),
+      }),
+    ]);
+  });
+
+  it("persists successful detail refreshes before reporting another PR failure", async () => {
+    const { db, writes } = createClaimedDb([
+      createTracked(),
+      createTracked({ id: "pull-request-2", externalId: "11", number: 11 }),
+    ]);
+    const missing = new Error("pull request 11 was not found");
+    const { access, getPullRequest } = createDetailAccess(
+      [],
+      new Map([[10, createSummary({ state: "merged" })]]),
+      new Map([[11, missing]]),
+    );
+
+    await expect(
+      refreshRepositoryPullRequestStates(db, repository, access),
+    ).rejects.toBe(missing);
+
+    expect(getPullRequest).toHaveBeenCalledTimes(2);
+    expect(writes.filter((entry) => entry.table === pullRequests)).toEqual([
+      expect.objectContaining({
+        values: expect.objectContaining({ state: "merged" }),
+      }),
+    ]);
   });
 });

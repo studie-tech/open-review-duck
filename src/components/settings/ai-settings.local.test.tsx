@@ -1,14 +1,46 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalAiSettings } from "./ai-settings.local";
 
 const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   test: vi.fn(),
+  savePending: false,
 }));
+
+type LocalConfiguration = ComponentProps<
+  typeof LocalAiSettings
+>["initialConfiguration"];
+
+const configuredLocalAi: LocalConfiguration = {
+  canEditPrompts: false,
+  mode: "on_demand",
+  managedModel: "gpt-4.1-mini",
+  managedModels: ["gpt-4.1-mini"],
+  reviewPullRequests: true,
+  maxReviewTokens: null,
+  deepReviewAvailable: true,
+  configuration: {
+    provider: "openai",
+    model: "gpt-4.1-mini",
+    baseUrl: "https://api.openai.com/v1",
+    useManagedModels: false,
+    hasApiKey: true,
+    hasHeaders: false,
+  },
+};
+
+/** Builds a local AI configuration with only the relevant test variation. */
+function localConfiguration(
+  overrides: Partial<LocalConfiguration> = {},
+): LocalConfiguration {
+  return { ...configuredLocalAi, ...overrides };
+}
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
@@ -38,7 +70,7 @@ vi.mock("~/trpc/react", () => ({
       saveConfiguration: {
         useMutation: () => ({
           mutate: mocks.save,
-          isPending: false,
+          isPending: mocks.savePending,
         }),
       },
     },
@@ -48,31 +80,13 @@ vi.mock("~/trpc/react", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  mocks.test.mockReset();
+  mocks.savePending = false;
 });
 
 describe("LocalAiSettings", () => {
   it("uses the full-width SaaS layout with preferences and provider cards", () => {
-    render(
-      <LocalAiSettings
-        initialConfiguration={{
-          canEditPrompts: false,
-          mode: "on_demand",
-          managedModel: "gpt-4.1-mini",
-          managedModels: ["gpt-4.1-mini"],
-          reviewPullRequests: true,
-          maxReviewTokens: null,
-          deepReviewAvailable: true,
-          configuration: {
-            provider: "openai",
-            model: "gpt-4.1-mini",
-            baseUrl: "https://api.openai.com/v1",
-            useManagedModels: false,
-            hasApiKey: true,
-            hasHeaders: false,
-          },
-        }}
-      />,
-    );
+    render(<LocalAiSettings initialConfiguration={localConfiguration()} />);
 
     expect(
       screen.getByRole("heading", { name: "AI that supports your judgment" }),
@@ -82,6 +96,9 @@ describe("LocalAiSettings", () => {
     ).toBeVisible();
     expect(
       screen.getByRole("heading", { name: "Assistant preferences" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/call your provider.*save with the connection/i),
     ).toBeVisible();
     expect(
       screen.getByRole("heading", { name: "Model provider" }),
@@ -103,23 +120,7 @@ describe("LocalAiSettings", () => {
   it("shows the prompt editor for an administrator", () => {
     render(
       <LocalAiSettings
-        initialConfiguration={{
-          canEditPrompts: true,
-          mode: "on_demand",
-          managedModel: "gpt-4.1-mini",
-          managedModels: ["gpt-4.1-mini"],
-          reviewPullRequests: true,
-          maxReviewTokens: null,
-          deepReviewAvailable: true,
-          configuration: {
-            provider: "openai",
-            model: "gpt-4.1-mini",
-            baseUrl: "https://api.openai.com/v1",
-            useManagedModels: false,
-            hasApiKey: true,
-            hasHeaders: false,
-          },
-        }}
+        initialConfiguration={localConfiguration({ canEditPrompts: true })}
       />,
     );
 
@@ -129,16 +130,13 @@ describe("LocalAiSettings", () => {
   it("starts with no provider selected when none is saved", () => {
     render(
       <LocalAiSettings
-        initialConfiguration={{
-          canEditPrompts: false,
-          mode: "on_demand",
+        initialConfiguration={localConfiguration({
           managedModel: "",
           managedModels: [""],
           reviewPullRequests: false,
-          maxReviewTokens: null,
-          deepReviewAvailable: true,
+          deepReviewAvailable: false,
           configuration: null,
-        }}
+        })}
       />,
     );
 
@@ -149,6 +147,86 @@ describe("LocalAiSettings", () => {
     ).toBeEnabled();
     expect(
       screen.getByRole("button", { name: "Test connection" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText("This deployment cannot run a pull-request review."),
+    ).toBeVisible();
+  });
+
+  it("validates and saves the shared preference draft in the BYOK payload", async () => {
+    const user = userEvent.setup();
+    mocks.test.mockResolvedValueOnce({ ok: true, latencyMs: 42 });
+    render(<LocalAiSettings initialConfiguration={localConfiguration()} />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /Assistance timing/ }),
+      "automatic",
+    );
+    await user.click(
+      screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Save & use model" }),
+      ).toBeEnabled(),
+    );
+
+    const tokenCap = screen.getByRole("textbox", {
+      name: /Tokens per review/,
+    });
+    await user.type(tokenCap, "12.5");
+    expect(screen.getByText(/Enter a whole number of tokens/)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Save & use model" }),
+    ).toBeDisabled();
+
+    await user.clear(tokenCap);
+    await user.type(tokenCap, "12345");
+    await user.click(screen.getByRole("button", { name: "Save & use model" }));
+
+    expect(mocks.save).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      apiKey: undefined,
+      clearApiKey: false,
+      clearHeaders: false,
+      headers: {},
+      baseUrl: "https://api.openai.com/v1",
+      useManagedModels: false,
+      mode: "automatic",
+      reviewPullRequests: false,
+      maxReviewTokens: 12_345,
+    });
+  });
+
+  it("disables shared preferences while the provider save is pending", () => {
+    mocks.savePending = true;
+    render(
+      <LocalAiSettings
+        initialConfiguration={localConfiguration({
+          maxReviewTokens: 10_000,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: /Assistance timing/ }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("textbox", { name: /Tokens per review/ }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Test connection" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Save & use model" }),
     ).toBeDisabled();
   });
 });

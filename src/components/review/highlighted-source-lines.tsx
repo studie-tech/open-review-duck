@@ -3,6 +3,7 @@
 import { Fragment, type ReactNode } from "react";
 import type { HighlightedLine } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
+import { HighlightedTokens } from "./highlighted-tokens";
 import {
   HIGHLIGHTED_SOURCE_ROW_HEIGHT_PX,
   SourceLineWindow,
@@ -105,16 +106,7 @@ export function HighlightedSourceLines({
                   </span>
                 )}
                 <code className="syntax-code px-4 whitespace-pre text-cloud">
-                  {line.tokens.length
-                    ? line.tokens.map((token, tokenIndex) => (
-                        <span
-                          key={`${tokenIndex}-${token.text.length}`}
-                          className={token.className || undefined}
-                        >
-                          {token.text}
-                        </span>
-                      ))
-                    : " "}
+                  <HighlightedTokens tokens={line.tokens} />
                 </code>
               </div>
               {renderAfterLine?.(lineNumber)}

@@ -1,4 +1,8 @@
 import {
+  compileRepositoryGlob,
+  normalizeRepositoryPath,
+} from "./repository-glob";
+import {
   RULEBOOK_DEFAULT,
   RULEBOOK_DIGEST,
   RULEBOOK_DOCUMENTS,
@@ -18,59 +22,6 @@ export interface ResolvedRulebooks {
   text: string;
 }
 
-/** Escapes the characters that carry meaning inside a regular expression. */
-function escapeLiteral(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Compiles one glob into an anchored, case-insensitive expression.
- *
- * The vendored corpus uses only star, double-star and brace alternation,
- * matching upstream's doublestar semantics. Double-star followed by a separator
- * spans zero or more path segments, so an extension pattern has to match a
- * repository-root file as well as a nested one.
- */
-function globToRegExp(pattern: string) {
-  let source = "";
-  let index = 0;
-  while (index < pattern.length) {
-    const character = pattern[index];
-    if (character === "*") {
-      if (pattern[index + 1] === "*") {
-        if (pattern[index + 2] === "/") {
-          source += "(?:[^/]*/)*";
-          index += 3;
-          continue;
-        }
-        source += ".*";
-        index += 2;
-        continue;
-      }
-      source += "[^/]*";
-      index += 1;
-      continue;
-    }
-    if (character === "?") {
-      source += "[^/]";
-      index += 1;
-      continue;
-    }
-    if (character === "{") {
-      const close = pattern.indexOf("}", index);
-      if (close > index) {
-        const alternatives = pattern.slice(index + 1, close).split(",");
-        source += `(?:${alternatives.map(escapeLiteral).join("|")})`;
-        index = close + 1;
-        continue;
-      }
-    }
-    source += escapeLiteral(character ?? "");
-    index += 1;
-  }
-  return new RegExp(`^${source}$`, "i");
-}
-
 /**
  * Returns whether a pattern selects purely on file extension.
  *
@@ -83,16 +34,11 @@ function isExtensionPattern(pattern: string) {
 }
 
 const compiled = RULEBOOK_PATTERNS.map(([pattern, name]) => ({
-  matches: globToRegExp(pattern),
+  matches: compileRepositoryGlob(pattern),
   extensionOnly: isExtensionPattern(pattern),
   pattern,
   name,
 }));
-
-/** Normalizes a repository path for matching against the vendored globs. */
-function normalizePath(path: string) {
-  return path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/^\/+/, "");
-}
 
 /**
  * Resolves the rulebooks that apply to one changed file.
@@ -103,7 +49,7 @@ function normalizePath(path: string) {
  * extension rulebook, so a workflow file is reviewed as both.
  */
 export function resolveRulebooks(path: string): ResolvedRulebooks {
-  const normalized = normalizePath(path);
+  const normalized = normalizeRepositoryPath(path);
   const primaryMatch = compiled.find((entry) => entry.matches.test(normalized));
   const primary = primaryMatch?.name ?? RULEBOOK_DEFAULT;
   const extensionMatch = primaryMatch?.extensionOnly

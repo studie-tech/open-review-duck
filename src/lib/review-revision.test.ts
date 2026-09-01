@@ -40,6 +40,7 @@ describe("review revision acknowledgement", () => {
 
   it("uses the conventional seven-character revision label", () => {
     expect(shortRevision("a8cbd45ea14abda")).toBe("a8cbd45");
+    expect(shortRevision("a8c")).toBe("a8c");
   });
 
   it("remembers a review cursor only for its exact snapshot", () => {

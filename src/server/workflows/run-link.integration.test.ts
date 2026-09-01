@@ -18,6 +18,7 @@ const fixture = {
   connectionId: randomUUID(),
   repositoryId: randomUUID(),
   syncId: randomUUID(),
+  fencedSyncId: randomUUID(),
   providerRunId: `wrun_${randomUUID()}`,
 };
 
@@ -51,6 +52,14 @@ beforeAll(async () => {
     workspaceId: fixture.workspaceId,
     repositoryId: fixture.repositoryId,
     pullRequestNumber: 1,
+  });
+  await db.insert(syncRuns).values({
+    id: fixture.fencedSyncId,
+    workspaceId: fixture.workspaceId,
+    repositoryId: fixture.repositoryId,
+    pullRequestNumber: 2,
+    workflowStartToken: randomUUID(),
+    workflowStartLeaseExpiresAt: new Date(Date.now() + 30_000),
   });
 });
 
@@ -91,5 +100,40 @@ describe("durable workflow links", () => {
         providerRunId: `wrun_${randomUUID()}`,
       }),
     ).rejects.toThrow("already linked to another run");
+  });
+
+  it("fences a delayed starter after a reservation is reclaimed", async () => {
+    const replacementToken = randomUUID();
+    await db
+      .update(syncRuns)
+      .set({
+        workflowStartToken: replacementToken,
+        workflowStartLeaseExpiresAt: new Date(Date.now() + 30_000),
+      })
+      .where(eq(syncRuns.id, fixture.fencedSyncId));
+
+    await expect(
+      ensureWorkflowRunLink(db, {
+        kind: "sync_pull_request",
+        targetId: fixture.fencedSyncId,
+        providerRunId: `wrun_${randomUUID()}`,
+        startToken: randomUUID(),
+      }),
+    ).resolves.toBeNull();
+
+    const replacementRunId = `wrun_${randomUUID()}`;
+    await expect(
+      ensureWorkflowRunLink(db, {
+        kind: "sync_pull_request",
+        targetId: fixture.fencedSyncId,
+        providerRunId: replacementRunId,
+        startToken: replacementToken,
+      }),
+    ).resolves.toMatchObject({ providerRunId: replacementRunId });
+    await expect(
+      db.query.syncRuns.findFirst({
+        where: eq(syncRuns.id, fixture.fencedSyncId),
+      }),
+    ).resolves.toMatchObject({ workflowStartLeaseExpiresAt: null });
   });
 });

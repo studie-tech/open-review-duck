@@ -3,6 +3,12 @@ import { AI_PROMPT_KEYS } from "./ai-prompt-catalog";
 import { AI_PROMPT_FLOWS, aiPromptFlowCoverage } from "./ai-prompt-flows";
 
 describe("AI prompt flows", () => {
+  it("defines each supported pipeline exactly once", () => {
+    const flowIds = AI_PROMPT_FLOWS.map(({ id }) => id);
+    expect(flowIds).toEqual(["explanations", "deep_review", "grouping"]);
+    expect(new Set(flowIds).size).toBe(flowIds.length);
+  });
+
   it("places every catalog key on exactly one pipeline step", () => {
     const { missing, duplicate } = aiPromptFlowCoverage();
     expect(missing).toEqual([]);

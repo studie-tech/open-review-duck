@@ -198,6 +198,38 @@ afterEach(() => {
   ruleCache.invalidate.mockReset();
 });
 
+describe("repository revision labels", () => {
+  it("shortens a loaded snapshot revision", () => {
+    render(
+      <RepoReviewsContent
+        initialMonitors={
+          [monitor] as unknown as ContentProps["initialMonitors"]
+        }
+        initialRepositories={[] as ContentProps["initialRepositories"]}
+        fetchedAt={Date.now()}
+      />,
+    );
+
+    expect(screen.getByText("abc1234")).toBeVisible();
+  });
+
+  it("shows the existing waiting label before a snapshot is available", () => {
+    render(
+      <RepoReviewsContent
+        initialMonitors={
+          [
+            { ...monitor, snapshot: null },
+          ] as unknown as ContentProps["initialMonitors"]
+        }
+        initialRepositories={[] as ContentProps["initialRepositories"]}
+        fetchedAt={Date.now()}
+      />,
+    );
+
+    expect(screen.getByText("Waiting")).toBeVisible();
+  });
+});
+
 describe("compliance rules", () => {
   it("flips the toggle label before the mutation settles", async () => {
     ruleCache.rules = [buildRule({ id: "rule-1" })];

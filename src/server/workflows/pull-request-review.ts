@@ -39,6 +39,10 @@ interface SealedPlanSummary {
   surveyJobId: string | null;
 }
 
+type DeepReviewWorkflowResult = Awaited<
+  ReturnType<typeof finalizeDeepReviewRun>
+>;
+
 /**
  * Splits the selected files into fixed lanes drained in parallel.
  *
@@ -74,11 +78,23 @@ function reviewLanes(
  * recorded as coverage rather than thrown, reaching the finalize step is the
  * normal path for a run in which several files failed.
  */
-export async function pullRequestReviewWorkflow(parentJobId: string) {
+export function pullRequestReviewWorkflow(
+  parentJobId: string,
+): Promise<DeepReviewWorkflowResult>;
+export function pullRequestReviewWorkflow(
+  parentJobId: string,
+  startToken: string,
+): Promise<DeepReviewWorkflowResult | { superseded: true }>;
+/** Implements the durable review and rejects a superseded start token before planning. */
+export async function pullRequestReviewWorkflow(
+  parentJobId: string,
+  startToken?: string,
+) {
   "use workflow";
 
   const { workflowRunId } = getWorkflowMetadata();
-  const plan = await sealDeepReviewPlan(parentJobId, workflowRunId);
+  const plan = await sealDeepReviewPlan(parentJobId, workflowRunId, startToken);
+  if (!plan) return { superseded: true as const };
   if (plan.files.length === 0 && !plan.surveyJobId) {
     return await finalizeDeepReviewRun(parentJobId, workflowRunId, {
       expectedItemCount: plan.itemCount,
@@ -139,14 +155,17 @@ export async function pullRequestReviewWorkflow(parentJobId: string) {
 async function sealDeepReviewPlan(
   parentJobId: string,
   providerRunId: string,
-): Promise<SealedPlanSummary> {
+  startToken?: string,
+): Promise<SealedPlanSummary | null> {
   "use step";
 
   const workflow = await ensureWorkflowRunLink(db, {
     kind: "ai_job",
     targetId: parentJobId,
     providerRunId,
+    startToken,
   });
+  if (!workflow) return null;
   try {
     await db
       .update(workflowRuns)

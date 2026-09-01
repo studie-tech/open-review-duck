@@ -444,6 +444,12 @@ describe("RepositoryReader", () => {
     );
     expect(screen.queryByText("above one")).toBeNull();
     expect(screen.queryByText("below six")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Show 2 lines above.*Shift\+↑/ }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /Show 2 lines below.*Shift\+↓/ }),
+    ).toBeVisible();
 
     fireEvent.keyDown(document, { key: "c" });
     expect(screen.getByText("above one")).toBeVisible();

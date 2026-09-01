@@ -13,11 +13,11 @@ import {
   reviewUnits,
   signOffs,
 } from "@/drizzle/schema";
+import { renderAiPromptTemplate } from "~/config/ai-prompt-template";
 import type { db as database } from "~/server/db";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
-import { renderAiPromptTemplate } from "~/config/ai-prompt-template";
-import { loadAiPromptBodies } from "./prompt-store";
 import { resolveAiModel } from "./models";
+import { loadAiPromptBodies } from "./prompt-store";
 import {
   enforceSemanticConceptCaps,
   semanticClusterJobInput,
@@ -25,6 +25,7 @@ import {
   semanticPartitionSchema,
 } from "./semantic-partition";
 import { createAiJob, settleAiJobQuota, type TokenUsage } from "./service";
+import { addAiUsage, providerUsage } from "./usage";
 
 type Database = typeof database;
 
@@ -39,44 +40,6 @@ export const SEMANTIC_CLUSTER_TOO_LARGE =
   "This pull request is too large for AI grouping";
 export const SEMANTIC_CLUSTER_TIMED_OUT =
   "AI grouping ran out of time before it produced a complete layout";
-
-/** Normalizes provider usage into the shared AI quota ledger. */
-function tokenUsage(result: {
-  usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    inputTokenDetails: {
-      cacheReadTokens?: number;
-      cacheWriteTokens?: number;
-    };
-  };
-  providerMetadata?: unknown;
-}) {
-  const metadata = result.providerMetadata as
-    | { openrouter?: { usage?: { cost?: number } } }
-    | undefined;
-  return {
-    input: result.usage.inputTokens ?? 0,
-    output: result.usage.outputTokens ?? 0,
-    cacheRead: result.usage.inputTokenDetails.cacheReadTokens ?? 0,
-    cacheWrite: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
-    totalTokens: result.usage.totalTokens ?? 0,
-    microUsd: Math.ceil((metadata?.openrouter?.usage?.cost ?? 0) * 1_000_000),
-  } satisfies TokenUsage;
-}
-
-/** Adds provider usage across initial, repaired, and component requests. */
-function addTokenUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    cacheRead: left.cacheRead + right.cacheRead,
-    cacheWrite: left.cacheWrite + right.cacheWrite,
-    totalTokens: left.totalTokens + right.totalTokens,
-    microUsd: (left.microUsd ?? 0) + (right.microUsd ?? 0),
-  };
-}
 
 /** Runs one optional intent-aware refinement and returns a complete safe layout. */
 export async function proposeSemanticConceptLayout(
@@ -294,7 +257,7 @@ export async function proposeSemanticConceptLayout(
           manifest: componentJson,
         }),
       );
-      accumulatedUsage = addTokenUsage(accumulatedUsage, tokenUsage(result));
+      accumulatedUsage = addAiUsage(accumulatedUsage, providerUsage(result));
       let output = result.output;
       let errors = semanticPartitionErrors(unitIds, output.concepts);
       if (
@@ -320,7 +283,7 @@ export async function proposeSemanticConceptLayout(
             proposal: JSON.stringify(output),
           }),
         );
-        accumulatedUsage = addTokenUsage(accumulatedUsage, tokenUsage(repair));
+        accumulatedUsage = addAiUsage(accumulatedUsage, providerUsage(repair));
         output = repair.output;
         errors = semanticPartitionErrors(unitIds, output.concepts);
       }

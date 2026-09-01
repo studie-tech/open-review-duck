@@ -659,6 +659,9 @@ describe("PullRequestsContent", () => {
     expect(
       screen.getByRole("heading", { name: "Un-imported PRs" }),
     ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Your priority inbox" }),
+    ).toBeVisible();
     expect(screen.getByText("Add usage metrics")).toBeVisible();
     expect(screen.getByText("Not in your queue")).toBeVisible();
 
@@ -672,10 +675,23 @@ describe("PullRequestsContent", () => {
     expect(
       screen.getByRole("heading", { name: "Un-imported PRs" }),
     ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Your priority inbox" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("heading", { name: "Un-imported PRs" }),
+    ).toHaveLength(1);
     expect(screen.getByText("Add usage metrics")).toBeVisible();
     expect(
       screen.queryByText("Inventory improvements"),
     ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add for review" }));
+    expect(queryState.syncMutate).toHaveBeenCalledTimes(2);
+    expect(queryState.syncMutate).toHaveBeenLastCalledWith({
+      repositoryId: "repository-manual",
+      number: 77,
+    });
   });
 
   it("keeps the drafts switch available for un-imported pull requests", async () => {
@@ -754,8 +770,10 @@ describe("PullRequestsContent", () => {
     expect(api.review.dashboard.useQuery).toHaveBeenCalledWith(
       undefined,
       expect.objectContaining({
+        enabled: true,
         initialDataUpdatedAt: fetchedAt,
         refetchOnMount: true,
+        refetchOnWindowFocus: true,
       }),
     );
   });

@@ -22,10 +22,13 @@ import {
   LinkNavigationStatus,
   LinkPendingSpinner,
 } from "~/components/ui/link-status";
-import { clampToClientClock } from "~/lib/hydration-clock";
+import { hydratedQueryOptions } from "~/lib/hydration-clock";
 import { prioritizeInbox } from "~/lib/priority-inbox";
 import { formatRelativeTime, useRelativeClock } from "~/lib/relative-time";
-import { activeRunStatuses } from "~/lib/repository-run-progress";
+import {
+  activeRunStatuses,
+  followActiveRepositorySyncs,
+} from "~/lib/repository-run-progress";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
 import { cn } from "~/lib/utils";
@@ -137,22 +140,13 @@ export function DashboardOverview({
     refetchOnWindowFocus: true,
     refetchInterval: followActiveReviewJobs,
   });
-  // The sidebar prefetches this route eagerly, so the server payload can
-  // predate the navigation. Stamping it with the time it was read lets the
-  // shared stale time decide whether hydration has to refresh it.
-  const pullRequestsQuery = api.review.dashboard.useQuery(undefined, {
-    initialData: initialPullRequests,
-    initialDataUpdatedAt: clampToClientClock(fetchedAt),
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
-  });
+  const pullRequestsQuery = api.review.dashboard.useQuery(
+    undefined,
+    hydratedQueryOptions(initialPullRequests, fetchedAt),
+  );
   const monitorsQuery = api.repoReviews.list.useQuery(undefined, {
-    initialData: initialMonitors,
-    initialDataUpdatedAt: clampToClientClock(fetchedAt),
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
-    refetchInterval: (query) =>
-      query.state.data?.some(({ activeSync }) => activeSync) ? 1_500 : false,
+    ...hydratedQueryOptions(initialMonitors, fetchedAt),
+    refetchInterval: followActiveRepositorySyncs,
   });
   const hadActiveSync = useRef(false);
   useEffect(() => {

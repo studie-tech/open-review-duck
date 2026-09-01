@@ -186,8 +186,8 @@ make install
 make start
 ```
 
-`make start` starts PostgreSQL 18, applies migrations, prepares the grammar
-assets, creates the local owner, and runs the app at
+`make start` starts PostgreSQL 18, applies migrations, prepares the generated
+grammar and rulebook assets, creates the local owner, and runs the app at
 [http://localhost:3666](http://localhost:3666). Development state is kept in
 the ignored `.reviewduck-dev` directory.
 
@@ -199,6 +199,7 @@ make stop        # stop the development database
 make check       # run formatting, linting, type checking, and tests
 make build       # create a production build
 make migrations  # generate a Drizzle migration after a schema change
+pnpm test:integration # run the PostgreSQL suite with DATABASE_URL configured
 ```
 
 Set `PORT` or `DEV_DATABASE_PORT` if the defaults are already in use. To use an

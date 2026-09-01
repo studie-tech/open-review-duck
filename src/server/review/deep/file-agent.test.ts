@@ -75,6 +75,8 @@ import {
   aiJobTurns,
   aiReviewItems,
 } from "@/drizzle/schema";
+import { AI_PROMPT_KEYS } from "~/config/ai-prompt-catalog";
+import { defaultAiPromptBody } from "~/server/ai/prompt-defaults";
 import type { DeepReviewContext } from "./context";
 import {
   deepReviewRunStop,
@@ -120,14 +122,30 @@ function tableName(table: unknown): string {
  * and its parent second, and a drizzle `where` clause cannot be introspected
  * back into the id it filters on.
  */
-function createFakeDb(state: FakeRunState) {
+function createFakeDb(
+  state: FakeRunState,
+  options: { failTerminalJobUpdates?: number } = {},
+) {
   const updates: RecordedUpdate[] = [];
-  const jobReads = [state.child, state.parent];
+  let jobReadCount = 0;
+  let inTransaction = false;
+  let terminalJobFailures = options.failTerminalJobUpdates ?? 0;
+  /** Restores a record exactly, including removing fields added by a write. */
+  const restore = (
+    target: Record<string, unknown>,
+    snapshot: Record<string, unknown>,
+  ) => {
+    for (const key of Object.keys(target)) delete target[key];
+    Object.assign(target, snapshot);
+  };
   const db = {
     query: {
       aiJobs: {
-        /** Returns the child, then its parent, in the order the turn reads them. */
-        findFirst: async () => jobReads.shift() ?? state.parent,
+        /** Alternates child and parent reads; close transactions re-read child. */
+        findFirst: async () =>
+          inTransaction || jobReadCount++ % 2 === 0
+            ? state.child
+            : state.parent,
       },
       aiReviewItems: {
         /** Returns the one item this child job reviews. */
@@ -160,17 +178,64 @@ function createFakeDb(state: FakeRunState) {
           targetBranch: "main",
         }),
       },
+      aiPrompts: {
+        /** Returns the shipped catalog, matching an initialized prompt store. */
+        findMany: async () =>
+          AI_PROMPT_KEYS.map((key) => ({
+            key,
+            body: defaultAiPromptBody(key),
+          })),
+      },
     },
     /** Records an update and applies the state changes the turn depends on. */
     update(table: unknown) {
       return {
         set(values: Record<string, unknown>) {
           updates.push({ table: tableName(table), values });
-          if (table === aiReviewItems) Object.assign(state.item, values);
-          return { where: async () => [] };
+          return {
+            where: async () => {
+              const terminalJobWrite =
+                table === aiJobs &&
+                (values.status === "completed" || values.status === "failed");
+              if (terminalJobWrite && terminalJobFailures > 0) {
+                terminalJobFailures -= 1;
+                throw new Error("injected terminal job write failure");
+              }
+              if (table === aiReviewItems) Object.assign(state.item, values);
+              if (table === aiJobs) {
+                if ("status" in values || "totalTokens" in values) {
+                  Object.assign(state.child, values);
+                } else {
+                  Object.assign(state.parent, values);
+                }
+              }
+              return [];
+            },
+          };
         },
       };
     },
+    /** Rolls all state back when any statement in the callback fails. */
+    async transaction<T>(operation: (tx: never) => Promise<T>) {
+      const child = { ...state.child };
+      const parent = { ...state.parent };
+      const item = { ...state.item };
+      const turns = state.turns.map((turn) => ({ ...turn }));
+      inTransaction = true;
+      try {
+        return await operation(db as never);
+      } catch (cause) {
+        restore(state.child, child);
+        restore(state.parent, parent);
+        restore(state.item, item);
+        state.turns.splice(0, state.turns.length, ...turns);
+        throw cause;
+      } finally {
+        inTransaction = false;
+      }
+    },
+    /** Advisory locks are no-ops in this single-process database double. */
+    execute: async () => [],
     /** Persists a transcript row so a re-read returns what was just written. */
     insert(table: unknown) {
       return {
@@ -544,6 +609,77 @@ describe("executeReviewFileTurn", () => {
     expect(result).toMatchObject({ done: true, state: "completed" });
   });
 
+  it("rolls back both terminal writes when the child-job write fails", async () => {
+    const state = createState();
+    const { db } = createFakeDb(state, { failTerminalJobUpdates: 2 });
+    mocks.deepReviewFileFinished.mockResolvedValue(true);
+
+    await expect(
+      executeReviewFileTurn(db, {
+        childJobId,
+        turnIndex: 0,
+        context: fakeRepository(),
+      }),
+    ).rejects.toThrow("injected terminal job write failure");
+
+    // The running marker predates close; neither attempted terminal item write
+    // survives its transaction when the paired child write faults.
+    expect(state.item.state).toBe("selected");
+    expect(state.child.status).toBe("running");
+
+    const replay = await executeReviewFileTurn(db, {
+      childJobId,
+      turnIndex: 0,
+      context: fakeRepository(),
+    });
+    expect(replay).toMatchObject({ done: true, state: "completed" });
+    expect(state.item.state).toBe("completed");
+    expect(state.child.status).toBe("completed");
+  });
+
+  it("repairs a terminal item whose child job was left live", async () => {
+    const state = createState();
+    state.item.state = "completed";
+    state.child.status = "running";
+    const { db } = createFakeDb(state);
+
+    const result = await executeReviewFileTurn(db, {
+      childJobId,
+      turnIndex: 1,
+      context: fakeRepository(),
+    });
+
+    expect(result).toMatchObject({ done: true, state: "completed" });
+    expect(state.child).toMatchObject({
+      status: "completed",
+      completionReason: "answered",
+      progress: 100,
+    });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
+  it("makes a disagreeing terminal child match the coverage item", async () => {
+    const state = createState();
+    state.item.state = "completed";
+    state.child.status = "failed";
+    state.child.error = "persisted incompatible terminal state";
+    const { db } = createFakeDb(state);
+
+    const result = await executeReviewFileTurn(db, {
+      childJobId,
+      turnIndex: 1,
+      context: fakeRepository(),
+    });
+
+    expect(result).toMatchObject({ done: true, state: "completed" });
+    expect(state.child).toMatchObject({
+      status: "completed",
+      completionReason: "answered",
+      error: null,
+    });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
   it("fails one file without failing the run when the model throws", async () => {
     const state = createState();
     const { db, updates } = createFakeDb(state);
@@ -716,6 +852,8 @@ describe("executeReviewFileTurn", () => {
     const state = createState();
     state.item.state = "failed";
     state.item.failureClass = "cancelled";
+    state.child.status = "cancelled";
+    state.child.cancelledAt = new Date();
     const { db } = createFakeDb(state);
 
     const result = await executeReviewFileTurn(db, {
@@ -725,6 +863,8 @@ describe("executeReviewFileTurn", () => {
     });
 
     expect(result).toMatchObject({ done: true, state: "failed" });
+    expect(state.child.status).toBe("cancelled");
+    expect(state.child.cancelledAt).toBeInstanceOf(Date);
     expect(mocks.generateText).not.toHaveBeenCalled();
   });
 

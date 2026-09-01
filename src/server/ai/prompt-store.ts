@@ -48,23 +48,13 @@ export async function ensureAiPrompts(db: Database) {
 
 /** Loads every prompt body, seeding defaults for keys that have never been saved. */
 export async function loadAiPromptBodies(db: Database) {
-  try {
-    await ensureAiPrompts(db);
-    const rows = await db.query.aiPrompts.findMany();
-    const bodies = defaultAiPromptBodies();
-    for (const row of rows) {
-      if (isAiPromptKey(row.key)) bodies[row.key] = row.body;
-    }
-    return bodies;
-  } catch {
-    return defaultAiPromptBodies();
+  await ensureAiPrompts(db);
+  const rows = await db.query.aiPrompts.findMany();
+  const bodies = defaultAiPromptBodies();
+  for (const row of rows) {
+    if (isAiPromptKey(row.key)) bodies[row.key] = row.body;
   }
-}
-
-/** Loads one prompt body, falling back to the shipped default. */
-export async function loadAiPrompt(db: Database, key: AiPromptKey) {
-  const bodies = await loadAiPromptBodies(db);
-  return bodies[key];
+  return bodies;
 }
 
 /** Persists an administrator edit for one known prompt. */

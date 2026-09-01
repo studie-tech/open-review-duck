@@ -65,8 +65,6 @@ describe("normalizeFindingCategory", () => {
   });
 
   it("maps a near-miss category rather than emptying it into other", () => {
-    // Observed from a real run: the model reaches for these words, and letting
-    // every one of them fall into `other` leaves the category filter useless.
     expect(normalizeFindingCategory("correctness")).toBe("bug");
     expect(normalizeFindingCategory("validation")).toBe("security");
     expect(normalizeFindingCategory("vulnerability")).toBe("security");

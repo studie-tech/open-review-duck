@@ -1,6 +1,17 @@
 import "server-only";
 
-import { and, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   pullRequests,
   repositories,
@@ -323,6 +334,14 @@ export async function reconcileWorkspaceIntake(
   }
   const workspaceRepositories = await db.query.repositories.findMany({
     where: eq(repositories.workspaceId, workspaceId),
+    orderBy: [
+      // A successful claim writes this timestamp before any provider work, so
+      // oldest-first selection is a durable round-robin cursor. New rows sort
+      // first, while the stable tie-breakers make simultaneous passes agree.
+      sql`${repositories.pullRequestStateLastCheckedAt} asc nulls first`,
+      asc(repositories.createdAt),
+      asc(repositories.id),
+    ],
     limit: MAX_REPOSITORIES_PER_PASS,
   });
   const passes = await mapWithLimit(

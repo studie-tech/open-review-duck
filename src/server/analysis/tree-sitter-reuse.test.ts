@@ -9,6 +9,17 @@ function fillerSource(index: number) {
   ).join("\n");
 }
 
+/** Builds valid TypeScript whose UTF-8 representation has an exact size. */
+function unicodeSource(bytes: number, index: number) {
+  const framing = `//\nexport const unicode${index} = ${index};`;
+  const remaining = bytes - Buffer.byteLength(framing);
+  const fragment = "😀漢";
+  const fragmentBytes = Buffer.byteLength(fragment);
+  const source = `//${fragment.repeat(Math.floor(remaining / fragmentBytes))}${"x".repeat(remaining % fragmentBytes)}\nexport const unicode${index} = ${index};`;
+  expect(Buffer.byteLength(source)).toBe(bytes);
+  return source;
+}
+
 describe("syntax tree reuse", () => {
   it("returns the same structure whether a source is parsed or reused", () => {
     const source =
@@ -52,5 +63,30 @@ describe("syntax tree reuse", () => {
       return { nested, outer: syntaxDescendants(outer.rootNode).length };
     });
     expect(observed.nested).toBe(observed.outer);
+  });
+
+  it("accounts for Unicode parses at the exact UTF-8 byte ceiling", () => {
+    const firstSource = unicodeSource(1_000_000, 1);
+    const secondSource = unicodeSource(1_000_000, 2);
+    const firstTree = withSyntaxTree("typescript", firstSource, (tree) => tree);
+    const secondTree = withSyntaxTree(
+      "typescript",
+      secondSource,
+      (tree) => tree,
+    );
+
+    // The exact two-megabyte ceiling retains both parses, and touching the
+    // first makes the second the least-recently-used entry.
+    expect(withSyntaxTree("typescript", firstSource, (tree) => tree)).toBe(
+      firstTree,
+    );
+
+    withSyntaxTree("typescript", ";", (tree) => tree.rootNode.namedChildCount);
+
+    // One additional UTF-8 byte evicts the second parse. This would remain
+    // cached if the Unicode sources were incorrectly charged as UTF-16 units.
+    expect(withSyntaxTree("typescript", secondSource, (tree) => tree)).not.toBe(
+      secondTree,
+    );
   });
 });

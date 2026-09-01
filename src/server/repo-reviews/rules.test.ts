@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applicableRepositoryRules,
+  type RepositoryReviewRuleSnapshot,
   repositoryRuleDigest,
   repositoryRuleGlob,
-  type RepositoryReviewRuleSnapshot,
 } from "./rules";
 
 const rule: RepositoryReviewRuleSnapshot = {

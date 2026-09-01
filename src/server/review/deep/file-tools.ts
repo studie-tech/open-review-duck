@@ -13,9 +13,11 @@ import {
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { sideBySideDiff } from "~/lib/side-by-side-diff";
+import { untrustedFileSource } from "~/server/ai/untrusted-content";
 import type { db as database } from "~/server/db";
 import { sealVaultSecret } from "~/server/security/vault";
 import type { DeepReviewContext } from "./context";
+import { findingCapacity } from "./finding-cap";
 import {
   deepReviewFindingId,
   normalizeFindingCategory,
@@ -36,22 +38,6 @@ const MAX_LISTED_PATHS = 500;
 const MAX_POLICY_CHECKED_PATHS = 2_000;
 const MAX_SEARCH_EXCERPT = 1_000;
 const MAX_READ_FILE_BYTES = 1_000_000;
-
-/**
- * Frames repository text so model instructions cannot be confused with source.
- *
- * The single-agent loop keeps this private, and the framing has to be identical
- * on both paths or the prompt-injection defence differs by job kind.
- */
-function untrustedFileSource(path: string, source: string) {
-  /** Escapes text without changing its reviewer-visible content. */
-  const escapeXml = (value: string) =>
-    value
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
-  return `<untrusted-file path="${escapeXml(path).replaceAll('"', "&quot;")}">${escapeXml(source)}</untrusted-file>`;
-}
 
 export interface DeepReviewToolInvocation {
   name: string;
@@ -268,7 +254,7 @@ export function deepReviewFileTools(context: DeepReviewFileToolContext) {
   const readPaths = new Set(context.readPaths ?? []);
   const consumedBytes = context.sourceBytesRead ?? 0;
   let newSourceBytes = 0;
-  let reportedFindings = context.reportedFindings ?? 0;
+  const findings = findingCapacity(maxFindings, context.reportedFindings ?? 0);
   let finished = false;
 
   /** Charges source text against the run's exposure ceiling exactly once. */
@@ -562,58 +548,55 @@ export function deepReviewFileTools(context: DeepReviewFileToolContext) {
           name: "report_finding",
           callId: options.toolCallId,
           arguments: input,
-          execute: async () => {
-            // The rows are written here, inside the tool body, because a
-            // replayed durable step returns the stored tool output without
-            // re-running this handler. Findings buffered for a post-turn flush
-            // would silently vanish on every replay.
-            const accepted = input.findings.slice(
-              0,
-              Math.max(0, maxFindings - reportedFindings),
-            );
-            const rows = await Promise.all(
-              accepted.map(async (finding, index) => {
-                const id = deepReviewFindingId({
-                  toolCallId: options.toolCallId,
-                  index,
-                });
-                return {
-                  id,
-                  itemId: item.id,
-                  jobId: job.id,
-                  workspaceId: job.workspaceId,
-                  path: item.path,
-                  severity: normalizeFindingSeverity(finding.severity),
-                  category: normalizeFindingCategory(finding.category),
-                  encryptedContent: await sealVaultSecret(
-                    {
-                      workspaceId: job.workspaceId,
-                      recordId: id,
-                      provider: "ai-review-finding",
-                    },
-                    JSON.stringify({
-                      title: finding.title,
-                      body: finding.body,
-                      existingCode: finding.existing_code,
-                      suggestionCode: finding.suggestion_code,
-                    }),
-                  ),
-                };
-              }),
-            );
-            if (rows.length > 0) {
-              await db
-                .insert(aiReviewFindings)
-                .values(rows)
-                .onConflictDoNothing();
-            }
-            reportedFindings += rows.length;
-            return {
-              accepted: rows.length,
-              declined: input.findings.length - rows.length,
-              findingIds: rows.map((row) => row.id),
-            };
-          },
+          execute: () =>
+            findings.withReservation(input.findings.length, async (count) => {
+              // The rows are written here, inside the tool body, because a
+              // replayed durable step returns the stored tool output without
+              // re-running this handler. Findings buffered for a post-turn flush
+              // would silently vanish on every replay.
+              const accepted = input.findings.slice(0, count);
+              const rows = await Promise.all(
+                accepted.map(async (finding, index) => {
+                  const id = deepReviewFindingId({
+                    toolCallId: options.toolCallId,
+                    index,
+                  });
+                  return {
+                    id,
+                    itemId: item.id,
+                    jobId: job.id,
+                    workspaceId: job.workspaceId,
+                    path: item.path,
+                    severity: normalizeFindingSeverity(finding.severity),
+                    category: normalizeFindingCategory(finding.category),
+                    encryptedContent: await sealVaultSecret(
+                      {
+                        workspaceId: job.workspaceId,
+                        recordId: id,
+                        provider: "ai-review-finding",
+                      },
+                      JSON.stringify({
+                        title: finding.title,
+                        body: finding.body,
+                        existingCode: finding.existing_code,
+                        suggestionCode: finding.suggestion_code,
+                      }),
+                    ),
+                  };
+                }),
+              );
+              if (rows.length > 0) {
+                await db
+                  .insert(aiReviewFindings)
+                  .values(rows)
+                  .onConflictDoNothing();
+              }
+              return {
+                accepted: rows.length,
+                declined: input.findings.length - rows.length,
+                findingIds: rows.map((row) => row.id),
+              };
+            }),
         }),
     }),
     finish_file: tool({

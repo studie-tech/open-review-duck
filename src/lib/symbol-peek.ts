@@ -51,9 +51,9 @@ const NON_NAME_PREFIXES = [
  * single lookup is issued. Unclassified tokens stay eligible because the
  * lexical fallback highlighter leaves plain identifiers unclassed.
  *
- * The token's text is the authority for reserved words: a Tree-sitter class
- * of `tok-keyword` used to be inherited by Python `keyword_argument` values,
- * and imported constants written as `name=VALUE` must still open a definition.
+ * Reserved-word exclusion uses the token text because syntax classes can also
+ * cover name-bearing constructs such as Python keyword arguments. Imported
+ * constants written as `name=VALUE` must still open a definition.
  */
 export function isPeekableToken(
   token: Pick<SyntaxToken, "className" | "text">,
@@ -118,9 +118,8 @@ function declarationKindFromLine(line: string) {
 /**
  * Builds a definition card from a same-file binding the analyzer never stored.
  *
- * Nested `const` bindings and other locals are not review units, so hovering
- * one used later in the same file used to look up nothing. The file source is
- * already in hand; the declaration line is enough to window a preview.
+ * Nested `const` bindings and other locals are not review units. The file
+ * source supplies enough declaration context to build their previews locally.
  */
 export function sameFileDeclarationPeek({
   language,

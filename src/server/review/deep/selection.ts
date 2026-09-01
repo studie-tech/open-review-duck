@@ -1,3 +1,8 @@
+import {
+  compileRepositoryGlob,
+  normalizeRepositoryPath,
+} from "./repository-glob";
+
 /**
  * Why a changed file is not reviewed.
  *
@@ -134,41 +139,6 @@ export const SUPPORTED_REVIEW_EXTENSIONS: ReadonlySet<string> = new Set([
   "nimble",
 ]);
 
-/** The default exclude globs. See ./rulebooks/NOTICE. */
-export const DEFAULT_REVIEW_EXCLUDE_PATTERNS: readonly string[] = [
-  "**/*_test.go",
-  "**/src/test/java/**/*.java",
-  "**/src/test/**/*.kt",
-  "**/*.test.{js,jsx,ts,tsx}",
-  "**/*.spec.{js,jsx,ts,tsx}",
-  "**/__tests__/**",
-  "**/test/**/*_test.py",
-  "**/tests/**/*_test.py",
-  "**/*_test.py",
-  "**/*_spec.rb",
-  "**/spec/**/*_spec.rb",
-  "**/*Test.java",
-  "**/*Tests.java",
-  "**/*_test.rs",
-  "**/oh_modules/**",
-  "**/*.test.ets",
-  "**/test/**/*.jl",
-  "**/test/**/*.hs",
-  "**/*Spec.hs",
-  "**/test/**/*.lhs",
-  "**/*Spec.lhs",
-  "**/tests/**/*.nim",
-  "**/__snapshots__/**",
-  "**/*.snap",
-  "**/testdata/**",
-  "**/fixtures/**",
-  "**/*.generated.*",
-  "**/*.gen.go",
-  "**/*.pb.go",
-  "**/*.pb.cc",
-  "**/*.pb.h",
-];
-
 // The exclude corpus mixes three kinds of path. Machine-emitted output and
 // inert test corpora are not worth a model turn, but hand-written test source
 // is: a wrong assertion or a skipped case is a real defect, and neither
@@ -194,61 +164,8 @@ const VENDORED_PATH_PATTERNS: readonly string[] = [
   "**/fixtures/**",
 ];
 
-/** Escapes the characters that carry meaning inside a regular expression. */
-function escapeLiteral(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Compiles one exclude glob into an anchored, case-insensitive expression.
- *
- * The corpus uses only `*`, a doubled star and `{a,b}`, matching upstream's
- * doublestar semantics: a doubled star spans zero or more path segments, so a
- * pattern rooted at one has to match a repository-root file as well as a
- * nested one.
- */
-function globToRegExp(pattern: string) {
-  let source = "";
-  let index = 0;
-  while (index < pattern.length) {
-    const character = pattern[index];
-    if (character === "*") {
-      if (pattern[index + 1] === "*") {
-        if (pattern[index + 2] === "/") {
-          source += "(?:[^/]*/)*";
-          index += 3;
-          continue;
-        }
-        source += ".*";
-        index += 2;
-        continue;
-      }
-      source += "[^/]*";
-      index += 1;
-      continue;
-    }
-    if (character === "{") {
-      const close = pattern.indexOf("}", index);
-      if (close > index) {
-        const alternatives = pattern.slice(index + 1, close).split(",");
-        source += `(?:${alternatives.map(escapeLiteral).join("|")})`;
-        index = close + 1;
-        continue;
-      }
-    }
-    source += escapeLiteral(character ?? "");
-    index += 1;
-  }
-  return new RegExp(`^${source}$`, "i");
-}
-
-const GENERATED_MATCHERS = GENERATED_PATH_PATTERNS.map(globToRegExp);
-const VENDORED_MATCHERS = VENDORED_PATH_PATTERNS.map(globToRegExp);
-
-/** Normalizes a repository path to the forward-slash form the globs assume. */
-function normalizePath(path: string) {
-  return path.replaceAll("\\", "/").replace(/^\.\//, "");
-}
+const GENERATED_MATCHERS = GENERATED_PATH_PATTERNS.map(compileRepositoryGlob);
+const VENDORED_MATCHERS = VENDORED_PATH_PATTERNS.map(compileRepositoryGlob);
 
 /**
  * Returns the lowercase extension without its dot, or null when there is none.
@@ -266,13 +183,13 @@ function pathExtension(path: string) {
 
 /** Returns whether a path is machine-emitted output rather than authored code. */
 export function isGeneratedPath(path: string) {
-  const normalized = normalizePath(path);
+  const normalized = normalizeRepositoryPath(path);
   return GENERATED_MATCHERS.some((matcher) => matcher.test(normalized));
 }
 
 /** Returns whether a path holds third-party or inert fixture content. */
 export function isVendoredPath(path: string) {
-  const normalized = normalizePath(path);
+  const normalized = normalizeRepositoryPath(path);
   return VENDORED_MATCHERS.some((matcher) => matcher.test(normalized));
 }
 
@@ -292,7 +209,7 @@ export function reviewExclusionReason(
   if (file.isBinary) return "binary";
   if (file.skipReason) return "oversized";
   if (!file.hasCurrentSource && !file.hasPreviousSource) return "no_source";
-  const path = normalizePath(file.path);
+  const path = normalizeRepositoryPath(file.path);
   const extension = pathExtension(path);
   // An extensionless path is a Makefile, a Dockerfile or a shell script, all
   // of which are worth reviewing; only a known-unreviewable extension is

@@ -38,6 +38,7 @@ async function configureWorkflowDuration() {
 
 /** @type {import("next").NextConfig} */
 const config = {
+  agentRules: false,
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     cpus: 4,

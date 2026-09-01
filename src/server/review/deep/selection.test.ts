@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_REVIEW_EXCLUDE_PATTERNS,
   isGeneratedPath,
   isVendoredPath,
   type ReviewCandidateFile,
@@ -208,6 +207,8 @@ describe("deep review path classification", () => {
     ]) {
       expect(isGeneratedPath(path)).toBe(true);
     }
+    expect(isGeneratedPath("/api/types.generated.go")).toBe(true);
+    expect(isGeneratedPath("src\\graphql\\schema.generated.ts")).toBe(true);
   });
 
   it("recognises vendored and fixture trees", () => {
@@ -221,6 +222,8 @@ describe("deep review path classification", () => {
     ]) {
       expect(isVendoredPath(path)).toBe(true);
     }
+    expect(isVendoredPath("/internal/parser/testdata/input.json")).toBe(true);
+    expect(isVendoredPath("spec\\fixtures\\users.yml")).toBe(true);
   });
 
   it("does not classify a directory or file that merely shares the word", () => {
@@ -260,19 +263,6 @@ describe("deep review allowlist corpus", () => {
     for (const extension of ["md", "txt", "png", "lock", ".go", "GO"]) {
       expect(SUPPORTED_REVIEW_EXTENSIONS.has(extension)).toBe(false);
     }
-  });
-
-  it("carries every exclude pattern verbatim", () => {
-    expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toHaveLength(31);
-    expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toContain("**/*_test.go");
-    expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toContain(
-      "**/*.test.{js,jsx,ts,tsx}",
-    );
-    expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toContain("**/oh_modules/**");
-    expect(DEFAULT_REVIEW_EXCLUDE_PATTERNS).toContain("**/*.pb.h");
-    expect(new Set(DEFAULT_REVIEW_EXCLUDE_PATTERNS).size).toBe(
-      DEFAULT_REVIEW_EXCLUDE_PATTERNS.length,
-    );
   });
 
   it("classifies only paths the ported corpus covers", () => {

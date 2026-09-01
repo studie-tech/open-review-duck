@@ -1,10 +1,4 @@
-export const AI_PROMPT_GROUPS = [
-  "Explanations",
-  "Deep review",
-  "Grouping",
-] as const;
-
-export type AiPromptGroup = (typeof AI_PROMPT_GROUPS)[number];
+type AiPromptGroup = "Explanations" | "Deep review" | "Grouping";
 
 export const AI_PROMPT_KEYS = [
   "explain.system",

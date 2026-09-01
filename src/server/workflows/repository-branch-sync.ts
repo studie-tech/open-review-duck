@@ -23,11 +23,14 @@ function failureText(cause: unknown) {
 }
 
 /** Durably captures one monitored repository branch. */
-export async function repositoryBranchSyncWorkflow(syncId: string) {
+export async function repositoryBranchSyncWorkflow(
+  syncId: string,
+  startToken?: string,
+) {
   "use workflow";
   const { workflowRunId } = getWorkflowMetadata();
   try {
-    return await executeRepositoryBranchSync(syncId, workflowRunId);
+    return await executeRepositoryBranchSync(syncId, workflowRunId, startToken);
   } catch (cause) {
     await recordTerminalFailure(syncId, workflowRunId, failureText(cause));
     throw cause;
@@ -73,13 +76,16 @@ async function recordTerminalFailure(
 async function executeRepositoryBranchSync(
   syncId: string,
   providerRunId: string,
+  startToken?: string,
 ) {
   "use step";
   const workflow = await ensureWorkflowRunLink(db, {
     kind: "sync_repository_branch",
     targetId: syncId,
     providerRunId,
+    startToken,
   });
+  if (!workflow) return { syncId, superseded: true as const };
   const run = await db.query.repositoryBranchSyncRuns.findFirst({
     where: eq(repositoryBranchSyncRuns.id, syncId),
   });

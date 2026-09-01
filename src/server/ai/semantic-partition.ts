@@ -112,10 +112,8 @@ export function enforceSemanticConceptCaps(
 /**
  * Describes the job one clustering run reserves.
  *
- * The layout it proposes for travels in `layoutKey`, not in `question`: a
- * question states a reviewer's turn and the database checks it against the
- * focus line and thread it was asked at, neither of which a clustering run
- * has. Naming the layout there made every one of these rows unwritable.
+ * The proposed layout belongs in `layoutKey`; `question` is reserved for
+ * reviewer interactions tied to a focus line and thread.
  */
 export function semanticClusterJobInput(input: {
   pullRequestId: string;

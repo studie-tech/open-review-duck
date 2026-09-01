@@ -1070,6 +1070,8 @@ export const repositoryBranchSyncRuns = createTable(
     workflowRunId: uuid().references(() => workflowRuns.id, {
       onDelete: "set null",
     }),
+    workflowStartToken: uuid(),
+    workflowStartLeaseExpiresAt: timestamp({ withTimezone: true }),
     status: workflowRunStatusEnum().notNull().default("queued"),
     progress: integer().notNull().default(0),
     force: boolean().notNull().default(false),
@@ -1106,6 +1108,8 @@ export const syncRuns = createTable(
     workflowRunId: uuid().references(() => workflowRuns.id, {
       onDelete: "set null",
     }),
+    workflowStartToken: uuid(),
+    workflowStartLeaseExpiresAt: timestamp({ withTimezone: true }),
     status: workflowRunStatusEnum().notNull().default("queued"),
     progress: integer().notNull().default(0),
     error: text(),
@@ -1208,6 +1212,8 @@ export const aiJobs = createTable(
     workflowRunId: uuid().references(() => workflowRuns.id, {
       onDelete: "set null",
     }),
+    workflowStartToken: uuid(),
+    workflowStartLeaseExpiresAt: timestamp({ withTimezone: true }),
     progress: integer().notNull().default(0),
     completionReason: aiCompletionReasonEnum(),
     model: varchar({ length: 255 }),
