@@ -2,6 +2,7 @@ import {
   supportsManagedReauthorization,
   supportsTokenReplacement,
 } from "~/lib/provider-credential-recovery";
+import { providerLabel } from "~/lib/provider-labels";
 
 export type ProviderPermissionKind = "merge" | "review" | "sync";
 
@@ -13,12 +14,6 @@ export interface ProviderConnectionRecovery {
   canReplaceToken: boolean;
   canReconnect: boolean;
 }
-
-const providerLabels: Record<ProviderPermissionName, string> = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-};
 
 const mergeAccess: Record<ProviderPermissionName, string> = {
   github: "Contents: Read and write",
@@ -43,11 +38,6 @@ export function providerSettingsHref(connectionId: string, repair?: "token") {
   const params = new URLSearchParams({ connection: connectionId });
   if (repair) params.set("repair", repair);
   return `/settings/providers?${params}`;
-}
-
-/** Names the provider the completion page talks about. */
-export function providerPermissionLabel(provider: ProviderPermissionName) {
-  return providerLabels[provider];
 }
 
 /** Returns the access a reviewer must grant to perform one provider action. */
@@ -100,7 +90,7 @@ export function providerPermissionRecovery(
   kind: ProviderPermissionKind,
   connection?: ProviderConnectionRecovery,
 ) {
-  const label = providerLabels[provider];
+  const label = providerLabel(provider);
   const requiredAccess = providerRequiredAccess(provider, kind);
   const finishLabel =
     provider === "azure_devops"

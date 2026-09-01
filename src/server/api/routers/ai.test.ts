@@ -63,6 +63,7 @@ vi.mock("~/server/ai/service", async (importOriginal) => ({
   settleAiJobQuota: mocks.settleAiJobQuota,
 }));
 
+import { DEEP_REVIEW_UNENTITLED_MESSAGE } from "~/server/ai/service";
 import { createCallerFactory } from "~/server/api/trpc";
 import type { db as database } from "~/server/db";
 import { aiRouter } from "./ai";
@@ -200,7 +201,7 @@ describe("ai.start deep review refusal", () => {
         pullRequestId: "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10",
         kind: "review",
       }),
-    ).rejects.toThrow("Deep review requires a paid plan");
+    ).rejects.toThrow(DEEP_REVIEW_UNENTITLED_MESSAGE);
   });
 
   it("does not fall through to any other reviewer", async () => {
@@ -212,6 +213,25 @@ describe("ai.start deep review refusal", () => {
       })
       .catch(() => undefined);
     expect(mocks.order).toEqual([]);
+  });
+
+  it("does not leak unexpected start failures", async () => {
+    const service = await import("~/server/ai/service");
+    const job = vi
+      .spyOn(service, "createAiJob")
+      .mockRejectedValueOnce(new Error("relation ai_jobs does not exist"));
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const { db } = createFakeDb();
+    await expect(
+      caller(db, true).start({
+        pullRequestId: "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10",
+        kind: "review",
+      }),
+    ).rejects.toThrow("Could not start the AI assistant. Try again.");
+    job.mockRestore();
+    error.mockRestore();
   });
 });
 

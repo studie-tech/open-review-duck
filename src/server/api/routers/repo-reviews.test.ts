@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   ensurePersonalWorkspace: vi.fn(async () => ({ id: "workspace-1" })),
 }));
 
-vi.mock("~/server/ai/service", () => ({
+vi.mock("~/server/ai/service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/server/ai/service")>()),
   createAiJob: mocks.createAiJob,
   scheduleAiJob: mocks.scheduleAiJob,
 }));
@@ -18,6 +19,7 @@ vi.mock("~/server/workspaces/service", () => ({
   ensurePersonalWorkspace: mocks.ensurePersonalWorkspace,
 }));
 
+import { DEEP_REVIEW_UNENTITLED_MESSAGE } from "~/server/ai/service";
 import { createCallerFactory } from "~/server/api/trpc";
 import type { db as database } from "~/server/db";
 import { repoReviewsRouter } from "./repo-reviews";
@@ -118,11 +120,11 @@ describe("repoReviews.startRun entitlement", () => {
 
   it("refuses an unsubscribed hosted account", async () => {
     mocks.createAiJob.mockRejectedValueOnce(
-      new Error("Deep review requires a paid plan"),
+      new Error(DEEP_REVIEW_UNENTITLED_MESSAGE),
     );
     await expect(
       caller([]).startRun({ monitorId, purpose: "code" }),
-    ).rejects.toThrow("Deep review requires a paid plan");
+    ).rejects.toThrow(DEEP_REVIEW_UNENTITLED_MESSAGE);
     expect(mocks.createAiJob).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -130,6 +132,43 @@ describe("repoReviews.startRun entitlement", () => {
         planTier: "free",
       }),
     );
+  });
+});
+
+describe("repoReviews.startRun errors", () => {
+  it("forwards shared AI start policy failures", async () => {
+    for (const message of [
+      "The managed SaaS model is not configured",
+      "Pull request not found",
+      "No review snapshot found",
+    ]) {
+      mocks.createAiJob.mockRejectedValueOnce(new Error(message));
+      await expect(
+        caller([]).startRun({ monitorId, purpose: "code" }),
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it("forwards the workspace budget extra", async () => {
+    mocks.createAiJob.mockRejectedValueOnce(
+      new Error("Workspace monthly AI budget is exhausted"),
+    );
+    await expect(
+      caller([]).startRun({ monitorId, purpose: "code" }),
+    ).rejects.toThrow("Workspace monthly AI budget is exhausted");
+  });
+
+  it("does not leak unexpected start failures", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    mocks.createAiJob.mockRejectedValueOnce(
+      new Error("relation ai_jobs does not exist"),
+    );
+    await expect(
+      caller([]).startRun({ monitorId, purpose: "code" }),
+    ).rejects.toThrow("Could not start the repository review. Try again.");
+    error.mockRestore();
   });
 });
 

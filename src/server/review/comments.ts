@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, lte, or } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { and, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import { reviewComments } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import type { ProviderReviewThread } from "~/server/providers/types";
@@ -106,4 +107,125 @@ export async function claimCommentForPublicationRetry(
     )
     .returning();
   return claimed;
+}
+
+/**
+ * Names the ledger row one comment of a conversation was published as.
+ *
+ * `publishInlineComment` opens a conversation and returns the identifier the
+ * provider gives that conversation: a discussion on GitLab, a thread on Azure
+ * DevOps, and the root comment on GitHub, which is what GitHub keys a thread
+ * by. So the ledger is keyed by conversation, and only the comment a
+ * conversation hangs from is ever a row of it — a reply is keyed by its own
+ * identifier instead.
+ */
+export function publishedCommentId(
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  return thread.comments[0]?.externalId === commentExternalId
+    ? thread.externalId
+    : undefined;
+}
+
+/**
+ * Names the reviewer ReviewDuck published one provider comment for.
+ *
+ * One workspace connection speaks for every member, so the provider cannot
+ * say which of them wrote a comment and will let any of them change it. What
+ * ReviewDuck published it knows the author of, and that is what it protects:
+ * a root comment through the conversation it opened, a reply through its own
+ * identifier. A comment ReviewDuck did not publish — a bot's, or one written
+ * in the provider's own interface — has no recorded author and stays open to
+ * whoever the provider itself would allow.
+ */
+export async function publishedCommentAuthor(
+  db: typeof database,
+  unitId: string,
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  const conversationId = publishedCommentId(thread, commentExternalId);
+  const [owned] = await db
+    .select({ userId: reviewComments.userId })
+    .from(reviewComments)
+    .where(
+      and(
+        eq(reviewComments.unitId, unitId),
+        eq(reviewComments.status, "published"),
+        conversationId
+          ? or(
+              eq(reviewComments.providerCommentExternalId, commentExternalId),
+              eq(reviewComments.providerExternalId, conversationId),
+            )
+          : eq(reviewComments.providerCommentExternalId, commentExternalId),
+      ),
+    )
+    .limit(1);
+  return owned?.userId;
+}
+
+/**
+ * Refuses one reviewer's change to a comment ReviewDuck published for another.
+ *
+ * Editing puts words in their mouth and deleting takes their feedback away,
+ * and the provider records neither as anyone but the shared connection.
+ */
+export async function assertCommentIsTheReviewersToChange(
+  db: typeof database,
+  userId: string,
+  unitId: string,
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  const author = await publishedCommentAuthor(
+    db,
+    unitId,
+    thread,
+    commentExternalId,
+  );
+  if (author && author !== userId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Another reviewer published this comment through ReviewDuck. Only they can change it.",
+    });
+  }
+}
+
+/**
+ * Drops the local record of comments that no longer exist at the provider.
+ *
+ * The ledger of what ReviewDuck published is what marks an AI finding as
+ * posted and hides a duplicate of the provider conversation, so a deleted
+ * comment has to leave it or the reviewer keeps being told it is still there.
+ */
+export async function forgetPublishedComments(
+  db: typeof database,
+  unitId: string,
+  gone: {
+    commentIds?: readonly (string | undefined)[];
+    conversationIds?: readonly (string | undefined)[];
+  },
+) {
+  const conversationIds = [...new Set(gone.conversationIds ?? [])].filter(
+    (id): id is string => Boolean(id),
+  );
+  const commentIds = [...new Set(gone.commentIds ?? [])].filter(
+    (id): id is string => Boolean(id),
+  );
+  // A root comment is recorded against the conversation it opened and a reply
+  // against itself, so both keys are given up together.
+  const named = [
+    ...(conversationIds.length
+      ? [inArray(reviewComments.providerExternalId, conversationIds)]
+      : []),
+    ...(commentIds.length
+      ? [inArray(reviewComments.providerCommentExternalId, commentIds)]
+      : []),
+  ];
+  if (named.length === 0) return;
+  await db
+    .delete(reviewComments)
+    .where(and(eq(reviewComments.unitId, unitId), or(...named)));
 }

@@ -4,14 +4,9 @@ import { ExternalLink, GitPullRequest } from "lucide-react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { providerLabel } from "~/lib/provider-labels";
 import type { UnimportedPullRequest } from "~/lib/unimported-pull-requests";
 import { unimportedPullRequestKey } from "~/lib/unimported-pull-requests";
-
-const providerLabel = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-};
 
 /** Renders open pull requests that still need to be prepared for review. */
 export function UnimportedPullRequestList({
@@ -63,7 +58,7 @@ export function UnimportedPullRequestList({
                 </span>
                 <span className="min-w-0 sm:flex-1">
                   <span className="flex min-w-0 items-center gap-2">
-                    <Badge>{providerLabel[pullRequest.provider]}</Badge>
+                    <Badge>{providerLabel(pullRequest.provider)}</Badge>
                     <span className="text-fog truncate text-xs">
                       {pullRequest.repositoryOwner}/{pullRequest.repositoryName}{" "}
                       #{pullRequest.number}
@@ -95,8 +90,8 @@ export function UnimportedPullRequestList({
                   href={pullRequest.webUrl}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label={`Open ${pullRequest.title} on ${providerLabel[pullRequest.provider]}`}
-                  title={`Open on ${providerLabel[pullRequest.provider]}`}
+                  aria-label={`Open ${pullRequest.title} on ${providerLabel(pullRequest.provider)}`}
+                  title={`Open on ${providerLabel(pullRequest.provider)}`}
                   className="text-mist hover:text-cloud hover:bg-surface-subtle grid size-9 place-items-center rounded-lg transition"
                 >
                   <ExternalLink className="size-4" />

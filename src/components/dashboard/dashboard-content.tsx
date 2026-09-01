@@ -40,6 +40,7 @@ import {
   priorityInboxGroup,
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
+import { PROVIDER_NAMES, providerLabel } from "~/lib/provider-labels";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
 import {
@@ -58,12 +59,6 @@ type WorkView =
   | "closed"
   | "removed"
   | "unimported";
-
-const providerLabel = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-} satisfies Record<PriorityInboxItem["provider"], string>;
 
 const workCopy = {
   all: [
@@ -708,13 +703,11 @@ export function PullRequestsContent({
                       className="bg-ink/35 h-9 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-36"
                     >
                       <option value="all">All providers</option>
-                      {Object.entries(providerLabel).map(
-                        ([provider, label]) => (
-                          <option key={provider} value={provider}>
-                            {label}
-                          </option>
-                        ),
-                      )}
+                      {PROVIDER_NAMES.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {providerLabel(provider)}
+                        </option>
+                      ))}
                     </select>
                     <RepositoryFilter
                       onChange={setRepositoryFilter}

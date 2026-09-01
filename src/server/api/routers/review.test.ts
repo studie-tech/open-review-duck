@@ -3,15 +3,17 @@ import { describe, expect, it } from "vitest";
 import { aiReviewFindingLocations } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { ProviderError } from "~/server/providers/types";
-import { DEEP_REVIEW_SURVEY_ITEM_PATH } from "~/server/review/deep/survey";
-import { sealVaultSecret } from "~/server/security/vault";
 import {
   assertCommentIsTheReviewersToChange,
+  publishedCommentAuthor,
+} from "~/server/review/comments";
+import {
   deepReviewFindingForPublication,
   deepReviewRunPayload,
-  importCandidateReads,
-  publishedCommentAuthor,
-} from "./review";
+} from "~/server/review/deep/payload";
+import { DEEP_REVIEW_SURVEY_ITEM_PATH } from "~/server/review/deep/survey";
+import { importCandidateReads } from "~/server/review/symbol-peek";
+import { sealVaultSecret } from "~/server/security/vault";
 
 const workspaceId = "00000000-0000-4000-8000-0000000000aa";
 const parentJobId = "00000000-0000-4000-8000-0000000000bb";

@@ -27,11 +27,11 @@ import { withAiQuestionConversationIds } from "~/server/ai/question-threads";
 import {
   CURRENT_AI_AGENT_VERSION,
   createAiJob,
-  DEEP_REVIEW_UNENTITLED_MESSAGE,
   deepReviewAvailable,
   scheduleAiJob,
   settleAiJobQuota,
 } from "~/server/ai/service";
+import { mapAiStartError } from "~/server/ai/start-errors";
 import { isLocalDeployment } from "~/server/deployment";
 import { cancelDeepReviewTree } from "~/server/review/deep/cancel";
 import { enforceRateLimit } from "~/server/security/rate-limit";
@@ -72,23 +72,6 @@ function publicConfiguration(managedModel: string) {
   };
 }
 
-const safeAiStartMessages = new Set([
-  // Imported rather than repeated: the set matches on exact text, so a copy
-  // that drifted from the thrown message would be laundered into the generic
-  // "could not start" reply and the caller would never learn it needs a plan.
-  DEEP_REVIEW_UNENTITLED_MESSAGE,
-  "Pull request not found",
-  "The managed SaaS model is not configured",
-  "No review snapshot found",
-  "No review context found",
-  "Daily managed AI request limit reached",
-  "Daily user AI request limit reached",
-  "Monthly AI token limit reached",
-  "The managed model is missing a current tool-capable catalog entry",
-  "Configure a local AI provider before using AI",
-  "Too many requests. Wait a moment and try again.",
-]);
-
 /** Requires the platform admin flag. Workspace admin is not enough. */
 async function requirePromptAdministrator(
   db: Parameters<typeof ensurePersonalWorkspace>[0],
@@ -105,14 +88,6 @@ async function requirePromptAdministrator(
       message: "Prompt administration requires an admin account",
     });
   }
-}
-
-/** Converts expected policy failures into safe user-facing messages. */
-function aiStartErrorMessage(cause: unknown) {
-  const message = cause instanceof Error ? cause.message : "";
-  if (safeAiStartMessages.has(message)) return message;
-  console.error("AI job creation failed", cause);
-  return "Could not start the AI assistant. Try again.";
 }
 
 export const aiRouter = createTRPCRouter({
@@ -415,7 +390,10 @@ export const aiRouter = createTRPCRouter({
       } catch (cause) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: aiStartErrorMessage(cause),
+          message: mapAiStartError(
+            cause,
+            "Could not start the AI assistant. Try again.",
+          ),
           cause,
         });
       }

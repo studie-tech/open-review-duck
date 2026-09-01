@@ -2,6 +2,7 @@
 
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 
 export type RepositoryFilterOption = {
@@ -9,12 +10,6 @@ export type RepositoryFilterOption = {
   label: string;
   provider: "github" | "gitlab" | "azure_devops";
 };
-
-const providerLabel = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-} as const;
 
 /** Returns the compact label for the current repository selection. */
 export function repositoryFilterLabel(
@@ -133,7 +128,7 @@ export function RepositoryFilter({
                 <span className="min-w-0 truncate">
                   {repository.label}
                   {providerFilter === "all"
-                    ? ` · ${providerLabel[repository.provider]}`
+                    ? ` · ${providerLabel(repository.provider)}`
                     : ""}
                 </span>
               </button>

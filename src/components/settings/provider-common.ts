@@ -1,5 +1,8 @@
 import type { CodeProvider } from "~/components/settings/provider-token-guide";
+import { providerLabel } from "~/lib/provider-labels";
 import type { RouterOutputs } from "~/trpc/react";
+
+export { providerLabel };
 
 export type Connection = RouterOutputs["provider"]["listConnections"][number];
 export type ImportedRepository =
@@ -21,33 +24,23 @@ export const providers: Array<{
 }> = [
   {
     id: "github",
-    label: "GitHub",
+    label: providerLabel("github"),
     description: "Fine-grained token · code write + PR comments",
     hostedDescription: "GitHub App or fine-grained token",
   },
   {
     id: "gitlab",
-    label: "GitLab",
+    label: providerLabel("gitlab"),
     description: "api scope · personal, project, or group token",
     hostedDescription: "OAuth or personal, project, or group token",
   },
   {
     id: "azure_devops",
-    label: "Azure DevOps",
+    label: providerLabel("azure_devops"),
     description: "PAT · Code (Read & write) permission",
     hostedDescription: "Organization PAT · Code (Read & write) permission",
   },
 ];
-
-/**
- * Names a provider the way the connection form does.
- *
- * A two-way test read every provider that was not GitHub as GitLab, so an
- * Azure DevOps connection offered to reconnect the wrong one.
- */
-export function providerLabel(provider: string) {
-  return providers.find(({ id }) => id === provider)?.label ?? provider;
-}
 
 /** Returns the user-facing authorization method for a saved connection. */
 export function credentialLabel(kind: string) {

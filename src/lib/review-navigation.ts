@@ -108,43 +108,6 @@ export interface ReviewHierarchyNode<T> {
   children: ReviewHierarchyNode<T>[];
 }
 
-export interface ReviewNavigationHistory {
-  unitIds: string[];
-  cursor: number;
-}
-
-/** Creates a navigation trail anchored to the first visible review unit. */
-export function createReviewNavigationHistory(unitId?: string) {
-  return {
-    unitIds: unitId ? [unitId] : [],
-    cursor: unitId ? 0 : -1,
-  } satisfies ReviewNavigationHistory;
-}
-
-/** Adds a visited unit while discarding any obsolete forward history. */
-export function pushReviewNavigationHistory(
-  history: ReviewNavigationHistory,
-  unitId: string,
-) {
-  if (history.unitIds[history.cursor] === unitId) return history;
-  const unitIds = [...history.unitIds.slice(0, history.cursor + 1), unitId];
-  return { unitIds, cursor: unitIds.length - 1 };
-}
-
-/** Resolves one backward or forward step in the visited-unit trail. */
-export function reviewNavigationHistoryTarget(
-  history: ReviewNavigationHistory,
-  direction: -1 | 1,
-) {
-  const cursor = history.cursor + direction;
-  const unitId = history.unitIds[cursor];
-  if (!unitId) return undefined;
-  return {
-    unitId,
-    history: { ...history, cursor },
-  };
-}
-
 /** Checks whether a review unit still requires reviewer action. */
 function isActionable(unit: ReviewNavigationUnit) {
   return unit.status !== "signed_off" && unit.status !== "waiting";

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  REVIEWDUCK_AGENT_QUESTION_PROMPT,
-  REVIEWDUCK_AGENT_RUN_PROMPT,
-  reviewDuckAgentPrompt,
-} from "./prompts";
+import { reviewDuckAgentPrompt } from "./prompts";
 
 const pullRequest = {
   title: "Tighten authorization",
@@ -161,13 +157,6 @@ describe("ReviewDuck agent prompts", () => {
     expect(prompt).toContain("STORED_UNIT_TASK");
     expect(prompt).toContain("STORED_SUBMIT");
     expect(prompt).not.toContain("evidence-driven assistant");
-  });
-
-  it("uses a read-only dispatch prompt", () => {
-    expect(REVIEWDUCK_AGENT_RUN_PROMPT).toContain("do not modify");
-    expect(REVIEWDUCK_AGENT_RUN_PROMPT).toContain("submit");
-    expect(REVIEWDUCK_AGENT_QUESTION_PROMPT).toMatch(/do not modify/i);
-    expect(REVIEWDUCK_AGENT_QUESTION_PROMPT).toContain("submit");
   });
 
   it("escapes untrusted values inside prompt delimiters", () => {

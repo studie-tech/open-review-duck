@@ -42,6 +42,7 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
 } from "~/components/review/review-file-card";
+import { CONTEXT_PAGE_LINES } from "~/components/review/review-workspace-constants";
 import { ReviewFilesPanel } from "~/components/review/review-files-panel";
 import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
@@ -67,7 +68,6 @@ import { api, type RouterOutputs } from "~/trpc/react";
 type Workspace = RouterOutputs["review"]["workspace"];
 type Monitor = RouterOutputs["repoReviews"]["get"];
 type RuleSeverity = "critical" | "high" | "medium" | "low";
-const CONTEXT_PAGE_LINES = 20;
 
 /** Restores optimistic file-review fields without dropping later source hydration. */
 function restoreFileToggleReviewState(

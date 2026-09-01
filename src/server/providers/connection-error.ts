@@ -1,10 +1,6 @@
+import { providerLabel } from "~/lib/provider-labels";
+import { classifyProviderFailure } from "./status-class";
 import { ProviderError, type ProviderName } from "./types";
-
-const providerLabels: Record<ProviderName, string> = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-};
 
 const permissionHelp: Record<ProviderName, string> = {
   github:
@@ -20,35 +16,32 @@ export function providerConnectionErrorMessage(
   provider: ProviderName,
   cause: unknown,
 ) {
-  const label = providerLabels[provider];
+  const label = providerLabel(provider);
+  const kind = classifyProviderFailure(cause);
 
-  if (cause instanceof ProviderError) {
-    if (cause.status === 401) {
-      return `${label} rejected this token. Create a new token, copy the complete value, and try again.`;
-    }
-    if (cause.status === 403) {
-      const message = cause.message.toLowerCase();
-      if (message.includes("rate limit")) {
-        return `${label}'s API rate limit is exhausted. Wait for ${label} to reset it before retrying; repeated retries will not help.`;
-      }
-      if (message.includes("single sign-on")) {
-        return `${label} requires organization SSO authorization for this token. Authorize it with the organization and try again.`;
-      }
-      return `${label} accepted the token but blocked access. ${permissionHelp[provider]}`;
-    }
-    if (cause.status === 404) {
-      return provider === "github"
-        ? "GitHub could not find this API endpoint. Check the Enterprise API URL, or leave it empty for github.com."
-        : `${label} could not find this API endpoint. Check the provider URL and try again.`;
-    }
-    if (cause.status === 429) {
-      return `${label}'s API rate limit is exhausted. Wait for ${label} to reset it before retrying; repeated retries will not help.`;
-    }
-    return `${label} returned an unexpected response${cause.status ? ` (${cause.status})` : ""}. Check the token and provider URL, then try again.`;
+  if (kind === "unauthorized") {
+    return `${label} rejected this token. Create a new token, copy the complete value, and try again.`;
   }
-
-  if (cause instanceof Error && cause.name === "TimeoutError") {
+  if (kind === "rate_limit") {
+    return `${label}'s API rate limit is exhausted. Wait for ${label} to reset it before retrying; repeated retries will not help.`;
+  }
+  if (kind === "sso") {
+    return `${label} requires organization SSO authorization for this token. Authorize it with the organization and try again.`;
+  }
+  if (kind === "forbidden") {
+    return `${label} accepted the token but blocked access. ${permissionHelp[provider]}`;
+  }
+  if (kind === "not_found") {
+    return provider === "github"
+      ? "GitHub could not find this API endpoint. Check the Enterprise API URL, or leave it empty for github.com."
+      : `${label} could not find this API endpoint. Check the provider URL and try again.`;
+  }
+  if (kind === "timeout") {
     return `${label} did not respond in time. Check the provider URL and try again.`;
+  }
+  if (kind === "unexpected") {
+    const status = cause instanceof ProviderError ? cause.status : undefined;
+    return `${label} returned an unexpected response${status ? ` (${status})` : ""}. Check the token and provider URL, then try again.`;
   }
 
   if (cause instanceof Error) {

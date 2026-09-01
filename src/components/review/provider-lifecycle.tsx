@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import { providerLabel } from "~/lib/provider-labels";
 import {
   providerCheckStateLabel,
   providerLifecycleSummaryLabel,
@@ -23,12 +24,6 @@ import type { RouterOutputs } from "~/trpc/react";
 import { ProviderPermissionRecovery } from "./provider-permission-recovery";
 
 type LifecycleState = RouterOutputs["review"]["providerLifecycle"];
-
-const providerNames = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  azure_devops: "Azure DevOps",
-} as const;
 
 /** Renders live CI checks and the provider merge action after a review. */
 export function ProviderLifecycle({
@@ -55,7 +50,7 @@ export function ProviderLifecycle({
   state?: LifecycleState;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const providerName = providerNames[provider];
+  const providerName = providerLabel(provider);
   const merged = state?.pullRequestState === "merged";
   const closed = state?.pullRequestState === "closed";
   const summary = state?.summary ?? "empty";

@@ -43,6 +43,12 @@ const WINDOW_MOUNT_MARGIN_PX = 1500;
  */
 export const WINDOWED_SOURCE_LINE_COUNT = 400;
 
+/** Matches `leading-[21px]` on the workspace source pane. */
+export const WORKSPACE_SOURCE_ROW_HEIGHT_PX = 21;
+
+/** Matches `min-h-6` on each highlighted source row. */
+export const HIGHLIGHTED_SOURCE_ROW_HEIGHT_PX = 24;
+
 /**
  * Renders source rows, mounting only the blocks near the viewport.
  *

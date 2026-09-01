@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SourceLineWindow,
   WINDOWED_SOURCE_LINE_COUNT,
+  WORKSPACE_SOURCE_ROW_HEIGHT_PX,
 } from "./source-line-window";
 
 type IntersectionReport = (entries: Array<{ isIntersecting: boolean }>) => void;
@@ -66,7 +67,7 @@ function renderLines(
     <SourceLineWindow
       items={Array.from({ length: count }, (_, index) => index)}
       pinnedLines={pinnedLines}
-      rowHeight={21}
+      rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
       startLine={1}
       renderLine={(_, lineNumber) => (
         <div key={lineNumber} data-testid={`line-${lineNumber}`} />
@@ -106,8 +107,12 @@ describe("SourceLineWindow", () => {
   it("reserves the height of the lines it has not mounted", () => {
     renderLines(WINDOWED_SOURCE_LINE_COUNT + 1);
     const trailing = observedBlocks.at(-1)?.element;
-    expect(trailing).toHaveStyle({ height: "21px" });
-    expect(observedBlocks[4]?.element).toHaveStyle({ height: "1050px" });
+    expect(trailing).toHaveStyle({
+      height: `${WORKSPACE_SOURCE_ROW_HEIGHT_PX}px`,
+    });
+    expect(observedBlocks[4]?.element).toHaveStyle({
+      height: `${50 * WORKSPACE_SOURCE_ROW_HEIGHT_PX}px`,
+    });
   });
 
   it("watches a block against the pane the source scrolls inside", () => {
@@ -148,7 +153,7 @@ describe("SourceLineWindow", () => {
           (_, index) => index,
         )}
         pinnedLines={[380]}
-        rowHeight={21}
+        rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
         startLine={1}
         renderLine={(_, lineNumber) => (
           <div key={lineNumber} data-testid={`line-${lineNumber}`} />

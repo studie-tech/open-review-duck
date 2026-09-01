@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReviewHierarchy,
-  createReviewNavigationHistory,
   deepReviewFindingTarget,
   deletedFileSignOffUnits,
   nextPendingReviewIndex,
@@ -9,11 +8,9 @@ import {
   optimisticallySignOffReviewUnit,
   optimisticallySignOffReviewUnits,
   optimisticallyUnreviewReviewUnits,
-  pushReviewNavigationHistory,
   resetSignedOffReviewUnits,
   restoreReviewUnitAfterFailedSignOff,
   reviewAvailability,
-  reviewNavigationHistoryTarget,
   reviewPathSearchMatches,
   reviewPathSections,
   unpublishableFindingReason,
@@ -424,37 +421,6 @@ describe("buildReviewHierarchy", () => {
     expect(hierarchy[0]?.children[0]?.children[0]?.unit.id).toBe("shared");
     expect(hierarchy[1]?.children[0]?.unit.id).toBe("beta-leaf");
     expect(hierarchy[1]?.children[0]?.children).toEqual([]);
-  });
-});
-
-describe("review navigation history", () => {
-  it("returns to the unit visited immediately before an automatic advance", () => {
-    const started = createReviewNavigationHistory("unit-a");
-    const advanced = pushReviewNavigationHistory(started, "unit-b");
-    const back = reviewNavigationHistoryTarget(advanced, -1);
-
-    expect(back?.unitId).toBe("unit-a");
-    expect(
-      reviewNavigationHistoryTarget(back?.history ?? advanced, 1)?.unitId,
-    ).toBe("unit-b");
-  });
-
-  it("discards forward history after navigating to a different unit", () => {
-    const visited = pushReviewNavigationHistory(
-      pushReviewNavigationHistory(
-        createReviewNavigationHistory("unit-a"),
-        "unit-b",
-      ),
-      "unit-c",
-    );
-    const back = reviewNavigationHistoryTarget(visited, -1);
-    const branched = pushReviewNavigationHistory(
-      back?.history ?? visited,
-      "unit-x",
-    );
-
-    expect(branched.unitIds).toEqual(["unit-a", "unit-b", "unit-x"]);
-    expect(reviewNavigationHistoryTarget(branched, 1)).toBeUndefined();
   });
 });
 

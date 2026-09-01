@@ -1,8 +1,21 @@
-import type { SourceFile } from "~/server/analysis/types";
+import { isLikelyBinaryFile, type SourceFile } from "~/server/analysis/types";
 
 export interface ProviderSourceCandidate {
   file: SourceFile;
   oversizedHash?: string;
+}
+
+export interface ChangedSourceLoad {
+  path: string;
+  fetchPath?: string;
+  previousFetchPath?: string;
+  ref: string;
+  previousRef: string;
+  changeType: NonNullable<SourceFile["changeType"]>;
+  needsPrevious: boolean;
+  oversizedHash: string;
+  contentBinaryHash?: (content: string) => string;
+  getFileContent: (path: string, ref: string) => Promise<string | undefined>;
 }
 
 interface RetainedProviderSource {
@@ -53,6 +66,63 @@ function removeLargestProviderSource(heap: RetainedProviderSource[]) {
 }
 
 const PROVIDER_SOURCE_CONCURRENCY = 8;
+
+/** Fetches one changed source, sniffing binaries and skipping missing revisions. */
+export async function loadChangedSource(
+  request: ChangedSourceLoad,
+): Promise<ProviderSourceCandidate> {
+  const fetchPath = request.fetchPath ?? request.path;
+  const previousFetchPath = request.previousFetchPath ?? request.path;
+  const skippedFile: SourceFile = {
+    path: request.path,
+    content: "",
+    skipReason: "too_large",
+    isBinary: false,
+    binaryHash: request.oversizedHash,
+    changeType: request.changeType,
+  };
+  if (isLikelyBinaryFile(request.path)) {
+    return {
+      file: {
+        path: request.path,
+        content: "",
+        isBinary: true,
+        binaryHash: request.oversizedHash,
+        changeType: request.changeType,
+      },
+    };
+  }
+  const content = await request.getFileContent(fetchPath, request.ref);
+  if (content === undefined) return { file: skippedFile };
+  if (isLikelyBinaryFile(request.path, content)) {
+    return {
+      file: {
+        path: request.path,
+        content: "",
+        isBinary: true,
+        binaryHash:
+          request.contentBinaryHash?.(content) ?? request.oversizedHash,
+        changeType: request.changeType,
+      },
+    };
+  }
+  const previousContent = request.needsPrevious
+    ? await request.getFileContent(previousFetchPath, request.previousRef)
+    : undefined;
+  if (request.needsPrevious && previousContent === undefined) {
+    return { file: skippedFile };
+  }
+  return {
+    file: {
+      path: request.path,
+      content,
+      previousContent,
+      isBinary: false,
+      changeType: request.changeType,
+    },
+    oversizedHash: request.oversizedHash,
+  };
+}
 
 /** Loads provider files concurrently and retains the smallest sources in budget. */
 export async function collectProviderSourceFiles<T>(
