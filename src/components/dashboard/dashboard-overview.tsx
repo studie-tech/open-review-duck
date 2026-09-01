@@ -24,7 +24,7 @@ import {
 } from "~/components/ui/link-status";
 import { clampToClientClock } from "~/lib/hydration-clock";
 import { prioritizeInbox } from "~/lib/priority-inbox";
-import { formatRelativeTime } from "~/lib/relative-time";
+import { formatRelativeTime, useRelativeClock } from "~/lib/relative-time";
 import { activeRunStatuses } from "~/lib/repository-run-progress";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
@@ -131,6 +131,7 @@ export function DashboardOverview({
   initialMonitors: Monitors;
   fetchedAt: number;
 }) {
+  const now = useRelativeClock(fetchedAt);
   const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
@@ -383,7 +384,7 @@ export function DashboardOverview({
           {activities.length > 0 ? (
             <div className="divide-y divide-line">
               {activities.map((item) => (
-                <ActivityRow key={item.id} item={item} now={fetchedAt} />
+                <ActivityRow key={item.id} item={item} now={now} />
               ))}
             </div>
           ) : (
@@ -530,13 +531,7 @@ function ModeEmptyState({
 }
 
 /** Renders one event in the cross-workspace activity feed. */
-function ActivityRow({
-  item,
-  now,
-}: {
-  item: WorkspaceActivity;
-  now: number;
-}) {
+function ActivityRow({ item, now }: { item: WorkspaceActivity; now: number }) {
   const Icon =
     item.kind === "pull-request"
       ? GitPullRequest

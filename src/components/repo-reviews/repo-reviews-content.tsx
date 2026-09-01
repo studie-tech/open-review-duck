@@ -38,7 +38,7 @@ import { Button } from "~/components/ui/button";
 import { LinkPendingSpinner } from "~/components/ui/link-status";
 import { clampToClientClock } from "~/lib/hydration-clock";
 import { providerLabel } from "~/lib/provider-labels";
-import { formatRelativeTime } from "~/lib/relative-time";
+import { formatRelativeTime, useRelativeClock } from "~/lib/relative-time";
 import {
   repositoryReportFilename,
   repositoryReviewReport,
@@ -105,6 +105,7 @@ export function RepoReviewsContent({
   fetchedAt: number;
 }) {
   const utils = api.useUtils();
+  const now = useRelativeClock(fetchedAt);
   // The sidebar prefetches this route eagerly, so the server payload can
   // predate the navigation. Stamping it with the time it was read lets the
   // shared stale time decide whether hydration has to refresh it.
@@ -382,7 +383,7 @@ export function RepoReviewsContent({
               section={section}
               onSection={setSection}
               onRemoved={() => setSelectedMonitorId(undefined)}
-              fetchedAt={fetchedAt}
+              now={now}
             />
           )}
         </div>
@@ -446,13 +447,13 @@ function RepositoryCockpit({
   section,
   onSection,
   onRemoved,
-  fetchedAt,
+  now,
 }: {
   monitor: Monitors[number];
   section: Section;
   onSection: (section: Section) => void;
   onRemoved: () => void;
-  fetchedAt: number;
+  now: number;
 }) {
   const utils = api.useUtils();
   const { navigate } = usePendingNavigation();
@@ -611,7 +612,7 @@ function RepositoryCockpit({
               <span>
                 Checked{" "}
                 {monitor.lastCheckedAt
-                  ? formatRelativeTime(monitor.lastCheckedAt, fetchedAt)
+                  ? formatRelativeTime(monitor.lastCheckedAt, now)
                   : "Not yet"}
               </span>
             </div>
@@ -696,7 +697,7 @@ function RepositoryCockpit({
             runPendingPurpose={
               run.isPending ? (run.variables?.purpose ?? undefined) : undefined
             }
-            fetchedAt={fetchedAt}
+            now={now}
           />
         )}
         {section === "findings" && (
@@ -725,7 +726,7 @@ function Overview({
   enabledRuleCount,
   startRun,
   runPendingPurpose,
-  fetchedAt,
+  now,
 }: {
   monitor: Monitors[number];
   onSection: (section: Section) => void;
@@ -735,7 +736,7 @@ function Overview({
   enabledRuleCount: number;
   startRun: (purpose: "code" | "compliance") => void;
   runPendingPurpose?: "code" | "compliance";
-  fetchedAt: number;
+  now: number;
 }) {
   const total = monitor.progress.total;
   const percent = total
@@ -769,7 +770,7 @@ function Overview({
           value={`v${monitor.snapshot?.version ?? 0}`}
           detail={
             monitor.snapshot
-              ? formatRelativeTime(monitor.snapshot.createdAt, fetchedAt)
+              ? formatRelativeTime(monitor.snapshot.createdAt, now)
               : "Preparing first snapshot"
           }
         />
