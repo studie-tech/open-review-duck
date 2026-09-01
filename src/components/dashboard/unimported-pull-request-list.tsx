@@ -11,18 +11,18 @@ import { unimportedPullRequestKey } from "~/lib/unimported-pull-requests";
 /** Renders open pull requests that still need to be prepared for review. */
 export function UnimportedPullRequestList({
   onPrepare,
-  pendingKey,
+  pendingKeys,
   pullRequests,
 }: {
   onPrepare: (pullRequest: UnimportedPullRequest) => void;
-  pendingKey?: string;
+  pendingKeys?: ReadonlySet<string>;
   pullRequests: UnimportedPullRequest[];
 }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-line">
       {pullRequests.map((pullRequest, index) => {
         const key = unimportedPullRequestKey(pullRequest);
-        const pending = pendingKey === key;
+        const pending = pendingKeys?.has(key) ?? false;
         const previous = pullRequests[index - 1];
         const showGroupHeading =
           previous?.repositoryId !== pullRequest.repositoryId;
