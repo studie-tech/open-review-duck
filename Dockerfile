@@ -46,6 +46,7 @@ ENV ALLOW_PRIVATE_PROVIDER_HOSTS=true
 ENV REVIEWDUCK_VERSION=$REVIEWDUCK_VERSION
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates curl git libatomic1 tini util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/local/bin/gosu \
