@@ -312,13 +312,23 @@ export function PullRequestsContent({
     }),
     [providerFilter, repositoryFilter, searchQuery],
   );
+  const actionableFailedSyncs = useMemo(
+    () =>
+      failedSyncs.filter(
+        (sync) =>
+          !synchronizingKeys.has(
+            `${sync.repositoryId}:${sync.pullRequestNumber}`,
+          ),
+      ),
+    [failedSyncs, synchronizingKeys],
+  );
   const visibleSynchronizing = useMemo(
     () => filterReviewPreparations(synchronizing, preparationFilters),
     [preparationFilters, synchronizing],
   );
   const visibleFailedSyncs = useMemo(
-    () => filterReviewPreparations(failedSyncs, preparationFilters),
-    [failedSyncs, preparationFilters],
+    () => filterReviewPreparations(actionableFailedSyncs, preparationFilters),
+    [actionableFailedSyncs, preparationFilters],
   );
   const visiblePreparationCount =
     visibleSynchronizing.length + visibleFailedSyncs.length;
@@ -401,12 +411,12 @@ export function PullRequestsContent({
           : [
               ...prioritizedNeedsReview,
               ...synchronizing,
-              ...failedSyncs,
+              ...actionableFailedSyncs,
               ...availableUnimported,
             ],
     [
       availableUnimported,
-      failedSyncs,
+      actionableFailedSyncs,
       prioritizedNeedsReview,
       sourceItems,
       synchronizing,
@@ -475,7 +485,8 @@ export function PullRequestsContent({
   const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
   const hasUnimportedQueryError = unimportedPullRequests.isError;
-  const hasPreparationWork = synchronizing.length + failedSyncs.length > 0;
+  const hasPreparationWork =
+    synchronizing.length + actionableFailedSyncs.length > 0;
   const hasWorkNav =
     hasImportedWork ||
     hasPreparationWork ||
@@ -506,7 +517,9 @@ export function PullRequestsContent({
     workView === "unimported"
       ? availableUnimported.length
       : sourceItems.length +
-        (workView === "all" ? synchronizing.length + failedSyncs.length : 0);
+        (workView === "all"
+          ? synchronizing.length + actionableFailedSyncs.length
+          : 0);
   const filterScopeItems = useMemo(() => {
     if (workView === "unimported") {
       return filterUnimportedPullRequests(availableUnimported, {
