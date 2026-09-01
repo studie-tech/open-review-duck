@@ -2960,10 +2960,7 @@ export const SideBySideUnitDiff = forwardRef<
             const next = new Map(current);
             next.set(
               key,
-              Math.min(
-                gap.count,
-                (current.get(key) ?? 0) + CONTEXT_PAGE_LINES,
-              ),
+              Math.min(gap.count, (current.get(key) ?? 0) + CONTEXT_PAGE_LINES),
             );
             return next;
           });
@@ -2978,10 +2975,7 @@ export const SideBySideUnitDiff = forwardRef<
       }
       if (direction === 1 && visibleRowEnd < rows.length) {
         setContextAfterRows((current) =>
-          Math.min(
-            rows.length - focusRange.end,
-            current + CONTEXT_PAGE_LINES,
-          ),
+          Math.min(rows.length - focusRange.end, current + CONTEXT_PAGE_LINES),
         );
         return true;
       }
