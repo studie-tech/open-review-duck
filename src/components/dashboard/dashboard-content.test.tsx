@@ -302,6 +302,35 @@ describe("PullRequestsContent", () => {
     });
   });
 
+  it("hides a stale failure while the same review is synchronizing", () => {
+    queryState.recentSyncFailures = [
+      {
+        id: "sync-failed",
+        repositoryId: "repository-1",
+        pullRequestNumber: 42,
+        progress: 10,
+        completedAt: new Date(),
+        repositoryOwner: "reviewduck",
+        repositoryName: "app",
+        provider: "azure_devops",
+        title: "Make synchronization visible",
+        message: "The previous preparation failed.",
+      },
+    ];
+
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
+
+    expect(screen.getByText("Preparing for review")).toBeVisible();
+    expect(
+      screen.queryByText("Preparation needs attention"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("prioritizes continued work and filters across providers", async () => {
     queryState.activeSyncs = [];
     const user = userEvent.setup();
