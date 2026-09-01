@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -185,13 +191,23 @@ describe("PullRequestsContent", () => {
       <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
     );
 
-    expect(screen.getByText("Preparing a review")).toBeVisible();
-    expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
-      "Azure DevOps · reviewduck/app #42",
-    );
-    expect(screen.getByText("Make synchronization visible")).toBeVisible();
+    const preparationStatus = screen.getByRole("region", {
+      name: "Review preparation status",
+    });
     expect(
-      screen.getByText("Fetching pull request and changed files"),
+      within(preparationStatus).getByText("Preparing for review"),
+    ).toBeVisible();
+    expect(within(preparationStatus).getByText("Azure DevOps")).toBeVisible();
+    expect(
+      within(preparationStatus).getByText("reviewduck/app #42"),
+    ).toBeVisible();
+    expect(
+      within(preparationStatus).getByText("Make synchronization visible"),
+    ).toBeVisible();
+    expect(
+      within(preparationStatus).getByText(
+        "Fetching pull request and changed files",
+      ),
     ).toBeVisible();
     expect(
       screen.getByRole("progressbar", {
@@ -199,10 +215,8 @@ describe("PullRequestsContent", () => {
       }),
     ).toHaveAttribute("aria-valuenow", "25");
     expect(
-      screen.getByRole("heading", {
-        name: "Your review is being prepared",
-      }),
-    ).toBeVisible();
+      screen.queryByText("The review queue updates automatically"),
+    ).not.toBeInTheDocument();
 
     queryState.activeSyncs = [];
     view.rerender(
@@ -237,12 +251,20 @@ describe("PullRequestsContent", () => {
       <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
     );
 
-    expect(screen.getByText("A review could not be prepared")).toBeVisible();
-    expect(screen.getByText("Azure DevOps").closest("p")).toHaveTextContent(
-      "Azure DevOps · DSAIE/hub-app #18622",
-    );
+    const preparationStatus = screen.getByRole("region", {
+      name: "Review preparation status",
+    });
     expect(
-      screen.getByText(/Failed at 10% while fetching pull request/),
+      within(preparationStatus).getByText("Preparation needs attention"),
+    ).toBeVisible();
+    expect(within(preparationStatus).getByText("Azure DevOps")).toBeVisible();
+    expect(
+      within(preparationStatus).getByText("DSAIE/hub-app #18622"),
+    ).toBeVisible();
+    expect(
+      within(preparationStatus).getByText(
+        /Failed at 10% while fetching pull request/,
+      ),
     ).toHaveTextContent(
       "Reconnect a token with Code: Read & write access to this repository.",
     );

@@ -13,12 +13,9 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  DashboardFailurePanel,
-  DashboardSyncPanel,
-} from "~/components/dashboard/dashboard-panels";
 import { PullRequestList } from "~/components/dashboard/pull-request-list";
 import { RepositoryFilter } from "~/components/dashboard/repository-filter";
+import { ReviewPreparationList } from "~/components/dashboard/review-preparation-list";
 import { UnimportedPullRequestList } from "~/components/dashboard/unimported-pull-request-list";
 import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
@@ -41,6 +38,7 @@ import {
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
 import { PROVIDER_NAMES, providerLabel } from "~/lib/provider-labels";
+import { filterReviewPreparations } from "~/lib/review-preparation";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
 import {
@@ -261,7 +259,7 @@ export function PullRequestsContent({
     [needsReview],
   );
   const unimportedSource = unimportedPullRequests.data?.pullRequests ?? [];
-  const syncingUnimportedKeys = useMemo(
+  const synchronizingKeys = useMemo(
     () =>
       new Set(
         synchronizing.map(
@@ -270,9 +268,18 @@ export function PullRequestsContent({
       ),
     [synchronizing],
   );
+  const preparationKeys = useMemo(
+    () =>
+      new Set(
+        [...synchronizing, ...failedSyncs].map(
+          (sync) => `${sync.repositoryId}:${sync.pullRequestNumber}`,
+        ),
+      ),
+    [failedSyncs, synchronizing],
+  );
   useEffect(() => {
     if (!pendingUnimportedKey) return;
-    if (syncingUnimportedKeys.has(pendingUnimportedKey)) {
+    if (synchronizingKeys.has(pendingUnimportedKey)) {
       setPendingUnimportedKey(undefined);
       return;
     }
@@ -286,17 +293,35 @@ export function PullRequestsContent({
   }, [
     pendingUnimportedKey,
     prepareReview.isPending,
-    syncingUnimportedKeys,
+    synchronizingKeys,
     unimportedSource,
   ]);
   const availableUnimported = useMemo(
     () =>
       unimportedSource.filter(
         (pullRequest) =>
-          !syncingUnimportedKeys.has(unimportedPullRequestKey(pullRequest)),
+          !preparationKeys.has(unimportedPullRequestKey(pullRequest)),
       ),
-    [syncingUnimportedKeys, unimportedSource],
+    [preparationKeys, unimportedSource],
   );
+  const preparationFilters = useMemo(
+    () => ({
+      provider: providerFilter,
+      repositories: repositoryFilter,
+      search: searchQuery,
+    }),
+    [providerFilter, repositoryFilter, searchQuery],
+  );
+  const visibleSynchronizing = useMemo(
+    () => filterReviewPreparations(synchronizing, preparationFilters),
+    [preparationFilters, synchronizing],
+  );
+  const visibleFailedSyncs = useMemo(
+    () => filterReviewPreparations(failedSyncs, preparationFilters),
+    [failedSyncs, preparationFilters],
+  );
+  const visiblePreparationCount =
+    visibleSynchronizing.length + visibleFailedSyncs.length;
   const sourceItems = isHistoryView(workView)
     ? workView === "reviewed"
       ? reviewed
@@ -353,7 +378,9 @@ export function PullRequestsContent({
       includeDrafts: showDrafts,
     });
   const workCounts = {
-    all: applySharedFilters(prioritizedNeedsReview, "all").length,
+    all:
+      applySharedFilters(prioritizedNeedsReview, "all").length +
+      visiblePreparationCount,
     continue: applySharedFilters(prioritizedNeedsReview, "continue").length,
     ready: applySharedFilters(prioritizedNeedsReview, "ready").length,
     unreviewable: applySharedFilters(prioritizedNeedsReview, "unreviewable")
@@ -371,8 +398,20 @@ export function PullRequestsContent({
         ? sourceItems
         : workView === "unimported"
           ? availableUnimported
-          : [...prioritizedNeedsReview, ...availableUnimported],
-    [availableUnimported, prioritizedNeedsReview, sourceItems, workView],
+          : [
+              ...prioritizedNeedsReview,
+              ...synchronizing,
+              ...failedSyncs,
+              ...availableUnimported,
+            ],
+    [
+      availableUnimported,
+      failedSyncs,
+      prioritizedNeedsReview,
+      sourceItems,
+      synchronizing,
+      workView,
+    ],
   );
   const repositories = useMemo(
     () =>
@@ -436,25 +475,38 @@ export function PullRequestsContent({
   const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
   const hasUnimportedQueryError = unimportedPullRequests.isError;
+  const hasPreparationWork = synchronizing.length + failedSyncs.length > 0;
   const hasWorkNav =
-    hasImportedWork || hasManualRepositories || hasUnimportedQueryError;
+    hasImportedWork ||
+    hasPreparationWork ||
+    hasManualRepositories ||
+    hasUnimportedQueryError;
   const showCatchUpEmpty =
     !isHistoryView(workView) &&
     workView !== "unimported" &&
     needsReview.length === 0 &&
+    !hasPreparationWork &&
     !(workView === "all" && availableUnimported.length > 0) &&
     !hasUnimportedQueryError;
   const showListFilters = isHistoryView(workView)
     ? sourceItems.length > 0 || filtersActive
     : workView === "unimported"
       ? hasManualRepositories || filtersActive
-      : needsReview.length > 0 || availableUnimported.length > 0;
+      : needsReview.length > 0 ||
+        hasPreparationWork ||
+        availableUnimported.length > 0;
   const listKind = isHistoryView(workView) ? workView : "active";
   const [sectionTitle, sectionDetail] = workCopy[workView];
   const listedCount =
-    workView === "unimported" ? visibleUnimported.length : visibleItems.length;
+    workView === "unimported"
+      ? visibleUnimported.length
+      : visibleItems.length +
+        (workView === "all" ? visiblePreparationCount : 0);
   const listedTotal =
-    workView === "unimported" ? availableUnimported.length : sourceItems.length;
+    workView === "unimported"
+      ? availableUnimported.length
+      : sourceItems.length +
+        (workView === "all" ? synchronizing.length + failedSyncs.length : 0);
   const filterScopeItems = useMemo(() => {
     if (workView === "unimported") {
       return filterUnimportedPullRequests(availableUnimported, {
@@ -552,26 +604,7 @@ export function PullRequestsContent({
         </Button>
       </div>
 
-      <div className="mt-8 space-y-4">
-        <DashboardSyncPanel synchronizing={synchronizing} />
-        <DashboardFailurePanel
-          failedSyncs={failedSyncs}
-          retryingKey={
-            pendingUnimportedKey ??
-            (prepareReview.isPending
-              ? `${prepareReview.variables?.repositoryId}:${prepareReview.variables?.number}`
-              : undefined)
-          }
-          onRetry={(sync) =>
-            prepareReview.mutate({
-              repositoryId: sync.repositoryId,
-              number: sync.pullRequestNumber,
-            })
-          }
-        />
-      </div>
-
-      <section className="mt-10">
+      <section className="mt-8">
         <div
           className={cn(
             "grid items-start gap-4",
@@ -802,6 +835,7 @@ export function PullRequestsContent({
                 {workView === "unimported" ? (
                   <UnimportedInboxSection {...unimportedSectionProps} />
                 ) : visibleItems.length === 0 &&
+                  !(workView === "all" && visiblePreparationCount > 0) &&
                   !(
                     workView === "all" &&
                     (availableUnimported.length > 0 || hasUnimportedQueryError)
@@ -850,6 +884,24 @@ export function PullRequestsContent({
                   </div>
                 ) : (
                   <div className="space-y-6">
+                    {workView === "all" && visiblePreparationCount > 0 && (
+                      <ReviewPreparationList
+                        failedSyncs={visibleFailedSyncs}
+                        synchronizing={visibleSynchronizing}
+                        retryingKey={
+                          pendingUnimportedKey ??
+                          (prepareReview.isPending
+                            ? `${prepareReview.variables?.repositoryId}:${prepareReview.variables?.number}`
+                            : undefined)
+                        }
+                        onRetry={(sync) =>
+                          prepareReview.mutate({
+                            repositoryId: sync.repositoryId,
+                            number: sync.pullRequestNumber,
+                          })
+                        }
+                      />
+                    )}
                     {visibleItems.length > 0 && (
                       <PullRequestList
                         pullRequests={visibleItems}
