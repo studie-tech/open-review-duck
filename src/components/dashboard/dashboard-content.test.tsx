@@ -107,10 +107,20 @@ vi.mock("~/trpc/react", () => ({
         })),
       },
       sync: {
-        useMutation: vi.fn(() => ({
-          mutate: queryState.syncMutate,
-          isPending: false,
-        })),
+        useMutation: vi.fn(
+          (options?: {
+            onMutate?: (input: {
+              repositoryId: string;
+              number: number;
+            }) => void;
+          }) => ({
+            mutate: (input: { repositoryId: string; number: number }) => {
+              options?.onMutate?.(input);
+              queryState.syncMutate(input);
+            },
+            isPending: false,
+          }),
+        ),
       },
     },
   },
@@ -299,6 +309,61 @@ describe("PullRequestsContent", () => {
     expect(queryState.syncMutate).toHaveBeenCalledWith({
       repositoryId: "repository-failed",
       number: 18_622,
+    });
+  });
+
+  it("keeps every concurrent preparation retry disabled independently", async () => {
+    const user = userEvent.setup();
+    queryState.activeSyncs = [];
+    queryState.recentSyncFailures = [
+      {
+        id: "sync-failed-a",
+        repositoryId: "repository-a",
+        pullRequestNumber: 101,
+        progress: 10,
+        completedAt: new Date(),
+        repositoryOwner: "acme",
+        repositoryName: "web",
+        provider: "github",
+        title: "First failed review",
+        message: "The first preparation failed.",
+      },
+      {
+        id: "sync-failed-b",
+        repositoryId: "repository-b",
+        pullRequestNumber: 202,
+        progress: 20,
+        completedAt: new Date(),
+        repositoryOwner: "acme",
+        repositoryName: "api",
+        provider: "github",
+        title: "Second failed review",
+        message: "The second preparation failed.",
+      },
+    ];
+
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
+
+    const retryButtons = screen.getAllByRole("button", { name: "Retry" });
+    expect(retryButtons).toHaveLength(2);
+    const [firstRetry, secondRetry] = retryButtons;
+    if (!firstRetry || !secondRetry) throw new Error("Retry buttons missing");
+    await user.click(firstRetry);
+    expect(firstRetry).toBeDisabled();
+    expect(secondRetry).toBeEnabled();
+
+    await user.click(secondRetry);
+    expect(firstRetry).toBeDisabled();
+    expect(secondRetry).toBeDisabled();
+    expect(queryState.syncMutate).toHaveBeenNthCalledWith(1, {
+      repositoryId: "repository-a",
+      number: 101,
+    });
+    expect(queryState.syncMutate).toHaveBeenNthCalledWith(2, {
+      repositoryId: "repository-b",
+      number: 202,
     });
   });
 
@@ -737,12 +802,8 @@ describe("PullRequestsContent", () => {
       screen.queryByText("Inventory improvements"),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Add for review" }));
-    expect(queryState.syncMutate).toHaveBeenCalledTimes(2);
-    expect(queryState.syncMutate).toHaveBeenLastCalledWith({
-      repositoryId: "repository-manual",
-      number: 77,
-    });
+    expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+    expect(queryState.syncMutate).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the drafts switch available for un-imported pull requests", async () => {

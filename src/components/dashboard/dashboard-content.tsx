@@ -68,7 +68,7 @@ type UnimportedInboxSectionProps = {
   onPrepare: (pullRequest: UnimportedPullRequest) => void;
   onRetry: () => void;
   onShowDrafts: () => void;
-  pendingKey?: string;
+  pendingKeys?: ReadonlySet<string>;
   pullRequests: UnimportedPullRequest[];
   totalCount: number;
 };
@@ -149,7 +149,9 @@ export function PullRequestsContent({
       retry: false,
       refetchOnWindowFocus: false,
     });
-  const [pendingUnimportedKey, setPendingUnimportedKey] = useState<string>();
+  const [pendingPreparationKeys, setPendingPreparationKeys] = useState(
+    () => new Set<string>(),
+  );
   const hadActiveSync = useRef(false);
   const reviews = pullRequests.data ?? initialPullRequests;
   const synchronizing = activeSyncs.data ?? [];
@@ -209,13 +211,17 @@ export function PullRequestsContent({
     onSettled: () => setPendingPullRequestId(undefined),
   });
   const prepareReview = api.review.sync.useMutation({
-    onMutate: (input) =>
-      setPendingUnimportedKey(
-        unimportedPullRequestKey({
-          repositoryId: input.repositoryId,
-          number: input.number,
-        }),
-      ),
+    onMutate: (input) => {
+      const key = unimportedPullRequestKey({
+        repositoryId: input.repositoryId,
+        number: input.number,
+      });
+      setPendingPreparationKeys((current) => {
+        const next = new Set(current);
+        next.add(key);
+        return next;
+      });
+    },
     onSuccess: (_result, input) => {
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
@@ -227,8 +233,17 @@ export function PullRequestsContent({
         description: `Pull request #${input.number} is being prepared in the background.`,
       });
     },
-    onError: (error) => {
-      setPendingUnimportedKey(undefined);
+    onError: (error, input) => {
+      const key = unimportedPullRequestKey({
+        repositoryId: input.repositoryId,
+        number: input.number,
+      });
+      setPendingPreparationKeys((current) => {
+        if (!current.has(key)) return current;
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
       toast.error("Could not prepare review", {
         description: error.message,
       });
@@ -278,24 +293,12 @@ export function PullRequestsContent({
     [failedSyncs, synchronizing],
   );
   useEffect(() => {
-    if (!pendingUnimportedKey) return;
-    if (synchronizingKeys.has(pendingUnimportedKey)) {
-      setPendingUnimportedKey(undefined);
-      return;
-    }
-    const stillListed = unimportedSource.some(
-      (pullRequest) =>
-        unimportedPullRequestKey(pullRequest) === pendingUnimportedKey,
-    );
-    if (!stillListed && !prepareReview.isPending) {
-      setPendingUnimportedKey(undefined);
-    }
-  }, [
-    pendingUnimportedKey,
-    prepareReview.isPending,
-    synchronizingKeys,
-    unimportedSource,
-  ]);
+    setPendingPreparationKeys((current) => {
+      const next = new Set(current);
+      for (const key of synchronizingKeys) next.delete(key);
+      return next.size === current.size ? current : next;
+    });
+  }, [synchronizingKeys]);
   const availableUnimported = useMemo(
     () =>
       unimportedSource.filter(
@@ -585,7 +588,7 @@ export function PullRequestsContent({
       }),
     onRetry: () => void unimportedPullRequests.refetch(),
     onShowDrafts: () => setShowDrafts(true),
-    pendingKey: pendingUnimportedKey,
+    pendingKeys: pendingPreparationKeys,
     pullRequests: visibleUnimported,
     totalCount: availableUnimported.length,
   } satisfies Omit<UnimportedInboxSectionProps, "heading">;
@@ -901,12 +904,7 @@ export function PullRequestsContent({
                       <ReviewPreparationList
                         failedSyncs={visibleFailedSyncs}
                         synchronizing={visibleSynchronizing}
-                        retryingKey={
-                          pendingUnimportedKey ??
-                          (prepareReview.isPending
-                            ? `${prepareReview.variables?.repositoryId}:${prepareReview.variables?.number}`
-                            : undefined)
-                        }
+                        retryingKeys={pendingPreparationKeys}
                         onRetry={(sync) =>
                           prepareReview.mutate({
                             repositoryId: sync.repositoryId,
@@ -973,7 +971,7 @@ function UnimportedInboxSection({
   onPrepare,
   onRetry,
   onShowDrafts,
-  pendingKey,
+  pendingKeys,
   pullRequests,
   totalCount,
 }: UnimportedInboxSectionProps) {
@@ -1080,7 +1078,7 @@ function UnimportedInboxSection({
       ) : (
         <UnimportedPullRequestList
           onPrepare={onPrepare}
-          pendingKey={pendingKey}
+          pendingKeys={pendingKeys}
           pullRequests={pullRequests}
         />
       )}

@@ -17,12 +17,12 @@ type FailedSyncs = RouterOutputs["review"]["recentSyncFailures"];
 export function ReviewPreparationList({
   failedSyncs,
   onRetry,
-  retryingKey,
+  retryingKeys,
   synchronizing,
 }: {
   failedSyncs: FailedSyncs;
   onRetry: (sync: FailedSyncs[number]) => void;
-  retryingKey?: string;
+  retryingKeys?: ReadonlySet<string>;
   synchronizing: ActiveSyncs;
 }) {
   if (failedSyncs.length + synchronizing.length === 0) return null;
@@ -43,7 +43,7 @@ export function ReviewPreparationList({
       )}
       {failedSyncs.map((sync) => {
         const key = `${sync.repositoryId}:${sync.pullRequestNumber}`;
-        const retrying = retryingKey === key;
+        const retrying = retryingKeys?.has(key) ?? false;
         return (
           <article
             key={sync.id}
