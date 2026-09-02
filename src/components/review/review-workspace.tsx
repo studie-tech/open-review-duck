@@ -2649,23 +2649,32 @@ export function ReviewWorkspace({
   useEffect(() => {
     if (!pendingProviderThread) return;
     if (pendingProviderThread.unitId !== activeUnitId) return;
-    let secondFrame = 0;
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        const target =
-          document.getElementById(
-            providerConversationElementId(pendingProviderThread.externalId),
-          ) ??
-          document.getElementById(`review-line-${pendingProviderThread.line}`);
-        if (!target) return;
+    const targetThread = pendingProviderThread;
+    let frame = 0;
+    let attempts = 0;
+    const maximumAttempts = 180;
+
+    /** Reveals the requested discussion once its hydrated target has mounted. */
+    function revealDiscussion() {
+      const target =
+        document.getElementById(
+          providerConversationElementId(targetThread.externalId),
+        ) ?? document.getElementById(`review-line-${targetThread.line}`);
+      if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         setPendingProviderThread(undefined);
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
-    };
+        return;
+      }
+      attempts += 1;
+      if (attempts >= maximumAttempts) {
+        setPendingProviderThread(undefined);
+        return;
+      }
+      frame = window.requestAnimationFrame(revealDiscussion);
+    }
+
+    frame = window.requestAnimationFrame(revealDiscussion);
+    return () => window.cancelAnimationFrame(frame);
   }, [activeUnitId, pendingProviderThread]);
   const hasLiveConversation = activeUnitHasConversation;
   /** Renders the open finding inline beside the line it accuses. */
@@ -3783,6 +3792,7 @@ export function ReviewWorkspace({
     if (startedThreadId && !aiQuestionThreadId) {
       setAiQuestionThreadId(startedThreadId);
     }
+    return Boolean(startedThreadId);
   }
 
   /** Starts a complete evidence-based review of the pull request. */
@@ -5161,26 +5171,18 @@ export function ReviewWorkspace({
       )}
 
       {discussionsOpen && (
-        <>
-          <button
-            type="button"
-            aria-label="Close pull request discussions"
-            onClick={() => setDiscussionsOpen(false)}
-            className="fixed top-16 right-0 bottom-0 left-0 z-40 bg-black/45 backdrop-blur-[2px]"
-          />
-          <ReviewDiscussionsPanel
-            error={providerConversations.error?.message}
-            loading={providerConversations.isFetching}
-            provider={
-              providerConversations.data?.provider ??
-              initialData.pullRequest.provider
-            }
-            threads={providerDiscussionThreads}
-            onClose={() => setDiscussionsOpen(false)}
-            onOpenThread={openProviderDiscussion}
-            onRefresh={() => void providerConversations.refetch()}
-          />
-        </>
+        <ReviewDiscussionsPanel
+          error={providerConversations.error?.message}
+          loading={providerConversations.isFetching}
+          provider={
+            providerConversations.data?.provider ??
+            initialData.pullRequest.provider
+          }
+          threads={providerDiscussionThreads}
+          onClose={() => setDiscussionsOpen(false)}
+          onOpenThread={openProviderDiscussion}
+          onRefresh={() => void providerConversations.refetch()}
+        />
       )}
 
       <div

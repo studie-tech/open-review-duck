@@ -10,7 +10,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { providerLabel } from "~/lib/provider-labels";
@@ -139,6 +139,9 @@ export function ReviewDiscussionsPanel({
   threads: ProviderDiscussionThread[];
 }) {
   const [tab, setTab] = useState<DiscussionTab>("open");
+  const dialog = useRef<HTMLDialogElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const titleId = `${useId()}-title`;
   const ordered = useMemo(() => orderProviderDiscussions(threads), [threads]);
   const openThreads = ordered.filter(isOpenProviderDiscussion);
   const resolvedThreads = ordered.filter(
@@ -147,11 +150,31 @@ export function ReviewDiscussionsPanel({
   const visibleThreads = tab === "open" ? openThreads : resolvedThreads;
   const providerName = providerLabel(provider);
 
+  useEffect(() => {
+    const element = dialog.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    if (element && !element.open) {
+      if (typeof element.showModal === "function") element.showModal();
+      else element.setAttribute("open", "");
+      closeButton.current?.focus();
+    }
+    return () => {
+      if (element?.open && typeof element.close === "function") element.close();
+      previousFocus?.focus();
+    };
+  }, []);
+
   return (
-    <aside
+    <dialog
+      ref={dialog}
       id="review-discussions-panel"
-      aria-label="Pull request discussions"
-      className="bg-panel fixed top-16 right-0 bottom-0 z-50 flex w-[min(420px,calc(100vw-2rem))] flex-col border-l border-line shadow-2xl"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      className="bg-panel fixed top-16 right-0 bottom-0 left-auto z-50 m-0 hidden h-[calc(100dvh-4rem)] max-h-none w-[min(420px,calc(100vw-2rem))] flex-col border-0 border-l border-line p-0 shadow-2xl open:flex backdrop:bg-black/45 backdrop:backdrop-blur-[2px]"
     >
       <header className="shrink-0 border-b border-line px-4 pt-4 sm:px-5">
         <div className="flex items-start gap-3">
@@ -162,7 +185,9 @@ export function ReviewDiscussionsPanel({
             <p className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
               {providerName} · PR-wide
             </p>
-            <h2 className="text-cloud mt-1 text-sm font-medium">Discussions</h2>
+            <h2 id={titleId} className="text-cloud mt-1 text-sm font-medium">
+              Discussions
+            </h2>
           </div>
           <button
             type="button"
@@ -175,6 +200,7 @@ export function ReviewDiscussionsPanel({
             <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
           </button>
           <button
+            ref={closeButton}
             type="button"
             onClick={onClose}
             aria-label="Close pull request discussions"
@@ -272,7 +298,7 @@ export function ReviewDiscussionsPanel({
         Resolved discussions stay folded by default. Opening a discussion
         returns to its exact review unit and line.
       </footer>
-    </aside>
+    </dialog>
   );
 }
 
