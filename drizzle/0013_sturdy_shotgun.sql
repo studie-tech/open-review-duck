@@ -1,0 +1,2 @@
+ALTER TABLE "open_review_duck_ai_job" ADD COLUMN "clientRequestId" uuid;--> statement-breakpoint
+CREATE UNIQUE INDEX "ai_job_client_request_idx" ON "open_review_duck_ai_job" USING btree ("userId","clientRequestId");

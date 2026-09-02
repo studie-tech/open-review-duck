@@ -257,6 +257,7 @@ export async function createAiJob(
     layoutKey?: string;
     focusLine?: number;
     threadId?: string;
+    clientRequestId?: string;
     userId: string;
     subscribed: boolean;
     planTier?: ManagedAiPlanTier;
@@ -288,6 +289,31 @@ export async function createAiJob(
     await managedReservationPricing(db, scope.model);
   }
   return db.transaction(async (tx) => {
+    if (input.clientRequestId) {
+      const requestKey = `ai-question:${input.userId}:${input.clientRequestId}`;
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${requestKey}))`,
+      );
+      const existing = await tx.query.aiJobs.findFirst({
+        where: and(
+          eq(aiJobs.userId, input.userId),
+          eq(aiJobs.clientRequestId, input.clientRequestId),
+        ),
+      });
+      if (existing) {
+        const sameRequest =
+          existing.pullRequestId === input.pullRequestId &&
+          existing.unitId === (input.unitId ?? null) &&
+          existing.kind === input.kind &&
+          existing.question === (input.question ?? null) &&
+          existing.focusLine === (input.focusLine ?? null) &&
+          existing.threadId === (input.threadId ?? null);
+        if (!sameRequest) {
+          throw new Error("AI request identity was reused for different input");
+        }
+        return existing;
+      }
+    }
     if (!input.question) {
       // A clustering run is identified by the layout revision it proposes
       // for, so two of them collide only when they would produce the same
@@ -355,6 +381,7 @@ export async function createAiJob(
         question: input.question,
         focusLine: input.focusLine,
         threadId: input.threadId,
+        clientRequestId: input.clientRequestId,
         layoutKey: input.layoutKey,
         reviewScope: input.reviewScope ?? "pull_request",
         reviewPurpose: input.reviewPurpose ?? "code",

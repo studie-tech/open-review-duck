@@ -1174,6 +1174,13 @@ export const aiJobs = createTable(
     focusLine: integer(),
     threadId: uuid(),
     /**
+     * Stable identity supplied by the client for one logical reviewer request.
+     *
+     * It is nullable for automatic jobs and rows created by older clients.
+     * Question retries reuse it so a repeated POST resolves to the same job.
+     */
+    clientRequestId: uuid(),
+    /**
      * The concept layout a clustering run proposes for, as `<id>:<version>`.
      *
      * `question`, `focusLine`, and `threadId` describe reviewer conversations;
@@ -1289,6 +1296,7 @@ export const aiJobs = createTable(
     // not use it and scanned every job row for each unit it removed.
     index("ai_job_unit_idx").on(t.unitId),
     index("ai_job_snapshot_idx").on(t.snapshotId),
+    uniqueIndex("ai_job_client_request_idx").on(t.userId, t.clientRequestId),
     foreignKey({
       columns: [t.parentJobId],
       foreignColumns: [t.id],

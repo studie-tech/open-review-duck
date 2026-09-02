@@ -117,7 +117,7 @@ describe("ReviewCompletion", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Review complete." }),
+      screen.getByRole("heading", { name: "Code review complete." }),
     ).toBeVisible();
     expect(screen.getByText("Checks and merge")).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -151,7 +151,7 @@ describe("ReviewCompletion", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Review complete." }),
+      screen.getByRole("heading", { name: "Code review complete." }),
     ).toBeVisible();
     expect(screen.getByText("24")).toBeVisible();
     expect(screen.getByText("7")).toBeVisible();
@@ -245,5 +245,30 @@ describe("ReviewCompletion", () => {
     expect(page).not.toHaveClass("place-items-center");
     expect(page?.innerHTML).not.toMatch(/max-w-6xl/);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps unresolved provider discussions explicit after code completion", () => {
+    render(
+      <ReviewCompletion
+        completedFiles={7}
+        completedUnits={24}
+        dashboardShortcut={[{ key: "g" }, { key: "r" }]}
+        dismissShortcut={[{ key: "Escape" }]}
+        nextReviewShortcut={[{ key: "n", shift: true }]}
+        discussionStatus={<div>Three open conversation summaries</div>}
+        openDiscussions={3}
+        providerReview={<div>Provider approval</div>}
+        queueLoading={false}
+        onDashboard={vi.fn()}
+        onDismiss={vi.fn()}
+        onNextReview={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Three open conversation summaries")).toBeVisible();
+    expect(
+      screen.getByText(/3 provider discussions remain open/i),
+    ).toBeVisible();
+    expect(screen.getByText("Open discussions")).toBeVisible();
   });
 });

@@ -79,6 +79,7 @@ export const startAiJobSchema = z.discriminatedUnion("kind", [
       question: z.string().trim().min(1).max(4_000).optional(),
       focusLine: z.number().int().positive().optional(),
       threadId: z.string().uuid().optional(),
+      clientRequestId: z.string().uuid().optional(),
     })
     .superRefine((input, context) => {
       if (
@@ -89,6 +90,12 @@ export const startAiJobSchema = z.discriminatedUnion("kind", [
           code: "custom",
           message:
             "Questions must identify one focused source line and conversation",
+        });
+      }
+      if (input.clientRequestId && !input.question) {
+        context.addIssue({
+          code: "custom",
+          message: "Only focused questions may carry a client request ID",
         });
       }
     })

@@ -165,6 +165,12 @@ import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
 import {
+  isOpenProviderDiscussion,
+  type ProviderDiscussionThread,
+  ReviewDiscussionSummary,
+  ReviewDiscussionsPanel,
+} from "./review-discussions";
+import {
   actionableReviewCardMember,
   ReviewFileCardHeader,
   ReviewFileUnitMarker,
@@ -229,6 +235,7 @@ import { ProviderCommentBody } from "./review-workspace-markdown";
 import {
   CopyRepositoryUrlButton,
   ProviderConversation,
+  providerConversationElementId,
   reviewProviderWebUrl,
 } from "./review-workspace-provider-conversation";
 import {
@@ -400,6 +407,7 @@ export function ReviewWorkspace({
     toggleInsightsPanel,
     togglePathPanel,
   } = useReviewPanelController();
+  const [discussionsOpen, setDiscussionsOpen] = useState(false);
   // A ref, not state: the composer owns the draft while it is mounted, so
   // this only carries the text across an unmount the reviewer did not ask
   // for, such as a wait that failed.
@@ -409,6 +417,11 @@ export function ReviewWorkspace({
   const [draftRevision, setDraftRevision] = useState(0);
   const [selectedLine, setSelectedLine] = useState<number>();
   const [pendingCommentLine, setPendingCommentLine] = useState<{
+    line: number;
+    unitId: string;
+  }>();
+  const [pendingProviderThread, setPendingProviderThread] = useState<{
+    externalId: string;
     line: number;
     unitId: string;
   }>();
@@ -2543,6 +2556,28 @@ export function ReviewWorkspace({
     settledUnitId: settledActiveUnitId,
     waitingCount,
   });
+  const providerDiscussionThreads = providerConversations.data?.threads ?? [];
+  const openProviderDiscussionCount = providerDiscussionThreads.filter(
+    isOpenProviderDiscussion,
+  ).length;
+  /** Leaves summary UI and returns to the exact unit carrying a discussion. */
+  const openProviderDiscussion = useCallback(
+    (thread: ProviderDiscussionThread) => {
+      const index = unitIndexById.get(thread.unitId) ?? -1;
+      if (index < 0) return;
+      setDiscussionsOpen(false);
+      setCompletionOpen(false);
+      setWaitingCompletionOpen(false);
+      setCompletedBrowsing(true);
+      setPendingProviderThread({
+        externalId: thread.externalId,
+        line: thread.line,
+        unitId: thread.unitId,
+      });
+      selectUnit(index);
+    },
+    [selectUnit, unitIndexById],
+  );
   const manualSyncPending = reviewSession === "synchronizing";
   const {
     acknowledgeLoadedRevision,
@@ -2611,6 +2646,27 @@ export function ReviewWorkspace({
     setUnits,
     units,
   });
+  useEffect(() => {
+    if (!pendingProviderThread) return;
+    if (pendingProviderThread.unitId !== activeUnitId) return;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const target =
+          document.getElementById(
+            providerConversationElementId(pendingProviderThread.externalId),
+          ) ??
+          document.getElementById(`review-line-${pendingProviderThread.line}`);
+        if (!target) return;
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        setPendingProviderThread(undefined);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [activeUnitId, pendingProviderThread]);
   const hasLiveConversation = activeUnitHasConversation;
   /** Renders the open finding inline beside the line it accuses. */
   function renderInlineFindingCard(
@@ -3424,6 +3480,9 @@ export function ReviewWorkspace({
   const waitingCompletionVisible =
     reviewCaughtUp && waitingCompletionOpen && footerSaveState === "idle";
   const completionChromeHidden = completionVisible || waitingCompletionVisible;
+  useEffect(() => {
+    if (completionChromeHidden) setDiscussionsOpen(false);
+  }, [completionChromeHidden]);
   const openPullRequests = useCallback(
     () => navigate("/pullrequests"),
     [navigate],
@@ -4824,6 +4883,7 @@ export function ReviewWorkspace({
     findingLine,
     keyboardLine,
     pendingFindingReveal?.line,
+    pendingProviderThread?.line,
     selectedLine,
   ].flatMap((line) => (line === undefined ? [] : [line]));
 
@@ -4889,6 +4949,49 @@ export function ReviewWorkspace({
             />
           </div>
         </div>
+        <button
+          type="button"
+          aria-controls="review-discussions-panel"
+          aria-expanded={discussionsOpen}
+          aria-label={`Show pull request discussions, ${openProviderDiscussionCount} open`}
+          title={`${openProviderDiscussionCount} open ${openProviderDiscussionCount === 1 ? "discussion" : "discussions"}`}
+          onClick={() => {
+            setDiscussionsOpen((open) => {
+              if (!open) setInsightsPanelOpen(false);
+              return !open;
+            });
+          }}
+          className={cn(
+            "flex h-9 shrink-0 items-center gap-2 rounded-lg border px-2.5 text-[10px] transition",
+            completionChromeHidden && "hidden",
+            discussionsOpen
+              ? "border-cyan/30 bg-cyan/[.08] text-cyan"
+              : "text-mist hover:text-cloud border-line hover:bg-surface-subtle",
+          )}
+        >
+          {providerConversations.isLoading && !providerConversations.data ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <MessageSquareText className="size-4" />
+          )}
+          <span className="hidden lg:inline">Discussions</span>
+          <span
+            className={cn(
+              "grid min-w-4 place-items-center rounded-md px-1 py-0.5 font-mono text-[9px]",
+              openProviderDiscussionCount > 0
+                ? "bg-coral/10 text-coral"
+                : "bg-lime/10 text-lime",
+            )}
+          >
+            {openProviderDiscussionCount}
+          </span>
+          {openProviderDiscussionCount > 0 && (
+            <span
+              className="bg-coral size-1.5 rounded-full"
+              aria-hidden="true"
+            />
+          )}
+        </button>
         <button
           type="button"
           onClick={
@@ -5055,6 +5158,29 @@ export function ReviewWorkspace({
           Only a new source or analysis revision can change review state;
           interface updates cannot.
         </ReviewRevisionLoadedNotice>
+      )}
+
+      {discussionsOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="Close pull request discussions"
+            onClick={() => setDiscussionsOpen(false)}
+            className="fixed top-16 right-0 bottom-0 left-0 z-40 bg-black/45 backdrop-blur-[2px]"
+          />
+          <ReviewDiscussionsPanel
+            error={providerConversations.error?.message}
+            loading={providerConversations.isFetching}
+            provider={
+              providerConversations.data?.provider ??
+              initialData.pullRequest.provider
+            }
+            threads={providerDiscussionThreads}
+            onClose={() => setDiscussionsOpen(false)}
+            onOpenThread={openProviderDiscussion}
+            onRefresh={() => void providerConversations.refetch()}
+          />
+        </>
       )}
 
       <div
@@ -5506,6 +5632,16 @@ export function ReviewWorkspace({
               dismissShortcut={[{ key: "Escape" }]}
               nextReview={nextReview}
               nextReviewShortcut={reviewShortcuts.nextReview}
+              discussionStatus={
+                <ReviewDiscussionSummary
+                  provider={
+                    providerConversations.data?.provider ??
+                    initialData.pullRequest.provider
+                  }
+                  threads={providerDiscussionThreads}
+                  onOpenThread={openProviderDiscussion}
+                />
+              }
               lifecycle={
                 <ProviderLifecycle
                   state={providerLifecycle.data}
@@ -5566,6 +5702,7 @@ export function ReviewWorkspace({
                   }
                 />
               }
+              openDiscussions={openProviderDiscussionCount}
               queueLoading={reviewQueue.isLoading}
               onDashboard={openPullRequests}
               onDismiss={browseCompletedReview}
