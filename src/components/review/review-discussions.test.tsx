@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -121,6 +121,29 @@ describe("ReviewDiscussionsPanel", () => {
 
     await user.click(screen.getByText("Should this retry delay be capped?"));
     expect(onOpenThread).toHaveBeenCalledWith(thread);
+  });
+
+  it("uses a focus-trapping modal dialog and closes on Escape", () => {
+    const onClose = vi.fn();
+    render(
+      <ReviewDiscussionsPanel
+        loading={false}
+        provider="github"
+        threads={[discussion()]}
+        onClose={onClose}
+        onOpenThread={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    const panel = screen.getByRole("dialog", { name: "Discussions" });
+    expect(panel).toHaveAttribute("aria-modal", "true");
+    expect(
+      screen.getByRole("button", { name: "Close pull request discussions" }),
+    ).toHaveFocus();
+
+    fireEvent(panel, new Event("cancel", { bubbles: false, cancelable: true }));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });
 

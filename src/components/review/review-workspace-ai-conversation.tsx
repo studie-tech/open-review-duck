@@ -350,7 +350,7 @@ export function InlineAiQuestion({
   line: number;
   maximumLine: number;
   minimumLine: number;
-  onAsk: (question: string) => void;
+  onAsk: (question: string) => boolean;
   onClose: () => void;
   onDeleteThread?: (jobIds: string[]) => Promise<void>;
   onDraftChange: (value: string) => void;
@@ -444,12 +444,12 @@ export function InlineAiQuestion({
     [onPublishProposal, proposalDrafts, publishingProposal],
   );
 
-  /** Sends one question upward and empties the composer for the next one. */
+  /** Empties the composer only after its question is accepted upstream. */
   const submitQuestion = useCallback(
     (question: string) => {
+      if (!onAsk(question)) return;
       setDraft("");
       onDraftChange("");
-      onAsk(question);
     },
     [onAsk, onDraftChange],
   );

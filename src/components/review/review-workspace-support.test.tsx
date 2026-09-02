@@ -824,7 +824,7 @@ describe("InlineAiQuestion", () => {
   });
 
   it("shows the focused conversation and submits with Enter", async () => {
-    const ask = vi.fn();
+    const ask = vi.fn(() => true);
     const change = vi.fn();
     const user = userEvent.setup();
     render(
@@ -866,7 +866,7 @@ describe("InlineAiQuestion", () => {
   });
 
   it("keeps the typed question local and clears it once submitted", async () => {
-    const ask = vi.fn();
+    const ask = vi.fn(() => true);
     const draftChange = vi.fn();
     const user = userEvent.setup();
     render(
@@ -897,6 +897,37 @@ describe("InlineAiQuestion", () => {
     expect(ask).toHaveBeenCalledExactlyOnceWith("Why retry twice");
     expect(input).toHaveValue("");
     expect(draftChange).toHaveBeenLastCalledWith("");
+  });
+
+  it("preserves a draft when the question is rejected upstream", async () => {
+    const ask = vi.fn(() => false);
+    const draftChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineAiQuestion
+        canAsk
+        initialDraft="Another question"
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={ask}
+        onClose={vi.fn()}
+        onDraftChange={draftChange}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", {
+      name: "Ask AI about line 17",
+    });
+    await user.type(input, "{Enter}");
+
+    expect(ask).toHaveBeenCalledExactlyOnceWith("Another question");
+    expect(input).toHaveValue("Another question");
+    expect(draftChange).not.toHaveBeenCalledWith("");
   });
 
   it("moves the focus with the line controls", async () => {
