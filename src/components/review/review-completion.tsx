@@ -11,6 +11,7 @@ import { type ReactNode, useEffect, useRef } from "react";
 import { usePendingNavigation } from "~/components/navigation-progress";
 import { Spinner } from "~/components/ui/spinner";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
+import { cn } from "~/lib/utils";
 import { ReviewExitActions } from "./review-exit-actions";
 
 export interface ReviewCompletionCandidate {
@@ -32,7 +33,9 @@ interface ReviewCompletionProps {
   dismissShortcut: KeyboardShortcut;
   nextReview?: ReviewCompletionCandidate;
   nextReviewShortcut: KeyboardShortcut;
+  discussionStatus?: ReactNode;
   lifecycle?: ReactNode;
+  openDiscussions?: number;
   providerReview: ReactNode;
   queueLoading: boolean;
   onDashboard: () => void;
@@ -140,7 +143,9 @@ export function ReviewCompletion({
   dismissShortcut,
   nextReview,
   nextReviewShortcut,
+  discussionStatus,
   lifecycle,
+  openDiscussions = 0,
   providerReview,
   queueLoading,
   onDashboard,
@@ -173,22 +178,23 @@ export function ReviewCompletion({
 
                 <p className="text-lime mt-5 flex items-center gap-2 text-[10px] font-semibold tracking-[.18em] uppercase sm:mt-6">
                   <Sparkles className="size-3.5" />
-                  Review finished
+                  Code review finished
                 </p>
                 <h2
                   id="review-completion-title"
                   className="font-editorial mt-2 text-3xl font-medium tracking-[-.035em] text-cloud sm:text-4xl lg:text-5xl"
                 >
-                  Review complete.
+                  Code review complete.
                 </h2>
                 <p
                   id="review-completion-description"
                   className="text-mist mt-3 text-sm leading-6"
                 >
-                  You made it through every review unit. Your sign-offs are
-                  saved and this pull request is fully reviewed at its current
-                  revision. Check the pipelines, merge when they are ready, or
-                  continue to the next pull request.
+                  You made it through every review unit and your sign-offs are
+                  saved at this revision.{" "}
+                  {openDiscussions > 0
+                    ? `${openDiscussions} ${openDiscussions === 1 ? "provider discussion remains" : "provider discussions remain"} open; code coverage and conversation resolution are tracked separately.`
+                    : "No provider discussions remain open."}
                 </p>
               </div>
 
@@ -211,17 +217,25 @@ export function ReviewCompletion({
                 </div>
                 <div className="rounded-2xl border border-lime/20 bg-lime/[.06] px-3 py-4 text-center sm:px-5 sm:py-5">
                   <dt className="text-fog text-[9px] tracking-[.14em] uppercase">
-                    Progress
+                    Open discussions
                   </dt>
-                  <dd className="text-lime mt-1 font-mono text-lg sm:text-xl">
-                    100%
+                  <dd
+                    className={cn(
+                      "mt-1 font-mono text-lg sm:text-xl",
+                      openDiscussions > 0 ? "text-coral" : "text-lime",
+                    )}
+                  >
+                    {openDiscussions}
                   </dd>
                 </div>
               </dl>
             </div>
 
             <div className="mt-8 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(20rem,24rem)] lg:items-start xl:mt-10 xl:gap-6">
-              {lifecycle}
+              <div className="space-y-4">
+                {discussionStatus}
+                {lifecycle}
+              </div>
               <div className="space-y-4">
                 {providerReview}
 

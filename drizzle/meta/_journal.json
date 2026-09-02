@@ -92,6 +92,13 @@
       "when": 1788247924226,
       "tag": "0012_perpetual_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788340078251,
+      "tag": "0013_sturdy_shotgun",
+      "breakpoints": true
     }
   ]
 }

@@ -35,6 +35,7 @@ export function useAiQuestionStreamController({
 }: AiQuestionStreamControllerInput) {
   const [liveQuestions, setLiveQuestions] = useState<LiveAiQuestion[]>([]);
   const streams = useRef(new Map<string, AbortController>());
+  const questionInFlight = useRef(false);
   const startQuestion = api.ai.start.useMutation({
     onSuccess: onUsageChanged,
   });
@@ -151,6 +152,7 @@ export function useAiQuestionStreamController({
       }
       onQuestionsChanged();
       onUsageChanged();
+      questionInFlight.current = false;
     }
   }
 
@@ -162,11 +164,20 @@ export function useAiQuestionStreamController({
     threadId,
     unitId,
   }: AskAiQuestionInput) {
-    if (!unitId || focusLine === undefined || !canAsk) return;
+    if (
+      !unitId ||
+      focusLine === undefined ||
+      !canAsk ||
+      questionInFlight.current
+    ) {
+      return;
+    }
     const question = rawQuestion.trim();
     if (!question) return;
+    questionInFlight.current = true;
     const conversationId = threadId ?? crypto.randomUUID();
     const optimisticId = `pending-${crypto.randomUUID()}`;
+    const clientRequestId = crypto.randomUUID();
     setLiveQuestions((questions) => [
       ...questions,
       {
@@ -188,6 +199,7 @@ export function useAiQuestionStreamController({
         question,
         focusLine,
         threadId: conversationId,
+        clientRequestId,
       },
       {
         onSuccess: (job) => {
@@ -207,6 +219,7 @@ export function useAiQuestionStreamController({
           onQuestionsChanged();
         },
         onError: (error) => {
+          questionInFlight.current = false;
           setLiveQuestions((questions) =>
             questions.map((entry) =>
               entry.id === optimisticId

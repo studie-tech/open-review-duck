@@ -837,7 +837,7 @@ export function InlineAiQuestion({
               onClose();
             } else if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              if (canAsk && draft.trim()) submitQuestion(draft);
+              event.currentTarget.form?.requestSubmit();
             }
           }}
           className="bg-surface/70 text-cloud placeholder:text-fog min-h-16 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none transition focus:border-violet/40"

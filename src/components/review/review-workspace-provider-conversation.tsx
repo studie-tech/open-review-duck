@@ -29,6 +29,11 @@ type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ProviderConversationThread =
   RouterOutputs["review"]["providerConversations"]["threads"][number];
 
+/** Gives a provider thread a stable in-workspace navigation anchor. */
+export function providerConversationElementId(threadExternalId: string) {
+  return `provider-conversation-${encodeURIComponent(threadExternalId)}`;
+}
+
 /** Returns the provider pull-request page, falling back to its repository. */
 export function reviewProviderWebUrl(input: {
   repositoryWebUrl: string;
@@ -249,6 +254,7 @@ export function ProviderConversation({
 
   return (
     <article
+      id={providerConversationElementId(thread.externalId)}
       className={cn(
         "border-cyan/20 bg-panel mx-4 my-2 ml-[82px] overflow-hidden rounded-xl border font-sans shadow-lg",
         className,
