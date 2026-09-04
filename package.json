@@ -10,7 +10,7 @@
   "type": "module",
   "scripts": {
     "assets:prepare": "node scripts/prepare-tree-sitter.mjs && node scripts/generate-rulebooks.mjs && node scripts/check-generated-assets.mjs",
-    "audit:prod": "pnpm audit --prod --audit-level moderate",
+    "audit:prod": "pnpm audit --prod --audit-level moderate --ignore-registry-errors",
     "biome:scope:check": "node scripts/check-biome-scope.mjs",
     "build": "pnpm assets:prepare && next build --webpack",
     "build:vercel": "node scripts/vercel-build.mjs",
