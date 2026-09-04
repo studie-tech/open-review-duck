@@ -105,6 +105,69 @@ jobs:
           exit-code: "1"
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+      - name: Upgrade the released v0.1.0 appliance
+        run: |
+          docker pull ghcr.io/studie-tech/open-review-duck:0.1.0
+          docker run --detach --name reviewduck-v010 \
+            --network none \
+            --volume reviewduck-v010-data:/data \
+            ghcr.io/studie-tech/open-review-duck:0.1.0
+          for attempt in $(seq 1 90); do
+            if docker exec reviewduck-v010 curl --fail --silent \
+              http://127.0.0.1:3000/api/health >/dev/null; then break; fi
+            if [ "$attempt" -eq 90 ]; then docker logs reviewduck-v010; exit 1; fi
+            sleep 2
+          done
+          before_upgrade="$(docker exec reviewduck-v010 sh -c \
+            'PGPASSWORD="$(cat /data/secrets/database)" \
+            /usr/lib/postgresql/18/bin/psql -h /data/run/postgresql \
+            -U reviewduck -d reviewduck -tAc \
+            "select (select count(*) from open_review_duck_user) || chr(58) || \
+              (select count(*) from open_review_duck_workspace)"')"
+          docker stop --time 35 reviewduck-v010
+          docker rm reviewduck-v010
+
+          docker run --detach --name reviewduck-v010-upgraded \
+            --network none \
+            --volume reviewduck-v010-data:/data \
+            open-review-duck:ci
+          for attempt in $(seq 1 90); do
+            if docker exec reviewduck-v010-upgraded curl --fail --silent \
+              http://127.0.0.1:3000/api/health >/dev/null; then break; fi
+            if ! docker inspect --format '{{.State.Running}}' \
+              reviewduck-v010-upgraded | grep -q true; then
+              docker logs reviewduck-v010-upgraded
+              exit 1
+            fi
+            if [ "$attempt" -eq 90 ]; then
+              docker logs reviewduck-v010-upgraded
+              exit 1
+            fi
+            sleep 2
+          done
+          docker logs reviewduck-v010-upgraded | \
+            grep -q "Legacy database schema upgraded."
+          after_upgrade="$(docker exec reviewduck-v010-upgraded sh -c \
+            'PGPASSWORD="$(cat /data/secrets/database)" \
+            /usr/lib/postgresql/18/bin/psql -h /data/run/postgresql \
+            -U reviewduck -d reviewduck -tAc \
+            "select (select count(*) from open_review_duck_user) || chr(58) || \
+              (select count(*) from open_review_duck_workspace)"')"
+          test "$after_upgrade" = "$before_upgrade"
+          docker restart reviewduck-v010-upgraded
+          for attempt in $(seq 1 60); do
+            docker exec reviewduck-v010-upgraded curl --fail --silent \
+              http://127.0.0.1:3000/api/health >/dev/null && break
+            if [ "$attempt" -eq 60 ]; then
+              docker logs reviewduck-v010-upgraded
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(docker logs reviewduck-v010-upgraded 2>&1 | \
+            grep -c "Legacy database schema upgraded.")" = "1"
+          docker stop --time 35 reviewduck-v010-upgraded
+          docker rm reviewduck-v010-upgraded
       - name: Start with no configuration and no network
         run: >-
           docker run --detach --name reviewduck-ci --network none
