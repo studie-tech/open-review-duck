@@ -123,6 +123,43 @@ describe("ReviewDiscussionsPanel", () => {
     expect(onOpenThread).toHaveBeenCalledWith(thread);
   });
 
+  it("previews long comments and expands them without opening the conversation", async () => {
+    const onOpenThread = vi.fn();
+    const body =
+      "This is a deliberately long review comment explaining why the current branch can return stale data, how the retry path reaches it, and which invariant should be preserved before this conversation is considered resolved by the reviewer.";
+    const user = userEvent.setup();
+    render(
+      <ReviewDiscussionsPanel
+        loading={false}
+        provider="github"
+        threads={[
+          discussion({
+            comments: [
+              {
+                externalId: "comment-long",
+                author: "Maya",
+                body,
+                createdAt: "2026-07-20T10:00:00Z",
+                publishedByAnotherReviewer: false,
+              },
+            ],
+          }),
+        ]}
+        onClose={vi.fn()}
+        onOpenThread={onOpenThread}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    const comment = screen.getByText(body);
+    expect(comment).toHaveClass("line-clamp-2");
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    expect(comment).not.toHaveClass("line-clamp-2");
+    expect(onOpenThread).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(comment).toHaveClass("line-clamp-2");
+  });
+
   it("uses a focus-trapping modal dialog and closes on Escape", () => {
     const onClose = vi.fn();
     render(

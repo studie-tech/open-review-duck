@@ -43,6 +43,19 @@ export const reviewUnitSchema = z.object({
 export const unreviewSchema = reviewUnitSchema.extend({
   sessionId: z.string().uuid().optional(),
 });
+export type UnreviewInput = z.infer<typeof unreviewSchema>;
+
+export const unreviewBatchSchema = z.object({
+  undos: z
+    .array(unreviewSchema)
+    .min(2)
+    .max(20)
+    .refine(
+      (entries) =>
+        new Set(entries.map(({ unitId }) => unitId)).size === entries.length,
+      "An undo batch cannot contain the same unit twice",
+    ),
+});
 
 export const signOffConceptSchema = z.object({
   conceptId: z.string().uuid(),

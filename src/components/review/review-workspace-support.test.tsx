@@ -1480,6 +1480,69 @@ function conversationActions(
 }
 
 describe("ProviderConversation", () => {
+  it("opens a resolved conversation selected from the PR-wide list", () => {
+    const { rerender } = render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "900",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "900",
+              author: "reviewer",
+              body: "This answer should be revealed.",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    expect(
+      screen.queryByText("This answer should be revealed."),
+    ).not.toBeInTheDocument();
+    rerender(
+      <ProviderConversation
+        provider="github"
+        revealed
+        thread={{
+          externalId: "900",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "900",
+              author: "reviewer",
+              body: "This answer should be revealed.",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    expect(screen.getByText("This answer should be revealed.")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Collapse GitHub conversation" }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("publishes a reply inside the existing provider thread", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
@@ -2517,7 +2580,7 @@ describe("SideBySideUnitDiff", () => {
     });
     // Interior collapses page; finish any remainder with the in-flow control.
     const remaining = screen.queryAllByRole("button", {
-      name: /Show \d+ more unchanged lines/,
+      name: /Show \d+ unchanged lines downward/,
     });
     for (const button of remaining) {
       await user.click(button);
@@ -2554,14 +2617,14 @@ describe("SideBySideUnitDiff", () => {
     for (const pageSize of [20, 20, 2]) {
       await user.click(
         screen.getByRole("button", {
-          name: `Show ${pageSize} more unchanged lines`,
+          name: `Show ${pageSize} unchanged lines downward`,
         }),
       );
     }
 
     expect(diff).toHaveTextContent("const addition25 = true;");
     expect(
-      screen.queryByRole("button", { name: /more unchanged lines/ }),
+      screen.queryByRole("button", { name: /unchanged lines downward/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -2593,15 +2656,51 @@ describe("SideBySideUnitDiff", () => {
     for (const pageSize of [20, 20, 15]) {
       await user.click(
         screen.getByRole("button", {
-          name: `Show ${pageSize} more unchanged lines`,
+          name: `Show ${pageSize} unchanged lines downward`,
         }),
       );
     }
 
     expect(diff).toHaveTextContent("const retained30 = true;");
     expect(
-      screen.queryByRole("button", { name: /more unchanged lines/ }),
+      screen.queryByRole("button", { name: /unchanged lines downward/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("reveals collapsed context from the code below when paging upward", async () => {
+    const user = userEvent.setup();
+    const additions = Array.from(
+      { length: 50 },
+      (_, index) => `const addition${index + 1} = true;`,
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={additions.join("\n")}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusRanges={[]}
+        currentFocusRanges={[
+          { startLine: 1, endLine: 1 },
+          { startLine: 50, endLine: 50 },
+        ]}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Added code diff" });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Show 20 unchanged lines upward",
+      }),
+    );
+
+    expect(diff).toHaveTextContent("const addition30 = true;");
+    expect(diff).not.toHaveTextContent("const addition20 = true;");
+    expect(
+      screen.getByRole("group", { name: "22 unchanged lines hidden" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the entire file without collapsed gaps when expanded", () => {

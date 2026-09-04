@@ -8,6 +8,7 @@ import {
   replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
   signOffBatchSchema,
+  unreviewBatchSchema,
 } from "./review";
 
 describe("provider review decision validation", () => {
@@ -87,6 +88,20 @@ describe("sign-off batch validation", () => {
           signOff("399ea3a7-2860-4eb9-9243-28627e87898d"),
         ],
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe("undo batch validation", () => {
+  it("accepts distinct undos and rejects duplicate units", () => {
+    const first = { unitId: "399ea3a7-2860-4eb9-9243-28627e87898d" };
+    const second = { unitId: "86f28e99-40ab-4418-933a-48cfd57eb9f5" };
+
+    expect(
+      unreviewBatchSchema.safeParse({ undos: [first, second] }).success,
+    ).toBe(true);
+    expect(
+      unreviewBatchSchema.safeParse({ undos: [first, first] }).success,
     ).toBe(false);
   });
 });
