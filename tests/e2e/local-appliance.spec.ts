@@ -5,14 +5,18 @@ const container =
   process.env.LOCAL_E2E_CONTAINER ?? "reviewduck-local-playwright";
 const baseUrl = process.env.LOCAL_E2E_BASE_URL ?? "http://127.0.0.1:3941";
 
-/** Reads one-time bootstrap URLs without exposing their tokens in test output. */
-function bootstrapUrls() {
+/** Reads the complete appliance log without exposing it in normal test output. */
+function applianceLogs() {
   const result = spawnSync("docker", ["logs", container], {
     encoding: "utf8",
   });
-  const logs = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+}
+
+/** Reads one-time bootstrap URLs without exposing their tokens in test output. */
+function bootstrapUrls() {
   return Array.from(
-    logs.matchAll(
+    applianceLogs().matchAll(
       /http:\/\/localhost:3000\/api\/local\/bootstrap\?token=[^\s]+/g,
     ),
     (match) => match[0].replace("http://localhost:3000", baseUrl),
@@ -28,8 +32,12 @@ function bootstrapUrl() {
 }
 
 test("bootstraps local provider setup and preserves the session across restart", async ({
+  browser,
   page,
 }) => {
+  expect(applianceLogs()).toMatch(
+    /Starting ReviewDuck \S+ at http:\/\/localhost:3000/,
+  );
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/local\/setup$/);
   await expect(
@@ -82,7 +90,15 @@ test("bootstraps local provider setup and preserves the session across restart",
       { timeout: 60_000 },
     )
     .toBe(true);
-  expect(bootstrapUrls()).toHaveLength(bootstrapCountBeforeRestart);
+  expect(bootstrapUrls()).toHaveLength(bootstrapCountBeforeRestart + 1);
+
+  const additionalBrowser = await browser.newContext();
+  const additionalPage = await additionalBrowser.newPage();
+  await additionalPage.goto(bootstrapUrl());
+  await expect(
+    additionalPage.getByRole("heading", { name: "Choose where to focus." }),
+  ).toBeVisible();
+  await additionalBrowser.close();
 
   await page.goto("/dashboard");
   await expect(

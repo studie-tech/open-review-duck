@@ -178,7 +178,7 @@ elif [ "$listen_address" != "0.0.0.0" ] &&
   echo "Container HOSTNAME '$listen_address' is not a bind address; listening on 0.0.0.0 inside the container." >&2
   export HOSTNAME=0.0.0.0
 fi
-echo "Starting ReviewDuck at http://localhost:${PORT:-3000}. Publish the port as 127.0.0.1:${PORT:-3000}:3000."
+echo "Starting ReviewDuck ${REVIEWDUCK_VERSION:-development} at http://localhost:${PORT:-3000}. Publish the port as 127.0.0.1:${PORT:-3000}:3000."
 node ./server.js &
 web_pid=$!
 maintenance_loop &
