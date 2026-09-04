@@ -209,7 +209,12 @@ export function useAiQuestionStreamController({
                 ? {
                     ...entry,
                     jobId: job.id,
-                    progress: "Waiting for the AI reviewer…",
+                    progress:
+                      job.status === "queued"
+                        ? "Queued for the local AI worker…"
+                        : job.status === "waiting_for_provider"
+                          ? `Waiting for ${job.model || "the model provider"}…`
+                          : "Preparing review context…",
                     status: job.status === "running" ? "running" : "queued",
                   }
                 : entry,

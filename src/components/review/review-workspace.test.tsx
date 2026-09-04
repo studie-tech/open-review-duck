@@ -103,9 +103,9 @@ afterEach(() => {
 
 describe("aiJobActive", () => {
   it("keeps polling every non-terminal status, not only queued and running", () => {
-    // A deep-review parent sits in `waiting_for_provider` from `startAiJob`
-    // until seal-plan, so a predicate narrower than this reports a live
-    // fan-out as finished.
+    // A job can occupy every non-terminal state across worker queueing, model
+    // calls, and answer persistence, so a narrower predicate reports a live
+    // run as finished.
     for (const status of [
       "queued",
       "running",

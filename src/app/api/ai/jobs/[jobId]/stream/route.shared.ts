@@ -1,10 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, gt, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { after, type NextRequest } from "next/server";
-import { aiJobChunks, aiJobs, aiStreamLeases } from "@/drizzle/schema";
+import {
+  aiJobChunks,
+  aiJobs,
+  aiJobToolCalls,
+  aiStreamLeases,
+} from "@/drizzle/schema";
 import type { AiQuestionStreamUpdate } from "~/lib/ai-question-stream";
 import { applicationAuth } from "~/server/auth";
+import { aiQuestionProgress } from "~/server/ai/question-progress";
 import { db } from "~/server/db";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { openVaultSecret } from "~/server/security/vault";
@@ -196,7 +202,7 @@ export async function GET(
         // the review workspace and re-sends the text on every pass.
         let lastProgress: string | undefined;
         while (!closed && !request.signal.aborted) {
-          const [chunks, current] = await Promise.all([
+          const [chunks, current, latestTool] = await Promise.all([
             db.query.aiJobChunks.findMany({
               where: and(
                 eq(aiJobChunks.jobId, job.id),
@@ -206,8 +212,20 @@ export async function GET(
               limit: 100,
             }),
             db.query.aiJobs.findFirst({
-              columns: { status: true, result: true, error: true },
+              columns: {
+                status: true,
+                result: true,
+                error: true,
+                createdAt: true,
+                model: true,
+                progress: true,
+              },
               where: eq(aiJobs.id, job.id),
+            }),
+            db.query.aiJobToolCalls.findFirst({
+              columns: { status: true, toolName: true },
+              where: eq(aiJobToolCalls.jobId, job.id),
+              orderBy: [desc(aiJobToolCalls.createdAt)],
             }),
           ]);
           for (const chunk of chunks) {
@@ -268,10 +286,17 @@ export async function GET(
             return;
           }
           if (chunks.length === 0) {
-            const progress =
-              current.status === "waiting_for_provider"
-                ? "Waiting for the model provider…"
-                : "Investigating the review revision…";
+            const progress = aiQuestionProgress({
+              createdAt: current.createdAt,
+              model: current.model,
+              progress: current.progress,
+              status: current.status as
+                | "queued"
+                | "running"
+                | "waiting_for_provider"
+                | "streaming",
+              tool: latestTool,
+            });
             if (progress !== lastProgress) {
               lastProgress = progress;
               send({ progress, status: "working", text, cursor });

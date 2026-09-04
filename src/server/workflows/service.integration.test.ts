@@ -178,6 +178,12 @@ describe("recoverable workflow service reservations", () => {
       `wrun_${fixture.pullRequestSyncId}`,
     );
     expect(aiRun.workflowRunId).toBe(`wrun_${fixture.aiJobId}`);
+    await expect(
+      db.query.aiJobs.findFirst({ where: eq(aiJobs.id, fixture.aiJobId) }),
+    ).resolves.toMatchObject({
+      status: "queued",
+      workflowStartLeaseExpiresAt: null,
+    });
     expect(mocks.start).toHaveBeenCalledTimes(3);
     for (const [, [targetId, startToken]] of mocks.start.mock.calls) {
       expect(targetId).toEqual(expect.any(String));

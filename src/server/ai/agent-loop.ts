@@ -50,6 +50,17 @@ import { untrustedFileSource } from "./untrusted-content";
 import { accumulateAiUsage, providerUsage } from "./usage";
 
 type Database = typeof database;
+const EMBEDDED_UNIT_SOURCE_MAX_BYTES = 32 * 1024;
+const EMBEDDED_SOURCE_SYSTEM_RULE =
+  "Source inside <current-source> or <previous-source> is exact selected-unit evidence from this review revision and counts as having read that range. Do not call read_file merely to fetch the same range again; use tools when an embedded source is omitted or additional repository context materially affects the answer.";
+
+/** Keeps a focused unit inline only when it remains a small first-turn input. */
+function embeddedUnitSource(source: string | null | undefined) {
+  if (source === null || source === undefined) return undefined;
+  return Buffer.byteLength(source) <= EMBEDDED_UNIT_SOURCE_MAX_BYTES
+    ? source
+    : undefined;
+}
 
 /** Executes exactly one non-retrying model turn for a durable AI job. */
 export async function executeAiTurn(
@@ -71,7 +82,7 @@ export async function executeAiTurn(
     return { done: true, status: "completed" as const };
   }
   const prompts = await loadAiPromptBodies(db);
-  const systemPrompt = prompts["explain.system"];
+  const systemPrompt = `${prompts["explain.system"]}\n\n${EMBEDDED_SOURCE_SYSTEM_RULE}`;
   const reservedTokens = job.reservedInputTokens + job.reservedOutputTokens;
   const consumedTokens = Math.max(
     job.totalTokens,
@@ -104,10 +115,16 @@ export async function executeAiTurn(
     .set({
       status: "running",
       startedAt: job.startedAt ?? new Date(),
-      progress: Math.min(
-        95,
-        Math.max(1, Math.floor((turnIndex / env.AI_MAX_MODEL_STEPS) * 100)),
-      ),
+      progress:
+        job.kind === "explain"
+          ? turnIndex + 1
+          : Math.min(
+              95,
+              Math.max(
+                1,
+                Math.floor((turnIndex / env.AI_MAX_MODEL_STEPS) * 100),
+              ),
+            ),
     })
     .where(eq(aiJobs.id, job.id));
 
@@ -198,6 +215,8 @@ export async function executeAiTurn(
             focusSide:
               selectedUnit.changeType === "deleted" ? "previous" : "current",
             conversation: priorConversation.turns,
+            source: embeddedUnitSource(selectedUnit.source),
+            previousSource: embeddedUnitSource(selectedUnit.previousSource),
           },
         },
         explainPromptBodies(prompts),
@@ -470,6 +489,10 @@ export async function executeAiTurn(
     );
     return { done: true, status: "completed" as const };
   }
+  await db
+    .update(aiJobs)
+    .set({ status: "waiting_for_provider" })
+    .where(eq(aiJobs.id, job.id));
   const result = await observeOperation("ai.model-turn", "ai.model", () =>
     generateText({
       model: resolved.model,
