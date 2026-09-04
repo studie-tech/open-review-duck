@@ -136,6 +136,7 @@ import {
   type ReviewViewSnapshot,
   rememberSignOff,
   type SignOffUndoEntry,
+  unreviewOutcomeError,
 } from "~/lib/sign-off-undo";
 import { isPeekableToken, symbolPeekAttributes } from "~/lib/symbol-peek";
 import {
@@ -2338,12 +2339,14 @@ export function ReviewWorkspace({
       .filter(({ action }) => action.error)
       .sort((left, right) => right.actionId - left.actionId);
     if (failed.length > 0) {
-      let history = signOffUndoHistoryRef.current;
-      for (const { action } of failed) {
-        history = rememberSignOff(history, action.entry);
-      }
-      signOffUndoHistoryRef.current = history;
-      setSignOffUndoHistory(history);
+      setSignOffUndoHistory((current) => {
+        const history = failed.reduce(
+          (restored, { action }) => rememberSignOff(restored, action.entry),
+          current,
+        );
+        signOffUndoHistoryRef.current = history;
+        return history;
+      });
       toast.error(
         failed.length === 1
           ? "Sign-off could not be undone"
@@ -2381,17 +2384,17 @@ export function ReviewWorkspace({
             const queued = batch[0];
             if (!queued) continue;
             const result = await queuedUndoSignOff.mutateAsync(queued.input);
-            if (result.unreviewed) changed += 1;
+            const error = unreviewOutcomeError(result);
+            if (error) failures.set(queued.input.unitId, error);
+            else changed += 1;
           } else {
             const results = await queuedUndoBatch.mutateAsync({
               undos: batch.map(({ input }) => input),
             });
             for (const result of results) {
-              if (result.ok) {
-                if (result.unreviewed) changed += 1;
-              } else {
-                failures.set(result.unitId, result.message);
-              }
+              const error = unreviewOutcomeError(result);
+              if (error) failures.set(result.unitId, error);
+              else changed += 1;
             }
           }
         } catch (error) {

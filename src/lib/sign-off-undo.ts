@@ -44,6 +44,22 @@ export function rememberSignOff(
 }
 
 /**
+ * Converts a persisted undo outcome into the error needed to roll back UI.
+ *
+ * A successful request can still be a semantic no-op when no current sign-off
+ * matches the unit hash. The optimistic client must treat that as unsaved so
+ * its review state remains aligned with the server.
+ */
+export function unreviewOutcomeError(
+  outcome: { ok: false; message: string } | { ok?: true; unreviewed: boolean },
+) {
+  if ("ok" in outcome && outcome.ok === false) return outcome.message;
+  return outcome.unreviewed
+    ? undefined
+    : "No current sign-off matched this review unit.";
+}
+
+/**
  * Finds the newest sign-off that undoing would still change something about.
  *
  * A recorded step stops describing the review the moment its units leave the
