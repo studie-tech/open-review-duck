@@ -1539,6 +1539,9 @@ export function ReviewWorkspace({
       setStartedAt(Date.now());
       setQueueLimit(INITIAL_PATH_ITEMS);
       setKeyboardLine(undefined);
+      setPendingProviderThread((pending) =>
+        pending?.unitId === target.id ? pending : undefined,
+      );
       setFocusedProviderThreadId(undefined);
       // `openFinding` sets the finding line after calling this, and the later
       // set wins in the same batch; a unit reached by ⌘↓, the path panel or a
