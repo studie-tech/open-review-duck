@@ -187,6 +187,22 @@ describe("useReviewFileAdvance", () => {
 
     expect(selectFile).not.toHaveBeenCalled();
   });
+
+  it("uses the latest committed file-selection callback", () => {
+    const files = [{ path: "src/one.ts" }, { path: "src/two.ts" }];
+    const firstSelectFile = vi.fn();
+    const latestSelectFile = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ selectFile }) => useReviewFileAdvance(files, selectFile),
+      { initialProps: { selectFile: firstSelectFile } },
+    );
+
+    rerender({ selectFile: latestSelectFile });
+    act(() => result.current("src/two.ts"));
+
+    expect(firstSelectFile).not.toHaveBeenCalled();
+    expect(latestSelectFile).toHaveBeenCalledExactlyOnceWith(files[1]);
+  });
 });
 
 describe("applyAiQuestionStreamUpdate", () => {

@@ -34,8 +34,11 @@ export function useReviewFileAdvance<File extends { path: string }>(
   selectFile: (file: File) => void,
 ) {
   const selectFileRef = useRef(selectFile);
-  selectFileRef.current = selectFile;
   const [requestedPath, setRequestedPath] = useState<string>();
+
+  useEffect(() => {
+    selectFileRef.current = selectFile;
+  }, [selectFile]);
 
   useEffect(() => {
     if (!requestedPath) return;
