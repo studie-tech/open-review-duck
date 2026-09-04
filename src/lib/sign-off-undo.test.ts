@@ -6,6 +6,7 @@ import {
   rememberSignOff,
   type SignOffUndoEntry,
   signOffUndoTarget,
+  unreviewOutcomeError,
 } from "./sign-off-undo";
 
 const view: ReviewViewSnapshot = {
@@ -43,6 +44,19 @@ function conceptEntry(
 const layout = { id: "layout", version: 1 };
 
 describe("sign-off undo history", () => {
+  it("rolls back rejected and semantically empty undo outcomes", () => {
+    expect(unreviewOutcomeError({ unreviewed: true })).toBeUndefined();
+    expect(unreviewOutcomeError({ unreviewed: false })).toBe(
+      "No current sign-off matched this review unit.",
+    );
+    expect(unreviewOutcomeError({ ok: true, unreviewed: false })).toBe(
+      "No current sign-off matched this review unit.",
+    );
+    expect(
+      unreviewOutcomeError({ ok: false, message: "Provider rejected it" }),
+    ).toBe("Provider rejected it");
+  });
+
   it("puts the newest sign-off first", () => {
     const history = rememberSignOff(
       rememberSignOff([], unitEntry("one")),
@@ -78,6 +92,26 @@ describe("sign-off undo history", () => {
 
     expect(undoable?.entry.label).toBe("two");
     expect(undoable?.remaining.map(({ label }) => label)).toEqual(["one"]);
+  });
+
+  it("can pop another optimistic undo before the first save settles", () => {
+    const units = [
+      { id: "one", status: "signed_off" },
+      { id: "two", status: "signed_off" },
+    ];
+    const first = nextUndoableSignOff(
+      [unitEntry("two"), unitEntry("one")],
+      units,
+    );
+    const optimisticUnits = units.map((unit) =>
+      unit.id === first?.entry.unitIds[0]
+        ? { ...unit, status: "pending" }
+        : unit,
+    );
+
+    expect(
+      nextUndoableSignOff(first?.remaining ?? [], optimisticUnits)?.entry.label,
+    ).toBe("one");
   });
 
   it("skips a unit already returned to the queue another way", () => {

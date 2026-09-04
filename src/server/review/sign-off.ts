@@ -22,7 +22,7 @@ import {
 import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
 import { providerSyncErrorMessage } from "~/server/sync/error";
-import type { SignOffInput } from "~/validators/review";
+import type { SignOffInput, UnreviewInput } from "~/validators/review";
 import { reviewCompletionCounts } from "./completion";
 import { recomputeReviewStats, reviewExperience } from "./experience";
 import {
@@ -667,6 +667,240 @@ export async function finalizeSignOffs(
         .where(eq(reviewSessions.id, updatedSession.id));
     }
   }
+}
+
+export interface PersistedUnreview {
+  input: UnreviewInput;
+  signOff: typeof signOffs.$inferSelect;
+  unit: {
+    complexity: number;
+    id: string;
+    pullRequestId: string;
+    snapshotId: string;
+    stableKey: string;
+  };
+}
+
+export type UnreviewOutcome =
+  | { ok: true; unreviewed: false; unitId: string }
+  | { ok: true; unreviewed: true; unitId: string; write: PersistedUnreview }
+  | { code: "NOT_FOUND"; message: string; ok: false; unitId: string };
+
+/**
+ * Invalidates several current sign-offs under one ordered lock scope.
+ *
+ * The result remains keyed by the unit the client named, even when a carried
+ * sign-off also has lineage rows on an older snapshot. This lets an
+ * optimistic queue restore only rejected units while the successful members
+ * of the same HTTP batch remain undone.
+ */
+export async function persistUnreviews(
+  tx: ReviewTransaction,
+  userId: string,
+  inputs: UnreviewInput[],
+): Promise<Map<string, UnreviewOutcome>> {
+  const outcomes = new Map<string, UnreviewOutcome>();
+  if (inputs.length === 0) return outcomes;
+  const requestedIds = [...new Set(inputs.map(({ unitId }) => unitId))];
+  const requestedUnits = await tx
+    .select({
+      complexity: reviewUnits.complexity,
+      id: reviewUnits.id,
+      pullRequestId: pullRequests.id,
+      semanticHash: reviewUnits.semanticHash,
+      snapshotId: reviewUnits.snapshotId,
+      stableKey: reviewUnits.stableKey,
+    })
+    .from(reviewUnits)
+    .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
+    .innerJoin(pullRequests, eq(reviewSnapshots.pullRequestId, pullRequests.id))
+    .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+    .innerJoin(
+      workspaceMembers,
+      eq(repositories.workspaceId, workspaceMembers.workspaceId),
+    )
+    .where(
+      and(
+        inArray(reviewUnits.id, requestedIds),
+        eq(reviewSnapshots.headSha, pullRequests.headSha),
+        eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+        eq(workspaceMembers.userId, userId),
+      ),
+    );
+  const requestedById = new Map(requestedUnits.map((unit) => [unit.id, unit]));
+  for (const input of inputs) {
+    if (!requestedById.has(input.unitId)) {
+      outcomes.set(input.unitId, {
+        code: "NOT_FOUND",
+        message: "The review unit could not be returned",
+        ok: false,
+        unitId: input.unitId,
+      });
+    }
+  }
+  if (requestedUnits.length === 0) return outcomes;
+
+  for (const pullRequestId of [
+    ...new Set(requestedUnits.map(({ pullRequestId }) => pullRequestId)),
+  ].sort()) {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${pullRequestId}:${userId}`}))`,
+    );
+  }
+  const lockKeys = requestedUnits
+    .map(({ id }) => `${id}:${userId}`)
+    .sort()
+    .map((key) => sql`${key}`);
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(key)) from unnest(array[${sql.join(
+      lockKeys,
+      sql`, `,
+    )}]::text[]) as locks(key)`,
+  );
+
+  const activeSignOffs = await tx
+    .select()
+    .from(signOffs)
+    .where(
+      and(
+        eq(signOffs.userId, userId),
+        inArray(
+          signOffs.unitId,
+          requestedUnits.map(({ id }) => id),
+        ),
+        isNull(signOffs.invalidatedAt),
+      ),
+    )
+    .orderBy(desc(signOffs.signedOffAt));
+  const activeByUnitId = new Map<string, (typeof activeSignOffs)[number]>();
+  for (const signOff of activeSignOffs) {
+    if (!activeByUnitId.has(signOff.unitId)) {
+      activeByUnitId.set(signOff.unitId, signOff);
+    }
+  }
+
+  const writes: PersistedUnreview[] = [];
+  for (const input of inputs) {
+    const unit = requestedById.get(input.unitId);
+    if (!unit) continue;
+    const signOff = activeByUnitId.get(unit.id);
+    if (!signOff || signOff.semanticHash !== unit.semanticHash) {
+      outcomes.set(input.unitId, {
+        ok: true,
+        unreviewed: false,
+        unitId: input.unitId,
+      });
+      continue;
+    }
+    const write = { input, signOff, unit };
+    writes.push(write);
+    outcomes.set(input.unitId, {
+      ok: true,
+      unreviewed: true,
+      unitId: input.unitId,
+      write,
+    });
+  }
+  if (writes.length === 0) return outcomes;
+
+  const lineageScopes = new Map<string, Set<string>>();
+  for (const { unit } of writes) {
+    const stableKeys = lineageScopes.get(unit.pullRequestId) ?? new Set();
+    stableKeys.add(unit.stableKey);
+    lineageScopes.set(unit.pullRequestId, stableKeys);
+  }
+  const lineageUnits = await tx
+    .select({
+      id: reviewUnits.id,
+      pullRequestId: reviewSnapshots.pullRequestId,
+      stableKey: reviewUnits.stableKey,
+    })
+    .from(reviewUnits)
+    .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
+    .where(
+      or(
+        ...[...lineageScopes].map(([pullRequestId, stableKeys]) =>
+          and(
+            eq(reviewSnapshots.pullRequestId, pullRequestId),
+            inArray(reviewUnits.stableKey, [...stableKeys]),
+          ),
+        ),
+      ),
+    );
+  const lineageIds = new Map<string, string[]>();
+  for (const unit of lineageUnits) {
+    const key = revisionKey(unit.pullRequestId, unit.stableKey);
+    lineageIds.set(key, [...(lineageIds.get(key) ?? []), unit.id]);
+  }
+  await tx
+    .update(signOffs)
+    .set({ invalidatedAt: new Date() })
+    .where(
+      and(
+        eq(signOffs.userId, userId),
+        isNull(signOffs.invalidatedAt),
+        or(
+          ...writes.map(({ signOff, unit }) =>
+            and(
+              inArray(
+                signOffs.unitId,
+                lineageIds.get(
+                  revisionKey(unit.pullRequestId, unit.stableKey),
+                ) ?? [unit.id],
+              ),
+              eq(signOffs.semanticHash, signOff.semanticHash),
+              eq(signOffs.signedOffAt, signOff.signedOffAt),
+            ),
+          ),
+        ),
+      ),
+    );
+  return outcomes;
+}
+
+/** Applies review-session and aggregate updates once for an undo batch. */
+export async function finalizeUnreviews(
+  tx: ReviewTransaction,
+  userId: string,
+  writes: PersistedUnreview[],
+) {
+  if (writes.length === 0) return;
+  const sessionGroups = new Map<string, PersistedUnreview[]>();
+  for (const write of writes) {
+    if (!write.input.sessionId) continue;
+    const key = `${write.input.sessionId}:${write.unit.snapshotId}`;
+    sessionGroups.set(key, [...(sessionGroups.get(key) ?? []), write]);
+  }
+  for (const writesForSession of sessionGroups.values()) {
+    const first = writesForSession[0];
+    if (!first?.input.sessionId) continue;
+    const session = await tx.query.reviewSessions.findFirst({
+      where: and(
+        eq(reviewSessions.id, first.input.sessionId),
+        eq(reviewSessions.userId, userId),
+        eq(reviewSessions.snapshotId, first.unit.snapshotId),
+      ),
+    });
+    if (!session) continue;
+    const inSession = writesForSession.filter(
+      ({ signOff }) => signOff.signedOffAt >= session.startedAt,
+    );
+    if (inSession.length === 0) continue;
+    const experience = inSession.reduce(
+      (total, { signOff, unit }) =>
+        total + reviewExperience(unit.complexity, signOff.durationSeconds),
+      0,
+    );
+    await tx
+      .update(reviewSessions)
+      .set({
+        reviewedUnits: sql`greatest(${reviewSessions.reviewedUnits} - ${inSession.length}, 0)`,
+        experienceAwarded: sql`greatest(${reviewSessions.experienceAwarded} - ${experience}, 0)`,
+        completedAt: null,
+      })
+      .where(eq(reviewSessions.id, session.id));
+  }
+  await recomputeReviewStats(tx, userId);
 }
 
 /**

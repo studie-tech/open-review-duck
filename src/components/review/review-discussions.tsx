@@ -63,13 +63,20 @@ function DiscussionRow({
 }) {
   const latest = latestDiscussionComment(thread);
   const commentCount = thread.comments.length;
+  const [commentExpanded, setCommentExpanded] = useState(false);
+  const commentBody =
+    latest?.body || "This provider conversation has no visible comments.";
+  const canExpandComment =
+    commentBody.length > 140 || commentBody.split("\n").length > 2;
+  const commentId = `${useId()}-comment`;
 
   return (
-    <article className="group rounded-xl border border-line bg-surface/65 transition hover:border-line-strong hover:bg-surface">
-      <div className="flex items-start gap-1 p-2.5 sm:p-3">
+    <article className="group overflow-hidden rounded-xl border border-line bg-surface/65 transition hover:border-cyan/25 hover:bg-surface">
+      <div className="flex items-start gap-1 px-2.5 pt-2.5 sm:px-3 sm:pt-3">
         <button
           type="button"
           onClick={onOpen}
+          aria-label={`Open conversation in ${thread.path} at line ${thread.line}`}
           className="min-w-0 flex-1 rounded-lg p-1.5 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-cyan/50"
         >
           <span className="flex min-w-0 items-center gap-2">
@@ -85,22 +92,14 @@ function DiscussionRow({
               L{thread.line}
             </span>
           </span>
-          <span className="text-mist mt-2 line-clamp-3 block text-[11px] leading-5">
-            {latest?.body ||
-              "This provider conversation has no visible comments."}
-          </span>
-          <span className="text-fog mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[9px]">
-            {latest?.author && <span>{latest.author}</span>}
-            {latest?.author && <span aria-hidden="true">·</span>}
-            <span>
-              {commentCount} {commentCount === 1 ? "comment" : "comments"}
-            </span>
-            {latest?.createdAt && <span aria-hidden="true">·</span>}
-            {latest?.createdAt && (
-              <time dateTime={latest.createdAt}>
-                {discussionTimestamp(latest.createdAt)}
-              </time>
+          <span
+            id={commentId}
+            className={cn(
+              "text-mist mt-2 block whitespace-pre-wrap text-[11px] leading-5",
+              !commentExpanded && "line-clamp-2",
             )}
+          >
+            {commentBody}
           </span>
         </button>
         {thread.webUrl && (
@@ -115,6 +114,40 @@ function DiscussionRow({
             <ExternalLink className="size-3.5" />
           </a>
         )}
+      </div>
+      <div className="flex min-h-9 items-center gap-2 border-t border-line/70 px-4 py-2">
+        <span className="text-fog min-w-0 flex-1 truncate text-[9px]">
+          {latest?.author && <span>{latest.author}</span>}
+          {latest?.author && <span aria-hidden="true"> · </span>}
+          <span>
+            {commentCount} {commentCount === 1 ? "comment" : "comments"}
+          </span>
+          {latest?.createdAt && <span aria-hidden="true"> · </span>}
+          {latest?.createdAt && (
+            <time dateTime={latest.createdAt}>
+              {discussionTimestamp(latest.createdAt)}
+            </time>
+          )}
+        </span>
+        {canExpandComment && (
+          <button
+            type="button"
+            aria-controls={commentId}
+            aria-expanded={commentExpanded}
+            onClick={() => setCommentExpanded((expanded) => !expanded)}
+            className="text-mist hover:text-cloud shrink-0 rounded px-1.5 py-1 text-[9px] font-medium transition hover:bg-surface-hover"
+          >
+            {commentExpanded ? "Show less" : "Show more"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="text-cyan hover:bg-cyan/10 flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-semibold transition"
+        >
+          Open
+          <ChevronRight className="size-3" aria-hidden="true" />
+        </button>
       </div>
     </article>
   );

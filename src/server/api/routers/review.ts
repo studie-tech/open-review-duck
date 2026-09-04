@@ -111,10 +111,12 @@ import {
   conceptMembersForMutation,
   currentSnapshotFileForMember,
   finalizeSignOffs,
+  finalizeUnreviews,
   lockConceptLayoutForReviewer,
   lockConceptLayoutScope,
   type PersistedSignOff,
   persistSignOffs,
+  persistUnreviews,
   signOffFailure,
 } from "~/server/review/sign-off";
 import {
@@ -160,6 +162,7 @@ import {
   signOffSchema,
   symbolDefinitionSchema,
   syncPullRequestSchema,
+  unreviewBatchSchema,
   unreviewConceptSchema,
   unreviewFileSchema,
   unreviewSchema,
@@ -3459,115 +3462,58 @@ export const reviewRouter = createTRPCRouter({
     .input(unreviewSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        const [unit] = await tx
-          .select({
-            id: reviewUnits.id,
-            snapshotId: reviewUnits.snapshotId,
-            semanticHash: reviewUnits.semanticHash,
-            complexity: reviewUnits.complexity,
-            stableKey: reviewUnits.stableKey,
-            pullRequestId: pullRequests.id,
-          })
-          .from(reviewUnits)
-          .innerJoin(
-            reviewSnapshots,
-            eq(reviewUnits.snapshotId, reviewSnapshots.id),
-          )
-          .innerJoin(
-            pullRequests,
-            eq(reviewSnapshots.pullRequestId, pullRequests.id),
-          )
-          .innerJoin(
-            repositories,
-            eq(pullRequests.repositoryId, repositories.id),
-          )
-          .innerJoin(
-            workspaceMembers,
-            eq(repositories.workspaceId, workspaceMembers.workspaceId),
-          )
-          .where(
-            and(
-              eq(reviewUnits.id, input.unitId),
-              eq(reviewSnapshots.headSha, pullRequests.headSha),
-              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
-              eq(workspaceMembers.userId, ctx.auth.userId),
-            ),
-          )
-          .limit(1);
-        if (!unit) throw new TRPCError({ code: "NOT_FOUND" });
-
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${unit.pullRequestId}:${ctx.auth.userId}`}))`,
-        );
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${`${unit.id}:${ctx.auth.userId}`}))`,
-        );
-        const activeSignOff = await tx.query.signOffs.findFirst({
-          where: and(
-            eq(signOffs.unitId, unit.id),
-            eq(signOffs.userId, ctx.auth.userId),
-            eq(signOffs.semanticHash, unit.semanticHash),
-            isNull(signOffs.invalidatedAt),
-          ),
-          orderBy: [desc(signOffs.signedOffAt)],
-        });
-        if (!activeSignOff) return { unreviewed: false };
-
-        const lineageUnits = await tx
-          .select({ id: reviewUnits.id })
-          .from(reviewUnits)
-          .innerJoin(
-            reviewSnapshots,
-            eq(reviewUnits.snapshotId, reviewSnapshots.id),
-          )
-          .where(
-            and(
-              eq(reviewSnapshots.pullRequestId, unit.pullRequestId),
-              eq(reviewUnits.stableKey, unit.stableKey),
-            ),
-          );
-        await tx
-          .update(signOffs)
-          .set({ invalidatedAt: new Date() })
-          .where(
-            and(
-              inArray(
-                signOffs.unitId,
-                lineageUnits.map(({ id }) => id),
-              ),
-              eq(signOffs.userId, ctx.auth.userId),
-              eq(signOffs.semanticHash, activeSignOff.semanticHash),
-              eq(signOffs.signedOffAt, activeSignOff.signedOffAt),
-              isNull(signOffs.invalidatedAt),
-            ),
-          );
-
-        if (input.sessionId) {
-          const session = await tx.query.reviewSessions.findFirst({
-            where: and(
-              eq(reviewSessions.id, input.sessionId),
-              eq(reviewSessions.userId, ctx.auth.userId),
-              eq(reviewSessions.snapshotId, unit.snapshotId),
-            ),
+        const outcome = (
+          await persistUnreviews(tx, ctx.auth.userId, [input])
+        ).get(input.unitId);
+        if (!outcome?.ok) {
+          throw new TRPCError({
+            code: outcome?.code ?? "NOT_FOUND",
+            message: outcome?.message,
           });
-          if (session && activeSignOff.signedOffAt >= session.startedAt) {
-            const experience = reviewExperience(
-              unit.complexity,
-              activeSignOff.durationSeconds,
-            );
-            await tx
-              .update(reviewSessions)
-              .set({
-                reviewedUnits: sql`greatest(${reviewSessions.reviewedUnits} - 1, 0)`,
-                experienceAwarded: sql`greatest(${reviewSessions.experienceAwarded} - ${experience}, 0)`,
-                completedAt: null,
-              })
-              .where(eq(reviewSessions.id, session.id));
-          }
         }
+        await finalizeUnreviews(
+          tx,
+          ctx.auth.userId,
+          outcome.unreviewed ? [outcome.write] : [],
+        );
+        return { unreviewed: outcome.unreviewed };
+      }),
+    ),
 
-        await recomputeReviewStats(tx, ctx.auth.userId);
-        return { unreviewed: true };
+  unreviewBatch: protectedProcedure
+    .input(unreviewBatchSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        const outcomes = await persistUnreviews(
+          tx,
+          ctx.auth.userId,
+          input.undos,
+        );
+        await finalizeUnreviews(
+          tx,
+          ctx.auth.userId,
+          [...outcomes.values()].flatMap((outcome) =>
+            outcome.ok && outcome.unreviewed ? [outcome.write] : [],
+          ),
+        );
+        return input.undos.map(({ unitId }) => {
+          const outcome = outcomes.get(unitId);
+          if (!outcome) {
+            return {
+              code: "NOT_FOUND" as const,
+              message: "The review unit could not be returned",
+              ok: false as const,
+              unitId,
+            };
+          }
+          return outcome.ok
+            ? {
+                ok: true as const,
+                unitId,
+                unreviewed: outcome.unreviewed,
+              }
+            : outcome;
+        });
       }),
     ),
 
