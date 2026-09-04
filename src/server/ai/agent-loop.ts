@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { type ModelMessage, tool } from "@ai-sdk/provider-utils";
 import { generateText, stepCountIs } from "ai";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobChunks,
@@ -489,10 +489,18 @@ export async function executeAiTurn(
     );
     return { done: true, status: "completed" as const };
   }
-  await db
+  const [providerTurn] = await db
     .update(aiJobs)
     .set({ status: "waiting_for_provider" })
-    .where(eq(aiJobs.id, job.id));
+    .where(
+      and(
+        eq(aiJobs.id, job.id),
+        eq(aiJobs.status, "running"),
+        isNull(aiJobs.cancelledAt),
+      ),
+    )
+    .returning({ id: aiJobs.id });
+  if (!providerTurn) return { done: true, status: "cancelled" as const };
   const result = await observeOperation("ai.model-turn", "ai.model", () =>
     generateText({
       model: resolved.model,
