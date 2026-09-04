@@ -32,6 +32,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  type CSSProperties,
   Fragment,
   useCallback,
   useEffect,
@@ -182,6 +183,11 @@ import { ReviewFilesPanel } from "./review-files-panel";
 import { ReviewBinaryPreview } from "./review-image-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
+  REVIEW_INSIGHTS_PANEL_WIDTHS,
+  REVIEW_PATH_PANEL_WIDTHS,
+  ReviewPanelResizeHandle,
+} from "./review-panel-resize-handle";
+import {
   overviewMarksFromDiffRows,
   overviewRangeFromDiffRows,
   ReviewScrollOverviewStrip,
@@ -228,6 +234,7 @@ import {
 } from "./review-workspace-diff";
 import {
   aiJobActive,
+  reviewCardPinTarget,
   useReviewExitPrefetch,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
@@ -349,6 +356,10 @@ export function ReviewWorkspace({
       ),
     ),
   );
+  const [sourcePinRequest, setSourcePinRequest] = useState<{
+    kind: "file" | "unit";
+    unitId: string;
+  }>();
   const {
     fileContexts,
     hydratedUnitIds,
@@ -396,12 +407,16 @@ export function ReviewWorkspace({
     hidePathPanel,
     insightsPanelCollapsed,
     insightsPanelOpen,
+    insightsPanelWidth,
     pathPanelCollapsed,
     pathPanelOpen,
+    pathPanelWidth,
     setInsightsPanelCollapsed,
     setInsightsPanelOpen,
+    setInsightsPanelWidth,
     setPathPanelCollapsed,
     setPathPanelOpen,
+    setPathPanelWidth,
     showInsightsPanel,
     showPathPanel,
     toggleInsightsPanel,
@@ -687,8 +702,12 @@ export function ReviewWorkspace({
     if (!pane) return;
     const focusLine = activeUnit.startLine;
     const focusUnitId = activeUnit.id;
+    const pinToFileTop =
+      reviewMode === "files" &&
+      sourcePinRequest?.kind === "file" &&
+      sourcePinRequest.unitId === focusUnitId;
 
-    /** Scrolls remaining work into view, not the top of an already-read file. */
+    /** Pins file-tree selections to the card top and unit navigation to its work. */
     const pinSelectedCard = () => {
       const card = reviewUnitStartRef.current;
       if (!card) {
@@ -700,12 +719,12 @@ export function ReviewWorkspace({
         `[data-review-unit-start="${focusUnitId}"]`,
       );
       const unitLine = document.getElementById(`review-line-${focusLine}`);
-      const target =
-        unitStart instanceof HTMLElement
-          ? unitStart
-          : unitLine instanceof HTMLElement
-            ? unitLine
-            : card;
+      const target = reviewCardPinTarget({
+        card,
+        pinToFileTop,
+        unitLine: unitLine instanceof HTMLElement ? unitLine : undefined,
+        unitStart: unitStart instanceof HTMLElement ? unitStart : undefined,
+      });
       const paneTop = pane.getBoundingClientRect().top;
       const targetTop = target.getBoundingClientRect().top;
       const stickyHeader =
@@ -744,7 +763,9 @@ export function ReviewWorkspace({
     activeFileCardHydrationPending,
     activeUnit?.id,
     activeUnit?.startLine,
+    reviewMode,
     selectedCardPinKey,
+    sourcePinRequest,
     updateSelectedCardChrome,
   ]);
   useEffect(() => {
@@ -1159,13 +1180,17 @@ export function ReviewWorkspace({
     currentCardRanges.at(0)?.startLine ?? activeUnit?.startLine;
   const cardEndLine = currentCardRanges.at(-1)?.endLine ?? activeUnit?.endLine;
   const activeFileCardReviewed = reviewedFileCard(activeFileCardMembers);
+  const activeFileCardChangedLineCount = activeFileCardMembers.reduce(
+    (total, member) => total + member.changedLineCount,
+    0,
+  );
   const activeFileCardLineCount =
     cardStartLine !== undefined && cardEndLine !== undefined
       ? Math.max(0, cardEndLine - cardStartLine + 1)
       : 0;
   const activeFileCardHeavy = isHeavyReviewSource({
+    changedLineCount: activeFileCardChangedLineCount,
     language: activeUnit?.language,
-    lineCount: activeFileCardLineCount,
     path: activeUnit?.path,
     source: activeModule?.source,
   });
@@ -1456,9 +1481,10 @@ export function ReviewWorkspace({
   }, []);
   /** Opens one atomic review unit and selects its concept card. */
   const selectUnit = useCallback(
-    (index: number) => {
+    (index: number, pin: "file" | "unit" = "unit") => {
       const target = units[index];
       if (!target) return;
+      setSourcePinRequest({ kind: pin, unitId: target.id });
       setActiveIndex(index);
       setShowDiff(true);
       setStartedAt(Date.now());
@@ -1495,7 +1521,7 @@ export function ReviewWorkspace({
       if (index < 0) return;
       setCompletedBrowsing(false);
       setCompletionOpen(false);
-      selectUnit(index);
+      selectUnit(index, "file");
     },
     [selectUnit, units],
   );
@@ -5186,20 +5212,26 @@ export function ReviewWorkspace({
       )}
 
       <div
+        style={
+          {
+            "--review-insights-panel-width": `${insightsPanelWidth}px`,
+            "--review-path-panel-width": `${pathPanelWidth}px`,
+          } as CSSProperties
+        }
         className={cn(
           "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
           !completionChromeHidden &&
             (insightsPanelCollapsed
               ? "xl:grid-cols-[minmax(0,1fr)]"
-              : "xl:grid-cols-[minmax(0,1fr)_320px]"),
+              : "xl:grid-cols-[minmax(0,1fr)_var(--review-insights-panel-width)]"),
           !completionChromeHidden &&
             (pathPanelCollapsed && insightsPanelCollapsed
               ? "2xl:grid-cols-[minmax(0,1fr)]"
               : pathPanelCollapsed
-                ? "2xl:grid-cols-[minmax(0,1fr)_320px]"
+                ? "2xl:grid-cols-[minmax(0,1fr)_var(--review-insights-panel-width)]"
                 : insightsPanelCollapsed
-                  ? "2xl:grid-cols-[250px_minmax(0,1fr)]"
-                  : "2xl:grid-cols-[250px_minmax(0,1fr)_320px]"),
+                  ? "2xl:grid-cols-[var(--review-path-panel-width)_minmax(0,1fr)]"
+                  : "2xl:grid-cols-[var(--review-path-panel-width)_minmax(0,1fr)_var(--review-insights-panel-width)]"),
         )}
       >
         {pathPanelOpen && !completionChromeHidden && (
@@ -5231,9 +5263,23 @@ export function ReviewWorkspace({
             !completionChromeHidden &&
               (pathPanelCollapsed
                 ? "2xl:hidden"
-                : "2xl:static 2xl:flex 2xl:w-auto 2xl:shadow-none"),
+                : "2xl:relative 2xl:flex 2xl:w-auto 2xl:shadow-none"),
           )}
         >
+          {!pathPanelCollapsed && (
+            <ReviewPanelResizeHandle
+              className="2xl:flex"
+              controls="review-path-panel"
+              defaultWidth={REVIEW_PATH_PANEL_WIDTHS.default}
+              label={`Resize ${reviewMode === "path" ? "review path" : "changed files"}`}
+              maximumWidth={REVIEW_PATH_PANEL_WIDTHS.maximum}
+              minimumWidth={REVIEW_PATH_PANEL_WIDTHS.minimum}
+              side="left"
+              width={pathPanelWidth}
+              onResize={setPathPanelWidth}
+              onCollapse={hidePathPanel}
+            />
+          )}
           <div className="shrink-0 border-b border-line px-4 py-4">
             <ReviewModeSwitch mode={reviewMode} onChange={changeReviewMode} />
             <div className="mt-4 flex items-center justify-between">
@@ -6988,9 +7034,23 @@ export function ReviewWorkspace({
             !completionChromeHidden &&
               (insightsPanelCollapsed
                 ? "xl:hidden"
-                : "xl:static xl:flex xl:w-auto xl:bg-panel/30 xl:shadow-none"),
+                : "xl:relative xl:flex xl:w-auto xl:bg-panel/30 xl:shadow-none"),
           )}
         >
+          {!insightsPanelCollapsed && (
+            <ReviewPanelResizeHandle
+              className="xl:flex"
+              controls="code-explanation-panel"
+              defaultWidth={REVIEW_INSIGHTS_PANEL_WIDTHS.default}
+              label="Resize AI assistance"
+              maximumWidth={REVIEW_INSIGHTS_PANEL_WIDTHS.maximum}
+              minimumWidth={REVIEW_INSIGHTS_PANEL_WIDTHS.minimum}
+              side="right"
+              width={insightsPanelWidth}
+              onResize={setInsightsPanelWidth}
+              onCollapse={hideInsightsPanel}
+            />
+          )}
           <div className="border-violet/15 bg-panel z-10 flex shrink-0 flex-col gap-2.5 border-b px-4 py-4">
             <div className="flex items-center justify-between gap-2">
               <p className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">

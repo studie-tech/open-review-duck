@@ -363,7 +363,6 @@ describe("ReviewFilesPanel", () => {
   });
 
   it("scrolls the selected file row into view when selectedPath changes", async () => {
-    const user = userEvent.setup();
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     const { rerender } = render(
@@ -376,7 +375,6 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Expand review" }));
     const workspace = screen
       .getByRole("button", { name: /workspace\.ts/i })
       .closest("[data-review-file-path]");
@@ -397,7 +395,8 @@ describe("ReviewFilesPanel", () => {
     expect(scrollIntoView.mock.instances).toContain(workspace);
   });
 
-  it("expands collapsed ancestors so the selected file can scroll into view", () => {
+  it("expands collapsed ancestors so the selected file can scroll into view", async () => {
+    const user = userEvent.setup();
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     const { rerender } = render(
@@ -410,6 +409,7 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
+    await user.click(screen.getByRole("button", { name: "Collapse review" }));
     expect(
       screen.queryByRole("button", { name: /workspace\.ts/i }),
     ).not.toBeInTheDocument();
@@ -445,13 +445,6 @@ describe("ReviewFilesPanel", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: /workspace\.ts/i }),
-    ).not.toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: "Expand all folders" }),
-    );
-    expect(
       screen.getByRole("button", { name: /workspace\.ts/i }),
     ).toBeVisible();
     expect(
@@ -466,6 +459,13 @@ describe("ReviewFilesPanel", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand src" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Expand public" })).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand all folders" }),
+    );
+    expect(
+      screen.getByRole("button", { name: /workspace\.ts/i }),
+    ).toBeVisible();
   });
 
   it("lets a waiting file resume instead of blocking the checkbox", async () => {
@@ -503,7 +503,6 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Expand review" }));
     await user.click(
       screen.getByRole("button", {
         name: "Resume 1 waiting unit in src/review/constants.ts",
@@ -524,7 +523,7 @@ describe("ReviewFilesPanel", () => {
     );
   });
 
-  it("opens only the top-level folders so a large tree stays cheap", () => {
+  it("starts with every folder expanded", () => {
     render(
       <ReviewFilesPanel
         files={files}
@@ -538,13 +537,19 @@ describe("ReviewFilesPanel", () => {
     expect(
       screen.getByRole("button", { name: "Collapse public" }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Expand review" })).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: /workspace\.ts/i }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "Collapse review" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /workspace\.ts/i }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Collapse all folders" }),
+    ).toBeVisible();
   });
 
-  it("reveals a nested search match and re-collapses when the query clears", () => {
+  it("reveals a nested search match and restores a manual collapse when the query clears", async () => {
+    const user = userEvent.setup();
     const { rerender } = render(
       <ReviewFilesPanel
         files={files}
@@ -554,6 +559,7 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
+    await user.click(screen.getByRole("button", { name: "Collapse review" }));
     expect(
       screen.queryByRole("button", { name: /workspace\.ts/i }),
     ).not.toBeInTheDocument();

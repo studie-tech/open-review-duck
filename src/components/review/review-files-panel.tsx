@@ -346,15 +346,10 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   const [filter, setFilter] = useState<ReviewFileFilter>("all");
-  // Only the top-level folders start open. Seeding every ancestor mounts a
-  // row per changed file, and a large pull request pays for hundreds of rows
-  // the reviewer never looked at. The layout effect below opens the folders
-  // leading to the selected file, and the rest expand on demand.
+  // A new review starts with the complete changed-file outline visible. The
+  // reviewer can still fold one branch or the whole tree from the controls.
   const [expanded, setExpanded] = useState(
-    () =>
-      new Set(
-        files.flatMap((file) => reviewFileAncestorPaths(file.path).slice(0, 1)),
-      ),
+    () => new Set(reviewFileTreeDirectoryPaths(buildReviewFileTree(files))),
   );
   // A folder the reviewer closes while the query forces it open. The override
   // has to be tracked apart from `expanded` because the forced-open set would

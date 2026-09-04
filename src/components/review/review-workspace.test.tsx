@@ -15,6 +15,7 @@ import {
   aiJobActive,
   reshapeProviderThreads,
   restoreProviderThread,
+  reviewCardPinTarget,
   useReviewExitPrefetch,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
@@ -122,6 +123,37 @@ describe("aiJobActive", () => {
     expect(aiJobActive(undefined)).toBe(false);
     expect(aiJobActive(null)).toBe(false);
     expect(aiJobActive("")).toBe(false);
+  });
+});
+
+describe("reviewCardPinTarget", () => {
+  it("pins a file-tree selection to the card top", () => {
+    expect(
+      reviewCardPinTarget({
+        card: "file-card-top",
+        pinToFileTop: true,
+        unitLine: "changed-line",
+        unitStart: "actionable-unit",
+      }),
+    ).toBe("file-card-top");
+  });
+
+  it("keeps unit navigation focused on the most precise available target", () => {
+    expect(
+      reviewCardPinTarget({
+        card: "file-card-top",
+        pinToFileTop: false,
+        unitLine: "changed-line",
+        unitStart: "actionable-unit",
+      }),
+    ).toBe("actionable-unit");
+    expect(
+      reviewCardPinTarget({
+        card: "file-card-top",
+        pinToFileTop: false,
+        unitLine: "changed-line",
+      }),
+    ).toBe("changed-line");
   });
 });
 
