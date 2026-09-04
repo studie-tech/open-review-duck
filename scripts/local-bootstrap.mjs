@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 import pg from "pg";
 import {
   formatLocalBootstrapLink,
-  formatLocalSessionReady,
   LOCAL_BOOTSTRAP_TTL_MINUTES,
 } from "./local-bootstrap-output.mjs";
 
@@ -37,32 +36,23 @@ try {
      on conflict ("workspaceId", "userId") do update set role = 'owner'`,
     [workspaceId],
   );
-  const activeSession = await client.query(
-    `select 1 from open_review_duck_local_session
-     where "revokedAt" is null and "expiresAt" > now()
-     limit 1`,
+  await client.query(
+    `update open_review_duck_local_bootstrap_token
+     set "consumedAt" = now()
+     where "consumedAt" is null`,
   );
-  if (activeSession.rowCount) {
-    output = formatLocalSessionReady(port);
-  } else {
-    await client.query(
-      `update open_review_duck_local_bootstrap_token
-       set "consumedAt" = now()
-       where "consumedAt" is null`,
-    );
-    const bootstrap = randomBytes(48).toString("base64url");
-    await client.query(
-      `insert into open_review_duck_local_bootstrap_token
-        ("tokenHash", "expiresAt", "createdAt")
-       values ($1, now() + ($2 * interval '1 minute'), now())`,
-      [
-        createHash("sha256").update(bootstrap).digest("hex"),
-        LOCAL_BOOTSTRAP_TTL_MINUTES,
-      ],
-    );
-    const url = `http://localhost:${port}/api/local/bootstrap?token=${bootstrap}`;
-    output = formatLocalBootstrapLink(url);
-  }
+  const bootstrap = randomBytes(48).toString("base64url");
+  await client.query(
+    `insert into open_review_duck_local_bootstrap_token
+      ("tokenHash", "expiresAt", "createdAt")
+     values ($1, now() + ($2 * interval '1 minute'), now())`,
+    [
+      createHash("sha256").update(bootstrap).digest("hex"),
+      LOCAL_BOOTSTRAP_TTL_MINUTES,
+    ],
+  );
+  const url = `http://localhost:${port}/api/local/bootstrap?token=${bootstrap}`;
+  output = formatLocalBootstrapLink(url);
   await client.query("commit");
   process.stdout.write(output);
 } catch (cause) {

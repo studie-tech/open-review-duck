@@ -35,15 +35,18 @@ completion events with default PII disabled. Source, prompts, output,
 credentials, OAuth data, storage identifiers, signed URLs, repository paths,
 request bodies, cookies, and authorization headers are prohibited.
 
-The local appliance sends no telemetry and performs no network request during
-startup or ordinary non-AI use. All state remains in the `/data` volume.
-Optional provider or AI credentials are encrypted there. Locally configured
-providers are contacted only after explicit selection.
+The local appliance itself sends no telemetry and performs no network request
+during startup or ordinary non-AI use. Docker contacts GHCR before startup when
+the documented `--pull=always` option checks for a newer image. All state
+remains in the `/data` volume. Optional provider or AI credentials are
+encrypted there. Locally configured providers are contacted only after
+explicit selection.
 
-The first local start prints a 15-minute owner link. Once an active owner
-session exists, restarts do not mint another link. The explicit bootstrap
-administration command revokes existing sessions before printing a replacement,
-so its output must be treated as a credential until it expires or is exchanged.
+Every local start prints a fresh 15-minute owner link without revoking existing
+browser sessions. Only the newest unconsumed startup link remains valid. The
+explicit bootstrap administration command revokes existing sessions before
+printing a replacement, so either command's output must be treated as a
+credential until it expires or is exchanged.
 
 Operators accepting other users' data must publish their controller identity,
 subprocessors, regional scope, contact address, and legally required

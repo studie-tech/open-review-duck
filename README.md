@@ -34,24 +34,26 @@ it so retention cannot silently stop.
 ```bash
 export REVIEWDUCK_IMAGE=ghcr.io/studie-tech/open-review-duck:latest
 
-docker run --rm --tty \
+docker run --pull=always --rm --tty \
   --name open-review-duck \
   -p 127.0.0.1:3000:3000 \
   -v open-review-duck-data:/data \
   "$REVIEWDUCK_IMAGE"
 ```
 
-The command prints a highlighted, clickable owner link. Open it within 15
-minutes and keep this terminal open while you use ReviewDuck. Press `Ctrl+C` to
-stop it. The container is removed automatically, while your session, reviews,
-credentials, source files, and backups stay in the Docker volume for the next
-run.
+`--pull=always` checks the registry before every start, so the `latest` tag does
+not get stuck on an older image cached by Docker. Unchanged layers are reused.
+Startup prints the ReviewDuck version and a highlighted, clickable owner link.
+Open the link within 15 minutes and keep this terminal open while you use
+ReviewDuck. Press `Ctrl+C` to stop it. The container is removed automatically,
+while your session, reviews, credentials, source files, and backups stay in the
+Docker volume for the next run.
 
 To keep the appliance running after the terminal closes and restart it with the
 host, use the background form instead:
 
 ```bash
-docker run --detach \
+docker run --pull=always --detach \
   --name open-review-duck \
   --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
@@ -61,9 +63,9 @@ docker run --detach \
 docker logs open-review-duck
 ```
 
-The first start prints the owner link to the logs. Later restarts preserve the
-existing session without minting another owner link. Generate a fresh link with
-the administration command below when you need to authorize another browser.
+Every start prints a fresh owner link to the logs. Existing authorized browser
+sessions remain valid; the link simply makes it easy to authorize the browser
+you are using now. Only the newest unconsumed link remains valid.
 
 Keep the port bound to `127.0.0.1`. The local appliance is meant to run on the
 same machine as your browser and rejects non-loopback hosts.

@@ -20,17 +20,3 @@ export function formatLocalBootstrapLink(url, options = {}) {
     `${accent}This one-time link expires in ${LOCAL_BOOTSTRAP_TTL_MINUTES} minutes.${reset}\n\n`
   );
 }
-
-/**
- * Explains a restart without exposing a new owner capability in logs.
- *
- * @param {number} port local application port
- * @returns {string} restart guidance
- */
-export function formatLocalSessionReady(port) {
-  return (
-    `\nReviewDuck already has an active owner session.\n` +
-    `Open http://localhost:${port} in the authorized browser.\n` +
-    `To authorize another browser, run the bootstrap administration command.\n\n`
-  );
-}
