@@ -49,6 +49,7 @@ import {
   REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
+  ReviewFileCardSourcePlaceholder,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   reviewCardMemberForLine,
@@ -473,6 +474,30 @@ describe("same-file concept cards", () => {
       "const configuration = true;",
     );
     expect(highlight).toHaveBeenCalled();
+  });
+
+  it("keeps the selected card frame around a hidden source notice", () => {
+    render(
+      <ReviewFileCardSourcePlaceholder
+        framed
+        language="json"
+        lineCount={812}
+        onShow={vi.fn()}
+        path="values.schema.json"
+        reviewed={false}
+      />,
+    );
+
+    const frame = screen
+      .getByRole("button", { name: "Show file" })
+      .closest("div");
+    expect(frame).toHaveClass(
+      "rounded-b-xl",
+      "border-x",
+      "border-b",
+      "border-line",
+    );
+    expect(frame).toHaveTextContent("812 lines of json hidden");
   });
 
   it("keeps a card open when a new unit arrives after older units were signed off", () => {
@@ -2065,6 +2090,30 @@ describe("SideBySideUnitDiff", () => {
     expect(diff.textContent?.indexOf("TypePlot section")).toBeLessThan(
       diff.textContent?.indexOf("export const TypePlot") ?? -1,
     );
+  });
+
+  it("keeps a folded unit label visible while omitting its code rows", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={"const reviewed = true;\nconst pending = true;"}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={20}
+        currentFocusStartLine={20}
+        currentFocusEndLine={21}
+        isReviewLineCollapsed={(line) => line === 20}
+        onSelectReviewLine={vi.fn()}
+        renderBeforeLine={(line) =>
+          line === 20 ? <div>Reviewed unit folded</div> : null
+        }
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Added code diff" });
+    expect(diff).toHaveTextContent("Reviewed unit folded");
+    expect(diff).not.toHaveTextContent("const reviewed = true;");
+    expect(diff).toHaveTextContent("const pending = true;");
   });
 
   it("uses one full-width pull-request pane for pure additions", async () => {

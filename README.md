@@ -138,9 +138,9 @@ files and source ranges used for its answer. Long investigations may use up to
 64 model steps, with additional limits on time, source volume, tool calls, and
 cost.
 
-Local installations can use Ollama, a local OpenAI-compatible server, or a
-supported provider with your own key. Those settings and credentials remain
-encrypted on the local volume.
+Local installations can use Ollama, a local OpenAI-compatible server, OpenAI,
+OpenRouter, OpenCode Zen, Amazon Bedrock, or Azure AI Foundry with your own key.
+Those settings and credentials remain encrypted on the local volume.
 
 ## Back up and upgrade
 

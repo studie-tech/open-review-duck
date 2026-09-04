@@ -218,6 +218,7 @@ interface SideBySideUnitDiffProps {
   expanded?: boolean;
   onSelectReviewLine: (line: number) => void;
   onAskReviewLine?: (line: number) => void;
+  isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
   renderLineDetails?: (line: number) => ReactNode;
 }
@@ -777,6 +778,7 @@ export const SideBySideUnitDiff = forwardRef<
     expanded = false,
     onSelectReviewLine,
     onAskReviewLine,
+    isReviewLineCollapsed,
     renderBeforeLine,
     renderLineDetails,
   },
@@ -1166,6 +1168,8 @@ export const SideBySideUnitDiff = forwardRef<
           const rendersBeforeLine =
             reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
           if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
+          const lineCollapsed =
+            reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
           const absoluteRowIndex = visibleRowStart + item.rowIndex;
           const startsScope =
             showsContextBefore &&
@@ -1183,20 +1187,27 @@ export const SideBySideUnitDiff = forwardRef<
                 <ReviewScopeMarker edge="start" line={scopeStartLine} />
               )}
               {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
-              <AddedUnitDiffRow
-                added={row.kind === "added"}
-                anchored={rendersLineDetails}
-                canAsk={onAskReviewLine !== undefined}
-                isFinding={highlightsReviewLine(findingLine, reviewLine)}
-                keyboardFocused={highlightsReviewLine(keyboardLine, reviewLine)}
-                line={line}
-                lineNumber={lineNumber}
-                onAsk={askReviewLine}
-                onSelect={selectReviewLine}
-                reviewLine={reviewLine}
-                selected={highlightsReviewLine(selectedLine, reviewLine)}
-              />
-              {rendersLineDetails && renderLineDetails?.(reviewLine)}
+              {!lineCollapsed && (
+                <>
+                  <AddedUnitDiffRow
+                    added={row.kind === "added"}
+                    anchored={rendersLineDetails}
+                    canAsk={onAskReviewLine !== undefined}
+                    isFinding={highlightsReviewLine(findingLine, reviewLine)}
+                    keyboardFocused={highlightsReviewLine(
+                      keyboardLine,
+                      reviewLine,
+                    )}
+                    line={line}
+                    lineNumber={lineNumber}
+                    onAsk={askReviewLine}
+                    onSelect={selectReviewLine}
+                    reviewLine={reviewLine}
+                    selected={highlightsReviewLine(selectedLine, reviewLine)}
+                  />
+                  {rendersLineDetails && renderLineDetails?.(reviewLine)}
+                </>
+              )}
               {endsScope && (
                 <ReviewScopeMarker edge="end" line={scopeEndLine} />
               )}
@@ -1276,6 +1287,8 @@ export const SideBySideUnitDiff = forwardRef<
         const rendersBeforeLine =
           reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
         if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
+        const lineCollapsed =
+          reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
         const currentIsReviewLine =
           reviewLine !== undefined &&
           currentLineNumber !== undefined &&
@@ -1305,30 +1318,41 @@ export const SideBySideUnitDiff = forwardRef<
               <ReviewScopeMarker edge="start" line={scopeStartLine} />
             )}
             {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
-            {rendersLineDetails && (
-              <span
-                id={`review-line-${reviewLine}`}
-                className="block h-0"
-                aria-hidden="true"
-              />
+            {!lineCollapsed && (
+              <>
+                {rendersLineDetails && (
+                  <span
+                    id={`review-line-${reviewLine}`}
+                    className="block h-0"
+                    aria-hidden="true"
+                  />
+                )}
+                <SplitUnitDiffRow
+                  canAsk={onAskReviewLine !== undefined}
+                  currentLine={currentLine}
+                  currentLineNumber={currentLineNumber}
+                  currentReviewLine={
+                    currentIsReviewLine ? reviewLine : undefined
+                  }
+                  isFinding={highlightsReviewLine(findingLine, reviewLine)}
+                  keyboardFocused={highlightsReviewLine(
+                    keyboardLine,
+                    reviewLine,
+                  )}
+                  kind={row.kind}
+                  onAsk={askReviewLine}
+                  onSelect={selectReviewLine}
+                  previousLine={previousLine}
+                  previousLineNumber={previousLineNumber}
+                  previousReviewLine={
+                    previousIsReviewLine ? reviewLine : undefined
+                  }
+                  selected={highlightsReviewLine(selectedLine, reviewLine)}
+                  sideBySide={sideBySide}
+                />
+                {rendersLineDetails && renderLineDetails?.(reviewLine)}
+              </>
             )}
-            <SplitUnitDiffRow
-              canAsk={onAskReviewLine !== undefined}
-              currentLine={currentLine}
-              currentLineNumber={currentLineNumber}
-              currentReviewLine={currentIsReviewLine ? reviewLine : undefined}
-              isFinding={highlightsReviewLine(findingLine, reviewLine)}
-              keyboardFocused={highlightsReviewLine(keyboardLine, reviewLine)}
-              kind={row.kind}
-              onAsk={askReviewLine}
-              onSelect={selectReviewLine}
-              previousLine={previousLine}
-              previousLineNumber={previousLineNumber}
-              previousReviewLine={previousIsReviewLine ? reviewLine : undefined}
-              selected={highlightsReviewLine(selectedLine, reviewLine)}
-              sideBySide={sideBySide}
-            />
-            {rendersLineDetails && renderLineDetails?.(reviewLine)}
             {endsScope && <ReviewScopeMarker edge="end" line={scopeEndLine} />}
           </Fragment>
         );

@@ -52,8 +52,7 @@ export default async function LocalSetupPage() {
           <div>
             <p className="text-fog text-[11px]">Docker appliance</p>
             <code className="text-cloud mt-1 block overflow-x-auto font-mono text-xs">
-              docker exec --tty &lt;container-name&gt; reviewduck-local admin
-              bootstrap
+              docker exec open-review-duck reviewduck-local admin bootstrap
             </code>
           </div>
           <p className="text-fog mt-3 text-xs leading-5">

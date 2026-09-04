@@ -28,7 +28,7 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 43;
+export const CURRENT_ANALYSIS_VERSION = 44;
 
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
@@ -341,10 +341,10 @@ function renamedUnitPairs(
 /**
  * Represents a file that is signed off as a whole rather than piece by piece.
  *
- * Two kinds of file are read this way: one whose text no grammar can break
- * into declarations, and one whose grammar declares that its content is data
- * rather than behaviour. Both are confirmed by reading the file, so the file
- * is the unit.
+ * A file is read this way when its text has no supported grammar, its grammar
+ * declares that the content is data rather than behaviour, or it contains no
+ * semantic declarations at all. All three are confirmed by reading the file,
+ * so the file itself is the review unit.
  */
 function wholeFileDeclaration(
   file: SourceFile,
@@ -659,9 +659,13 @@ function rawFileReviewUnits(file: SourceFile) {
     declarations,
     isContextOnly,
   );
+  const reviewUnits = [...declarations, ...moduleUnits];
   return {
     adapter,
-    reviewUnits: [...declarations, ...moduleUnits],
+    reviewUnits:
+      reviewUnits.length > 0
+        ? reviewUnits
+        : [wholeFileDeclaration(file, adapter?.language ?? "text")],
   };
 }
 

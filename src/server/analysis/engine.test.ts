@@ -3,6 +3,28 @@ import { analyzeFiles, reconcileSignOffs } from "./engine";
 import { applySourceBudget } from "./types";
 
 describe("review analysis engine", () => {
+  it("keeps an empty changed file as a whole-file review unit", () => {
+    const units = analyzeFiles([
+      {
+        path: "app/package/__init__.py",
+        content: "",
+        changeType: "added",
+      },
+    ]).units;
+
+    expect(units.filter(({ kind }) => kind !== "file")).toEqual([
+      expect.objectContaining({
+        path: "app/package/__init__.py",
+        kind: "module",
+        name: "__init__.py",
+        source: "",
+        startLine: 1,
+        endLine: 1,
+      }),
+    ]);
+    expect(units.filter(({ kind }) => kind === "file")).toHaveLength(1);
+  });
+
   it("keeps a complete repository map when a file is unchanged", () => {
     const content = [
       "export const first = () => 1;",
@@ -301,7 +323,7 @@ describe("review analysis engine", () => {
     );
   });
 
-  it("keeps import-only setup in file context instead of the review queue", () => {
+  it("keeps import setup contextual and reviews an import-only file as a whole", () => {
     const result = analyzeFiles([
       {
         path: "service.ts",
@@ -331,9 +353,13 @@ describe("review analysis engine", () => {
         content: 'import type { Config } from "./config";',
       },
     ]);
-    expect(
-      importsOnly.units.filter(({ kind }) => kind !== "file"),
-    ).toHaveLength(0);
+    expect(importsOnly.units.filter(({ kind }) => kind !== "file")).toEqual([
+      expect.objectContaining({
+        kind: "module",
+        name: "dependencies.ts",
+        source: 'import type { Config } from "./config";',
+      }),
+    ]);
   });
 
   it("shows imports as context for individual tests instead of separate setup units", () => {

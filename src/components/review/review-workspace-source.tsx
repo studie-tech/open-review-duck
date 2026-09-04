@@ -102,6 +102,7 @@ export function reviewCardMemberForLine(
  * that calls it. This placeholder is what the reviewer uses to open it again.
  */
 export function ReviewFileCardSourcePlaceholder({
+  framed = false,
   itemLabel = "file",
   language,
   lineCount,
@@ -110,6 +111,7 @@ export function ReviewFileCardSourcePlaceholder({
   reviewed,
   sourceBytes,
 }: {
+  framed?: boolean;
   itemLabel?: "card" | "file";
   language?: string;
   lineCount: number;
@@ -120,7 +122,12 @@ export function ReviewFileCardSourcePlaceholder({
 }) {
   const kind = reviewSourceKindLabel({ language, path });
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 font-sans">
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 px-4 py-3 font-sans",
+        framed && "rounded-b-xl border-x border-b border-line bg-code",
+      )}
+    >
       <div className="min-w-0">
         <p className="text-cloud text-[11px] font-medium">
           {lineCount.toLocaleString("en-US")}{" "}
