@@ -539,9 +539,9 @@ export async function sealReviewPlan(
       .update(aiJobs)
       .set({
         // Load-bearing, and written nowhere else on this path: `startAiJob`
-        // leaves the parent `waiting_for_provider`, the UI polls only while a
-        // job is queued or running, and the wall-clock limit has no anchor to
-        // measure from without `startedAt`.
+        // leaves the parent queued until this worker begins, the UI polls every
+        // non-terminal state, and the wall-clock limit has no anchor to measure
+        // from without `startedAt`.
         status: "running",
         startedAt: current.startedAt ?? startedAt,
         progress: 1,

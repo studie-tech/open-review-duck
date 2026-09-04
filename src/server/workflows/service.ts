@@ -323,7 +323,11 @@ export async function startAiJob(db: Database, jobId: string) {
             await tx
               .update(aiJobs)
               .set({
-                status: "waiting_for_provider",
+                // Keep the public state honest while the embedded worker has
+                // not started this workflow. executeAiTurn moves the job to
+                // running and then waiting_for_provider at the actual model
+                // boundary.
+                status: "queued",
                 workflowStartToken: lease.startToken,
                 workflowStartLeaseExpiresAt: lease.leaseExpiresAt,
               })
@@ -363,7 +367,7 @@ export async function startAiJob(db: Database, jobId: string) {
         .where(
           and(
             eq(aiJobs.id, claim.jobId),
-            eq(aiJobs.status, "waiting_for_provider"),
+            eq(aiJobs.status, "queued"),
             eq(aiJobs.workflowStartToken, startToken),
           ),
         )
