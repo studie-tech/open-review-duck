@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RouterOutputs } from "~/trpc/react";
 
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
@@ -26,6 +26,25 @@ export function reviewCardPinTarget<T>(input: {
 }) {
   if (input.pinToFileTop) return input.card;
   return input.unitStart ?? input.unitLine ?? input.card;
+}
+
+/** Advances to a requested file after the sign-off state has committed. */
+export function useReviewFileAdvance<File extends { path: string }>(
+  files: readonly File[],
+  selectFile: (file: File) => void,
+) {
+  const selectFileRef = useRef(selectFile);
+  selectFileRef.current = selectFile;
+  const [requestedPath, setRequestedPath] = useState<string>();
+
+  useEffect(() => {
+    if (!requestedPath) return;
+    setRequestedPath(undefined);
+    const target = files.find(({ path }) => path === requestedPath);
+    if (target) selectFileRef.current(target);
+  }, [files, requestedPath]);
+
+  return useCallback((path: string) => setRequestedPath(path), []);
 }
 
 /** One conversation change a reviewer just asked the provider to make. */

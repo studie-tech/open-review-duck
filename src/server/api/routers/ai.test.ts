@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   order: [] as string[],
   isLocalDeployment: vi.fn(() => false),
   enforceRateLimit: vi.fn(async () => undefined),
+  assertSafeRemoteUrl: vi.fn(async () => undefined),
+  safeRemoteFetch: vi.fn(),
   cancelWorkflowRun: vi.fn(async () => undefined),
   cancelDeepReviewTree: vi.fn(async () => {
     mocks.order.push("cancelDeepReviewTree");
@@ -25,6 +27,10 @@ vi.mock("~/server/deployment", () => ({
 }));
 vi.mock("~/server/security/rate-limit", () => ({
   enforceRateLimit: mocks.enforceRateLimit,
+}));
+vi.mock("~/server/security/remote-url", () => ({
+  assertSafeRemoteUrl: mocks.assertSafeRemoteUrl,
+  safeRemoteFetch: mocks.safeRemoteFetch,
 }));
 vi.mock("~/server/workflows/service", () => ({
   cancelWorkflowRun: mocks.cancelWorkflowRun,
@@ -191,6 +197,84 @@ describe("ai.configuration deep review availability", () => {
     await caller(db).configuration();
     expect(peak).toBe(3);
   });
+});
+
+describe("ai.testConfiguration provider credentials", () => {
+  it.each(["bedrock", "azure_foundry"])(
+    "requires an API key for %s",
+    async (provider) => {
+      mocks.isLocalDeployment.mockReturnValue(true);
+      const { db } = createFakeDb();
+      await expect(
+        caller(db).testConfiguration({
+          provider,
+          model: "deployment-or-model-id",
+          baseUrl: "https://provider.example/openai/v1",
+          useManagedModels: false,
+          mode: "on_demand",
+          reviewPullRequests: false,
+          clearApiKey: false,
+          clearHeaders: false,
+          headers: {},
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "This provider requires an API key",
+      });
+    },
+  );
+
+  it.each([
+    {
+      provider: "bedrock",
+      model: "openai.gpt-oss-120b",
+      listedModel: "openai.gpt-oss-120b",
+      modelVerified: true,
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+    },
+    {
+      provider: "azure_foundry",
+      model: "reviewduck-deployment",
+      listedModel: "gpt-5.4",
+      modelVerified: false,
+      baseUrl: "https://reviewduck.openai.azure.com/openai/v1",
+    },
+  ])(
+    "verifies the documented $provider model endpoint",
+    async ({ provider, model, listedModel, modelVerified, baseUrl }) => {
+      mocks.isLocalDeployment.mockReturnValue(true);
+      mocks.safeRemoteFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ id: listedModel }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      const { db } = createFakeDb();
+
+      await expect(
+        caller(db).testConfiguration({
+          provider,
+          model,
+          apiKey: "provider-key",
+          baseUrl,
+          useManagedModels: false,
+          mode: "on_demand",
+          reviewPullRequests: false,
+          clearApiKey: false,
+          clearHeaders: false,
+          headers: {},
+        }),
+      ).resolves.toMatchObject({ ok: true, model, modelVerified });
+      expect(mocks.assertSafeRemoteUrl).toHaveBeenCalledWith(baseUrl, false);
+      expect(mocks.safeRemoteFetch).toHaveBeenCalledWith(
+        `${baseUrl}/models`,
+        expect.objectContaining({
+          headers: { authorization: "Bearer provider-key" },
+        }),
+        false,
+      );
+    },
+  );
 });
 
 describe("ai.start deep review refusal", () => {

@@ -13,6 +13,10 @@ import {
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import {
+  aiProviderCanVerifyModelFromList,
+  aiProviderRequiresApiKey,
+} from "~/lib/ai-provider-presets";
+import {
   readLocalAiSecret,
   resolveLocalAiCredentials,
 } from "~/server/ai/local-configuration";
@@ -218,6 +222,12 @@ export const aiRouter = createTRPCRouter({
           },
           previousSecret,
         );
+        if (aiProviderRequiresApiKey(input.provider) && !apiKey) {
+          return {
+            ok: false as const,
+            error: "This provider requires an API key",
+          };
+        }
         await assertSafeRemoteUrl(input.baseUrl, env.ALLOW_PRIVATE_AI_HOSTS);
         const startedAt = performance.now();
         const response = await safeRemoteFetch(
@@ -242,7 +252,11 @@ export const aiRouter = createTRPCRouter({
         const availableModels = providerModelsSchema.parse(
           await response.json(),
         ).data;
-        if (!availableModels.some(({ id }) => id === input.model)) {
+        const modelVerified = aiProviderCanVerifyModelFromList(input.provider);
+        if (
+          modelVerified &&
+          !availableModels.some(({ id }) => id === input.model)
+        ) {
           return {
             ok: false as const,
             error: `Provider does not list model ${input.model}`,
@@ -251,6 +265,7 @@ export const aiRouter = createTRPCRouter({
         return {
           ok: true as const,
           model: input.model,
+          modelVerified,
           latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
         };
       } catch (cause) {
@@ -315,6 +330,12 @@ export const aiRouter = createTRPCRouter({
           },
           previousSecret,
         );
+        if (aiProviderRequiresApiKey(input.provider) && !credentials.apiKey) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This provider requires an API key",
+          });
+        }
         const encryptedConfiguration = await sealVaultSecret(
           {
             workspaceId: workspace.id,

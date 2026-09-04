@@ -178,6 +178,7 @@ import {
   relatedReviewRanges,
   reviewCardRanges,
   reviewedFileCard,
+  reviewUnitStartsCollapsed,
 } from "./review-file-card";
 import { ReviewFilesPanel } from "./review-files-panel";
 import { ReviewBinaryPreview } from "./review-image-preview";
@@ -236,6 +237,7 @@ import {
   aiJobActive,
   reviewCardPinTarget,
   useReviewExitPrefetch,
+  useReviewFileAdvance,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
 import { ProviderCommentBody } from "./review-workspace-markdown";
@@ -340,7 +342,6 @@ export function ReviewWorkspace({
   const router = useRouter();
   const { navigate, pending: navigationPending } = usePendingNavigation();
   const [layoutRefreshing, startLayoutRefresh] = useTransition();
-  const [, startReviewFileAdvance] = useTransition();
   const [reviewSession, sendReviewSession] = useReducer(
     reviewSessionReducer,
     initialReviewSessionState,
@@ -394,6 +395,9 @@ export function ReviewWorkspace({
   );
   const [fullFileUnitIds, setFullFileUnitIds] = useState(
     () => new Set<string>(),
+  );
+  const [unitFoldOverrides, setUnitFoldOverrides] = useState(
+    () => new Map<string, boolean>(),
   );
   const [pathSearch, setPathSearch] = useState("");
   const [queueLimit, setQueueLimit] = useState(INITIAL_PATH_ITEMS);
@@ -1369,6 +1373,26 @@ export function ReviewWorkspace({
     selectedFileSourceExpanded ? displayedSource : "",
     activeUnit?.language ?? "text",
   );
+  const displayedLineEntries = useMemo(
+    () =>
+      lines.flatMap((line, index) => {
+        const lineNumber = visibleStartLine + index;
+        if (activeFileCardMembers.length <= 1) return [{ line, lineNumber }];
+        const owner = reviewCardMemberForLine(
+          activeFileCardMembers,
+          lineNumber,
+        );
+        const collapsed = owner
+          ? (unitFoldOverrides.get(owner.id) ??
+            reviewUnitStartsCollapsed(owner))
+          : false;
+        const opensUnit = activeFileCardMembers.some(
+          (member) => member.startLine === lineNumber,
+        );
+        return collapsed && !opensUnit ? [] : [{ line, lineNumber }];
+      }),
+    [activeFileCardMembers, lines, unitFoldOverrides, visibleStartLine],
+  );
   const previousRewriteSource =
     activeUnit?.changeType === "modified" &&
     activeUnit.previousSource &&
@@ -1525,6 +1549,10 @@ export function ReviewWorkspace({
     },
     [selectUnit, units],
   );
+  const requestReviewFileAdvance = useReviewFileAdvance(
+    reviewFiles,
+    selectReviewFile,
+  );
 
   /**
    * Applies or reverses one file-sized semantic review decision.
@@ -1581,9 +1609,7 @@ export function ReviewWorkspace({
       { advance: false },
     );
     if (nextFile) {
-      startReviewFileAdvance(() => {
-        selectReviewFile(nextFile);
-      });
+      requestReviewFileAdvance(nextFile.path);
     }
   }
   const applyReviewFileToggleRef = useRef(applyReviewFileToggle);
@@ -2797,12 +2823,109 @@ export function ReviewWorkspace({
     );
   }
 
-  /** Units that open on this line when Files mode is showing more than one. */
+  /** Reports a unit's explicit fold choice or its status-based default. */
+  function unitIsCollapsed(member: ReviewUnit) {
+    return (
+      unitFoldOverrides.get(member.id) ?? reviewUnitStartsCollapsed(member)
+    );
+  }
+
+  /** Changes one unit without disturbing the fold state of its siblings. */
+  function toggleUnitCollapsed(member: ReviewUnit) {
+    setUnitFoldOverrides((current) => {
+      const next = new Map(current);
+      next.set(
+        member.id,
+        !(current.get(member.id) ?? reviewUnitStartsCollapsed(member)),
+      );
+      return next;
+    });
+  }
+
+  /** Reports whether this unit's individual ledger action is being saved. */
+  function unitReviewActionPending(member: ReviewUnit) {
+    const concept = conceptByMemberId.get(member.id);
+    return (
+      signOffQueue.ids.has(member.id) ||
+      (undoSignOff.isPending && undoSignOff.variables?.unitId === member.id) ||
+      Boolean(concept && pendingConceptSignOffIds.has(concept.id))
+    );
+  }
+
+  /** Reports whether an atomic ledger action is safe from this card. */
+  function unitReviewActionDisabled(member: ReviewUnit) {
+    if (
+      unitReviewActionPending(member) ||
+      undoSignOff.isPending ||
+      undoConcept.isPending ||
+      resetReview.isPending
+    ) {
+      return true;
+    }
+    if (member.status === "signed_off") return false;
+    return (
+      reviewComplete ||
+      member.status === "waiting" ||
+      (member.kind !== "binary" && !hydratedUnitIds.has(member.id))
+    );
+  }
+
+  /** Toggles one unit's review ledger without advancing or changing its card. */
+  function toggleUnitReview(member: ReviewUnit) {
+    if (unitReviewActionDisabled(member)) return;
+    if (member.status === "signed_off") {
+      undoSignOff.mutate({ unitId: member.id, sessionId });
+      return;
+    }
+    optimisticallyQueueSignOffs(
+      [
+        {
+          unitId: member.id,
+          sessionId,
+          durationSeconds:
+            member.id === activeUnit?.id
+              ? Math.round((Date.now() - startedAt) / 1000)
+              : 0,
+        },
+      ],
+      undefined,
+      { advance: false },
+    );
+  }
+
+  /** Units that open on this line when a card contains more than one. */
   function fileUnitsStartingAt(lineNumber: number) {
-    if (reviewMode !== "files" || activeFileCardMembers.length <= 1) return [];
+    if (activeFileCardMembers.length <= 1) return [];
     return activeFileCardMembers.filter(
       (member) => member.startLine === lineNumber,
     );
+  }
+
+  /** Reports whether the atomic owner of a rendered card line is folded. */
+  function isFileUnitLineCollapsed(lineNumber: number) {
+    if (activeFileCardMembers.length <= 1) return false;
+    const owner = reviewCardMemberForLine(activeFileCardMembers, lineNumber);
+    return owner ? unitIsCollapsed(owner) : false;
+  }
+
+  /** Renders the persistent opener for each atomic unit in a file card. */
+  function renderFileUnitMarkers(lineNumber: number) {
+    return fileUnitsStartingAt(lineNumber).map((member) => (
+      <ReviewFileUnitMarker
+        key={member.id}
+        collapsed={unitIsCollapsed(member)}
+        member={member}
+        onToggleCollapsed={() => toggleUnitCollapsed(member)}
+        onToggleReview={() => toggleUnitReview(member)}
+        onStopWaiting={
+          member.status === "waiting"
+            ? () => stopWaitingOnUnit(member.id)
+            : undefined
+        }
+        reviewActionDisabled={unitReviewActionDisabled(member)}
+        reviewActionPending={unitReviewActionPending(member)}
+      />
+    ));
   }
 
   /** Renders every review artifact attached to one source line in either code view. */
@@ -6204,6 +6327,7 @@ export function ReviewWorkspace({
                   {!selectedFileSourceExpanded &&
                   activeFileCardSourceAvailable ? (
                     <ReviewFileCardSourcePlaceholder
+                      framed
                       itemLabel={reviewMode === "files" ? "file" : "card"}
                       language={activeUnit.language}
                       lineCount={activeFileCardLineCount}
@@ -6256,21 +6380,10 @@ export function ReviewWorkspace({
                       keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
                       findingLine={findingLine}
                       expanded={fullFileVisible}
+                      isReviewLineCollapsed={isFileUnitLineCollapsed}
                       onSelectReviewLine={commentOnCardLine}
                       onAskReviewLine={askAboutCardLine}
-                      renderBeforeLine={(lineNumber) =>
-                        fileUnitsStartingAt(lineNumber).map((member) => (
-                          <ReviewFileUnitMarker
-                            key={member.id}
-                            member={member}
-                            onStopWaiting={
-                              member.status === "waiting"
-                                ? () => stopWaitingOnUnit(member.id)
-                                : undefined
-                            }
-                          />
-                        ))
-                      }
+                      renderBeforeLine={renderFileUnitMarkers}
                       renderLineDetails={renderReviewLineDetails}
                     />
                   )}
@@ -6361,11 +6474,21 @@ export function ReviewWorkspace({
                     activeUnit.kind !== "binary" && (
                       <SourceLineWindow
                         key={activeUnit.id}
-                        items={lines}
+                        items={displayedLineEntries}
+                        lineNumberForItem={(entry) => entry.lineNumber}
                         pinnedLines={pinnedReviewLines}
                         rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
                         startLine={visibleStartLine}
-                        renderLine={(line, lineNumber) => {
+                        renderLine={(entry, lineNumber) => {
+                          const { line } = entry;
+                          const unitMarkers = renderFileUnitMarkers(lineNumber);
+                          if (isFileUnitLineCollapsed(lineNumber)) {
+                            return (
+                              <Fragment key={`${activeUnit.id}-${lineNumber}`}>
+                                {unitMarkers}
+                              </Fragment>
+                            );
+                          }
                           const isUnitLine = isPrimaryReviewLine(lineNumber);
                           const isChangedLine =
                             isUnitLine && changedCurrentLines.has(lineNumber);
@@ -6380,17 +6503,7 @@ export function ReviewWorkspace({
                             : [];
                           return (
                             <Fragment key={`${activeUnit.id}-${lineNumber}`}>
-                              {fileUnitsStartingAt(lineNumber).map((member) => (
-                                <ReviewFileUnitMarker
-                                  key={member.id}
-                                  member={member}
-                                  onStopWaiting={
-                                    member.status === "waiting"
-                                      ? () => stopWaitingOnUnit(member.id)
-                                      : undefined
-                                  }
-                                />
-                              ))}
+                              {unitMarkers}
                               {contextBefore > 0 &&
                                 lineNumber === cardStartLine &&
                                 cardStartLine && (

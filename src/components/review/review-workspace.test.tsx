@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouterOutputs } from "~/trpc/react";
@@ -17,6 +23,7 @@ import {
   restoreProviderThread,
   reviewCardPinTarget,
   useReviewExitPrefetch,
+  useReviewFileAdvance,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
 import {
@@ -154,6 +161,31 @@ describe("reviewCardPinTarget", () => {
         unitLine: "changed-line",
       }),
     ).toBe("changed-line");
+  });
+});
+
+describe("useReviewFileAdvance", () => {
+  it("selects the requested file after the sign-off render commits", () => {
+    const files = [{ path: "src/one.ts" }, { path: "src/two.ts" }];
+    const selectFile = vi.fn();
+    const { result } = renderHook(() =>
+      useReviewFileAdvance(files, selectFile),
+    );
+
+    act(() => result.current("src/two.ts"));
+
+    expect(selectFile).toHaveBeenCalledExactlyOnceWith(files[1]);
+  });
+
+  it("does not reopen a file that disappeared during the sign-off", () => {
+    const selectFile = vi.fn();
+    const { result } = renderHook(() =>
+      useReviewFileAdvance([{ path: "src/one.ts" }], selectFile),
+    );
+
+    act(() => result.current("src/two.ts"));
+
+    expect(selectFile).not.toHaveBeenCalled();
   });
 });
 

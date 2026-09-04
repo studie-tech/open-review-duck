@@ -156,6 +156,49 @@ describe("LocalAiSettings", () => {
     ).toBeVisible();
   });
 
+  it("guides Bedrock and Azure AI Foundry OpenAI-compatible setup", async () => {
+    const user = userEvent.setup();
+    render(
+      <LocalAiSettings
+        initialConfiguration={localConfiguration({
+          managedModel: "",
+          managedModels: [""],
+          configuration: null,
+        })}
+      />,
+    );
+
+    const provider = screen.getByRole("combobox", { name: "Provider" });
+    await user.selectOptions(provider, "bedrock");
+    expect(
+      screen.getByPlaceholderText(
+        "https://bedrock-runtime.<region>.amazonaws.com/openai/v1",
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Amazon Bedrock API key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(screen.getByText(/model's AWS Region/)).toBeVisible();
+
+    await user.selectOptions(provider, "azure_foundry");
+    expect(
+      screen.getByPlaceholderText(
+        "https://<resource>.openai.azure.com/openai/v1",
+      ),
+    ).toBeVisible();
+    expect(screen.getByPlaceholderText("Deployment name")).toBeVisible();
+    expect(screen.getByLabelText("Foundry resource API key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(
+      screen.getByText(
+        /deployment name, not the catalog model ID.*supports Chat Completions/,
+      ),
+    ).toBeVisible();
+  });
+
   it("validates and saves the shared preference draft in the BYOK payload", async () => {
     const user = userEvent.setup();
     mocks.test.mockResolvedValueOnce({ ok: true, latencyMs: 42 });

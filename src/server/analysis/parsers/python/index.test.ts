@@ -86,7 +86,7 @@ describe("Python review analysis", () => {
     ).toEqual(["Service class statements"]);
   });
 
-  it("keeps module docstrings and imports as context rather than review units", () => {
+  it("reviews a context-only package initializer as a whole file", () => {
     const result = analyzeFiles([
       {
         path: "src/acme/__init__.py",
@@ -98,7 +98,13 @@ describe("Python review analysis", () => {
       },
     ]);
 
-    expect(result.units.filter(({ kind }) => kind !== "file")).toEqual([]);
+    expect(result.units.filter(({ kind }) => kind !== "file")).toEqual([
+      expect.objectContaining({
+        kind: "module",
+        name: "__init__.py",
+        source: expect.stringContaining("Public package exports"),
+      }),
+    ]);
   });
 
   it("resolves named, module, local, and src-layout imports", () => {

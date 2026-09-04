@@ -206,6 +206,70 @@ describe("review file browsing", () => {
     );
   });
 
+  it("advances through a whole-file fallback before the next semantic file", () => {
+    const ordered = reviewFileEntries(
+      [
+        {
+          id: "snowflake-file",
+          path: "app/flakegraph_app/backends/snowflake.py",
+          previousPath: null,
+          changeType: "modified",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "init-file",
+          path: "app/flakegraph_app/ui/__init__.py",
+          previousPath: null,
+          changeType: "added",
+          additions: 0,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "authentication-file",
+          path: "app/flakegraph_app/ui/authentication.py",
+          previousPath: null,
+          changeType: "added",
+          additions: 10,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+      ],
+      [
+        {
+          id: "snowflake-unit",
+          path: "app/flakegraph_app/backends/snowflake.py",
+          status: "signed_off",
+          revisionState: "unchanged" as const,
+        },
+        {
+          id: "init-whole-file-unit",
+          path: "app/flakegraph_app/ui/__init__.py",
+          status: "pending",
+          revisionState: "new" as const,
+        },
+        {
+          id: "authentication-unit",
+          path: "app/flakegraph_app/ui/authentication.py",
+          status: "pending",
+          revisionState: "new" as const,
+        },
+      ],
+    );
+
+    expect(
+      nextOutstandingReviewFile(
+        ordered,
+        "app/flakegraph_app/backends/snowflake.py",
+      )?.path,
+    ).toBe("app/flakegraph_app/ui/__init__.py");
+  });
+
   it("sorts concept cards in the same order the sidebar walks the tree", () => {
     const nested = reviewFileEntries(
       [

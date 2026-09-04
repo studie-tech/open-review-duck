@@ -59,24 +59,42 @@ export const HIGHLIGHTED_SOURCE_ROW_HEIGHT_PX = 24;
  */
 export function SourceLineWindow<T>({
   items,
+  lineNumberForItem,
   pinnedLines,
   renderLine,
   rowHeight,
   startLine,
 }: {
   items: readonly T[];
+  lineNumberForItem?: (item: T, index: number) => number;
   pinnedLines?: readonly number[];
   renderLine: (item: T, lineNumber: number) => ReactNode;
   rowHeight: number;
   startLine: number;
 }) {
   if (items.length <= WINDOWED_SOURCE_LINE_COUNT) {
-    return <>{renderBlock(items, 0, items.length, startLine, renderLine)}</>;
+    return (
+      <>
+        {renderBlock(
+          items,
+          0,
+          items.length,
+          startLine,
+          renderLine,
+          lineNumberForItem,
+        )}
+      </>
+    );
   }
   const pinnedBlocks = new Set(
-    (pinnedLines ?? []).map((line) =>
-      Math.floor((line - startLine) / WINDOW_BLOCK_LINES),
-    ),
+    (pinnedLines ?? []).flatMap((line) => {
+      const index = lineNumberForItem
+        ? items.findIndex(
+            (item, itemIndex) => lineNumberForItem(item, itemIndex) === line,
+          )
+        : line - startLine;
+      return index >= 0 ? [Math.floor(index / WINDOW_BLOCK_LINES)] : [];
+    }),
   );
   return (
     <>
@@ -92,7 +110,14 @@ export function SourceLineWindow<T>({
               initiallyMounted={block < WINDOW_INITIAL_BLOCKS}
               pinned={pinnedBlocks.has(block)}
               render={() =>
-                renderBlock(items, first, last, startLine, renderLine)
+                renderBlock(
+                  items,
+                  first,
+                  last,
+                  startLine,
+                  renderLine,
+                  lineNumberForItem,
+                )
               }
             />
           );
@@ -109,10 +134,16 @@ function renderBlock<T>(
   last: number,
   startLine: number,
   renderLine: (item: T, lineNumber: number) => ReactNode,
+  lineNumberForItem?: (item: T, index: number) => number,
 ) {
   return items
     .slice(first, last)
-    .map((item, offset) => renderLine(item, startLine + first + offset));
+    .map((item, offset) =>
+      renderLine(
+        item,
+        lineNumberForItem?.(item, first + offset) ?? startLine + first + offset,
+      ),
+    );
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
+  reviewUnitStartsCollapsed,
 } from "./review-file-card";
 
 afterEach(cleanup);
@@ -356,6 +357,12 @@ describe("CopyReviewPathButton", () => {
 });
 
 describe("ReviewFileUnitMarker", () => {
+  it("starts signed-off units collapsed but leaves outstanding units open", () => {
+    expect(reviewUnitStartsCollapsed({ status: "signed_off" })).toBe(true);
+    expect(reviewUnitStartsCollapsed({ status: "pending" })).toBe(false);
+    expect(reviewUnitStartsCollapsed({ status: "waiting" })).toBe(false);
+  });
+
   it("labels the unit as a section with its line span instead of a card title", () => {
     render(
       <ReviewFileUnitMarker
@@ -405,5 +412,111 @@ describe("ReviewFileUnitMarker", () => {
       }),
     );
     expect(onStopWaiting).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes an independent fold control for the unit", () => {
+    const onToggleCollapsed = vi.fn();
+    const { rerender } = render(
+      <ReviewFileUnitMarker
+        collapsed
+        member={
+          {
+            id: "reviewed-unit",
+            name: "ReviewedUnit",
+            startLine: 4,
+            endLine: 8,
+            status: "signed_off",
+            signOffOrigin: "preserved",
+            revisionState: "unchanged",
+          } as never
+        }
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+
+    const expand = screen.getByRole("button", { name: "Expand ReviewedUnit" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(expand);
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ReviewFileUnitMarker
+        collapsed={false}
+        member={
+          {
+            id: "reviewed-unit",
+            name: "ReviewedUnit",
+            startLine: 4,
+            endLine: 8,
+            status: "signed_off",
+            signOffOrigin: "preserved",
+            revisionState: "unchanged",
+          } as never
+        }
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Collapse ReviewedUnit" }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("toggles the individual unit review from a compact icon", () => {
+    const onToggleReview = vi.fn();
+    const member = {
+      id: "review-unit",
+      name: "ReviewUnit",
+      startLine: 10,
+      endLine: 12,
+      status: "pending",
+      revisionState: "unchanged",
+    };
+    const { rerender } = render(
+      <ReviewFileUnitMarker
+        member={member as never}
+        onToggleReview={onToggleReview}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign off ReviewUnit" }),
+    );
+    expect(onToggleReview).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ReviewFileUnitMarker
+        member={{ ...member, status: "signed_off" } as never}
+        onToggleReview={onToggleReview}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Mark ReviewUnit as not reviewed",
+      }),
+    );
+    expect(onToggleReview).toHaveBeenCalledTimes(2);
+  });
+
+  it("locks the unit review icon while its ledger update is saving", () => {
+    render(
+      <ReviewFileUnitMarker
+        member={
+          {
+            id: "saving-unit",
+            name: "SavingUnit",
+            startLine: 10,
+            endLine: 12,
+            status: "signed_off",
+            revisionState: "unchanged",
+          } as never
+        }
+        onToggleReview={vi.fn()}
+        reviewActionPending
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Saving review for SavingUnit" }),
+    ).toBeDisabled();
   });
 });
