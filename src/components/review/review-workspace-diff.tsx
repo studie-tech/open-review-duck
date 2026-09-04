@@ -153,27 +153,52 @@ function DiffEdgeRevealButton({
 /** Reveals another page from an unchanged region inside the focused unit. */
 function DiffCollapsedContextButton({
   count,
-  revealed,
+  revealedFromEnd,
+  revealedFromStart,
   onReveal,
 }: {
   count: number;
-  revealed: number;
-  onReveal: () => void;
+  revealedFromEnd: number;
+  revealedFromStart: number;
+  onReveal: (direction: -1 | 1) => void;
 }) {
-  const remaining = count - revealed;
+  const remaining = count - revealedFromStart - revealedFromEnd;
   const pageSize = Math.min(CONTEXT_PAGE_LINES, remaining);
   return (
-    <button
-      type="button"
-      aria-label={`Show ${pageSize} more unchanged lines`}
-      onClick={onReveal}
-      className="text-fog hover:text-cloud flex w-full items-center justify-center gap-2 border-y border-line/70 bg-surface-subtle/55 px-3 py-2 font-sans text-[10px] transition"
+    <fieldset
+      aria-label={`${remaining} unchanged lines hidden`}
+      className="flex w-full items-center justify-center gap-2 border-y border-line/70 bg-surface-subtle/55 px-3 py-1.5 font-sans text-[10px]"
     >
-      <ChevronDown className="size-3" />
-      Show {pageSize} more unchanged lines
-      <span className="text-mist">({remaining} hidden)</span>
-    </button>
+      <button
+        type="button"
+        aria-label={`Show ${pageSize} unchanged lines downward`}
+        title={`Reveal the next ${pageSize} lines from the code above`}
+        onClick={() => onReveal(1)}
+        className="group text-fog hover:border-cyan/35 hover:bg-cyan/[.07] hover:text-cloud focus-visible:border-cyan/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan flex items-center gap-1.5 rounded-full border border-line bg-panel/70 px-2.5 py-1 font-medium shadow-sm transition"
+      >
+        <ChevronDown className="size-3 text-cyan/80 transition-transform group-hover:translate-y-px" />
+        <span>Show {pageSize} down</span>
+      </button>
+      <span className="text-mist min-w-28 text-center tabular-nums">
+        {remaining} unchanged {remaining === 1 ? "line" : "lines"} hidden
+      </span>
+      <button
+        type="button"
+        aria-label={`Show ${pageSize} unchanged lines upward`}
+        title={`Reveal the previous ${pageSize} lines from the code below`}
+        onClick={() => onReveal(-1)}
+        className="group text-fog hover:border-cyan/35 hover:bg-cyan/[.07] hover:text-cloud focus-visible:border-cyan/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan flex items-center gap-1.5 rounded-full border border-line bg-panel/70 px-2.5 py-1 font-medium shadow-sm transition"
+      >
+        <ChevronDown className="size-3 rotate-180 text-cyan/80 transition-transform group-hover:-translate-y-px" />
+        <span>Show {pageSize} up</span>
+      </button>
+    </fieldset>
   );
+}
+
+interface RevealedGapLines {
+  fromEnd: number;
+  fromStart: number;
 }
 
 export interface SideBySideUnitDiffHandle {
@@ -954,18 +979,27 @@ export const SideBySideUnitDiff = forwardRef<
     visibleRowStart,
     visibleRows,
   ]);
-  const [revealedGapLines, setRevealedGapLines] = useState<Map<string, number>>(
-    () => new Map(),
+  const [revealedGapLines, setRevealedGapLines] = useState<
+    Map<string, RevealedGapLines>
+  >(() => new Map());
+  const revealCollapsedGap = useCallback(
+    (key: string, count: number, direction: -1 | 1) => {
+      setRevealedGapLines((current) => {
+        const revealed = current.get(key) ?? { fromEnd: 0, fromStart: 0 };
+        const revealedTotal = revealed.fromStart + revealed.fromEnd;
+        if (revealedTotal >= count) return current;
+        const pageSize = Math.min(CONTEXT_PAGE_LINES, count - revealedTotal);
+        const nextRevealed =
+          direction === 1
+            ? { ...revealed, fromStart: revealed.fromStart + pageSize }
+            : { ...revealed, fromEnd: revealed.fromEnd + pageSize };
+        const next = new Map(current);
+        next.set(key, nextRevealed);
+        return next;
+      });
+    },
+    [],
   );
-  const revealCollapsedGap = useCallback((key: string, count: number) => {
-    setRevealedGapLines((current) => {
-      const revealed = current.get(key) ?? 0;
-      if (revealed >= count) return current;
-      const next = new Map(current);
-      next.set(key, Math.min(count, revealed + CONTEXT_PAGE_LINES));
-      return next;
-    });
-  }, []);
   const revealEdge = useCallback(
     (direction: -1 | 1) => {
       const collapsedGaps = compactRows.filter(
@@ -981,9 +1015,12 @@ export const SideBySideUnitDiff = forwardRef<
       const gap = direction === -1 ? collapsedGaps[0] : collapsedGaps.at(-1);
       if (gap) {
         const key = `${visibleRowStart + gap.rowStart}-${visibleRowStart + gap.rowEnd}`;
-        const revealed = revealedGapLines.get(key) ?? 0;
-        if (revealed < gap.count) {
-          revealCollapsedGap(key, gap.count);
+        const revealed = revealedGapLines.get(key) ?? {
+          fromEnd: 0,
+          fromStart: 0,
+        };
+        if (revealed.fromStart + revealed.fromEnd < gap.count) {
+          revealCollapsedGap(key, gap.count, direction);
           return true;
         }
       }
@@ -1029,9 +1066,16 @@ export const SideBySideUnitDiff = forwardRef<
       compactRows.flatMap((item) => {
         if (item.kind === "row") return [item];
         const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
-        const revealed = Math.min(revealedGapLines.get(key) ?? 0, item.count);
-        if (revealed === 0) return [item];
-        if (revealed === item.count) {
+        const revealed = revealedGapLines.get(key) ?? {
+          fromEnd: 0,
+          fromStart: 0,
+        };
+        const revealedTotal = Math.min(
+          revealed.fromStart + revealed.fromEnd,
+          item.count,
+        );
+        if (revealedTotal === 0) return [item];
+        if (revealedTotal === item.count) {
           return visibleRows
             .slice(item.rowStart, item.rowEnd)
             .map((row, index) => ({
@@ -1041,18 +1085,14 @@ export const SideBySideUnitDiff = forwardRef<
             }));
         }
 
-        // Expand from the side nearest the change neighborhood defaults
-        // kept: reveal symmetrically inside unit interior collapses.
-        const revealedBefore = Math.ceil(revealed / 2);
-        const revealedAfter = Math.floor(revealed / 2);
         const before = visibleRows
-          .slice(item.rowStart, item.rowStart + revealedBefore)
+          .slice(item.rowStart, item.rowStart + revealed.fromStart)
           .map((row, index) => ({
             kind: "row" as const,
             row,
             rowIndex: item.rowStart + index,
           }));
-        const afterStart = item.rowEnd - revealedAfter;
+        const afterStart = item.rowEnd - revealed.fromEnd;
         const after = visibleRows
           .slice(afterStart, item.rowEnd)
           .map((row, index) => ({
@@ -1142,13 +1182,19 @@ export const SideBySideUnitDiff = forwardRef<
             const absoluteStart = visibleRowStart + item.rowStart;
             const absoluteEnd = visibleRowStart + item.rowEnd;
             const key = `${absoluteStart}-${absoluteEnd}`;
-            const revealed = revealedGapLines.get(key) ?? 0;
+            const revealed = revealedGapLines.get(key) ?? {
+              fromEnd: 0,
+              fromStart: 0,
+            };
             return (
               <DiffCollapsedContextButton
                 key={`gap-${key}`}
                 count={item.count}
-                revealed={revealed}
-                onReveal={() => revealCollapsedGap(key, item.count)}
+                revealedFromEnd={revealed.fromEnd}
+                revealedFromStart={revealed.fromStart}
+                onReveal={(direction) =>
+                  revealCollapsedGap(key, item.count, direction)
+                }
               />
             );
           }
@@ -1253,13 +1299,19 @@ export const SideBySideUnitDiff = forwardRef<
       {displayItems.map((item) => {
         if (item.kind === "collapsed") {
           const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
-          const revealed = revealedGapLines.get(key) ?? 0;
+          const revealed = revealedGapLines.get(key) ?? {
+            fromEnd: 0,
+            fromStart: 0,
+          };
           return (
             <DiffCollapsedContextButton
               key={`gap-${key}`}
               count={item.count}
-              revealed={revealed}
-              onReveal={() => revealCollapsedGap(key, item.count)}
+              revealedFromEnd={revealed.fromEnd}
+              revealedFromStart={revealed.fromStart}
+              onReveal={(direction) =>
+                revealCollapsedGap(key, item.count, direction)
+              }
             />
           );
         }

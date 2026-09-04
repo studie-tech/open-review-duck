@@ -70,6 +70,7 @@ import {
   type ImportReference,
 } from "~/lib/import-navigation";
 import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
+import { takeOptimisticActionBatch } from "~/lib/optimistic-action-queue";
 import { providerLabel } from "~/lib/provider-labels";
 import { followPendingProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
@@ -127,7 +128,6 @@ import {
 } from "~/lib/side-by-side-diff";
 import {
   createSignOffQueue,
-  nextSignOffBatchSize,
   reviewFooterSaveState,
   signOffQueueReducer,
 } from "~/lib/sign-off-queue";
@@ -136,7 +136,6 @@ import {
   type ReviewViewSnapshot,
   rememberSignOff,
   type SignOffUndoEntry,
-  signOffUndoTarget,
 } from "~/lib/sign-off-undo";
 import { isPeekableToken, symbolPeekAttributes } from "~/lib/symbol-peek";
 import {
@@ -290,6 +289,7 @@ type ReviewConcept = WorkspaceData["concepts"][number];
 type ImportTarget = RouterOutputs["review"]["importTarget"];
 type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
+type UnreviewInput = RouterInputs["review"]["unreview"];
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
 
@@ -307,6 +307,18 @@ interface SignOffRollback {
 interface QueuedSignOff {
   input: SignOffInput;
   rollback: SignOffRollback;
+}
+
+interface QueuedSignOffUndo {
+  actionId: number;
+  input: UnreviewInput;
+  rollback: ReviewUnit;
+}
+
+interface QueuedSignOffUndoAction {
+  entry: SignOffUndoEntry;
+  error?: string;
+  remaining: number;
 }
 
 /** Matches the `h-5` spacer above the selected card so its header is never flush. */
@@ -444,6 +456,8 @@ export function ReviewWorkspace({
     line: number;
     unitId: string;
   }>();
+  const [focusedProviderThreadId, setFocusedProviderThreadId] =
+    useState<string>();
   const [pendingAiQuestionLine, setPendingAiQuestionLine] = useState<{
     line: number;
     unitId: string;
@@ -467,6 +481,10 @@ export function ReviewWorkspace({
   const [signOffUndoHistory, setSignOffUndoHistory] = useState<
     SignOffUndoEntry[]
   >([]);
+  const signOffUndoHistoryRef = useRef<SignOffUndoEntry[]>([]);
+  useEffect(() => {
+    signOffUndoHistoryRef.current = signOffUndoHistory;
+  }, [signOffUndoHistory]);
   const [importPreview, setImportPreview] = useState<ImportPreview>();
   const [resolvingImport, setResolvingImport] = useState<string>();
   const [importReturn, setImportReturn] = useState<{
@@ -498,10 +516,16 @@ export function ReviewWorkspace({
   const codeScrollRef = useRef<HTMLDivElement>(null);
   const clearFindingLineRef = useRef<() => void>(() => undefined);
   const dismissedAiQuestionUnits = useRef(new Set<string>());
-  // Units of a multi-unit undo whose own success is not worth a toast.
-  const quietUndoUnitIds = useRef(new Set<string>());
-  const undoInFlight = useRef(false);
-  const [undoPending, setUndoPending] = useState(false);
+  const queuedSignOffUndos = useRef<QueuedSignOffUndo[]>([]);
+  const queuedSignOffUndoActions = useRef(
+    new Map<number, QueuedSignOffUndoAction>(),
+  );
+  const nextSignOffUndoActionId = useRef(1);
+  const undoDrainPromise = useRef<Promise<void> | null>(null);
+  const [pendingUndoUnitIds, setPendingUndoUnitIds] = useState(
+    () => new Set<string>(),
+  );
+  const undoPending = pendingUndoUnitIds.size > 0;
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
   const reviewCardsAboveRef = useRef<HTMLDivElement>(null);
@@ -518,7 +542,7 @@ export function ReviewWorkspace({
     () => new Set<string>(),
   );
   const queuedSignOffs = useRef<QueuedSignOff[]>([]);
-  const signOffDrainRunning = useRef(false);
+  const signOffDrainPromise = useRef<Promise<void> | null>(null);
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
@@ -1514,6 +1538,7 @@ export function ReviewWorkspace({
       setStartedAt(Date.now());
       setQueueLimit(INITIAL_PATH_ITEMS);
       setKeyboardLine(undefined);
+      setFocusedProviderThreadId(undefined);
       // `openFinding` sets the finding line after calling this, and the later
       // set wins in the same batch; a unit reached by ⌘↓, the path panel or a
       // concept card instead arrives with no stale amber line lit.
@@ -2133,13 +2158,11 @@ export function ReviewWorkspace({
   }
 
   /** Drains one immediate save, then coalesces accumulated work into batches. */
-  async function drainSignOffQueue() {
-    if (signOffDrainRunning.current) return;
-    signOffDrainRunning.current = true;
-    try {
+  function drainSignOffQueue(): Promise<void> {
+    if (signOffDrainPromise.current) return signOffDrainPromise.current;
+    const drain = (async () => {
       while (queuedSignOffs.current.length > 0) {
-        const batchSize = nextSignOffBatchSize(queuedSignOffs.current.length);
-        const batch = queuedSignOffs.current.splice(0, batchSize);
+        const batch = takeOptimisticActionBatch(queuedSignOffs.current);
         let saved = 0;
         try {
           if (batch.length === 1) {
@@ -2213,9 +2236,11 @@ export function ReviewWorkspace({
           }
         }
       }
-    } finally {
-      signOffDrainRunning.current = false;
-    }
+    })().finally(() => {
+      signOffDrainPromise.current = null;
+    });
+    signOffDrainPromise.current = drain;
+    return drain;
   }
   /**
    * Returns the named units to the review path before the server answers.
@@ -2253,6 +2278,143 @@ export function ReviewWorkspace({
     setUnits(updated);
   }
 
+  const queuedUndoSignOff = api.review.unreview.useMutation();
+  const queuedUndoBatch = api.review.unreviewBatch.useMutation();
+
+  /** Records one optimistic undo step for the shared background drain. */
+  function queueSignOffUndo(entry: SignOffUndoEntry, undone: ReviewUnit[]) {
+    const actionId = nextSignOffUndoActionId.current++;
+    queuedSignOffUndoActions.current.set(actionId, {
+      entry,
+      remaining: undone.length,
+    });
+    queuedSignOffUndos.current.push(
+      ...undone.map((unit) => ({
+        actionId,
+        input: { unitId: unit.id, sessionId },
+        rollback: unit,
+      })),
+    );
+    setPendingUndoUnitIds((current) => {
+      const pending = new Set(current);
+      for (const unit of undone) pending.add(unit.id);
+      return pending;
+    });
+    void drainSignOffUndoQueue();
+  }
+
+  /** Settles optimistic undo units and completes their user-visible steps. */
+  function settleSignOffUndoBatch(
+    batch: QueuedSignOffUndo[],
+    failures: Map<string, string>,
+  ) {
+    restoreUndoneSignOffs(
+      batch.flatMap((queued) =>
+        failures.has(queued.input.unitId) ? [queued.rollback] : [],
+      ),
+    );
+    setPendingUndoUnitIds((current) => {
+      const pending = new Set(current);
+      for (const { input } of batch) pending.delete(input.unitId);
+      return pending;
+    });
+
+    const completed: Array<{
+      actionId: number;
+      action: QueuedSignOffUndoAction;
+    }> = [];
+    for (const queued of batch) {
+      const action = queuedSignOffUndoActions.current.get(queued.actionId);
+      if (!action) continue;
+      action.remaining -= 1;
+      action.error ??= failures.get(queued.input.unitId);
+      if (action.remaining === 0) {
+        queuedSignOffUndoActions.current.delete(queued.actionId);
+        completed.push({ actionId: queued.actionId, action });
+      }
+    }
+
+    const failed = completed
+      .filter(({ action }) => action.error)
+      .sort((left, right) => right.actionId - left.actionId);
+    if (failed.length > 0) {
+      let history = signOffUndoHistoryRef.current;
+      for (const { action } of failed) {
+        history = rememberSignOff(history, action.entry);
+      }
+      signOffUndoHistoryRef.current = history;
+      setSignOffUndoHistory(history);
+      toast.error(
+        failed.length === 1
+          ? "Sign-off could not be undone"
+          : "Some undos failed",
+        {
+          id: "review-sign-off-undo-error",
+          description:
+            failed[0]?.action.error ??
+            "The affected units were restored to their signed-off state.",
+        },
+      );
+    }
+    const succeeded = completed.length - failed.length;
+    if (succeeded > 0) {
+      toast.success(
+        succeeded === 1
+          ? "Sign-off returned to the review path"
+          : `${succeeded} sign-offs returned to the review path`,
+        { id: "review-sign-off-undo-success" },
+      );
+    }
+  }
+
+  /** Waits for dependent sign-offs, then drains one undo and queued batches. */
+  function drainSignOffUndoQueue(): Promise<void> {
+    if (undoDrainPromise.current) return undoDrainPromise.current;
+    const drain = (async () => {
+      await drainSignOffQueue();
+      while (queuedSignOffUndos.current.length > 0) {
+        const batch = takeOptimisticActionBatch(queuedSignOffUndos.current);
+        const failures = new Map<string, string>();
+        let changed = 0;
+        try {
+          if (batch.length === 1) {
+            const queued = batch[0];
+            if (!queued) continue;
+            const result = await queuedUndoSignOff.mutateAsync(queued.input);
+            if (result.unreviewed) changed += 1;
+          } else {
+            const results = await queuedUndoBatch.mutateAsync({
+              undos: batch.map(({ input }) => input),
+            });
+            for (const result of results) {
+              if (result.ok) {
+                if (result.unreviewed) changed += 1;
+              } else {
+                failures.set(result.unitId, result.message);
+              }
+            }
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "The undo request failed";
+          for (const { input } of batch) failures.set(input.unitId, message);
+        }
+        settleSignOffUndoBatch(batch, failures);
+        if (changed > 0) {
+          void Promise.all([
+            utils.workspace.guidance.invalidate(),
+            utils.review.dashboard.invalidate(),
+            utils.review.gamification.invalidate(),
+          ]);
+        }
+      }
+    })().finally(() => {
+      undoDrainPromise.current = null;
+    });
+    undoDrainPromise.current = drain;
+    return drain;
+  }
+
   // Keyed by the unit the request named rather than the one on screen: undo
   // reaches back to a sign-off the reviewer has since moved on from.
   const undoSignOff = api.review.unreview.useMutation({
@@ -2267,9 +2429,6 @@ export function ReviewWorkspace({
         utils.review.dashboard.invalidate(),
         utils.review.gamification.invalidate(),
       ]);
-      // One undo of a many-unit step is one decision, so only the request
-      // that finishes it says so.
-      if (quietUndoUnitIds.current.delete(unitId)) return;
       toast.success("Marked as not reviewed", {
         description: `${units.find(({ id }) => id === unitId)?.name ?? "The unit"} is back in your review queue.`,
       });
@@ -2617,18 +2776,32 @@ export function ReviewWorkspace({
     (thread: ProviderDiscussionThread) => {
       const index = unitIndexById.get(thread.unitId) ?? -1;
       if (index < 0) return;
+      const targetUnit = units[index];
+      if (!targetUnit) return;
+      const fileMembers = units.filter(({ path }) => path === targetUnit.path);
       setDiscussionsOpen(false);
       setCompletionOpen(false);
       setWaitingCompletionOpen(false);
       setCompletedBrowsing(true);
+      setFileSourceReveal({
+        expanded: true,
+        path: targetUnit.path,
+        reviewed: reviewedFileCard(fileMembers),
+      });
+      setUnitFoldOverrides((current) => {
+        const next = new Map(current);
+        next.set(thread.unitId, false);
+        return next;
+      });
       setPendingProviderThread({
         externalId: thread.externalId,
         line: thread.line,
         unitId: thread.unitId,
       });
       selectUnit(index);
+      setFocusedProviderThreadId(thread.externalId);
     },
-    [selectUnit, unitIndexById],
+    [selectUnit, unitIndexById, units],
   );
   const manualSyncPending = reviewSession === "synchronizing";
   const {
@@ -2649,6 +2822,10 @@ export function ReviewWorkspace({
       queuedSignOffs.current = [];
       dispatchSignOffQueue({ type: "synchronize", unitIds: [] });
       setPendingConceptSignOffIds(new Set());
+      queuedSignOffUndos.current = [];
+      queuedSignOffUndoActions.current.clear();
+      setPendingUndoUnitIds(new Set());
+      signOffUndoHistoryRef.current = [];
       setSignOffUndoHistory([]);
       const nextIndex = nextPendingReviewIndex(updated);
       if (nextIndex >= 0) setActiveIndex(nextIndex);
@@ -2704,21 +2881,28 @@ export function ReviewWorkspace({
     const targetThread = pendingProviderThread;
     let frame = 0;
     let attempts = 0;
-    const maximumAttempts = 180;
+    const maximumAttempts = 600;
 
     /** Reveals the requested discussion once its hydrated target has mounted. */
     function revealDiscussion() {
-      const target =
-        document.getElementById(
-          providerConversationElementId(targetThread.externalId),
-        ) ?? document.getElementById(`review-line-${targetThread.line}`);
+      const target = document.getElementById(
+        providerConversationElementId(targetThread.externalId),
+      );
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.focus({ preventScroll: true });
         setPendingProviderThread(undefined);
         return;
       }
       attempts += 1;
       if (attempts >= maximumAttempts) {
+        document
+          .getElementById(`review-line-${targetThread.line}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        toast.error("The conversation could not be opened inline", {
+          description:
+            "The review moved to its line, but its source is not available yet.",
+        });
         setPendingProviderThread(undefined);
         return;
       }
@@ -2847,6 +3031,7 @@ export function ReviewWorkspace({
     const concept = conceptByMemberId.get(member.id);
     return (
       signOffQueue.ids.has(member.id) ||
+      pendingUndoUnitIds.has(member.id) ||
       (undoSignOff.isPending && undoSignOff.variables?.unitId === member.id) ||
       Boolean(concept && pendingConceptSignOffIds.has(concept.id))
     );
@@ -2856,6 +3041,7 @@ export function ReviewWorkspace({
   function unitReviewActionDisabled(member: ReviewUnit) {
     if (
       unitReviewActionPending(member) ||
+      undoPending ||
       undoSignOff.isPending ||
       undoConcept.isPending ||
       resetReview.isPending
@@ -3204,6 +3390,7 @@ export function ReviewWorkspace({
           <ProviderConversation
             key={thread.externalId}
             provider={initialData.pullRequest.provider}
+            revealed={focusedProviderThreadId === thread.externalId}
             thread={thread}
             newSince={
               activeUnit.status === "waiting" ? activeUnit.waitingSince : null
@@ -3735,6 +3922,7 @@ export function ReviewWorkspace({
     reviewComplete ||
     activeWaitStatus === "waiting" ||
     activeSignOffPending ||
+    undoPending ||
     undoSignOff.isPending ||
     undoConcept.isPending ||
     awaitPending ||
@@ -3743,6 +3931,7 @@ export function ReviewWorkspace({
     !activeUnit ||
     reviewComplete ||
     activeSignOffPending ||
+    undoPending ||
     undoSignOff.isPending ||
     undoConcept.isPending ||
     awaitPending ||
@@ -3794,6 +3983,7 @@ export function ReviewWorkspace({
       ? !!activeUnit &&
         !reviewComplete &&
         !activeSignOffPending &&
+        !undoPending &&
         !undoSignOff.isPending &&
         !undoConcept.isPending &&
         !awaitPending &&
@@ -3846,10 +4036,8 @@ export function ReviewWorkspace({
   const undoableSignOff = nextUndoableSignOff(signOffUndoHistory, units);
   const canUndoSignOff =
     !!undoableSignOff &&
-    // Both ways a sign-off is saved mark their units optimistically, so undo
-    // waits for the save it would otherwise race: the queue drains unit
-    // sign-offs, and a concept sign-off is one request of its own.
-    signOffQueue.ids.size === 0 &&
+    // A concept is still one atomic mutation. Unit and card saves can be
+    // undone immediately because their undo queue waits behind their drain.
     pendingConceptSignOffIds.size === 0 &&
     !undoSignOff.isPending &&
     !undoConcept.isPending &&
@@ -4265,58 +4453,31 @@ export function ReviewWorkspace({
   /**
    * Takes back the most recent sign-off that still stands.
    *
-   * Sign-offs are saved through a queue, so undo waits for that queue to
-   * drain rather than racing a save it would have to undo twice. Steps whose
-   * units a resync removed, or which some other action already returned to
-   * the queue, are dropped instead of replayed.
+   * The history ref is updated before React renders, so repeated clicks pop
+   * distinct decisions even when they arrive in one frame. Persistence waits
+   * behind any sign-off saves these undos depend on, then follows the same
+   * immediate-first, batch-afterward flow as sign-off itself.
    */
   async function undoLastSignOff() {
-    // A mutation's pending flag only reaches this closure on the next render,
-    // so a held shortcut would otherwise take the same step back twice.
-    if (!undoableSignOff || !canUndoSignOff || undoInFlight.current) return;
-    undoInFlight.current = true;
-    setUndoPending(true);
-    const { entry, remaining } = undoableSignOff;
+    const next = nextUndoableSignOff(
+      signOffUndoHistoryRef.current,
+      unitsRef.current,
+    );
+    if (
+      !next ||
+      pendingConceptSignOffIds.size > 0 ||
+      undoSignOff.isPending ||
+      undoConcept.isPending ||
+      resetReview.isPending
+    ) {
+      return;
+    }
+    const { entry, remaining } = next;
+    signOffUndoHistoryRef.current = remaining;
     setSignOffUndoHistory(remaining);
     restoreReviewView(entry.view, entry.unitIds);
-    const target = signOffUndoTarget(
-      entry,
-      initialData.conceptLayout ?? undefined,
-    );
-    try {
-      if (target.kind === "concept") {
-        await undoConcept.mutateAsync({ ...target, sessionId });
-        return;
-      }
-      // A step that names several units is one undo to the reviewer, so only
-      // the request for the last of them speaks.
-      for (const unitId of target.unitIds.slice(0, -1)) {
-        quietUndoUnitIds.current.add(unitId);
-      }
-      // The requests name distinct units and do not depend on each other, so
-      // they go out together and the step comes back in one frame. Every one
-      // of them has to settle before the quiet marks are dropped, so a
-      // failure among them cannot let the rest each announce themselves.
-      const undos = await Promise.allSettled(
-        target.unitIds.map((unitId) =>
-          undoSignOff.mutateAsync({ unitId, sessionId }),
-        ),
-      );
-      for (const undo of undos) {
-        if (undo.status === "rejected") throw undo.reason;
-      }
-    } catch {
-      // The mutation owns the user-facing error. The step goes back on the
-      // history so the reviewer can take it back again rather than being left
-      // with a sign-off standing and nothing left to undo it from.
-      setSignOffUndoHistory((history) => rememberSignOff(history, entry));
-    } finally {
-      // A request that failed leaves its unit marked quiet, and the next undo
-      // of that unit would otherwise succeed without saying so.
-      quietUndoUnitIds.current.clear();
-      undoInFlight.current = false;
-      setUndoPending(false);
-    }
+    const undone = optimisticallyUndoSignOffs(entry.unitIds);
+    if (undone) queueSignOffUndo(entry, undone);
   }
 
   /** Pauses the open unit until its own conversation moves. */
@@ -4887,6 +5048,7 @@ export function ReviewWorkspace({
       nextReview,
       outstandingCardMembers,
       pendingConceptSignOffIds,
+      pendingUndoCount: pendingUndoUnitIds.size,
       primaryIsContinue,
       primaryScopeLabel,
       resetReview,
@@ -5218,14 +5380,16 @@ export function ReviewWorkspace({
           }
           className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
         >
-          {undoPending ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : (
-            <Undo2 className="size-4" />
+          <Undo2 className="size-4" />
+          <span className="hidden sm:inline">Undo</span>
+          {undoPending && (
+            <span
+              title={`${pendingUndoUnitIds.size} undo saves pending`}
+              className="border-cyan/25 bg-cyan/10 text-cyan min-w-4 rounded-full border px-1 text-center font-mono tabular-nums"
+            >
+              {pendingUndoUnitIds.size}
+            </span>
           )}
-          <span className="hidden sm:inline">
-            {undoPending ? "Undoing…" : "Undo"}
-          </span>
           <ShortcutHint
             shortcut={reviewShortcuts.undoSignOff}
             className="hidden 2xl:inline-flex"
@@ -5236,13 +5400,14 @@ export function ReviewWorkspace({
           onClick={() => setResetDialogOpen(true)}
           disabled={
             pendingSignOffCount > 0 ||
+            undoPending ||
             externalSyncPending ||
             resetReview.isPending
           }
           aria-label="Reset review"
           title={
-            pendingSignOffCount > 0
-              ? "Wait for pending sign-offs to finish before resetting"
+            pendingSignOffCount > 0 || undoPending
+              ? "Wait for pending review changes to finish before resetting"
               : "Sync the latest code and clear all of your sign-offs (Shift+R)"
           }
           className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"

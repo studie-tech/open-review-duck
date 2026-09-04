@@ -69,6 +69,7 @@ export interface ReviewCommandState {
   };
   outstandingCardMembers: readonly unknown[];
   pendingConceptSignOffIds: ReadonlySet<string>;
+  pendingUndoCount: number;
   primaryIsContinue: boolean;
   primaryScopeLabel: string;
   resetReview: CommandMutationState;
@@ -178,6 +179,7 @@ export function buildReviewWorkspaceCommands(
     nextReview,
     outstandingCardMembers,
     pendingConceptSignOffIds,
+    pendingUndoCount,
     primaryIsContinue,
     primaryScopeLabel,
     resetReview,
@@ -591,6 +593,7 @@ export function buildReviewWorkspaceCommands(
       disabled:
         signOffQueue.ids.size > 0 ||
         pendingConceptSignOffIds.size > 0 ||
+        pendingUndoCount > 0 ||
         externalSyncPending ||
         resetReview.isPending,
       onSelect: () => setResetDialogOpen(true),

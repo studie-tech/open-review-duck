@@ -28,6 +28,7 @@ const fixture = {
   ownerId: `integration-${randomUUID()}`,
   memberId: `integration-${randomUUID()}`,
   soloId: `integration-${randomUUID()}`,
+  batchId: `integration-${randomUUID()}`,
   workspaceId: randomUUID(),
   connectionId: randomUUID(),
   repositoryId: randomUUID(),
@@ -132,6 +133,7 @@ beforeAll(async () => {
       { id: fixture.ownerId },
       { id: fixture.memberId },
       { id: fixture.soloId },
+      { id: fixture.batchId },
     ]);
   await db.insert(workspaces).values({
     id: fixture.workspaceId,
@@ -153,6 +155,11 @@ beforeAll(async () => {
     {
       workspaceId: fixture.workspaceId,
       userId: fixture.soloId,
+      role: "member",
+    },
+    {
+      workspaceId: fixture.workspaceId,
+      userId: fixture.batchId,
       role: "member",
     },
   ]);
@@ -215,6 +222,13 @@ beforeAll(async () => {
       durationSeconds: signedUnits.previous.durationSeconds,
       signedOffAt: new Date(today - signedUnits.previous.daysAgo * dayMs),
     },
+    ...Object.values(signedUnits).map((entry) => ({
+      unitId: entry.id,
+      userId: fixture.batchId,
+      semanticHash: entry.semanticHash,
+      durationSeconds: entry.durationSeconds,
+      signedOffAt: new Date(today - entry.daysAgo * dayMs),
+    })),
   ]);
 });
 
@@ -222,6 +236,7 @@ afterAll(async () => {
   await db.delete(users).where(eq(users.id, fixture.ownerId));
   await db.delete(users).where(eq(users.id, fixture.memberId));
   await db.delete(users).where(eq(users.id, fixture.soloId));
+  await db.delete(users).where(eq(users.id, fixture.batchId));
 });
 
 describe("review achievement recomputation", () => {
@@ -267,6 +282,33 @@ describe("review achievement recomputation", () => {
       currentStreak: 0,
       longestStreak: 0,
       lastReviewDate: null,
+    });
+  });
+
+  it("recomputes achievements once for a batch of undos", async () => {
+    const results = await createCaller({
+      db,
+      auth: { userId: fixture.batchId, has: () => true },
+      headers: new Headers(),
+    }).unreviewBatch({
+      undos: [
+        { unitId: signedUnits.latest.id },
+        { unitId: signedUnits.previous.id },
+      ],
+    });
+
+    expect(results).toEqual([
+      { ok: true, unitId: signedUnits.latest.id, unreviewed: true },
+      { ok: true, unitId: signedUnits.previous.id, unreviewed: true },
+    ]);
+    expect(await statsOf(fixture.batchId)).toEqual({
+      experiencePoints:
+        lifetimeExperience -
+        signedUnits.latest.experience -
+        signedUnits.previous.experience,
+      currentStreak: 0,
+      longestStreak: 1,
+      lastReviewDate: new Date(today - 2 * dayMs),
     });
   });
 });

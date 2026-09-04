@@ -130,6 +130,7 @@ export function ProviderConversation({
   onReply,
   onResolve,
   provider,
+  revealed = false,
   replying,
   thread,
   publishedByReviewDuck,
@@ -139,6 +140,8 @@ export function ProviderConversation({
   /** Marks comments after this moment as the activity a wait was paused for. */
   newSince?: Date | null;
   provider: WorkspaceData["pullRequest"]["provider"];
+  /** Opens and highlights a conversation selected from PR-wide discussions. */
+  revealed?: boolean;
   replying: boolean;
   thread: ProviderConversationThread;
   publishedByReviewDuck: boolean;
@@ -186,6 +189,10 @@ export function ProviderConversation({
     setExpanded(thread.status !== "resolved" || hasNewComments);
     setReplyOpen(false);
   }, [thread.status, hasNewComments]);
+
+  useEffect(() => {
+    if (revealed) setExpanded(true);
+  }, [revealed]);
 
   /** Publishes the draft while preserving it if the provider rejects the reply. */
   async function submitReply() {
@@ -256,9 +263,12 @@ export function ProviderConversation({
     <article
       id={providerConversationElementId(thread.externalId)}
       className={cn(
-        "border-cyan/20 bg-panel mx-4 my-2 ml-[82px] overflow-hidden rounded-xl border font-sans shadow-lg",
+        "border-cyan/20 bg-panel mx-4 my-2 ml-[82px] overflow-hidden rounded-xl border font-sans shadow-lg transition-[border-color,box-shadow] duration-300",
+        revealed &&
+          "border-cyan/70 shadow-[0_0_0_2px_color-mix(in_srgb,var(--app-cyan)_18%,transparent),0_16px_40px_var(--app-shadow)]",
         className,
       )}
+      tabIndex={-1}
     >
       <header
         className={cn(
