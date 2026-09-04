@@ -14,12 +14,12 @@ const DATA_REVIEW_EXTENSIONS = new Set([
 ]);
 
 /**
- * Line count at which a data document stalls the review UI if mounted.
+ * Changed-line count at which a data document starts folded.
  *
  * A small config file is still worth reading. A drizzle snapshot or lockfile
- * is thousands of near-identical lines, and each one becomes a DOM row.
+ * with a broad change is usually better left closed until it is requested.
  */
-export const HEAVY_DATA_SOURCE_LINES = 80;
+export const HEAVY_DATA_CHANGE_LINES = 30;
 
 /** Byte size that hides a data document even when it is mostly one line. */
 export const HEAVY_DATA_SOURCE_BYTES = 16 * 1024;
@@ -116,8 +116,8 @@ export function reviewSourceByteLength(input?: {
  * the reviewer came to read. JSON dumps are not.
  */
 export function isHeavyReviewSource(input: {
+  changedLineCount?: number;
   language?: string;
-  lineCount?: number;
   path?: string;
   source?: string;
 }) {
@@ -127,9 +127,9 @@ export function isHeavyReviewSource(input: {
   ) {
     return false;
   }
-  const lineCount =
-    input.lineCount ?? reviewSourceLineCount(input.source ?? "");
-  if (lineCount >= HEAVY_DATA_SOURCE_LINES) return true;
+  const changedLineCount =
+    input.changedLineCount ?? reviewSourceLineCount(input.source ?? "");
+  if (changedLineCount >= HEAVY_DATA_CHANGE_LINES) return true;
   const bytes = input.source?.length ?? 0;
   return bytes >= HEAVY_DATA_SOURCE_BYTES;
 }

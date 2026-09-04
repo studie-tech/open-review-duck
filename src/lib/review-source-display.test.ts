@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   formatReviewSourceBytes,
+  HEAVY_DATA_CHANGE_LINES,
   HEAVY_DATA_SOURCE_BYTES,
-  HEAVY_DATA_SOURCE_LINES,
   isDataOrGeneratedReviewPath,
   isHeavyReviewSource,
   reviewFileCardStartsExpanded,
@@ -36,7 +36,7 @@ describe("review source display", () => {
       isHeavyReviewSource({
         path: "package.json",
         language: "json",
-        lineCount: 24,
+        changedLineCount: HEAVY_DATA_CHANGE_LINES - 1,
         source: '{ "name": "pond" }',
       }),
     ).toBe(false);
@@ -44,14 +44,14 @@ describe("review source display", () => {
       isHeavyReviewSource({
         path: "app/drizzle/migrations/meta/0039_snapshot.json",
         language: "json",
-        lineCount: HEAVY_DATA_SOURCE_LINES,
+        changedLineCount: HEAVY_DATA_CHANGE_LINES,
       }),
     ).toBe(true);
     expect(
       isHeavyReviewSource({
         path: "generated/blob.json",
         language: "json",
-        lineCount: 1,
+        changedLineCount: 1,
         source: "x".repeat(HEAVY_DATA_SOURCE_BYTES),
       }),
     ).toBe(true);
@@ -62,7 +62,7 @@ describe("review source display", () => {
       isHeavyReviewSource({
         path: "src/review-workspace.tsx",
         language: "typescript",
-        lineCount: 8_000,
+        changedLineCount: 8_000,
       }),
     ).toBe(false);
   });

@@ -17,6 +17,17 @@ export function aiJobActive(status: string | null | undefined) {
   return Boolean(status) && !terminalAiJobStatuses.includes(status ?? "");
 }
 
+/** Chooses the card top for file navigation and the exact unit otherwise. */
+export function reviewCardPinTarget<T>(input: {
+  card: T;
+  pinToFileTop: boolean;
+  unitLine?: T;
+  unitStart?: T;
+}) {
+  if (input.pinToFileTop) return input.card;
+  return input.unitStart ?? input.unitLine ?? input.card;
+}
+
 /** One conversation change a reviewer just asked the provider to make. */
 export type ProviderThreadChange = { threadExternalId: string } & (
   | { kind: "resolution"; resolved: boolean }

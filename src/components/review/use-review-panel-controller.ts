@@ -1,13 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import {
+  REVIEW_INSIGHTS_PANEL_WIDTHS,
+  REVIEW_PATH_PANEL_WIDTHS,
+} from "./review-panel-resize-handle";
 
 /** Owns responsive drawer and persistent-column state for both side panels. */
 export function useReviewPanelController() {
   const [pathPanelOpen, setPathPanelOpen] = useState(false);
   const [pathPanelCollapsed, setPathPanelCollapsed] = useState(false);
+  const [pathPanelWidth, setPathPanelWidth] = useState<number>(
+    REVIEW_PATH_PANEL_WIDTHS.default,
+  );
   const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
   const [insightsPanelCollapsed, setInsightsPanelCollapsed] = useState(false);
+  const [insightsPanelWidth, setInsightsPanelWidth] = useState<number>(
+    REVIEW_INSIGHTS_PANEL_WIDTHS.default,
+  );
 
   /** Shows the review path as a drawer or desktop column. */
   function showPathPanel() {
@@ -74,12 +84,16 @@ export function useReviewPanelController() {
     hidePathPanel,
     insightsPanelCollapsed,
     insightsPanelOpen,
+    insightsPanelWidth,
     pathPanelCollapsed,
     pathPanelOpen,
+    pathPanelWidth,
     setInsightsPanelCollapsed,
     setInsightsPanelOpen,
+    setInsightsPanelWidth,
     setPathPanelCollapsed,
     setPathPanelOpen,
+    setPathPanelWidth,
     showInsightsPanel,
     showPathPanel,
     toggleInsightsPanel,

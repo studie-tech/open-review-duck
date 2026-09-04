@@ -320,10 +320,14 @@ export function ReviewConceptFileCardPreview({
   const startLine = ranges.at(0)?.startLine ?? 1;
   const endLine = ranges.at(-1)?.endLine ?? startLine;
   const lineCount = endLine - startLine + 1;
+  const changedLineCount = members.reduce(
+    (total, member) => total + member.changedLineCount,
+    0,
+  );
   const reviewed = reviewedFileCard(members);
   const heavy = isHeavyReviewSource({
+    changedLineCount,
     language: members[0]?.language,
-    lineCount,
     path: members[0]?.path,
     source: fileSource,
   });

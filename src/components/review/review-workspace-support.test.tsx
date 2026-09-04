@@ -502,6 +502,48 @@ describe("same-file concept cards", () => {
     expect(screen.queryByText(/Folded after review/)).not.toBeInTheDocument();
   });
 
+  it("shows a small JSON change even when its review unit spans a large file", () => {
+    const fileSource = [
+      "{",
+      ...Array.from(
+        { length: 78 },
+        (_, index) => `  "row_${index}": ${index},`,
+      ),
+      '  "changed": true',
+      "}",
+    ].join("\n");
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "config",
+              path: "package.json",
+              name: "package.json",
+              changedLineCount: 1,
+              changeType: "modified",
+              previousSource: fileSource.replace("true", "false"),
+              source: fileSource,
+              startLine: 1,
+              endLine: 81,
+              language: "json",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        fileSource={fileSource}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("article")).toHaveTextContent('"changed": true');
+    expect(screen.queryByText(/lines of json hidden/)).not.toBeInTheDocument();
+  });
+
   it("hides a large JSON card until the reviewer asks to see it", async () => {
     const highlight = vi.mocked(useHighlightedSource);
     highlight.mockClear();
