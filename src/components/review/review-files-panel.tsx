@@ -27,6 +27,7 @@ import {
 import {
   buildReviewFileTree,
   filterReviewFiles,
+  initialReviewFileTreeDirectoryPaths,
   outstandingReviewFileUnits,
   type ReviewFileEntry,
   type ReviewFileFilter,
@@ -339,10 +340,11 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   const [filter, setFilter] = useState<ReviewFileFilter>("all");
-  // A new review starts with the complete changed-file outline visible. The
-  // reviewer can still fold one branch or the whole tree from the controls.
+  // Only apply review progress to the initial outline; later sign-offs must
+  // not collapse folders the reviewer is currently using.
   const [expanded, setExpanded] = useState(
-    () => new Set(reviewFileTreeDirectoryPaths(buildReviewFileTree(files))),
+    () =>
+      new Set(initialReviewFileTreeDirectoryPaths(buildReviewFileTree(files))),
   );
   // A folder the reviewer closes while the query forces it open. The override
   // has to be tracked apart from `expanded` because the forced-open set would

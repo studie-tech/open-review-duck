@@ -162,6 +162,27 @@ export function sortByReviewFileTreeOrder<Item extends { path: string }>(
   );
 }
 
+/** Selects the first available file in explorer order, retaining its unit order. */
+export function firstReviewFileUnitIndex(units: readonly { path: string }[]) {
+  const first = sortByReviewFileTreeOrder(units)[0];
+  return first ? units.indexOf(first) : 0;
+}
+
+/** Opens folders with any file that has not been fully reviewed on first load. */
+export function initialReviewFileTreeDirectoryPaths(
+  nodes: readonly ReviewFileTreeNode[],
+): string[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === "file") return [];
+    const fullyReviewed = flattenReviewFileTree(node.children).every(
+      (file) => file.state === "reviewed",
+    );
+    return fullyReviewed
+      ? []
+      : [node.path, ...initialReviewFileTreeDirectoryPaths(node.children)];
+  });
+}
+
 /** How many file cards sit on each side of the selected file in Files mode. */
 export const FILES_VIEWER_PAGE_SIZE = 40;
 /** How many neighboring cards render full source instead of a header. */

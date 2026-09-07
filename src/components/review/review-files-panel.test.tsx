@@ -523,7 +523,7 @@ describe("ReviewFilesPanel", () => {
     );
   });
 
-  it("starts with every folder expanded", () => {
+  it("starts with unfinished and zero-unit folders expanded", () => {
     render(
       <ReviewFilesPanel
         files={files}
@@ -546,6 +546,58 @@ describe("ReviewFilesPanel", () => {
     expect(
       screen.getByRole("button", { name: "Collapse all folders" }),
     ).toBeVisible();
+  });
+
+  it("collapses fully reviewed branches only on initial load and reveals selections", async () => {
+    const user = userEvent.setup();
+    const reviewedFiles = reviewFileEntries(files, [
+      {
+        id: "done",
+        path: "src/review/workspace.ts",
+        status: "signed_off",
+        revisionState: "unchanged",
+      },
+    ]);
+    const props = { search: "", onSelect: noop, onToggle: noop };
+    const { rerender } = render(
+      <ReviewFilesPanel {...props} files={reviewedFiles} />,
+    );
+    expect(screen.getByRole("button", { name: "Expand src" })).toBeVisible();
+    expect(screen.queryByText("workspace.ts")).not.toBeInTheDocument();
+    expect(screen.getByText("duck.png")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Expand src" }));
+    expect(screen.getByRole("button", { name: "Expand review" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Expand review" }));
+    rerender(<ReviewFilesPanel {...props} files={[...reviewedFiles]} />);
+    expect(screen.getByText("workspace.ts")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Collapse src" }));
+    rerender(
+      <ReviewFilesPanel
+        {...props}
+        files={reviewedFiles}
+        selectedPath="src/review/workspace.ts"
+      />,
+    );
+    expect(screen.getByText("workspace.ts")).toBeVisible();
+  });
+
+  it("does not collapse a folder when its last outstanding unit is signed off", () => {
+    const props = { search: "", onSelect: noop, onToggle: noop };
+    const { rerender } = render(<ReviewFilesPanel {...props} files={files} />);
+    rerender(
+      <ReviewFilesPanel
+        {...props}
+        files={reviewFileEntries(
+          files,
+          files.flatMap((file) =>
+            file.units.map((unit) => ({ ...unit, status: "signed_off" })),
+          ),
+        )}
+      />,
+    );
+    expect(screen.getByText("workspace.ts")).toBeVisible();
   });
 
   it("reveals a nested search match and restores a manual collapse when the query clears", async () => {
