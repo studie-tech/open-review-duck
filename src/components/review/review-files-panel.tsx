@@ -453,16 +453,9 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
     if (searching) setCollapsed(new Set());
   }
 
-  /** Moves keyboard focus across visible tree rows without changing mouse behavior. */
+  /** Handles structural tree navigation without claiming review-scroll keys. */
   function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const keys = [
-      "ArrowDown",
-      "ArrowUp",
-      "ArrowLeft",
-      "ArrowRight",
-      "Home",
-      "End",
-    ];
+    const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
     if (!keys.includes(event.key)) return;
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
@@ -488,19 +481,6 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
       ? current.path.slice(0, current.path.lastIndexOf("/"))
       : undefined;
 
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const delta = event.key === "ArrowDown" ? 1 : -1;
-      const next =
-        visibleItems[
-          Math.min(
-            visibleItems.length - 1,
-            Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta),
-          )
-        ];
-      if (next) focusPath(next.path);
-      return;
-    }
     if (event.key === "Home") {
       event.preventDefault();
       const first = visibleItems[0];

@@ -119,6 +119,84 @@ export interface ReviewCommandActions {
   unreviewActiveUnit: () => void;
 }
 
+interface ReviewStepCommandOptions {
+  activeCardIndex: number;
+  activeConceptIndex: number;
+  cardCount: number;
+  conceptCount: number;
+  navigateCard: (direction: -1 | 1) => void;
+  navigateConcept: (direction: -1 | 1) => void;
+  reviewMode: ReviewMode;
+}
+
+/** Builds the navigation steps that belong to the active review mode. */
+export function buildReviewStepCommands({
+  activeCardIndex,
+  activeConceptIndex,
+  cardCount,
+  conceptCount,
+  navigateCard,
+  navigateConcept,
+  reviewMode,
+}: ReviewStepCommandOptions): CommandCenterItem[] {
+  const itemLabel = reviewMode === "files" ? "file" : "card";
+  const commands: CommandCenterItem[] = [
+    {
+      id: "next-unit",
+      label: `Select next ${itemLabel}`,
+      description:
+        reviewMode === "files"
+          ? "Select the next changed file"
+          : "Select the next file card in this concept",
+      group: "Review navigation",
+      icon: <ChevronDown className="size-4" />,
+      shortcut: reviewShortcuts.nextUnit,
+      disabled: activeCardIndex >= cardCount - 1,
+      onSelect: () => navigateCard(1),
+    },
+    {
+      id: "previous-unit",
+      label: `Select previous ${itemLabel}`,
+      description:
+        reviewMode === "files"
+          ? "Select the previous changed file"
+          : "Select the previous file card in this concept",
+      group: "Review navigation",
+      icon: <ChevronRight className="size-4 -rotate-90" />,
+      shortcut: reviewShortcuts.previousUnit,
+      disabled: activeCardIndex <= 0,
+      onSelect: () => navigateCard(-1),
+    },
+  ];
+
+  if (reviewMode === "path") {
+    commands.push(
+      {
+        id: "next-concept",
+        label: "Open next concept",
+        description: "Move to the next concept in the review path",
+        group: "Review navigation",
+        icon: <ChevronRight className="size-4" />,
+        shortcut: reviewShortcuts.nextConcept,
+        disabled: activeConceptIndex >= conceptCount - 1,
+        onSelect: () => navigateConcept(1),
+      },
+      {
+        id: "previous-concept",
+        label: "Open previous concept",
+        description: "Move to the previous concept in the review path",
+        group: "Review navigation",
+        icon: <ChevronRight className="size-4 rotate-180" />,
+        shortcut: reviewShortcuts.previousConcept,
+        disabled: activeConceptIndex <= 0,
+        onSelect: () => navigateConcept(-1),
+      },
+    );
+  }
+
+  return commands;
+}
+
 /** Builds search-only commands for every review unit. */
 export function buildReviewUnitCommands(
   units: readonly ReviewUnit[],
@@ -313,52 +391,15 @@ export function buildReviewWorkspaceCommands(
         (!contextAvailable || contextBefore >= availableBefore),
       onSelect: revealContextAbove,
     },
-    {
-      id: "next-unit",
-      label: "Select next card",
-      description:
-        reviewMode === "files"
-          ? "Select the next changed file"
-          : "Select the next file card in this concept",
-      group: "Review navigation",
-      icon: <ChevronDown className="size-4" />,
-      shortcut: reviewShortcuts.nextUnit,
-      disabled: activeConceptCardIndex >= activeConceptFileCards.length - 1,
-      onSelect: () => navigateConceptCard(1),
-    },
-    {
-      id: "previous-unit",
-      label: "Select previous card",
-      description:
-        reviewMode === "files"
-          ? "Select the previous changed file"
-          : "Select the previous file card in this concept",
-      group: "Review navigation",
-      icon: <ChevronRight className="size-4 -rotate-90" />,
-      shortcut: reviewShortcuts.previousUnit,
-      disabled: activeConceptCardIndex <= 0,
-      onSelect: () => navigateConceptCard(-1),
-    },
-    {
-      id: "next-concept",
-      label: "Open next concept",
-      description: "Move to the next concept in the review path",
-      group: "Review navigation",
-      icon: <ChevronRight className="size-4" />,
-      shortcut: reviewShortcuts.nextConcept,
-      disabled: activeConceptPathIndex >= initialData.concepts.length - 1,
-      onSelect: () => navigateConcept(1),
-    },
-    {
-      id: "previous-concept",
-      label: "Open previous concept",
-      description: "Move to the previous concept in the review path",
-      group: "Review navigation",
-      icon: <ChevronRight className="size-4 rotate-180" />,
-      shortcut: reviewShortcuts.previousConcept,
-      disabled: activeConceptPathIndex <= 0,
-      onSelect: () => navigateConcept(-1),
-    },
+    ...buildReviewStepCommands({
+      activeCardIndex: activeConceptCardIndex,
+      activeConceptIndex: activeConceptPathIndex,
+      cardCount: activeConceptFileCards.length,
+      conceptCount: initialData.concepts.length,
+      navigateCard: navigateConceptCard,
+      navigateConcept,
+      reviewMode,
+    }),
     {
       id: "next-pending-unit",
       label: "Resume the review queue",
@@ -487,7 +528,9 @@ export function buildReviewWorkspaceCommands(
             ? "Continue through the matching review units in planned order"
             : "Open the next unit that still needs review"
           : cardActionAvailable
-            ? `Remember all ${outstandingCardMembers.length} outstanding units in this file card and open the next card`
+            ? reviewMode === "files"
+              ? `Remember all ${outstandingCardMembers.length} outstanding units in this file and open the next file`
+              : `Remember all ${outstandingCardMembers.length} outstanding units in this file card and open the next card`
             : "Remember this unit at the current revision and open the next one",
       group: "Review actions",
       icon: reviewCaughtUp ? (
@@ -501,16 +544,20 @@ export function buildReviewWorkspaceCommands(
         ? () => setWaitingCompletionOpen(true)
         : runPrimaryAction,
     },
-    {
-      id: "sign-off-concept",
-      label: `Sign off concept (${activeConceptMembers.length})`,
-      description: "Remember every member of this concept at once",
-      group: "Review actions",
-      icon: <CheckCheck className="size-4" />,
-      shortcut: reviewShortcuts.signOffConcept,
-      disabled: !canSignOffConcept,
-      onSelect: signOffActiveConcept,
-    },
+    ...(reviewMode === "path"
+      ? [
+          {
+            id: "sign-off-concept",
+            label: `Sign off concept (${activeConceptMembers.length})`,
+            description: "Remember every member of this concept at once",
+            group: "Review actions",
+            icon: <CheckCheck className="size-4" />,
+            shortcut: reviewShortcuts.signOffConcept,
+            disabled: !canSignOffConcept,
+            onSelect: signOffActiveConcept,
+          },
+        ]
+      : []),
     {
       id: "sign-off-deleted-files",
       label: "Sign off deletes",
