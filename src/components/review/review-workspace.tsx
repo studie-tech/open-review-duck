@@ -346,6 +346,16 @@ function questionGroupsAt<Entry>(
   return index.get(line) ?? NO_QUESTION_GROUPS;
 }
 
+/** Finds the first review unit that is available for an immediate decision. */
+function firstActionableReviewUnitIndex(units: readonly ReviewUnit[]) {
+  return Math.max(
+    0,
+    units.findIndex(
+      (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
+    ),
+  );
+}
+
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -363,13 +373,37 @@ export function ReviewWorkspace({
   // The workspace opens on work the reviewer can act on. A wait is a
   // property of one unit, so a pending sibling remains a valid first landing.
   const [activeIndex, setActiveIndex] = useState(() =>
-    Math.max(
-      0,
-      initialData.units.findIndex(
-        (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
-      ),
-    ),
+    firstActionableReviewUnitIndex(initialData.units),
   );
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
+  const [sourceIntentSnapshotId, setSourceIntentSnapshotId] =
+    useState<string>();
+  const snapshotId = initialData.snapshot?.id;
+  const sourceIntentReady = sourceIntentSnapshotId === snapshotId;
+  // Source loading must not begin against server defaults and then compete
+  // with the review position and mode restored from this browser.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a snapshot is immutable and owns its initial navigation intent
+  useEffect(() => {
+    if (!snapshotId) return;
+    const rememberedUnitId = rememberedReviewPosition(
+      window.localStorage,
+      initialData.pullRequest.id,
+      snapshotId,
+    );
+    const rememberedIndex = initialData.units.findIndex(
+      (unit) =>
+        unit.id === rememberedUnitId &&
+        unit.status !== "signed_off" &&
+        unit.status !== "waiting",
+    );
+    setReviewMode(storedReviewMode(window.localStorage));
+    setActiveIndex(
+      rememberedIndex >= 0
+        ? rememberedIndex
+        : firstActionableReviewUnitIndex(initialData.units),
+    );
+    setSourceIntentSnapshotId(snapshotId);
+  }, [initialData.pullRequest.id, snapshotId]);
   const [sourcePinRequest, setSourcePinRequest] = useState<{
     kind: "file" | "unit";
     unitId: string;
@@ -377,15 +411,26 @@ export function ReviewWorkspace({
   const {
     fileContexts,
     hydratedUnitIds,
+    prepareSourcePath,
     settledUnitIds,
     setUnits,
     sourceHydrationPending,
+    sourceStatus,
     units,
-  } = usePrivateWorkspaceSourceHydration(initialData, activeIndex);
+  } = usePrivateWorkspaceSourceHydration(
+    initialData,
+    activeIndex,
+    reviewMode,
+    sourceIntentReady,
+  );
   const unitsRef = useRef(units);
   unitsRef.current = units;
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
+  const [pendingSourceNavigation, setPendingSourceNavigation] = useState<{
+    pin: "file" | "unit";
+    unitId: string;
+  }>();
+  const sourceNavigationSequence = useRef(0);
   const [filesViewerAbove, setFilesViewerAbove] = useState(
     FILES_VIEWER_PAGE_SIZE,
   );
@@ -468,9 +513,6 @@ export function ReviewWorkspace({
   const [contextAfter, setContextAfter] = useState(0);
   const [commandCenterMode, setCommandCenterMode] =
     useState<CommandCenterMode>();
-  useEffect(() => {
-    setReviewMode(storedReviewMode(window.localStorage));
-  }, []);
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [explanationLine, setExplanationLine] = useState<number>();
   // A ref, not state: the composer owns the draft while it is mounted, and a
@@ -547,42 +589,15 @@ export function ReviewWorkspace({
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
-  const restoredPositionSnapshotId = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const snapshotId = initialData.snapshot?.id;
-    if (!snapshotId || units.length === 0) return;
-    if (restoredPositionSnapshotId.current !== snapshotId) {
-      restoredPositionSnapshotId.current = snapshotId;
-      const rememberedUnitId = rememberedReviewPosition(
-        window.localStorage,
-        initialData.pullRequest.id,
-        snapshotId,
-      );
-      const rememberedIndex = units.findIndex(
-        (unit) =>
-          unit.id === rememberedUnitId &&
-          unit.status !== "signed_off" &&
-          unit.status !== "waiting",
-      );
-      if (rememberedIndex >= 0) {
-        if (rememberedIndex !== activeIndex) setActiveIndex(rememberedIndex);
-        return;
-      }
-    }
-    if (!activeUnitId) return;
+    if (!snapshotId || !sourceIntentReady || !activeUnitId) return;
     rememberReviewPosition(
       window.localStorage,
       initialData.pullRequest.id,
       snapshotId,
       activeUnitId,
     );
-  }, [
-    activeIndex,
-    activeUnitId,
-    initialData.pullRequest.id,
-    initialData.snapshot?.id,
-    units,
-  ]);
+  }, [activeUnitId, initialData.pullRequest.id, snapshotId, sourceIntentReady]);
   const unitsById = useMemo(
     () => new Map(units.map((unit) => [unit.id, unit])),
     [units],
@@ -1528,11 +1543,12 @@ export function ReviewWorkspace({
       ),
     );
   }, []);
-  /** Opens one atomic review unit and selects its concept card. */
-  const selectUnit = useCallback(
-    (index: number, pin: "file" | "unit" = "unit") => {
-      const target = units[index];
-      if (!target) return;
+  /** Commits a prepared review-unit selection without exposing an empty card. */
+  const commitUnitSelection = useCallback(
+    (unitId: string, pin: "file" | "unit") => {
+      const index = unitsRef.current.findIndex(({ id }) => id === unitId);
+      const target = unitsRef.current[index];
+      if (!target || index < 0) return;
       setSourcePinRequest({ kind: pin, unitId: target.id });
       setActiveIndex(index);
       setShowDiff(true);
@@ -1554,7 +1570,71 @@ export function ReviewWorkspace({
       setPathPanelOpen(false);
       setInsightsPanelOpen(false);
     },
-    [units, setPathPanelOpen, setInsightsPanelOpen],
+    [setPathPanelOpen, setInsightsPanelOpen],
+  );
+  /**
+   * Opens one atomic review unit after its destination surface settles.
+   *
+   * File mode prepares one file. Guided mode prepares every file in the target
+   * concept. Both keep the current source mounted until ready or failed.
+   */
+  const selectUnit = useCallback(
+    (index: number, pin: "file" | "unit" = "unit") => {
+      const target = unitsRef.current[index];
+      if (!target) return;
+      const targetConcept = initialData.concepts.find(({ memberIds }) =>
+        memberIds.includes(target.id),
+      );
+      const destinationPaths =
+        reviewMode === "path" && targetConcept
+          ? [
+              ...new Set(
+                targetConcept.memberIds.flatMap((id) => {
+                  const member = unitsRef.current.find(
+                    (unit) => unit.id === id,
+                  );
+                  return member ? [member.path] : [];
+                }),
+              ),
+            ]
+          : [target.path];
+      const pendingPaths = destinationPaths.filter(
+        (path) => !["ready", "error"].includes(sourceStatus(path)),
+      );
+      const staysOnCurrentSurface =
+        reviewMode === "files"
+          ? target.path === activeUnit?.path
+          : Boolean(
+              activeUnitId && targetConcept?.memberIds.includes(activeUnitId),
+            );
+      if (staysOnCurrentSurface || pendingPaths.length === 0) {
+        sourceNavigationSequence.current += 1;
+        setPendingSourceNavigation(undefined);
+        commitUnitSelection(target.id, pin);
+        return;
+      }
+      const sequence = sourceNavigationSequence.current + 1;
+      sourceNavigationSequence.current = sequence;
+      setPendingSourceNavigation({ pin, unitId: target.id });
+      void Promise.allSettled(
+        pendingPaths.map((path) =>
+          prepareSourcePath(path, path === target.path ? "active" : "next"),
+        ),
+      ).then(() => {
+        if (sourceNavigationSequence.current !== sequence) return;
+        setPendingSourceNavigation(undefined);
+        commitUnitSelection(target.id, pin);
+      });
+    },
+    [
+      activeUnit?.path,
+      activeUnitId,
+      commitUnitSelection,
+      initialData.concepts,
+      prepareSourcePath,
+      reviewMode,
+      sourceStatus,
+    ],
   );
   /** Opens a file at its first actionable unit without expanding to the full file. */
   const selectReviewFile = useCallback(
@@ -2089,7 +2169,7 @@ export function ReviewWorkspace({
     }
     const nextIndex = nextReviewIndexAfterAction(updated, preferredNextUnit);
     if (nextIndex >= 0) {
-      setActiveIndex(nextIndex);
+      selectUnit(nextIndex);
     }
     setQueueLimit(INITIAL_PATH_ITEMS);
     setShowDiff(true);
@@ -2118,7 +2198,7 @@ export function ReviewWorkspace({
       ),
     );
     const rollback = first.queued.rollback;
-    setActiveIndex(rollback.unitIndex);
+    selectUnit(rollback.unitIndex);
     if (rollback.pathSearch.trim()) {
       setPathSearch((current) =>
         current.trim() ? current : rollback.pathSearch,
@@ -2834,7 +2914,7 @@ export function ReviewWorkspace({
       signOffUndoHistoryRef.current = [];
       setSignOffUndoHistory([]);
       const nextIndex = nextPendingReviewIndex(updated);
-      if (nextIndex >= 0) setActiveIndex(nextIndex);
+      if (nextIndex >= 0) selectUnit(nextIndex);
       setCompletedBrowsing(false);
       setCompletionOpen(false);
       setWaitingCompletionOpen(false);
@@ -4344,7 +4424,7 @@ export function ReviewWorkspace({
     );
     setPendingConceptSignOffIds((current) => new Set(current).add(concept.id));
     setUnits(updated);
-    if (nextIndex >= 0) setActiveIndex(nextIndex);
+    if (nextIndex >= 0) selectUnit(nextIndex);
     setQueueLimit(INITIAL_PATH_ITEMS);
     setShowDiff(true);
     setContextBefore(0);
@@ -4429,7 +4509,7 @@ export function ReviewWorkspace({
       const index = units.findIndex(({ id }) => id === unitId);
       return index >= 0 ? [index] : [];
     });
-    setActiveIndex(
+    selectUnit(
       surviving.includes(view.unitIndex)
         ? view.unitIndex
         : (surviving[0] ??
@@ -6177,15 +6257,27 @@ export function ReviewWorkspace({
                   </p>
                 </div>
                 <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                  {sourceHydrationPending && (
+                  {(sourceHydrationPending || pendingSourceNavigation) && (
                     <span
                       role="status"
-                      aria-label="Loading private review source"
+                      aria-label={
+                        pendingSourceNavigation
+                          ? "Preparing selected review source"
+                          : "Loading private review source"
+                      }
                       className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
-                      title="Loading and verifying review source in the background"
+                      title={
+                        pendingSourceNavigation
+                          ? "Keeping the current source visible until the selected file is ready"
+                          : "Loading and verifying the current review source"
+                      }
                     >
                       <LoaderCircle className="size-3.5 animate-spin" />
-                      <span className="hidden lg:inline">Loading source…</span>
+                      <span className="hidden lg:inline">
+                        {pendingSourceNavigation
+                          ? "Opening next source…"
+                          : "Loading source…"}
+                      </span>
                     </span>
                   )}
                   {initialData.conceptLayout && !conceptLayoutLocked && (
@@ -6589,9 +6681,24 @@ export function ReviewWorkspace({
                           </p>
                           <p className="text-mist mt-2 text-xs leading-5">
                             This private source could not be verified and
-                            loaded. Reload the review before signing off this
-                            unit.
+                            loaded. Retry this file before signing off its
+                            units.
                           </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="mt-5"
+                            onClick={() =>
+                              void prepareSourcePath(
+                                activeUnit.path,
+                                "active",
+                                true,
+                              ).catch(() => undefined)
+                            }
+                          >
+                            <RefreshCw className="size-3.5" /> Retry source
+                          </Button>
                         </div>
                       </div>
                     )}
@@ -6967,15 +7074,17 @@ export function ReviewWorkspace({
                         shortcut={reviewShortcuts.previousUnit}
                         alternateShortcut={reviewShortcuts.nextUnit}
                       />
-                      Card
+                      {reviewMode === "files" ? "File" : "Card"}
                     </span>
-                    <span className="flex items-center gap-1.5 whitespace-nowrap">
-                      <ShortcutAlternatives
-                        shortcut={reviewShortcuts.previousConcept}
-                        alternateShortcut={reviewShortcuts.nextConcept}
-                      />
-                      Concept
-                    </span>
+                    {reviewMode === "path" && (
+                      <span className="flex items-center gap-1.5 whitespace-nowrap">
+                        <ShortcutAlternatives
+                          shortcut={reviewShortcuts.previousConcept}
+                          alternateShortcut={reviewShortcuts.nextConcept}
+                        />
+                        Concept
+                      </span>
+                    )}
                   </span>
                 )}
               </div>

@@ -317,29 +317,30 @@ describe("ReviewFilesPanel", () => {
     expect(screen.queryByText("No review units")).not.toBeInTheDocument();
   });
 
-  it("moves keyboard focus between visible tree rows with arrow keys", async () => {
+  it("leaves file focus unchanged for review-scroll arrow keys", async () => {
     const user = userEvent.setup();
+    const onSelect = vi.fn();
     render(
       <ReviewFilesPanel
         files={files}
         search=""
         selectedPath="src/review/workspace.ts"
-        onSelect={vi.fn()}
+        onSelect={onSelect}
         onToggle={vi.fn()}
       />,
     );
 
     const file = screen.getByRole("button", { name: /workspace\.ts/i });
-    file.focus();
+    await user.click(file);
+    onSelect.mockClear();
     await user.keyboard("{ArrowUp}");
-    expect(
-      screen.getByRole("button", { name: "Collapse review" }),
-    ).toHaveFocus();
+    expect(file).toHaveFocus();
     await user.keyboard("{ArrowDown}");
     expect(file).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("arrows from a file checkbox using the containing tree row", async () => {
+  it("leaves checkbox focus unchanged for review-scroll arrow keys", async () => {
     const user = userEvent.setup();
     render(
       <ReviewFilesPanel
@@ -351,15 +352,14 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
-    screen
-      .getByRole("checkbox", {
-        name: /Sign off 2 review units in src\/review\/workspace.ts/i,
-      })
-      .focus();
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Sign off 2 review units in src\/review\/workspace.ts/i,
+    });
+    checkbox.focus();
     await user.keyboard("{ArrowUp}");
-    expect(
-      screen.getByRole("button", { name: "Collapse review" }),
-    ).toHaveFocus();
+    expect(checkbox).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(checkbox).toHaveFocus();
   });
 
   it("scrolls the selected file row into view when selectedPath changes", async () => {
