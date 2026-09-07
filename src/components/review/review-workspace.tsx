@@ -293,6 +293,10 @@ type SignOffInput = RouterInputs["review"]["signOff"];
 type UnreviewInput = RouterInputs["review"]["unreview"];
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
+type RestoredReviewView = Pick<
+  ReviewViewSnapshot,
+  "contextAfter" | "contextBefore" | "scrollTop" | "showDiff"
+>;
 
 interface SignOffRollback {
   contextAfter: number;
@@ -428,6 +432,7 @@ export function ReviewWorkspace({
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [pendingSourceNavigation, setPendingSourceNavigation] = useState<{
     pin: "file" | "unit";
+    restoredView?: RestoredReviewView;
     unitId: string;
   }>();
   const sourceNavigationSequence = useRef(0);
@@ -1545,13 +1550,17 @@ export function ReviewWorkspace({
   }, []);
   /** Commits a prepared review-unit selection without exposing an empty card. */
   const commitUnitSelection = useCallback(
-    (unitId: string, pin: "file" | "unit") => {
+    (
+      unitId: string,
+      pin: "file" | "unit",
+      restoredView?: RestoredReviewView,
+    ) => {
       const index = unitsRef.current.findIndex(({ id }) => id === unitId);
       const target = unitsRef.current[index];
       if (!target || index < 0) return;
       setSourcePinRequest({ kind: pin, unitId: target.id });
       setActiveIndex(index);
-      setShowDiff(true);
+      setShowDiff(restoredView?.showDiff ?? true);
       setStartedAt(Date.now());
       setQueueLimit(INITIAL_PATH_ITEMS);
       setKeyboardLine(undefined);
@@ -1563,12 +1572,22 @@ export function ReviewWorkspace({
       // set wins in the same batch; a unit reached by ⌘↓, the path panel or a
       // concept card instead arrives with no stale amber line lit.
       clearFindingLineRef.current();
-      setContextBefore(0);
-      setContextAfter(0);
+      setContextBefore(restoredView?.contextBefore ?? 0);
+      setContextAfter(restoredView?.contextAfter ?? 0);
       setImportReturn(undefined);
       setImportPreview(undefined);
       setPathPanelOpen(false);
       setInsightsPanelOpen(false);
+      if (restoredView) {
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() => {
+            codeScrollRef.current?.scrollTo({
+              top: restoredView.scrollTop,
+              behavior: "auto",
+            });
+          }),
+        );
+      }
     },
     [setPathPanelOpen, setInsightsPanelOpen],
   );
@@ -1579,7 +1598,11 @@ export function ReviewWorkspace({
    * concept. Both keep the current source mounted until ready or failed.
    */
   const selectUnit = useCallback(
-    (index: number, pin: "file" | "unit" = "unit") => {
+    (
+      index: number,
+      pin: "file" | "unit" = "unit",
+      restoredView?: RestoredReviewView,
+    ) => {
       const target = unitsRef.current[index];
       if (!target) return;
       const targetConcept = initialData.concepts.find(({ memberIds }) =>
@@ -1610,12 +1633,12 @@ export function ReviewWorkspace({
       if (staysOnCurrentSurface || pendingPaths.length === 0) {
         sourceNavigationSequence.current += 1;
         setPendingSourceNavigation(undefined);
-        commitUnitSelection(target.id, pin);
+        commitUnitSelection(target.id, pin, restoredView);
         return;
       }
       const sequence = sourceNavigationSequence.current + 1;
       sourceNavigationSequence.current = sequence;
-      setPendingSourceNavigation({ pin, unitId: target.id });
+      setPendingSourceNavigation({ pin, restoredView, unitId: target.id });
       void Promise.allSettled(
         pendingPaths.map((path) =>
           prepareSourcePath(path, path === target.path ? "active" : "next"),
@@ -1623,7 +1646,7 @@ export function ReviewWorkspace({
       ).then(() => {
         if (sourceNavigationSequence.current !== sequence) return;
         setPendingSourceNavigation(undefined);
-        commitUnitSelection(target.id, pin);
+        commitUnitSelection(target.id, pin, restoredView);
       });
     },
     [
@@ -2198,25 +2221,13 @@ export function ReviewWorkspace({
       ),
     );
     const rollback = first.queued.rollback;
-    selectUnit(rollback.unitIndex);
+    selectUnit(rollback.unitIndex, "unit", rollback);
     if (rollback.pathSearch.trim()) {
       setPathSearch((current) =>
         current.trim() ? current : rollback.pathSearch,
       );
       setSearchLimit(rollback.searchLimit);
     }
-    setShowDiff(rollback.showDiff);
-    setContextBefore(rollback.contextBefore);
-    setContextAfter(rollback.contextAfter);
-    setStartedAt(Date.now());
-    window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() => {
-        codeScrollRef.current?.scrollTo({
-          top: rollback.scrollTop,
-          behavior: "auto",
-        });
-      }),
-    );
     if (
       failures.some(({ code }) => code === "CONFLICT" || code === "NOT_FOUND")
     ) {
@@ -3995,7 +4006,8 @@ export function ReviewWorkspace({
   // A concept action needs a layout to name, and a concept of one member is
   // its unit — there the two levels collapse into a single action.
   const conceptActionAvailable = Boolean(
-    activeConcept &&
+    reviewMode === "path" &&
+      activeConcept &&
       initialData.conceptLayout &&
       activeConceptMembers.length > 1,
   );
@@ -4517,23 +4529,13 @@ export function ReviewWorkspace({
               Math.max(0, view.unitIndex),
               Math.max(0, units.length - 1),
             )),
+      "unit",
+      view,
     );
     if (view.pathSearch.trim()) {
       setPathSearch((current) => (current.trim() ? current : view.pathSearch));
       setSearchLimit(view.searchLimit);
     }
-    setShowDiff(view.showDiff);
-    setContextBefore(view.contextBefore);
-    setContextAfter(view.contextAfter);
-    setStartedAt(Date.now());
-    window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() => {
-        codeScrollRef.current?.scrollTo({
-          top: view.scrollTop,
-          behavior: "auto",
-        });
-      }),
-    );
   }
 
   /**

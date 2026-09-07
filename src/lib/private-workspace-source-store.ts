@@ -189,6 +189,12 @@ export class PrivateWorkspaceSourceStore<
       }
       return existing.promise;
     }
+    const failure = this.#errors.get(path);
+    if (this.status(path) === "error") {
+      return Promise.reject(
+        failure ?? new Error(`Review source failed to load: ${path}`),
+      );
+    }
     if (!this.#unitsByPath.has(path) && !this.#contextByPath.has(path)) {
       return Promise.reject(new Error(`Unknown review source path: ${path}`));
     }

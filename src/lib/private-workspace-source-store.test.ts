@@ -187,9 +187,14 @@ describe("PrivateWorkspaceSourceStore", () => {
     await expect(store.request("retry.ts", "active")).rejects.toThrow(
       "temporary",
     );
+    await expect(store.request("retry.ts", "active")).rejects.toThrow(
+      "temporary",
+    );
+    expect(hydrate).toHaveBeenCalledOnce();
     await expect(store.retry("retry.ts")).resolves.toMatchObject({
       units: [{ source: "ready" }],
     });
+    expect(hydrate).toHaveBeenCalledTimes(2);
     expect(store.status("retry.ts")).toBe("ready");
     store.dispose();
   });

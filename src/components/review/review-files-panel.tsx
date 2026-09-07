@@ -151,9 +151,7 @@ function ReviewFileRow({
   const name = file.path.split("/").at(-1) ?? file.path;
   const waitLabel = `${file.waitingUnits} waiting ${file.waitingUnits === 1 ? "unit" : "units"}`;
   return (
-    <div
-      role="treeitem"
-      tabIndex={-1}
+    <li
       data-review-file-path={file.path}
       aria-current={selected ? "page" : undefined}
       aria-label={`${file.path}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
@@ -216,7 +214,7 @@ function ReviewFileRow({
           {file.waitingUnits}
         </button>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -259,16 +257,11 @@ function ReviewFileTreeRows({
     }
     const open = expanded.has(node.path);
     return (
-      <div
-        key={node.path}
-        role="treeitem"
-        aria-expanded={open}
-        tabIndex={-1}
-        data-review-file-path={node.path}
-      >
+      <li key={node.path} data-review-file-path={node.path}>
         <button
           type="button"
           id={reviewFileTreeControlId(node.path)}
+          aria-expanded={open}
           aria-label={`${open ? "Collapse" : "Expand"} ${node.name}`}
           onClick={() => onExpandedChange(node.path)}
           className="text-mist hover:bg-surface-subtle flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 text-left transition"
@@ -297,7 +290,7 @@ function ReviewFileTreeRows({
           )}
         </button>
         {open && (
-          <div>
+          <ul className="m-0 list-none p-0">
             <ReviewFileTreeRows
               nodes={node.children}
               level={level + 1}
@@ -309,9 +302,9 @@ function ReviewFileTreeRows({
               onToggle={onToggle}
               onResumeWaiting={onResumeWaiting}
             />
-          </div>
+          </ul>
         )}
-      </div>
+      </li>
     );
   });
 }
@@ -453,8 +446,8 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
     if (searching) setCollapsed(new Set());
   }
 
-  /** Handles structural tree navigation without claiming review-scroll keys. */
-  function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  /** Handles optional structural shortcuts without claiming review-scroll keys. */
+  function handleFileListKeyDown(event: KeyboardEvent<HTMLUListElement>) {
     const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
     if (!keys.includes(event.key)) return;
     const target = event.target;
@@ -570,11 +563,10 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {tree.length > 0 ? (
-          <div
-            role="tree"
+          <ul
             aria-label={treeLabel}
-            className="space-y-0.5"
-            onKeyDown={handleTreeKeyDown}
+            className="m-0 list-none space-y-0.5 p-0"
+            onKeyDown={handleFileListKeyDown}
           >
             <ReviewFileTreeRows
               nodes={tree}
@@ -587,7 +579,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
               onToggle={onToggle}
               onResumeWaiting={onResumeWaiting}
             />
-          </div>
+          </ul>
         ) : (
           <p className="text-mist rounded-xl border border-dashed border-line px-3 py-5 text-center text-[10px] leading-4">
             {emptyLabel}

@@ -67,7 +67,7 @@ describe("ReviewFilesPanel", () => {
       />,
     );
 
-    expect(screen.getByRole("tree", { name: "Changed files" })).toBeVisible();
+    expect(screen.getByRole("list", { name: "Changed files" })).toBeVisible();
     expect(screen.getAllByText("1/2")).not.toHaveLength(0);
     expect(screen.queryByText("1/2 reviewed")).not.toBeInTheDocument();
     expect(screen.queryByText("No review units")).not.toBeInTheDocument();
@@ -114,7 +114,7 @@ describe("ReviewFilesPanel", () => {
     expect(screen.getAllByText("0/1").length).toBeGreaterThan(0);
     expect(screen.queryByText(/^added$/i)).not.toBeInTheDocument();
     expect(
-      screen.getByRole("treeitem", {
+      screen.getByRole("listitem", {
         name: "src/review/constants.ts, 0 of 1 review units reviewed",
       }),
     ).toHaveClass("items-center", "py-1.5");
