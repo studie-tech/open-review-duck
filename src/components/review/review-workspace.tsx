@@ -77,6 +77,7 @@ import {
   FILES_VIEWER_PAGE_SIZE,
   FILES_VIEWER_PREFETCH_RADIUS,
   FILES_VIEWER_PREVIEW_RADIUS,
+  firstReviewFileUnitIndex,
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
@@ -374,10 +375,9 @@ export function ReviewWorkspace({
     initialReviewSessionState,
   );
   useLayoutEffect(() => lockDocumentScroll(document), []);
-  // The workspace opens on work the reviewer can act on. A wait is a
-  // property of one unit, so a pending sibling remains a valid first landing.
+  // Files mode starts in sidebar order, independently of the guided path.
   const [activeIndex, setActiveIndex] = useState(() =>
-    firstActionableReviewUnitIndex(initialData.units),
+    firstReviewFileUnitIndex(initialData.units),
   );
   const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
   const [sourceIntentSnapshotId, setSourceIntentSnapshotId] =
@@ -400,11 +400,14 @@ export function ReviewWorkspace({
         unit.status !== "signed_off" &&
         unit.status !== "waiting",
     );
-    setReviewMode(storedReviewMode(window.localStorage));
+    const mode = storedReviewMode(window.localStorage);
+    setReviewMode(mode);
     setActiveIndex(
       rememberedIndex >= 0
         ? rememberedIndex
-        : firstActionableReviewUnitIndex(initialData.units),
+        : mode === "files"
+          ? firstReviewFileUnitIndex(initialData.units)
+          : firstActionableReviewUnitIndex(initialData.units),
     );
     setSourceIntentSnapshotId(snapshotId);
   }, [initialData.pullRequest.id, snapshotId]);

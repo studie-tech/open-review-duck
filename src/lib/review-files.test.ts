@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReviewFileTree,
   filterReviewFiles,
+  firstReviewFileUnitIndex,
   flattenReviewFileTree,
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
@@ -16,6 +17,22 @@ import {
   waitingReviewFileUnits,
   windowReviewFileCards,
 } from "./review-files";
+
+describe("firstReviewFileUnitIndex", () => {
+  it("starts at the first explorer file rather than the first guided unit", () => {
+    const units = [
+      { path: "app/tests/setup/testDatabase.ts", status: "pending" },
+      { path: "app/index.ts", status: "pending" },
+      { path: "app/components/button.ts", status: "signed_off" },
+      { path: "app/components/button.ts", status: "pending" },
+    ];
+    expect(firstReviewFileUnitIndex(units)).toBe(2);
+  });
+
+  it("handles an empty review", () => {
+    expect(firstReviewFileUnitIndex([])).toBe(0);
+  });
+});
 
 const files = [
   {
