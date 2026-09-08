@@ -2522,6 +2522,12 @@ export const reviewRouter = createTRPCRouter({
         and(
           eq(workspaceMembers.userId, ctx.auth.userId),
           inArray(syncRuns.status, ["queued", "running"]),
+          // A terminal webhook can race a sync that was already starting. The
+          // completed PR belongs in history, never back in review preparation.
+          or(
+            isNull(pullRequests.id),
+            inArray(pullRequests.state, ["open", "draft"]),
+          ),
         ),
       )
       .orderBy(desc(syncRuns.createdAt)),
@@ -2565,6 +2571,10 @@ export const reviewRouter = createTRPCRouter({
         and(
           eq(workspaceMembers.userId, ctx.auth.userId),
           gte(syncRuns.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1_000)),
+          or(
+            isNull(pullRequests.id),
+            inArray(pullRequests.state, ["open", "draft"]),
+          ),
         ),
       )
       .orderBy(desc(syncRuns.createdAt))

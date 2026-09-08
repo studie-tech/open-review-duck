@@ -11,7 +11,10 @@ vi.mock("~/server/workflows/service", () => ({
 import { pullRequests, type repositories } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import type { ConnectionAccess } from "./credentials";
-import { refreshRepositoryPullRequestStates } from "./pull-request-state";
+import {
+  applyTerminalPullRequestState,
+  refreshRepositoryPullRequestStates,
+} from "./pull-request-state";
 import type { PullRequestSummary } from "./types";
 
 type Database = typeof database;
@@ -112,6 +115,38 @@ const repository = {
   reviewIntakeMode: "manual",
   intakeOwnerId: null,
 } as typeof repositories.$inferSelect;
+
+describe("terminal pull-request state", () => {
+  it("updates tracked rows directly without starting synchronization", async () => {
+    const writes: Record<string, unknown>[] = [];
+    const update = {
+      set(values: Record<string, unknown>) {
+        writes.push(values);
+        return update;
+      },
+      where() {
+        return update;
+      },
+      returning: async () => [{ id: "pull-request-1" }],
+    };
+    const db = { update: () => update } as unknown as Database;
+
+    const changed = await applyTerminalPullRequestState(db, {
+      repositoryIds: [repository.id],
+      pullRequestNumber: 10,
+      state: "merged",
+    });
+
+    expect(changed).toBe(1);
+    expect(writes).toEqual([
+      expect.objectContaining({
+        state: "merged",
+        lastSyncedAt: expect.any(Date),
+      }),
+    ]);
+    expect(mocks.startPullRequestSync).not.toHaveBeenCalled();
+  });
+});
 
 /** Builds a tracked row that agrees with the remote summary below. */
 function createTracked(

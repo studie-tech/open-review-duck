@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { pullRequests, repositories } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
 import type { db as database } from "~/server/db";
@@ -14,6 +14,31 @@ type TrackedPullRequest = typeof pullRequests.$inferSelect;
 const STATE_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 /** Pooled handles one repository pass takes for its own writes and syncs. */
 const RECONCILIATION_WRITE_CONCURRENCY = 3;
+
+/** Applies a terminal webhook state without creating an analysis sync run. */
+export async function applyTerminalPullRequestState(
+  db: Database,
+  input: {
+    repositoryIds: string[];
+    pullRequestNumber: number;
+    state: "merged" | "closed";
+  },
+) {
+  if (input.repositoryIds.length === 0) return 0;
+  const terminalRows = await db
+    .update(pullRequests)
+    .set({ state: input.state, lastSyncedAt: new Date() })
+    .where(
+      and(
+        inArray(pullRequests.repositoryId, input.repositoryIds),
+        eq(pullRequests.number, input.pullRequestNumber),
+        // A delayed close event must never downgrade an already merged PR.
+        input.state === "closed" ? ne(pullRequests.state, "merged") : undefined,
+      ),
+    )
+    .returning({ id: pullRequests.id });
+  return terminalRows.length;
+}
 
 /** Reports whether the stored row already carries every refreshed column. */
 function isPullRequestCurrent(
