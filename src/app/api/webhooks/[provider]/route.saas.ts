@@ -15,6 +15,11 @@ import {
   isGitHubLifecycleEvent,
 } from "~/server/providers/github-lifecycle";
 import { supportsAssignedIntake } from "~/server/providers/intake-policy";
+import { applyTerminalPullRequestState } from "~/server/providers/pull-request-state";
+import {
+  type HostedProvider,
+  terminalPullRequestState,
+} from "~/server/providers/webhook-pull-request";
 import { providerWebhookTarget } from "~/server/providers/webhook-registration";
 import {
   boundedWebhookBody,
@@ -24,8 +29,6 @@ import {
 } from "~/server/providers/webhook-security";
 import { githubInstallationId } from "~/server/security/oauth-flow";
 import { startPullRequestSync } from "~/server/workflows/service";
-
-type HostedProvider = "github" | "gitlab" | "azure_devops";
 
 /** Verifies the provider-specific signature before payload parsing. */
 function verify(
@@ -74,10 +77,16 @@ function eventName(
 }
 
 const githubPayload = z.object({
+  action: z.string().min(1).max(64).optional(),
   number: z.number().optional(),
   repository: z.object({ id: z.union([z.string(), z.number()]) }),
   pull_request: z
-    .object({ number: z.number(), updated_at: z.string().datetime() })
+    .object({
+      number: z.number(),
+      updated_at: z.string().datetime(),
+      state: z.string().max(32).optional(),
+      merged: z.boolean().optional(),
+    })
     .optional(),
   installation: z.object({ id: z.union([z.string(), z.number()]) }),
 });
@@ -86,6 +95,8 @@ const gitlabPayload = z.object({
   object_attributes: z.object({
     iid: z.number(),
     updated_at: z.string().datetime(),
+    action: z.string().max(64).optional(),
+    state: z.string().max(32).optional(),
   }),
 });
 const azurePayload = z.object({
@@ -94,6 +105,7 @@ const azurePayload = z.object({
   createdDate: z.string().datetime(),
   resource: z.object({
     pullRequestId: z.number(),
+    status: z.string().max(32).optional(),
     repository: z.object({ id: z.string() }),
   }),
 });
@@ -181,6 +193,38 @@ function synchronizationTarget(provider: HostedProvider, payload: unknown) {
     repositoryExternalId: String(value.resource?.repository?.id ?? ""),
     pullRequestNumber: Number(value.resource?.pullRequestId),
   };
+}
+
+/** Determines whether the delivery should retire the PR instead of analyzing it. */
+function terminalState(
+  provider: HostedProvider,
+  event: string,
+  payload: unknown,
+) {
+  if (provider === "github") {
+    const value = githubPayload.parse(payload);
+    return terminalPullRequestState({
+      provider,
+      event,
+      action: value.action,
+      state: value.pull_request?.state,
+      merged: value.pull_request?.merged,
+    });
+  }
+  if (provider === "gitlab") {
+    const value = gitlabPayload.parse(payload);
+    return terminalPullRequestState({
+      provider,
+      event,
+      action: value.object_attributes.action,
+      state: value.object_attributes.state,
+    });
+  }
+  return terminalPullRequestState({
+    provider,
+    event,
+    state: azurePayload.parse(payload).resource.status,
+  });
 }
 
 /** Verifies, deduplicates, and durably enqueues one source-provider webhook. */
@@ -385,6 +429,22 @@ export async function POST(
         .set({ status: "ignored", processedAt: new Date() })
         .where(eq(webhookDeliveries.id, delivery.id));
       return NextResponse.json({ ignored: true }, { status: 202 });
+    }
+    const finalState = terminalState(provider, event, payload);
+    if (finalState) {
+      const updated = await applyTerminalPullRequestState(db, {
+        repositoryIds: matchingRepositories.map(({ id }) => id),
+        pullRequestNumber: target.pullRequestNumber,
+        state: finalState,
+      });
+      await db
+        .update(webhookDeliveries)
+        .set({ status: "processed", processedAt: new Date() })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      return NextResponse.json(
+        { processed: true, state: finalState, updated },
+        { status: 202 },
+      );
     }
     /** Applies one delivery independently so every connected tenant is attempted. */
     const synchronizeRepository = async (
