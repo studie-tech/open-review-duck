@@ -9,6 +9,7 @@ export function createProvider(
   token: string,
   baseUrl?: string,
   credentialKind?: string,
+  githubInstallationContents?: "read" | "write",
 ): PullRequestProvider {
   const normalizedBaseUrl = baseUrl?.replace(/\/+$/, "");
   if (name === "github")
@@ -16,6 +17,7 @@ export function createProvider(
       token,
       normalizedBaseUrl,
       credentialKind === "github_app",
+      githubInstallationContents,
     );
   if (name === "gitlab") return new GitLabProvider(token, normalizedBaseUrl);
   if (credentialKind !== "pat" && credentialKind !== "local_pat") {
