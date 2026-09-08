@@ -1764,12 +1764,6 @@ describe("provider normalization", () => {
           base: { ref: "main", sha: "base-sha" },
         });
       }
-      if (url.endsWith("/installation")) {
-        return jsonResponse({
-          id: 17,
-          account: { id: 7, login: "acme" },
-        });
-      }
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -1787,6 +1781,9 @@ describe("provider normalization", () => {
       canRequestChanges: false,
       actorName: "connected GitHub App",
     });
+    expect(
+      fetchMock.mock.calls.map(([input]) => requestUrl(input)),
+    ).not.toContain("https://api.github.com/installation");
     await expect(
       provider.setPullRequestReviewDecision({
         repositoryExternalId: "42",
