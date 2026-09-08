@@ -2324,6 +2324,73 @@ describe("provider normalization", () => {
     });
   });
 
+  it("blocks a rebase-only GitHub repository when the pull request is not rebaseable", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/pulls/12")) {
+        return jsonResponse({
+          id: 12,
+          number: 12,
+          title: "Conflicted rebase",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/12",
+          user: { id: 9, login: "author", avatar_url: "" },
+          head: { ref: "feature", sha: "head-sha" },
+          base: { ref: "main", sha: "base-sha" },
+          mergeable: true,
+          mergeable_state: "clean",
+          rebaseable: false,
+        });
+      }
+      if (url.includes("/check-runs")) {
+        return jsonResponse({ check_runs: [] });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse({ statuses: [] });
+      }
+      if (url.includes("graphql")) {
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewDecision: "APPROVED",
+                statusCheckRollup: { contexts: { nodes: [] } },
+              },
+            },
+          },
+        });
+      }
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+          allow_merge_commit: false,
+          allow_squash_merge: false,
+          allow_rebase_merge: true,
+          permissions: { pull: true, push: true },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    await expect(
+      provider.getPullRequestLifecycle("42", 12),
+    ).resolves.toMatchObject({
+      canMerge: false,
+      hasMergePermission: true,
+      mergeable: false,
+      mergeBlockedReason:
+        "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+    });
+  });
+
   it("surfaces GitLab pipeline failures and merge blockers", async () => {
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {

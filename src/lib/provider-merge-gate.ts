@@ -106,6 +106,8 @@ export function githubMergeGate(input: {
   draft?: boolean;
   mergeable?: boolean | null;
   mergeableState?: string;
+  mergeMethod?: "merge" | "squash" | "rebase" | "none";
+  rebaseable?: boolean | null;
   reviewDecision?: GitHubReviewDecision | null;
   checks?: readonly ProviderMergeGateCheck[];
 }): ProviderMergeGate {
@@ -151,6 +153,28 @@ export function githubMergeGate(input: {
       mergeable: null,
       canMerge: false,
       mergeBlockedReason: "Mergeability is still being computed",
+    };
+  }
+  if (input.mergeMethod === "none") {
+    return {
+      mergeable: false,
+      canMerge: false,
+      mergeBlockedReason: "No merge method is enabled for this repository",
+    };
+  }
+  if (input.mergeMethod === "rebase" && input.rebaseable === false) {
+    return {
+      mergeable: false,
+      canMerge: false,
+      mergeBlockedReason:
+        "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+    };
+  }
+  if (input.mergeMethod === "rebase" && input.rebaseable === null) {
+    return {
+      mergeable: null,
+      canMerge: false,
+      mergeBlockedReason: "Rebase availability is still being computed",
     };
   }
   if (

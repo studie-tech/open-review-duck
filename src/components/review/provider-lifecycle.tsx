@@ -68,6 +68,10 @@ export function ProviderLifecycle({
     missingMergePermission || (error && (permissionDenied || !state)),
   );
   const mergeReady = Boolean(state?.canMerge && !merged && !closed);
+  const actionableError =
+    error && !(state && !state.canMerge && state.mergeBlockedReason)
+      ? error
+      : undefined;
   const summaryLabel = providerLifecycleSummaryLabel(
     summary,
     state?.checks.length ?? 0,
@@ -173,15 +177,24 @@ export function ProviderLifecycle({
               </p>
             )}
 
-            {error && !showPermissionRecovery && (
+            {actionableError && !showPermissionRecovery && (
               <p role="alert" className="text-coral mt-3 text-xs leading-5">
-                {error}
+                {actionableError}
               </p>
             )}
             {state.mergeBlockedReason && !merged && !missingMergePermission && (
-              <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
-                {state.mergeBlockedReason}
-              </p>
+              <div className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
+                <p>{state.mergeBlockedReason}</p>
+                <a
+                  href={pullRequestUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-cyan mt-1.5 inline-flex items-center gap-1 hover:underline"
+                >
+                  Open on {providerName}
+                  <ExternalLink className="size-3" />
+                </a>
+              </div>
             )}
             {showPermissionRecovery && (
               <ProviderPermissionRecovery
@@ -238,13 +251,49 @@ export function ProviderLifecycle({
 
       {confirming && state && (
         <ConfirmationDialog
-          title={`${mergeLabel} on ${providerName}?`}
+          title={
+            state.canMerge
+              ? `${mergeLabel} on ${providerName}?`
+              : `${mergeLabel} is blocked on ${providerName}`
+          }
           description={
-            mergeLabel === "Complete"
-              ? "This completes the pull request on Azure DevOps against the exact revision you finished reviewing. The action cannot be undone from ReviewDuck."
-              : `This merges the exact revision you finished reviewing on ${providerName}. The action cannot be undone from ReviewDuck.`
+            <>
+              <p>
+                {!state.canMerge
+                  ? `${providerName} is not ready to accept this ${mergeLabel.toLowerCase()}. ReviewDuck refreshed the latest provider state so you can see what needs attention.`
+                  : mergeLabel === "Complete"
+                    ? "This completes the pull request on Azure DevOps against the exact revision you finished reviewing. The action cannot be undone from ReviewDuck."
+                    : `This merges the exact revision you finished reviewing on ${providerName}. The action cannot be undone from ReviewDuck.`}
+              </p>
+              {actionableError && (
+                <p
+                  role="alert"
+                  className="text-coral mt-3 rounded-xl border border-coral/25 bg-coral/10 px-3 py-2 text-xs leading-5"
+                >
+                  {actionableError}
+                </p>
+              )}
+              {!state.canMerge && state.mergeBlockedReason && (
+                <div
+                  role="alert"
+                  className="text-coral mt-3 rounded-xl border border-coral/25 bg-coral/10 px-3 py-2 text-xs leading-5"
+                >
+                  <p>{state.mergeBlockedReason}</p>
+                  <a
+                    href={pullRequestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 font-medium hover:underline"
+                  >
+                    Open on {providerName}
+                    <ExternalLink className="size-3" />
+                  </a>
+                </div>
+              )}
+            </>
           }
           confirmLabel={mergeLabel}
+          confirmDisabled={!state.canMerge}
           pending={mutationPending}
           pendingLabel={
             <span className="flex items-center gap-2">
