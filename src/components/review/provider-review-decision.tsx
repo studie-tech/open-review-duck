@@ -54,11 +54,17 @@ export function ProviderReviewDecision({
   const [confirmation, setConfirmation] = useState<ReviewAction>();
   const [reason, setReason] = useState("");
   const providerName = providerLabel(provider);
-  const permissionLikeUnavailable = Boolean(
-    state?.unavailableReason &&
-      /permission|reconnect|GitHub App installations/i.test(
+  const githubAppReviewHandoff = Boolean(
+    state?.connection.credentialKind === "github_app" &&
+      state.unavailableReason &&
+      /personal approval|personal review decision|GitHub user identity/i.test(
         state.unavailableReason,
       ),
+  );
+  const permissionLikeUnavailable = Boolean(
+    state?.unavailableReason &&
+      !githubAppReviewHandoff &&
+      /permission|reconnect/i.test(state.unavailableReason),
   );
   const showPermissionRecovery = Boolean(
     permissionDenied || permissionLikeUnavailable || (error && !state),
@@ -189,10 +195,34 @@ export function ProviderReviewDecision({
                 {error}
               </p>
             )}
-            {state.unavailableReason && !permissionLikeUnavailable && (
-              <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
-                {state.unavailableReason}
-              </p>
+            {state.unavailableReason &&
+              !permissionLikeUnavailable &&
+              !githubAppReviewHandoff && (
+                <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
+                  {state.unavailableReason}
+                </p>
+              )}
+            {githubAppReviewHandoff && (
+              <div
+                role="note"
+                aria-label="GitHub App review handoff"
+                className="mt-3 rounded-xl border border-line bg-surface/50 px-3 py-3"
+              >
+                <p className="text-cloud text-xs font-medium">
+                  Review decisions happen on GitHub
+                </p>
+                <p className="text-mist mt-1 text-[10px] leading-4">
+                  ReviewDuck keeps the approval status in sync through the
+                  GitHub App. GitHub requires approvals and change requests to
+                  be submitted by your personal user.
+                </p>
+                <Button asChild size="sm" variant="secondary" className="mt-3">
+                  <a href={pullRequestUrl} target="_blank" rel="noreferrer">
+                    Review on GitHub
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                </Button>
+              </div>
             )}
             {showPermissionRecovery && (
               <ProviderPermissionRecovery
