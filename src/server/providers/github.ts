@@ -225,6 +225,7 @@ export class GitHubProvider implements PullRequestProvider {
     token: string,
     private readonly apiUrl = "https://api.github.com",
     private readonly installation = false,
+    private readonly installationContents?: "read" | "write",
   ) {
     this.headers = {
       Accept: "application/vnd.github+json",
@@ -1307,6 +1308,9 @@ export class GitHubProvider implements PullRequestProvider {
 
   /** Reads whether this credential can write the repository, if GitHub says. */
   private async repositoryHasMergePermission(repositoryExternalId: string) {
+    if (this.installationContents) {
+      return this.installationContents === "write";
+    }
     try {
       const repository = await this.repository(repositoryExternalId);
       return githubViewerCanMerge(repository.permissions);

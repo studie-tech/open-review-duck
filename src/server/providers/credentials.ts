@@ -119,7 +119,7 @@ async function githubInstallationToken(
   if (cached) {
     try {
       const token = await cached;
-      if (token.expiresAt > Date.now() + 60_000) return token.token;
+      if (token.expiresAt > Date.now() + 60_000) return token;
     } catch {
       // A failed mint is removed below so the next request can recover.
     }
@@ -135,7 +135,7 @@ async function githubInstallationToken(
     }
   }
   try {
-    return (await pending).token;
+    return await pending;
   } catch (cause) {
     if (githubInstallationTokens.get(installationId) === pending) {
       githubInstallationTokens.delete(installationId);
@@ -443,6 +443,7 @@ export async function providerForConnection(
     throw new Error("Azure DevOps connections require a personal access token");
   }
   let token: string;
+  let githubInstallationContents: "read" | "write" | undefined;
   if (
     !local &&
     connection.provider === "github" &&
@@ -451,9 +452,14 @@ export async function providerForConnection(
     if (!connection.installationId) {
       throw new Error("GitHub App installation identity is missing");
     }
-    token = await githubInstallationToken(connection.installationId, {
-      refresh: options?.refreshInstallation,
-    });
+    const installationToken = await githubInstallationToken(
+      connection.installationId,
+      {
+        refresh: options?.refreshInstallation,
+      },
+    );
+    token = installationToken.token;
+    githubInstallationContents = installationToken.contents;
   } else if (connection.credentialKind === "oauth") {
     token = await oauthToken(db, connection);
   } else if (!local && connection.credentialKind === "pat") {
@@ -469,6 +475,7 @@ export async function providerForConnection(
     token,
     connection.baseUrl ?? undefined,
     connection.credentialKind,
+    githubInstallationContents,
   );
 }
 
