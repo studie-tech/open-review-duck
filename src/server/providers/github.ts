@@ -414,7 +414,9 @@ export class GitHubProvider implements PullRequestProvider {
         `${this.apiUrl}/repositories/${repositoryExternalId}/pulls/${number}`,
         { headers: this.headers },
       ),
-      this.getConnectionIdentity(),
+      // Installation tokens represent an app, not a GitHub user. Avoid the
+      // user-identity lookup that is only needed for personal review actions.
+      this.installation ? undefined : this.getConnectionIdentity(),
     ]);
     const latestByUser = new Map<number, GitHubReview["state"]>();
     for (const review of reviews) {
@@ -424,11 +426,10 @@ export class GitHubProvider implements PullRequestProvider {
         latestByUser.delete(review.user.id);
       }
     }
-    const actorId = Number(identity.externalAccountId);
-    const actorDecision = this.installation
-      ? undefined
-      : latestByUser.get(actorId);
-    const selfReview = pull.user.id === actorId;
+    const actorId = identity ? Number(identity.externalAccountId) : undefined;
+    const actorDecision =
+      actorId === undefined ? undefined : latestByUser.get(actorId);
+    const selfReview = actorId !== undefined && pull.user.id === actorId;
     const unavailableReason = this.installation
       ? "GitHub App installations can synchronize approval state, but a personal approval must be submitted with your GitHub user identity."
       : selfReview
@@ -443,9 +444,7 @@ export class GitHubProvider implements PullRequestProvider {
           : actorDecision === "CHANGES_REQUESTED"
             ? "changes_requested"
             : "none",
-      actorName: this.installation
-        ? "connected GitHub App"
-        : identity.displayName,
+      actorName: identity?.displayName ?? "connected GitHub App",
       approvedCount: [...latestByUser.values()].filter(
         (state) => state === "APPROVED",
       ).length,
