@@ -1113,10 +1113,14 @@ export function ReviewWorkspace({
         },
       );
     },
-    onError: (error) =>
+    onError: (error) => {
       toast.error("Pull request was not merged", {
         description: error.message,
-      }),
+      });
+      void utils.review.providerLifecycle.invalidate({
+        pullRequestId: initialData.pullRequest.id,
+      });
+    },
   });
   const nextReview = useMemo(
     () => findNextReview(reviewQueue.data, initialData.pullRequest.id),

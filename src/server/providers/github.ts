@@ -81,6 +81,7 @@ interface GitHubPull {
   base: { ref: string; sha: string };
   mergeable?: boolean | null;
   mergeable_state?: string;
+  rebaseable?: boolean | null;
 }
 interface GitHubReview {
   id: number;
@@ -509,7 +510,7 @@ export class GitHubProvider implements PullRequestProvider {
       { headers: this.headers },
     );
     const sha = pull.head.sha;
-    const [checkRuns, combined, gate] = await Promise.all([
+    const [checkRuns, combined, gate, mergeMethod] = await Promise.all([
       optionalProviderFetch<GitHubCheckRuns>(
         this.name,
         `${this.apiUrl}/repositories/${repositoryExternalId}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`,
@@ -521,6 +522,7 @@ export class GitHubProvider implements PullRequestProvider {
         { headers: this.headers },
       ),
       this.mergeGateContext(repositoryExternalId, number),
+      this.configuredMergeMethod(repositoryExternalId),
     ]);
     const checks = applyCheckRequiredFlags(
       this.normalizeChecks(
@@ -536,6 +538,8 @@ export class GitHubProvider implements PullRequestProvider {
       draft: pull.draft,
       mergeable: pull.mergeable ?? null,
       mergeableState: pull.mergeable_state,
+      mergeMethod,
+      rebaseable: pull.rebaseable,
       reviewDecision: gate?.reviewDecision,
       checks,
     });
@@ -1327,6 +1331,21 @@ export class GitHubProvider implements PullRequestProvider {
       this.name,
       "No merge method is enabled for this repository",
     );
+  }
+
+  /** Reads the method ReviewDuck would use without making lifecycle sync brittle. */
+  private async configuredMergeMethod(repositoryExternalId: string) {
+    try {
+      return this.mergeMethod(await this.repository(repositoryExternalId));
+    } catch (cause) {
+      if (
+        cause instanceof ProviderError &&
+        cause.message === "No merge method is enabled for this repository"
+      ) {
+        return "none" as const;
+      }
+      return undefined;
+    }
   }
 
   /**

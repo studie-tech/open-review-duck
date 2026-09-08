@@ -98,6 +98,22 @@ describe("githubMergeGate", () => {
     });
   });
 
+  it("blocks the configured rebase method when GitHub cannot replay the commits", () => {
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "clean",
+        mergeMethod: "rebase",
+        rebaseable: false,
+      }),
+    ).toEqual({
+      mergeable: false,
+      canMerge: false,
+      mergeBlockedReason:
+        "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+    });
+  });
+
   it("keeps merge blocked when GitHub reports blocked without required-check data", () => {
     expect(
       githubMergeGate({

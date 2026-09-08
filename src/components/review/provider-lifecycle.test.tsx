@@ -157,6 +157,94 @@ describe("ProviderLifecycle", () => {
       screen.getByText("Required checks or reviews are not satisfied"),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+    expect(
+      screen.getByRole("link", { name: /Open on GitHub/i }),
+    ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
+  });
+
+  it("keeps merge failure feedback visible in the open dialog", async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <ProviderLifecycle
+        state={githubLifecycle}
+        error={undefined}
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+    view.rerender(
+      <ProviderLifecycle
+        state={githubLifecycle}
+        error="GitHub could not merge this pull request"
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    expect(
+      within(screen.getByRole("dialog")).getByRole("alert"),
+    ).toHaveTextContent("GitHub could not merge this pull request");
+  });
+
+  it("updates an open merge dialog with the refreshed conflict blocker", async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <ProviderLifecycle
+        state={githubLifecycle}
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+    view.rerender(
+      <ProviderLifecycle
+        state={{
+          ...githubLifecycle,
+          canMerge: false,
+          mergeable: false,
+          mergeBlockedReason:
+            "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+        }}
+        error="GitHub could not merge this pull request"
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Merge is blocked on GitHub",
+      }),
+    ).toBeVisible();
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "cannot be rebased",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: /Merge/ }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("link", { name: /Open on GitHub/i }),
+    ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
   });
 
   it("shows a completed Azure pull request without a complete button", () => {
