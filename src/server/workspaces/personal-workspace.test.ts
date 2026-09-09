@@ -1,4 +1,4 @@
-import { TRPCError } from "@trpc/server";
+import type { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { db as database } from "~/server/db";
 import { requirePersonalWorkspaceAdministrator } from "./access";
@@ -84,6 +84,9 @@ describe("requirePersonalWorkspaceAdministrator", () => {
     const { db } = createFakeDb({ role: "member", isAdmin: false });
     await expect(
       requirePersonalWorkspaceAdministrator(db, "reviewer-1"),
-    ).rejects.toThrow(TRPCError);
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Workspace administrator access required",
+    } satisfies Partial<TRPCError>);
   });
 });

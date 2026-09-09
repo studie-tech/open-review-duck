@@ -1,10 +1,5 @@
-// Unit modules validate configuration at import time but must not reach a
-// developer database. Port 1 is deliberately unusable for PostgreSQL.
-const testDatabaseUrl =
-  "postgresql://unit-test:unit-test@127.0.0.1:1/reviewduck-unit-test";
-
-process.env.DATABASE_URL ??= testDatabaseUrl;
-process.env.MIGRATION_DATABASE_URL ??= testDatabaseUrl;
+// Database URLs are suite-specific: unit tests force an unusable port-1 URL,
+// and integration tests require a real isolated PostgreSQL 18 database.
 process.env.DEPLOYMENT_MODE ??= "local";
 process.env.NEXT_PUBLIC_DEPLOYMENT_MODE ??= "local";
 process.env.ENCRYPTION_KEY ??=

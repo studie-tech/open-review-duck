@@ -102,6 +102,33 @@ describe("database-backed rate limits", () => {
       db.query.rateLimits.findFirst({ where: eq(rateLimits.key, key) }),
     ).resolves.toBeUndefined();
   });
+
+  it("rejects a concurrent burst that exceeds the window", async () => {
+    const key = `integration:rate-burst:${randomUUID()}`;
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, () => enforceRateLimit(db, key, 2, 60_000)),
+    );
+    const accepted = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+
+    expect(accepted).toHaveLength(2);
+    expect(rejected).toHaveLength(6);
+    expect(
+      rejected.every(
+        (result) =>
+          result.status === "rejected" &&
+          result.reason &&
+          typeof result.reason === "object" &&
+          "code" in result.reason &&
+          result.reason.code === "TOO_MANY_REQUESTS",
+      ),
+    ).toBe(true);
+
+    const stored = await db.query.rateLimits.findFirst({
+      where: eq(rateLimits.key, key),
+    });
+    expect(stored?.count).toBe(8);
+  });
 });
 
 describe("review queue persistence", () => {
