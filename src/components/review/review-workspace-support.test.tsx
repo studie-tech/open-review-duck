@@ -857,6 +857,33 @@ describe("InlineLineActionChooser", () => {
     expect(ask).toHaveBeenCalledOnce();
   });
 
+  it("cancels on Escape without also reaching the workspace", async () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    const user = userEvent.setup();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      render(
+        <InlineLineActionChooser
+          canAsk
+          line={42}
+          path="src/server/queue.ts"
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={cancel}
+          onComment={vi.fn()}
+        />,
+      );
+
+      await user.keyboard("{Escape}");
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+
   it("does not invoke the disabled AI option from its shortcut", () => {
     const ask = vi.fn();
     render(
@@ -963,6 +990,7 @@ describe("InlineCommentComposer", () => {
     await user.keyboard("{Meta>}{Enter}{/Meta}");
     expect(post).not.toHaveBeenCalled();
 
+    screen.getByRole("button", { name: "Cancel" }).focus();
     await user.keyboard("{Escape}");
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -1006,6 +1034,41 @@ describe("InlineAiQuestion", () => {
     ).toBeVisible();
     expect(priorControl).toHaveFocus();
     priorControl.remove();
+  });
+
+  it("closes a restored conversation with Escape after its opener unmounts", () => {
+    const close = vi.fn();
+    const workspaceEscape = vi.fn();
+    const priorControl = document.createElement("button");
+    document.body.append(priorControl);
+    priorControl.focus();
+    render(
+      <InlineAiQuestion
+        autoFocus={false}
+        canAsk
+        initialDraft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onDraftChange={vi.fn()}
+        onClose={close}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+    priorControl.remove();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(close).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
   });
 
   it("shows the focused conversation and submits with Enter", async () => {
@@ -1276,6 +1339,7 @@ describe("InlineAiQuestion", () => {
   });
 
   it("confirms before permanently deleting a completed conversation", async () => {
+    const close = vi.fn();
     const deleteThread = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(
@@ -1297,7 +1361,7 @@ describe("InlineAiQuestion", () => {
         maximumLine={20}
         onAsk={vi.fn()}
         onDraftChange={vi.fn()}
-        onClose={vi.fn()}
+        onClose={close}
         onDeleteThread={deleteThread}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1317,6 +1381,18 @@ describe("InlineAiQuestion", () => {
     expect(
       screen.getByText(/Comments already published to GitHub will remain/),
     ).toBeVisible();
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("dialog", {
+        name: "Delete this AI conversation?",
+      }),
+    ).not.toBeInTheDocument();
+    expect(close).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete AI conversation" }),
+    );
 
     await user.click(
       screen.getByRole("button", { name: /Delete conversation/ }),
