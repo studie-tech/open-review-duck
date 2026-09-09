@@ -85,6 +85,7 @@ const AI_CONVERSATION_VISIBILITY_KEY = "reviewduck:ai-conversation-visibility";
 function useInlineEscapeDismissal<ElementType extends HTMLElement>(
   onDismiss: () => void,
   enabled = true,
+  allowPageFocusFallback = false,
 ) {
   const root = useRef<ElementType>(null);
 
@@ -96,12 +97,13 @@ function useInlineEscapeDismissal<ElementType extends HTMLElement>(
       if (event.key !== "Escape" || event.defaultPrevented) return;
       const element = root.current;
       const activeElement = document.activeElement;
-      if (
-        !element ||
-        (activeElement !== document.body &&
-          activeElement !== null &&
-          !element.contains(activeElement))
-      ) {
+      const focusIsInside = Boolean(
+        element && activeElement && element.contains(activeElement),
+      );
+      const mayHandlePageFocus =
+        allowPageFocusFallback &&
+        (activeElement === document.body || activeElement === null);
+      if (!focusIsInside && !mayHandlePageFocus) {
         return;
       }
       event.preventDefault();
@@ -111,7 +113,7 @@ function useInlineEscapeDismissal<ElementType extends HTMLElement>(
 
     window.addEventListener("keydown", dismissOnEscape, true);
     return () => window.removeEventListener("keydown", dismissOnEscape, true);
-  }, [enabled, onDismiss]);
+  }, [allowPageFocusFallback, enabled, onDismiss]);
 
   return root;
 }
@@ -522,6 +524,7 @@ export function InlineAiQuestion({
   const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(
     onClose,
     !deleteDialogOpen,
+    true,
   );
   const threadInFlight = entries.some(({ status }) =>
     ["queued", "running", "streaming"].includes(status),

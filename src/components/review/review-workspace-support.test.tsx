@@ -884,6 +884,32 @@ describe("InlineLineActionChooser", () => {
     }
   });
 
+  it("lets the workspace handle Escape after focus leaves the chooser", () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    render(
+      <InlineLineActionChooser
+        canAsk
+        line={42}
+        path="src/server/queue.ts"
+        provider="github"
+        onAskAi={vi.fn()}
+        onCancel={cancel}
+        onComment={vi.fn()}
+      />,
+    );
+    (document.activeElement as HTMLElement).blur();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(cancel).not.toHaveBeenCalled();
+      expect(workspaceEscape).toHaveBeenCalledOnce();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+
   it("does not invoke the disabled AI option from its shortcut", () => {
     const ask = vi.fn();
     render(
@@ -993,6 +1019,34 @@ describe("InlineCommentComposer", () => {
     screen.getByRole("button", { name: "Cancel" }).focus();
     await user.keyboard("{Escape}");
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("lets the workspace handle Escape after focus leaves the composer", () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    render(
+      <InlineCommentComposer
+        initialDraft="Guard"
+        line={42}
+        path="src/server/queue.ts"
+        pending={false}
+        posting={false}
+        provider="github"
+        onCancel={cancel}
+        onDraftChange={vi.fn()}
+        onPost={vi.fn()}
+      />,
+    );
+    (document.activeElement as HTMLElement).blur();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(cancel).not.toHaveBeenCalled();
+      expect(workspaceEscape).toHaveBeenCalledOnce();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
   });
 });
 
