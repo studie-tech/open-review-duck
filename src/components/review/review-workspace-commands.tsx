@@ -468,8 +468,8 @@ export function buildReviewWorkspaceCommands(
     },
     {
       id: "comment-on-line",
-      label: "Comment on a line",
-      description: "Choose a line with the keyboard, then write feedback",
+      label: "Respond on a line",
+      description: "Choose a line, then post a review comment or ask AI",
       group: "Review actions",
       icon: <MessageSquareText className="size-4" />,
       shortcut: reviewShortcuts.comment,
@@ -478,8 +478,8 @@ export function buildReviewWorkspaceCommands(
     },
     {
       id: "comment-here",
-      label: "Comment here",
-      description: `Write a ${providerLabel(initialData.pullRequest.provider)} comment on the line in the middle of the view`,
+      label: "Respond here",
+      description: `Post to ${providerLabel(initialData.pullRequest.provider)} or ask AI about the line in the middle of the view`,
       group: "Review actions",
       icon: <MessageSquareText className="size-4" />,
       shortcut: reviewShortcuts.commentHere,

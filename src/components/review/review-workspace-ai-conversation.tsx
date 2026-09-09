@@ -224,6 +224,113 @@ function nearestMeasuredReviewLine(
   return below.line;
 }
 
+/** Lets the reviewer choose where a line-level conversation should live. */
+export function InlineLineActionChooser({
+  canAsk,
+  line,
+  onAskAi,
+  onCancel,
+  onComment,
+  path,
+  provider,
+}: {
+  canAsk: boolean;
+  line: number;
+  onAskAi: () => void;
+  onCancel: () => void;
+  onComment: () => void;
+  path: string;
+  provider: WorkspaceData["pullRequest"]["provider"];
+}) {
+  const providerName = providerLabel(provider);
+  const commentButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    commentButton.current?.focus();
+  }, []);
+  return (
+    <section
+      aria-label={`Choose an action for line ${line}`}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+          return;
+        }
+        if (
+          !(event.metaKey || event.ctrlKey) ||
+          event.altKey ||
+          event.shiftKey
+        ) {
+          return;
+        }
+        if (event.code === "Digit1" || event.key === "1") {
+          event.preventDefault();
+          event.stopPropagation();
+          onComment();
+        } else if (event.code === "Digit2" || event.key === "2") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (canAsk) onAskAi();
+        }
+      }}
+      className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl"
+    >
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div>
+          <p className="text-cloud text-xs font-medium">
+            What would you like to do on line {line}?
+          </p>
+          <p className="text-fog mt-0.5 text-[9px]">
+            Choose where this conversation should live.
+          </p>
+        </div>
+        <span className="text-fog min-w-0 truncate text-right font-mono text-[9px]">
+          {path}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <button
+          ref={commentButton}
+          type="button"
+          onClick={onComment}
+          className="border-line bg-surface/55 hover:border-cyan/35 hover:bg-cyan/[.05] focus-visible:border-cyan/50 rounded-lg border px-3 py-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan"
+        >
+          <span className="flex items-center justify-between gap-2">
+            <span className="text-cloud text-[11px] font-medium">
+              Post review comment
+            </span>
+            <ShortcutHint shortcut={reviewShortcuts.lineActionComment} />
+          </span>
+          <span className="text-fog mt-1 block text-[9px] leading-4">
+            Published immediately to {providerName} and visible there.
+          </span>
+        </button>
+        <button
+          type="button"
+          disabled={!canAsk}
+          onClick={onAskAi}
+          className="border-line bg-surface/55 hover:border-violet/35 hover:bg-violet/[.05] focus-visible:border-violet/50 rounded-lg border px-3 py-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <span className="flex items-center justify-between gap-2">
+            <span className="text-cloud text-[11px] font-medium">Ask AI</span>
+            <ShortcutHint shortcut={reviewShortcuts.lineActionAskAi} />
+          </span>
+          <span className="text-fog mt-1 block text-[9px] leading-4">
+            {canAsk
+              ? `The conversation stays in ReviewDuck and is not published to ${providerName}.`
+              : "Enable AI assistance in settings to use this option."}
+          </span>
+        </button>
+      </div>
+      <div className="mt-2 flex justify-end">
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 /** Renders the line-anchored composer for one inline provider comment. */
 export function InlineCommentComposer({
   initialDraft,

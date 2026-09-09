@@ -24,6 +24,7 @@ import {
   aiConversationVisibility,
   InlineAiQuestion,
   InlineCommentComposer,
+  InlineLineActionChooser,
   rememberAiConversationVisibility,
   withoutDeletedAiQuestions,
   withoutDeletedLiveAiQuestions,
@@ -356,12 +357,14 @@ describe("same-file concept cards", () => {
     ).toHaveClass("opacity-45");
     expect(
       screen.queryByRole("button", {
-        name: "Comment on line 3 of configuration",
+        name: "Open actions for line 3 of configuration",
       }),
     ).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+      screen.getByRole("button", {
+        name: "Open actions for line 5 of main",
+      }),
     );
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
   });
@@ -420,20 +423,24 @@ describe("same-file concept cards", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Comment on line 2 of configuration",
+        name: "Open actions for line 2 of configuration",
       }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+      screen.getByRole("button", {
+        name: "Open actions for line 5 of main",
+      }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Comment on line 3 of configuration",
+        name: "Open actions for line 3 of configuration",
       }),
     ).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+      screen.getByRole("button", {
+        name: "Open actions for line 5 of main",
+      }),
     );
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
   });
@@ -763,6 +770,117 @@ async function flushAnimationFrame() {
       new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   );
 }
+
+describe("InlineLineActionChooser", () => {
+  it("makes the provider boundary explicit before opening either composer", async () => {
+    const comment = vi.fn();
+    const ask = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineLineActionChooser
+        canAsk
+        line={42}
+        path="src/server/queue.ts"
+        provider="github"
+        onAskAi={ask}
+        onCancel={vi.fn()}
+        onComment={comment}
+      />,
+    );
+
+    expect(screen.getByText(/Published immediately to GitHub/)).toBeVisible();
+    expect(screen.getByText(/conversation stays in ReviewDuck/i)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    ).toHaveFocus();
+
+    await user.click(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    );
+    expect(comment).toHaveBeenCalledOnce();
+    expect(ask).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Ask AI/ }));
+    expect(ask).toHaveBeenCalledOnce();
+  });
+
+  it("explains why AI is unavailable without hiding the provider option", () => {
+    render(
+      <InlineLineActionChooser
+        canAsk={false}
+        line={9}
+        path="src/index.ts"
+        provider="gitlab"
+        onAskAi={vi.fn()}
+        onCancel={vi.fn()}
+        onComment={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Ask AI/ })).toBeDisabled();
+    expect(screen.getByText(/Enable AI assistance/)).toBeVisible();
+  });
+
+  it("selects either destination with the modified number shortcuts", () => {
+    const comment = vi.fn();
+    const ask = vi.fn();
+    render(
+      <InlineLineActionChooser
+        canAsk
+        line={42}
+        path="src/server/queue.ts"
+        provider="github"
+        onAskAi={ask}
+        onCancel={vi.fn()}
+        onComment={comment}
+      />,
+    );
+
+    const chooser = screen.getByRole("region", {
+      name: "Choose an action for line 42",
+    });
+    fireEvent.keyDown(chooser, {
+      code: "Digit1",
+      key: "1",
+      metaKey: true,
+    });
+    fireEvent.keyDown(chooser, {
+      code: "Digit2",
+      ctrlKey: true,
+      key: "2",
+    });
+
+    expect(comment).toHaveBeenCalledOnce();
+    expect(ask).toHaveBeenCalledOnce();
+  });
+
+  it("does not invoke the disabled AI option from its shortcut", () => {
+    const ask = vi.fn();
+    render(
+      <InlineLineActionChooser
+        canAsk={false}
+        line={9}
+        path="src/index.ts"
+        provider="gitlab"
+        onAskAi={ask}
+        onCancel={vi.fn()}
+        onComment={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(
+      screen.getByRole("region", {
+        name: "Choose an action for line 9",
+      }),
+      { code: "Digit2", key: "2", metaKey: true },
+    );
+
+    expect(ask).not.toHaveBeenCalled();
+  });
+});
 
 describe("InlineCommentComposer", () => {
   it("keeps typing inside the composer and reports the draft upward", async () => {
@@ -2074,7 +2192,7 @@ describe("SideBySideUnitDiff", () => {
     expect(screen.getByText("Inline details for line 12")).toBeInTheDocument();
 
     const [commentButton] = screen.getAllByRole("button", {
-      name: "Comment on current line 12",
+      name: "Open actions for current line 12",
     });
     if (!commentButton) throw new Error("Expected a current-line action");
     expect(commentButton).toHaveTextContent("const value = 2;");
@@ -2082,7 +2200,7 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenCalledWith(12);
 
     const [unchangedLine] = screen.getAllByRole("button", {
-      name: "Comment on current line 13",
+      name: "Open actions for current line 13",
     });
     if (!unchangedLine) throw new Error("Expected an unchanged-line action");
     expect(unchangedLine).toHaveTextContent("return value;");
@@ -2091,14 +2209,12 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenLastCalledWith(13);
   });
 
-  it("routes row actions to the latest handlers after a re-render", async () => {
+  it("routes row actions to the latest handler after a re-render", async () => {
     const staleSelect = vi.fn();
-    const staleAsk = vi.fn();
     const freshSelect = vi.fn();
-    const freshAsk = vi.fn();
     const user = userEvent.setup();
-    /** Renders the diff with one generation of the two line handlers. */
-    function diff(onSelect: () => void, onAsk: () => void) {
+    /** Renders the diff with one generation of the line handler. */
+    function diff(onSelect: () => void) {
       return (
         <SideBySideUnitDiff
           previousSource={"const value = 1;\nreturn value;"}
@@ -2107,29 +2223,20 @@ describe("SideBySideUnitDiff", () => {
           previousStartLine={10}
           currentStartLine={12}
           onSelectReviewLine={onSelect}
-          onAskReviewLine={onAsk}
         />
       );
     }
-    const { rerender } = render(diff(staleSelect, staleAsk));
+    const { rerender } = render(diff(staleSelect));
 
-    rerender(diff(freshSelect, freshAsk));
+    rerender(diff(freshSelect));
 
     const [commentButton] = screen.getAllByRole("button", {
-      name: "Comment on current line 12",
+      name: "Open actions for current line 12",
     });
     if (!commentButton) throw new Error("Expected a current-line action");
     await user.click(commentButton);
     expect(staleSelect).not.toHaveBeenCalled();
     expect(freshSelect).toHaveBeenCalledWith(12);
-
-    const [askButton] = screen.getAllByRole("button", {
-      name: "Ask AI about line 12",
-    });
-    if (!askButton) throw new Error("Expected an ask action");
-    await user.click(askButton);
-    expect(staleAsk).not.toHaveBeenCalled();
-    expect(freshAsk).toHaveBeenCalledWith(12);
   });
 
   it("renders a file-mode unit label before the line it opens", () => {
@@ -2199,7 +2306,7 @@ describe("SideBySideUnitDiff", () => {
     expect(screen.queryByText("Base")).not.toBeInTheDocument();
 
     const addedLine = screen.getByRole("button", {
-      name: "Comment on current line 18",
+      name: "Open actions for current line 18",
     });
     expect(addedLine).toHaveTextContent("const added = true;");
     expect(addedLine).toHaveClass("select-text");
@@ -2232,13 +2339,17 @@ describe("SideBySideUnitDiff", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Comment on current line 18" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 18",
+      }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
     );
     expect(
-      screen.getByRole("button", { name: "Comment on current line 19" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 19",
+      }),
     ).not.toHaveClass("bg-amber-400/[.09]");
   });
 
@@ -2258,25 +2369,33 @@ describe("SideBySideUnitDiff", () => {
     // The row is laid out for one width at a time, so the highlight has to
     // survive the swap or the finding is invisible on a narrow viewport.
     expect(
-      screen.getByRole("button", { name: "Comment on current line 12" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 12",
+      }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
     );
     expect(
-      screen.getByRole("button", { name: "Comment on current line 13" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 13",
+      }),
     ).not.toHaveClass("bg-amber-400/[.09]");
 
     act(() => setViewportWide(false));
 
     expect(
-      screen.getByRole("button", { name: "Comment on current line 12" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 12",
+      }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
     );
     expect(
-      screen.getByRole("button", { name: "Comment on current line 13" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 13",
+      }),
     ).not.toHaveClass("bg-amber-400/[.09]");
   });
 
@@ -2302,7 +2421,9 @@ describe("SideBySideUnitDiff", () => {
     expect(container.querySelectorAll("[data-review-scope]")).toHaveLength(2);
     expect(container.querySelectorAll(splitColumns)).toHaveLength(0);
     expect(
-      screen.getAllByRole("button", { name: "Comment on current line 12" }),
+      screen.getAllByRole("button", {
+        name: "Open actions for current line 12",
+      }),
     ).toHaveLength(1);
   });
 
@@ -2326,7 +2447,7 @@ describe("SideBySideUnitDiff", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Comment on deleted line 8" }),
+      screen.getByRole("button", { name: "Open actions for deleted line 8" }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
@@ -2477,7 +2598,7 @@ describe("SideBySideUnitDiff", () => {
     });
     expect(diff).toHaveTextContent("const removed = true;");
     const deletedLineActions = screen.getAllByRole("button", {
-      name: "Comment on deleted line 8",
+      name: "Open actions for deleted line 8",
     });
     const deletedLine = deletedLineActions[0];
     if (!deletedLine) throw new Error("Expected a deleted-line action");
@@ -2513,23 +2634,31 @@ describe("SideBySideUnitDiff", () => {
     );
 
     expect(
-      screen.getAllByRole("button", { name: "Comment on current line 2" }),
+      screen.getAllByRole("button", {
+        name: "Open actions for current line 2",
+      }),
     ).toHaveLength(1);
     expect(
-      screen.getAllByRole("button", { name: "Comment on current line 5" }),
+      screen.getAllByRole("button", {
+        name: "Open actions for current line 5",
+      }),
     ).toHaveLength(1);
     expect(
-      screen.queryByRole("button", { name: "Comment on current line 3" }),
+      screen.queryByRole("button", {
+        name: "Open actions for current line 3",
+      }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Comment on current line 4" }),
+      screen.queryByRole("button", {
+        name: "Open actions for current line 4",
+      }),
     ).not.toBeInTheDocument();
     expect(
       container.querySelectorAll('[data-review-scope="context"]'),
     ).toHaveLength(2);
 
     const currentLine = screen.getAllByRole("button", {
-      name: "Comment on current line 5",
+      name: "Open actions for current line 5",
     })[0];
     if (!currentLine) throw new Error("Expected a current-line action");
     await user.click(currentLine);
@@ -2792,7 +2921,7 @@ describe("SideBySideUnitDiff", () => {
     ).not.toBeInTheDocument();
 
     const deletedLine = screen.getAllByRole("button", {
-      name: "Comment on deleted line 31",
+      name: "Open actions for deleted line 31",
     })[0];
     if (!deletedLine) throw new Error("Expected a deleted-line action");
     await user.click(deletedLine);
