@@ -1,26 +1,32 @@
+import { TRPCError } from "@trpc/server";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  order: [] as string[],
-  isLocalDeployment: vi.fn(() => false),
-  enforceRateLimit: vi.fn(async () => undefined),
-  assertSafeRemoteUrl: vi.fn(async () => undefined),
-  safeRemoteFetch: vi.fn(),
-  cancelWorkflowRun: vi.fn(async () => undefined),
-  cancelDeepReviewTree: vi.fn(async () => {
-    mocks.order.push("cancelDeepReviewTree");
-  }),
-  settleAiJobQuota: vi.fn(async () => {
-    mocks.order.push("settleAiJobQuota");
-  }),
-  personalWorkspace: vi.fn(async () => ({
+const mocks = vi.hoisted(() => {
+  const workspace = {
     id: "workspace-1",
     aiMode: "on_demand" as const,
     aiReviewEnabled: true,
-  })),
-}));
+  };
+  return {
+    workspace,
+    order: [] as string[],
+    isLocalDeployment: vi.fn(() => false),
+    enforceRateLimit: vi.fn(async () => undefined),
+    assertSafeRemoteUrl: vi.fn(async () => undefined),
+    safeRemoteFetch: vi.fn(),
+    cancelWorkflowRun: vi.fn(async () => undefined),
+    cancelDeepReviewTree: vi.fn(async () => {
+      mocks.order.push("cancelDeepReviewTree");
+    }),
+    settleAiJobQuota: vi.fn(async () => {
+      mocks.order.push("settleAiJobQuota");
+    }),
+    personalWorkspace: vi.fn(async () => workspace),
+    requireAdmin: vi.fn(async () => workspace),
+  };
+});
 
 vi.mock("~/server/deployment", () => ({
   isLocalDeployment: mocks.isLocalDeployment,
@@ -43,7 +49,7 @@ vi.mock("~/server/workspaces/service", () => ({
   ensurePersonalWorkspace: mocks.personalWorkspace,
 }));
 vi.mock("~/server/workspaces/access", () => ({
-  requirePersonalWorkspaceAdministrator: mocks.personalWorkspace,
+  requirePersonalWorkspaceAdministrator: mocks.requireAdmin,
 }));
 vi.mock("~/server/ai/plan", () => ({
   PAID_AI_FEATURE: "paid_ai_models",
@@ -145,11 +151,8 @@ beforeEach(() => {
   mocks.order.length = 0;
   vi.clearAllMocks();
   mocks.isLocalDeployment.mockReturnValue(false);
-  mocks.personalWorkspace.mockResolvedValue({
-    id: "workspace-1",
-    aiMode: "on_demand",
-    aiReviewEnabled: true,
-  });
+  mocks.personalWorkspace.mockResolvedValue(mocks.workspace);
+  mocks.requireAdmin.mockResolvedValue(mocks.workspace);
 });
 
 describe("ai.configuration deep review availability", () => {
@@ -273,8 +276,39 @@ describe("ai.testConfiguration provider credentials", () => {
         }),
         false,
       );
+      expect(mocks.requireAdmin).toHaveBeenCalledOnce();
     },
   );
+
+  it("refuses a member who cannot administer the workspace", async () => {
+    mocks.isLocalDeployment.mockReturnValue(true);
+    mocks.requireAdmin.mockRejectedValueOnce(
+      new TRPCError({
+        code: "FORBIDDEN",
+        message: "Workspace administrator access required",
+      }),
+    );
+    const { db } = createFakeDb();
+
+    await expect(
+      caller(db).testConfiguration({
+        provider: "openrouter",
+        model: "example/model",
+        apiKey: "provider-key",
+        baseUrl: "https://openrouter.ai/api/v1",
+        useManagedModels: false,
+        mode: "on_demand",
+        reviewPullRequests: false,
+        clearApiKey: false,
+        clearHeaders: false,
+        headers: {},
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Workspace administrator access required",
+    });
+    expect(mocks.safeRemoteFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("ai.start deep review refusal", () => {

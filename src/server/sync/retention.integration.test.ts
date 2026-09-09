@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { asc, eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { asc, eq, inArray } from "drizzle-orm";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   providerConnections,
   pullRequests,
@@ -84,6 +84,18 @@ beforeAll(async () => {
       pullRequest(fixture.agedPullRequestId, 2),
       pullRequest(fixture.countedPullRequestId, 3),
     ]);
+});
+
+beforeEach(async () => {
+  await db
+    .delete(reviewSnapshots)
+    .where(
+      inArray(reviewSnapshots.pullRequestId, [
+        fixture.retainedPullRequestId,
+        fixture.agedPullRequestId,
+        fixture.countedPullRequestId,
+      ]),
+    );
   await db
     .insert(reviewSnapshots)
     .values([

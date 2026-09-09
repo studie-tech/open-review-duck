@@ -115,6 +115,18 @@ describe("GitHub App lifecycle handling", () => {
   });
 
   it("reactivates authorization without silently restoring automatic intake", async () => {
+    await db
+      .update(providerConnections)
+      .set({ credentialStatus: "suspended" })
+      .where(eq(providerConnections.id, fixture.connectionId));
+    await db
+      .update(repositories)
+      .set({
+        reviewIntakeMode: "manual",
+        intakeLastError: GITHUB_INSTALLATION_UNAVAILABLE,
+      })
+      .where(eq(repositories.connectionId, fixture.connectionId));
+
     await expect(
       applyGitHubLifecycleEvent(db, "installation", {
         action: "unsuspend",
@@ -163,6 +175,45 @@ describe("GitHub App lifecycle handling", () => {
     ).resolves.toMatchObject({
       reviewIntakeMode: "all",
       intakeLastError: null,
+    });
+  });
+
+  it("revokes a deleted installation and fails automatic intake closed", async () => {
+    await db
+      .update(providerConnections)
+      .set({ credentialStatus: "active" })
+      .where(eq(providerConnections.id, fixture.connectionId));
+    await db
+      .update(repositories)
+      .set({ reviewIntakeMode: "all", intakeLastError: null })
+      .where(eq(repositories.connectionId, fixture.connectionId));
+
+    await expect(
+      applyGitHubLifecycleEvent(db, "installation", {
+        action: "deleted",
+        installation: { id: fixture.installationId },
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      db.query.providerConnections.findFirst({
+        where: eq(providerConnections.id, fixture.connectionId),
+      }),
+    ).resolves.toMatchObject({ credentialStatus: "revoked" });
+    await expect(
+      db.query.repositories.findFirst({
+        where: eq(repositories.id, fixture.repositoryId),
+      }),
+    ).resolves.toMatchObject({
+      reviewIntakeMode: "manual",
+      intakeLastError: GITHUB_INSTALLATION_UNAVAILABLE,
+    });
+    await expect(
+      db.query.repositories.findFirst({
+        where: eq(repositories.id, fixture.otherRepositoryId),
+      }),
+    ).resolves.toMatchObject({
+      reviewIntakeMode: "manual",
+      intakeLastError: GITHUB_INSTALLATION_UNAVAILABLE,
     });
   });
 });

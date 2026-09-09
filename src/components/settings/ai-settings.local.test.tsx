@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 describe("LocalAiSettings", () => {
-  it("uses the full-width SaaS layout with preferences and provider cards", () => {
+  it("renders the local layout with preferences and provider cards", () => {
     render(<LocalAiSettings initialConfiguration={localConfiguration()} />);
 
     expect(

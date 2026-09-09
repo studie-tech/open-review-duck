@@ -11,6 +11,7 @@ export default defineConfig({
     environment: "node",
     setupFiles: [
       "./src/test/setup-environment.ts",
+      "./src/test/force-unit-database.ts",
       "./src/test/setup-tree-sitter.ts",
     ],
     exclude: [
