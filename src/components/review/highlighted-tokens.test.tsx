@@ -1,14 +1,21 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SyntaxToken } from "~/lib/highlight-tokens";
+import { symbolPeekAttributes } from "~/lib/symbol-peek";
 import { HighlightedSourceLines } from "./highlighted-source-lines";
 import { HighlightedTokens } from "./highlighted-tokens";
 import { UnitImportContext } from "./review-workspace-dialogs";
-import { SymbolPeekCard } from "./symbol-peek";
+import { SymbolPeekCard, useSymbolPeek } from "./symbol-peek";
 
 vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
   const actual =
@@ -55,6 +62,7 @@ vi.mock("~/lib/tree-sitter-import-navigation", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 /** Creates a classified token with offsets that remain stable on re-render. */
@@ -137,6 +145,28 @@ describe("HighlightedTokens", () => {
 });
 
 describe("highlighted source surfaces", () => {
+  it("opens a symbol lookup after the hover dwell", async () => {
+    vi.useFakeTimers();
+    /** Exposes the delayed symbol-peek state for the hover interaction. */
+    function PeekHarness() {
+      const { peeked, peekHandlers } = useSymbolPeek(true);
+      return (
+        <div {...peekHandlers}>
+          <span {...symbolPeekAttributes("ensureFilesIndexed", 89)}>
+            ensureFilesIndexed
+          </span>
+          {peeked ? <output>{`${peeked.symbol}:${peeked.line}`}</output> : null}
+        </div>
+      );
+    }
+    render(<PeekHarness />);
+
+    fireEvent.mouseOver(screen.getByText("ensureFilesIndexed"));
+    await act(async () => vi.advanceTimersByTimeAsync(350));
+
+    expect(screen.getByText("ensureFilesIndexed:89")).toBeInTheDocument();
+  });
+
   it("keeps source-row selection on the gutter while sharing token output", () => {
     const onSelectLine = vi.fn();
     render(

@@ -204,6 +204,7 @@ import {
   aiConversationVisibility,
   InlineAiQuestion,
   InlineCommentComposer,
+  InlineLineActionChooser,
   rememberAiConversationVisibility,
   withoutDeletedAiQuestions,
 } from "./review-workspace-ai-conversation";
@@ -227,7 +228,6 @@ import {
   UnitImportContext,
 } from "./review-workspace-dialogs";
 import {
-  AskAiLineButton,
   ReviewPathUnit,
   ReviewScopeMarker,
   SideBySideUnitDiff,
@@ -501,6 +501,9 @@ export function ReviewWorkspace({
   // textarea even when the composer already stands open on that line.
   const [draftRevision, setDraftRevision] = useState(0);
   const [selectedLine, setSelectedLine] = useState<number>();
+  const [lineActionMode, setLineActionMode] = useState<"choose" | "provider">(
+    "choose",
+  );
   const [pendingCommentLine, setPendingCommentLine] = useState<{
     line: number;
     unitId: string;
@@ -512,10 +515,6 @@ export function ReviewWorkspace({
   }>();
   const [focusedProviderThreadId, setFocusedProviderThreadId] =
     useState<string>();
-  const [pendingAiQuestionLine, setPendingAiQuestionLine] = useState<{
-    line: number;
-    unitId: string;
-  }>();
   const [keyboardLine, setKeyboardLine] = useState<number>();
   const [contextBefore, setContextBefore] = useState(0);
   const [contextAfter, setContextAfter] = useState(0);
@@ -1530,10 +1529,11 @@ export function ReviewWorkspace({
     importPreview?.source ?? "",
     importPreview?.language ?? "text",
   );
-  /** Opens the provider comment composer for one reviewable diff line. */
+  /** Opens a line action, or a prepared provider draft when one was supplied. */
   const openInlineComment = useCallback((line: number, draft = "") => {
     setKeyboardLine(undefined);
     setSelectedLine(line);
+    setLineActionMode(draft ? "provider" : "choose");
     commentDraft.current = draft;
     setDraftRevision((revision) => revision + 1);
     window.requestAnimationFrame(() =>
@@ -1798,19 +1798,6 @@ export function ReviewWorkspace({
       openInlineComment,
     ],
   );
-  /** Opens AI assistance through the atomic owner represented in the card. */
-  function askAboutCardLine(line: number) {
-    const owner = reviewCardMemberForLine(activeFileCardMembers, line);
-    if (!owner) return;
-    if (owner.id === activeUnitId) {
-      openAiQuestionAt(line);
-      return;
-    }
-    const index = unitIndexById.get(owner.id) ?? -1;
-    if (index < 0) return;
-    setPendingAiQuestionLine({ unitId: owner.id, line });
-    selectUnit(index);
-  }
   // File cards are re-rendered only when their members or source move, so
   // unrelated workspace state never re-reconciles hundreds of source lines.
   const conceptFileCardPreviews = useMemo(
@@ -3518,33 +3505,51 @@ export function ReviewWorkspace({
             <p className="text-mist mt-1 text-xs leading-5">{comment.body}</p>
           </div>
         ))}
-        {selectedLine === lineNumber && (
-          <InlineCommentComposer
-            key={`${lineNumber}-${draftRevision}`}
-            initialDraft={commentDraft.current}
-            line={lineNumber}
-            path={activeUnit.path}
-            pending={publishComment.isPending}
-            posting={
-              publishComment.isPending && publishComment.variables?.body != null
-            }
-            provider={initialData.pullRequest.provider}
-            onCancel={() => {
-              setSelectedLine(undefined);
-              commentDraft.current = "";
-            }}
-            onDraftChange={(value) => {
-              commentDraft.current = value;
-            }}
-            onPost={(body) =>
-              publishComment.mutate({
-                unitId: activeUnit.id,
-                line: lineNumber,
-                body,
-              })
-            }
-          />
-        )}
+        {selectedLine === lineNumber &&
+          (lineActionMode === "choose" ? (
+            <InlineLineActionChooser
+              canAsk={canAskAi}
+              line={lineNumber}
+              path={activeUnit.path}
+              provider={initialData.pullRequest.provider}
+              onAskAi={() => openAiQuestionAt(lineNumber)}
+              onCancel={() => {
+                setSelectedLine(undefined);
+                commentDraft.current = "";
+              }}
+              onComment={() => {
+                setLineActionMode("provider");
+                setDraftRevision((revision) => revision + 1);
+              }}
+            />
+          ) : (
+            <InlineCommentComposer
+              key={`${lineNumber}-${draftRevision}`}
+              initialDraft={commentDraft.current}
+              line={lineNumber}
+              path={activeUnit.path}
+              pending={publishComment.isPending}
+              posting={
+                publishComment.isPending &&
+                publishComment.variables?.body != null
+              }
+              provider={initialData.pullRequest.provider}
+              onCancel={() => {
+                setSelectedLine(undefined);
+                commentDraft.current = "";
+              }}
+              onDraftChange={(value) => {
+                commentDraft.current = value;
+              }}
+              onPost={(body) =>
+                publishComment.mutate({
+                  unitId: activeUnit.id,
+                  line: lineNumber,
+                  body,
+                })
+              }
+            />
+          ))}
       </>
     );
   }
@@ -3826,19 +3831,6 @@ export function ReviewWorkspace({
     setPendingCommentLine(undefined);
     openInlineComment(pendingCommentLine.line);
   }, [activeUnitId, openInlineComment, pendingCommentLine]);
-  // The two state dependencies cause a fresh render after selecting the line's
-  // owning unit, so this intentionally calls that render's question opener.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the opener is render-local and the pending selection owns this effect
-  useEffect(() => {
-    if (
-      !pendingAiQuestionLine ||
-      pendingAiQuestionLine.unitId !== activeUnitId
-    ) {
-      return;
-    }
-    setPendingAiQuestionLine(undefined);
-    openAiQuestionAt(pendingAiQuestionLine.line);
-  }, [activeUnitId, pendingAiQuestionLine]);
   useEffect(() => {
     if (!importPreview) return;
     importPreviewFocusRef.current?.scrollIntoView({ block: "center" });
@@ -6448,7 +6440,7 @@ export function ReviewWorkspace({
                 >
                   <span className="text-cloud flex items-center gap-2 font-medium">
                     <MessageSquareText className="text-cyan size-3.5" />
-                    Choose a line to comment on
+                    Choose a line to respond to
                   </span>
                   <span className="flex items-center gap-1.5">
                     <ShortcutHint
@@ -6654,7 +6646,6 @@ export function ReviewWorkspace({
                       expanded={fullFileVisible}
                       isReviewLineCollapsed={isFileUnitLineCollapsed}
                       onSelectReviewLine={commentOnCardLine}
-                      onAskReviewLine={askAboutCardLine}
                       renderBeforeLine={renderFileUnitMarkers}
                       renderLineDetails={renderReviewLineDetails}
                     />
@@ -6856,29 +6847,15 @@ export function ReviewWorkspace({
                                         "bg-addition/20 text-addition",
                                     )}
                                   >
-                                    <AskAiLineButton
-                                      line={lineNumber}
-                                      onAsk={askAboutCardLine}
-                                      visible={aiQuestionLine === lineNumber}
-                                    />
                                     <button
                                       type="button"
-                                      aria-label={`Comment on line ${lineNumber}`}
+                                      aria-label={`Open actions for line ${lineNumber}`}
                                       aria-pressed={selectedLine === lineNumber}
                                       onClick={() =>
                                         commentOnCardLine(lineNumber)
                                       }
-                                      className="hover:text-violet flex items-center gap-1 transition"
+                                      className="hover:text-cyan transition"
                                     >
-                                      <MessageSquareText
-                                        className={cn(
-                                          "size-3 transition-opacity",
-                                          selectedLine === lineNumber ||
-                                            keyboardLine === lineNumber
-                                            ? "text-cyan opacity-100"
-                                            : "opacity-0 group-hover:opacity-100",
-                                        )}
-                                      />
                                       <span>{lineNumber}</span>
                                     </button>
                                   </span>
@@ -7635,9 +7612,27 @@ export function ReviewWorkspace({
         </aside>
 
         {peekedSymbol &&
+          peekedDefinition.isFetching &&
+          !peekedDefinition.data && (
+            <SymbolPeekMessage
+              message={`Finding the definition of ${peekedSymbol.symbol}…`}
+              peeked={peekedSymbol}
+            />
+          )}
+        {peekedSymbol && peekedDefinition.isError && (
+          <SymbolPeekMessage
+            message="This definition could not be loaded. Try hovering the symbol again."
+            peeked={peekedSymbol}
+          />
+        )}
+        {peekedSymbol &&
           peekedDefinition.data?.kind === "unresolved" &&
           (() => {
-            const message = symbolPeekNotice(peekedDefinition.data.reason);
+            const message =
+              symbolPeekNotice(peekedDefinition.data.reason) ??
+              (peekedImport && peekedDefinition.data.reason === "not_found"
+                ? `No definition was found for the imported symbol ${peekedSymbol.symbol}.`
+                : undefined);
             return message ? (
               <SymbolPeekMessage message={message} peeked={peekedSymbol} />
             ) : null;

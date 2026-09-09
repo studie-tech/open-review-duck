@@ -27,6 +27,8 @@ export const reviewShortcuts = {
   reviewPullRequest: [{ key: "a" }],
   comment: [{ key: "l" }],
   commentHere: [{ key: "Enter" }],
+  lineActionComment: [{ key: "1", mod: true }],
+  lineActionAskAi: [{ key: "2", mod: true }],
   undoSignOff: [{ key: "u", mod: true }],
   context: [{ key: "c" }],
   signOff: [{ key: "s" }],

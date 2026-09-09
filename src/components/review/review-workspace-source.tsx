@@ -5,7 +5,6 @@ import {
   ChevronDown,
   Columns2,
   FileCode2,
-  MessageSquareText,
   RefreshCw,
 } from "lucide-react";
 import {
@@ -180,11 +179,10 @@ function ReviewConceptFileCardFallbackMember({
               {owner && onCommentLine ? (
                 <button
                   type="button"
-                  aria-label={`Comment on line ${lineNumber} of ${member.name}`}
+                  aria-label={`Open actions for line ${lineNumber} of ${member.name}`}
                   onClick={() => onCommentLine(member.id, lineNumber)}
-                  className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                  className="hover:text-cyan text-fog flex items-start justify-end pr-3 text-right transition select-none"
                 >
-                  <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
                   <span>{lineNumber}</span>
                 </button>
               ) : (
@@ -271,11 +269,10 @@ function ReviewConceptFileCardSource({
                 {owner && onCommentLine ? (
                   <button
                     type="button"
-                    aria-label={`Comment on line ${lineNumber} of ${owner.name}`}
+                    aria-label={`Open actions for line ${lineNumber} of ${owner.name}`}
                     onClick={() => onCommentLine(owner.id, lineNumber)}
-                    className="hover:text-violet text-fog flex items-start justify-end gap-1.5 pr-3 text-right transition select-none"
+                    className="hover:text-cyan text-fog flex items-start justify-end pr-3 text-right transition select-none"
                   >
-                    <MessageSquareText className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
                     <span>{lineNumber}</span>
                   </button>
                 ) : (
