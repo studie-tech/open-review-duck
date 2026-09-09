@@ -81,6 +81,41 @@ export const AI_QUICK_QUESTIONS = [
 
 const AI_CONVERSATION_VISIBILITY_KEY = "reviewduck:ai-conversation-visibility";
 
+/** Lets Escape dismiss an active inline interaction from any of its controls. */
+function useInlineEscapeDismissal<ElementType extends HTMLElement>(
+  onDismiss: () => void,
+  enabled = true,
+) {
+  const root = useRef<ElementType>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    /** Gives the active inline surface first refusal on an unmodified Escape. */
+    function dismissOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const element = root.current;
+      const activeElement = document.activeElement;
+      if (
+        !element ||
+        (activeElement !== document.body &&
+          activeElement !== null &&
+          !element.contains(activeElement))
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss();
+    }
+
+    window.addEventListener("keydown", dismissOnEscape, true);
+    return () => window.removeEventListener("keydown", dismissOnEscape, true);
+  }, [enabled, onDismiss]);
+
+  return root;
+}
+
 interface AiConversationVisibility {
   line: number;
   threadId?: string;
@@ -244,18 +279,15 @@ export function InlineLineActionChooser({
 }) {
   const providerName = providerLabel(provider);
   const commentButton = useRef<HTMLButtonElement>(null);
+  const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(onCancel);
   useEffect(() => {
     commentButton.current?.focus();
   }, []);
   return (
     <section
+      ref={escapeBoundary}
       aria-label={`Choose an action for line ${line}`}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onCancel();
-          return;
-        }
         if (
           !(event.metaKey || event.ctrlKey) ||
           event.altKey ||
@@ -325,6 +357,7 @@ export function InlineLineActionChooser({
       <div className="mt-2 flex justify-end">
         <Button size="sm" variant="ghost" onClick={onCancel}>
           Cancel
+          <ShortcutHint shortcut={[{ key: "Escape" }]} />
         </Button>
       </div>
     </section>
@@ -354,6 +387,7 @@ export function InlineCommentComposer({
   provider: WorkspaceData["pullRequest"]["provider"];
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
+  const escapeBoundary = useInlineEscapeDismissal<HTMLDivElement>(onCancel);
   // The composer keeps the comment text so a keystroke never re-renders the
   // workspace tree; the parent only stores it so an unmount it did not ask
   // for, such as a wait that failed, keeps what the reviewer already typed.
@@ -364,7 +398,10 @@ export function InlineCommentComposer({
   }, []);
 
   return (
-    <div className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl">
+    <div
+      ref={escapeBoundary}
+      className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl"
+    >
       <div className="flex min-w-0 items-center justify-between gap-3">
         <p className="text-cloud flex shrink-0 items-center gap-2 text-xs font-medium">
           <MessageSquareText className="text-cyan size-3.5" />
@@ -382,10 +419,7 @@ export function InlineCommentComposer({
           onDraftChange(event.target.value);
         }}
         onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            onCancel();
-          } else if (
+          if (
             event.key === "Enter" &&
             (event.metaKey || event.ctrlKey) &&
             draft.trim() &&
@@ -485,6 +519,10 @@ export function InlineAiQuestion({
   const [publishingProposal, setPublishingProposal] = useState<string>();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingThread, setDeletingThread] = useState(false);
+  const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(
+    onClose,
+    !deleteDialogOpen,
+  );
   const threadInFlight = entries.some(({ status }) =>
     ["queued", "running", "streaming"].includes(status),
   );
@@ -692,6 +730,7 @@ export function InlineAiQuestion({
 
   return (
     <article
+      ref={escapeBoundary}
       id="inline-ai-question"
       className="border-violet/25 bg-panel relative mx-4 my-3 ml-[82px] overflow-hidden rounded-xl border font-sans shadow-[0_14px_40px_var(--app-shadow)]"
     >
@@ -939,10 +978,7 @@ export function InlineAiQuestion({
             onDraftChange(event.target.value);
           }}
           onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              onClose();
-            } else if (event.key === "Enter" && !event.shiftKey) {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }
@@ -977,9 +1013,12 @@ export function InlineAiQuestion({
           </div>
         )}
         <div className="mt-2 flex items-center justify-between gap-3">
-          <p className="text-fog text-[9px]">
-            ↑ / ↓ move focus · The answer uses this unit and the full PR
-            context.
+          <p className="text-fog flex flex-wrap items-center gap-x-1 text-[9px]">
+            <span>↑ / ↓ move focus</span>
+            <span>·</span>
+            <ShortcutHint shortcut={[{ key: "Escape" }]} />
+            <span>closes</span>
+            <span>· The answer uses this unit and the full PR context.</span>
           </p>
           <Button
             type="submit"
