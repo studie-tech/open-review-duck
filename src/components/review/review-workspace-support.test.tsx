@@ -1110,6 +1110,7 @@ describe("InlineLineActionSurface", () => {
   it("opens the provider composer without asking the parent to remount", async () => {
     const user = userEvent.setup();
     const parentRender = vi.fn();
+    /** Counts parent renders so the line-action composer must stay local. */
     function Harness() {
       parentRender();
       return (
