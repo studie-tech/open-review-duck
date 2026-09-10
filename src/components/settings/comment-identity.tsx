@@ -5,10 +5,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
 import { modalSurfaceClassName } from "~/components/ui/modal-surface";
-import {
-  type HostedAuthorizationProvider,
-  startHostedProviderAuthorization,
-} from "~/lib/hosted-provider-authorization";
+import { startHostedProviderAuthorization } from "~/lib/hosted-provider-authorization";
+import { supportsManagedReauthorization } from "~/lib/provider-credential-recovery";
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
@@ -102,6 +100,11 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
         {connections.map((connection) => {
           const pending =
             authorizationPending || disconnect.isPending || save.isPending;
+          const canReconnect = supportsManagedReauthorization(
+            localMode,
+            connection.credentialKind,
+            connection.provider,
+          );
           return (
             <div
               key={connection.connectionId}
@@ -141,7 +144,7 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
                 </Button>
               ) : (
                 <div className="flex flex-wrap gap-2">
-                  {connection.usesOAuth &&
+                  {canReconnect &&
                     (connection.provider === "github" ||
                       connection.provider === "gitlab") && (
                       <Button
@@ -150,7 +153,7 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
                         onClick={() => {
                           setAuthorizationPending(true);
                           void startHostedProviderAuthorization(
-                            connection.provider as HostedAuthorizationProvider,
+                            connection.provider,
                             "/settings/providers",
                             undefined,
                             {
@@ -174,12 +177,12 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
                       </Button>
                     )}
                   <Button
-                    variant={connection.usesOAuth ? "secondary" : "primary"}
+                    variant={canReconnect ? "secondary" : "primary"}
                     size="sm"
                     disabled={pending}
                     onClick={() => setPatConnectionId(connection.connectionId)}
                   >
-                    {connection.usesOAuth
+                    {canReconnect
                       ? "Use a personal token"
                       : "Connect with a token"}
                   </Button>

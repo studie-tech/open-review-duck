@@ -21,7 +21,6 @@ const { disconnectOnSuccess, saveMutate, identityData } = vi.hoisted(() => ({
         provider: "github" as const,
         displayName: "Acme GitHub",
         credentialKind: "github_app",
-        usesOAuth: false,
         identity: null,
       },
     ],

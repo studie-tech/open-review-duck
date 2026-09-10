@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 import { aiReviewFindingLocations } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { ProviderError } from "~/server/providers/types";
-import {
-  assertCommentIsTheReviewersToChange,
-  publishedCommentAuthor,
-} from "~/server/review/comments";
+import { assertCommentIsTheReviewersToChange } from "~/server/review/comments";
 import {
   deepReviewFindingForPublication,
   deepReviewRunPayload,
@@ -636,25 +633,6 @@ describe("who may change a provider comment", () => {
     } as unknown as typeof database;
   }
 
-  it("names the reviewer a published comment belongs to", async () => {
-    await expect(
-      publishedCommentAuthor(
-        createOwnershipDb([{ userId: colleague }]),
-        unitId,
-        thread,
-        "reply-9",
-      ),
-    ).resolves.toBe(colleague);
-  });
-
-  it("names nobody for a comment ReviewDuck never published", async () => {
-    // A bot's comment, or one written in the provider's own interface, is as
-    // open to change as the provider itself would leave it.
-    await expect(
-      publishedCommentAuthor(createOwnershipDb([]), unitId, thread, "reply-9"),
-    ).resolves.toBeUndefined();
-  });
-
   it("refuses one reviewer's change to another's comment", async () => {
     await expect(
       assertCommentIsTheReviewersToChange(
@@ -676,10 +654,12 @@ describe("who may change a provider comment", () => {
         thread,
         "thread-1",
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ userId: reviewer });
   });
 
   it("allows a comment nobody here published", async () => {
+    // A bot's comment, or one written in the provider's own interface, is as
+    // open to change as the provider itself would leave it.
     await expect(
       assertCommentIsTheReviewersToChange(
         createOwnershipDb([]),
