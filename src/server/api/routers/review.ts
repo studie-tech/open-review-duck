@@ -2062,15 +2062,9 @@ export const reviewRouter = createTRPCRouter({
             message: "That comment is no longer part of this conversation",
           });
         }
-        await assertCommentIsTheReviewersToChange(
+        const ledger = await assertCommentIsTheReviewersToChange(
           ctx.db,
           ctx.auth.userId,
-          input.unitId,
-          thread,
-          input.commentExternalId,
-        );
-        const ledger = await publishedCommentLedger(
-          ctx.db,
           input.unitId,
           thread,
           input.commentExternalId,
@@ -2146,15 +2140,9 @@ export const reviewRouter = createTRPCRouter({
             message: "That comment is no longer part of this conversation",
           });
         }
-        await assertCommentIsTheReviewersToChange(
+        const ledger = await assertCommentIsTheReviewersToChange(
           ctx.db,
           ctx.auth.userId,
-          input.unitId,
-          thread,
-          input.commentExternalId,
-        );
-        const ledger = await publishedCommentLedger(
-          ctx.db,
           input.unitId,
           thread,
           input.commentExternalId,
@@ -2200,28 +2188,26 @@ export const reviewRouter = createTRPCRouter({
         throw providerThreadError(scope.connection.provider, cause);
       });
       // Deleting a conversation takes every comment in it, so each one has to
-      // be the reviewer's to take.
+      // be the reviewer's to take before any write starts.
+      const authored = [];
       for (const comment of thread.comments) {
-        await assertCommentIsTheReviewersToChange(
-          ctx.db,
-          ctx.auth.userId,
-          input.unitId,
-          thread,
-          comment.externalId,
-        );
-      }
-      // Replies first: no provider lets the comment a conversation hangs
-      // from leave while the conversation still holds answers to it.
-      const ordered = [...thread.comments].reverse();
-      const removed: string[] = [];
-      try {
-        for (const comment of ordered) {
-          const ledger = await publishedCommentLedger(
+        authored.push({
+          comment,
+          ledger: await assertCommentIsTheReviewersToChange(
             ctx.db,
+            ctx.auth.userId,
             input.unitId,
             thread,
             comment.externalId,
-          );
+          ),
+        });
+      }
+      // Replies first: no provider lets the comment a conversation hangs
+      // from leave while the conversation still holds answers to it.
+      const ordered = [...authored].reverse();
+      const removed: string[] = [];
+      try {
+        for (const { comment, ledger } of ordered) {
           const { provider } = await providerForReviewerWrite(
             ctx.db,
             scope.connection,

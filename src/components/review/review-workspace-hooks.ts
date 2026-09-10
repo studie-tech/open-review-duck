@@ -107,19 +107,6 @@ export function pendingProviderThreadFromComment(
   };
 }
 
-/**
- * Returns whether a published finding should yield to the provider thread.
- *
- * The posted GitHub, GitLab, or Azure conversation is the comment. Keeping
- * the AI card beside it repeats the same text with a Published badge.
- */
-export function publishedFindingYieldsToThread(
-  published: boolean,
-  visibleThreadCount: number,
-) {
-  return published && visibleThreadCount > 0;
-}
-
 /** Adds a published comment to a unit discussion without dropping the rest. */
 export function withPublishedDiscussionComment(
   current: UnitDiscussion | undefined,

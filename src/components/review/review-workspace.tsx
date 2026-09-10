@@ -245,7 +245,6 @@ import {
 } from "./review-workspace-diff";
 import {
   aiJobActive,
-  publishedFindingYieldsToThread,
   reviewCardPinTarget,
   useReviewExitPrefetch,
   useReviewFileAdvance,
@@ -3167,10 +3166,8 @@ export function ReviewWorkspace({
     // provider thread there. The detached card would repeat that comment.
     if (
       commentLine !== undefined &&
-      publishedFindingYieldsToThread(
-        findingPublished(activeFinding),
-        groupedEntries(providerThreadsByLine, commentLine).length,
-      ) &&
+      findingPublished(activeFinding) &&
+      groupedEntries(providerThreadsByLine, commentLine).length > 0 &&
       (sideBySideVisible || isPrimaryReviewLine(commentLine))
     ) {
       return null;
@@ -3595,7 +3592,7 @@ export function ReviewWorkspace({
           const published = publishedAiProposals.has(
             `${finding.aiJobId}:${finding.index}`,
           );
-          if (publishedFindingYieldsToThread(published, lineThreads.length)) {
+          if (published && lineThreads.length > 0) {
             return null;
           }
           const publishingThisFinding =
@@ -3655,10 +3652,7 @@ export function ReviewWorkspace({
           .filter(
             (finding) =>
               finding.id !== activeFindingId &&
-              !publishedFindingYieldsToThread(
-                findingPublished(finding),
-                lineThreads.length,
-              ),
+              !(findingPublished(finding) && lineThreads.length > 0),
           )
           .map((finding) => (
             <DeepReviewFindingChip
@@ -3673,10 +3667,7 @@ export function ReviewWorkspace({
           activeFindingTarget.line === lineNumber &&
           units[activeFindingTarget.unitIndex]?.id === activeUnit.id &&
           !findingRevealExhausted &&
-          !publishedFindingYieldsToThread(
-            findingPublished(activeFinding),
-            lineThreads.length,
-          ) &&
+          !(findingPublished(activeFinding) && lineThreads.length > 0) &&
           renderInlineFindingCard(activeFinding, lineNumber)}
         {renderProviderConversations(lineThreads)}
         {lineComments.map((comment) => (

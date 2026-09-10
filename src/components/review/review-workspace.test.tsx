@@ -22,7 +22,6 @@ import {
   mergePendingProviderThreads,
   pendingProviderThreadFromComment,
   providerThreadsForVisibleUnits,
-  publishedFindingYieldsToThread,
   reshapeProviderThreads,
   restoreProviderThread,
   reviewCardPinTarget,
@@ -348,12 +347,6 @@ describe("reshapeProviderThreads", () => {
       providerThreadsForVisibleUnits(threads, ["unit-1", "unit-2"]),
     ).toHaveLength(2);
     expect(providerThreadsForVisibleUnits(threads, [])).toEqual([]);
-  });
-
-  it("yields a published finding to the provider thread on the same line", () => {
-    expect(publishedFindingYieldsToThread(true, 1)).toBe(true);
-    expect(publishedFindingYieldsToThread(true, 0)).toBe(false);
-    expect(publishedFindingYieldsToThread(false, 1)).toBe(false);
   });
 
   it("hides a just-published conversation that belongs to another file card", () => {

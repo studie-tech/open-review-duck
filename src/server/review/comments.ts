@@ -165,22 +165,12 @@ export async function publishedCommentLedger(
   return owned;
 }
 
-/** Names the reviewer ReviewDuck published one provider comment for. */
-export async function publishedCommentAuthor(
-  db: typeof database,
-  unitId: string,
-  thread: { comments: { externalId: string }[]; externalId: string },
-  commentExternalId: string,
-) {
-  return (await publishedCommentLedger(db, unitId, thread, commentExternalId))
-    ?.userId;
-}
-
 /**
  * Refuses one reviewer's change to a comment ReviewDuck published for another.
  *
  * Editing puts words in their mouth and deleting takes their feedback away,
- * and the provider records neither as anyone but the shared connection.
+ * and the provider records neither as anyone but the shared connection. The
+ * ledger is returned so the write can reuse the identity it already loaded.
  */
 export async function assertCommentIsTheReviewersToChange(
   db: typeof database,
@@ -189,19 +179,20 @@ export async function assertCommentIsTheReviewersToChange(
   thread: { comments: { externalId: string }[]; externalId: string },
   commentExternalId: string,
 ) {
-  const author = await publishedCommentAuthor(
+  const ledger = await publishedCommentLedger(
     db,
     unitId,
     thread,
     commentExternalId,
   );
-  if (author && author !== userId) {
+  if (ledger?.userId && ledger.userId !== userId) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message:
         "Another reviewer published this comment through ReviewDuck. Only they can change it.",
     });
   }
+  return ledger;
 }
 
 /**
