@@ -192,8 +192,14 @@ describe("workspace intake scheduling", () => {
       reconcileWorkspaceIntake(db, fixture.workspaceId),
       reconcileWorkspaceIntake(db, fixture.workspaceId),
     ]);
+    while (providerWork.length < 15) {
+      await reconcileWorkspaceIntake(db, fixture.workspaceId);
+    }
 
-    expect(providerWork.length).toBeGreaterThanOrEqual(10);
-    expect(new Set(providerWork).size).toBe(providerWork.length);
+    expect(new Set(providerWork)).toEqual(
+      new Set(
+        Array.from({ length: 15 }, (_value, index) => repositoryId(index)),
+      ),
+    );
   });
 });

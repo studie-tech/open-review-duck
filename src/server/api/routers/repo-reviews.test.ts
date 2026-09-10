@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -25,6 +27,7 @@ import type { db as database } from "~/server/db";
 import { repoReviewsRouter } from "./repo-reviews";
 
 const createCaller = createCallerFactory(repoReviewsRouter);
+const dialect = new PgDialect();
 const monitorId = "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10";
 const pullRequestId = "8c2b6f41-2a55-4f0e-9f7d-1b3c5a6e7d80";
 const jobId = "7a4c3e21-9d8b-4f60-a2c1-5e7b9d3f6a40";
@@ -174,8 +177,12 @@ describe("repoReviews.startRun errors", () => {
 
 describe("repoReviews.deleteReport", () => {
   it("deletes an authorized finished parent report", async () => {
+    let capturedWhere: unknown;
     const returning = vi.fn(async () => [{ id: jobId }]);
-    const where = vi.fn(() => ({ returning }));
+    const where = vi.fn((predicate: unknown) => {
+      capturedWhere = predicate;
+      return { returning };
+    });
     const deleteRow = vi.fn(() => ({ where }));
     const db = Object.assign(createFakeDb(), { delete: deleteRow });
 
@@ -184,6 +191,20 @@ describe("repoReviews.deleteReport", () => {
     ).resolves.toEqual({ deletedId: jobId });
     expect(deleteRow).toHaveBeenCalledTimes(1);
     expect(returning).toHaveBeenCalledTimes(1);
+    const query = dialect.sqlToQuery(capturedWhere as SQL);
+    expect(query.sql).toContain('"parentJobId" is null');
+    expect(query.sql).toContain('"reviewScope"');
+    expect(query.sql).toMatch(/"status" in/);
+    expect(query.params).toEqual(
+      expect.arrayContaining([
+        jobId,
+        "review",
+        "repository_snapshot",
+        "completed",
+        "failed",
+        "cancelled",
+      ]),
+    );
   });
 
   it("does not present an active or missing report as deleted", async () => {
