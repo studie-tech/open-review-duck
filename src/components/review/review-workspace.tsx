@@ -3130,7 +3130,7 @@ export function ReviewWorkspace({
         : target.kind === "unit"
           ? "Finding with no line in this file"
           : "Finding whose line this unit does not render";
-    const commentLine =
+    const candidateCommentLine =
       target.kind === "line"
         ? target.line
         : activeFinding.startLine !== null &&
@@ -3138,6 +3138,14 @@ export function ReviewWorkspace({
             activeFinding.startLine <= activeUnit.endLine
           ? activeFinding.startLine
           : undefined;
+    // A line inside the unit's bounds can still sit in a gap the provider
+    // will not take a comment on. Posting from here has to use the same
+    // ranges the publish mutation enforces.
+    const commentLine =
+      candidateCommentLine !== undefined &&
+      isPrimaryReviewLine(candidateCommentLine)
+        ? candidateCommentLine
+        : undefined;
     // A published finding whose line still renders details already shows the
     // provider thread there. The detached card would repeat that comment.
     if (
