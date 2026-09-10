@@ -39,14 +39,9 @@ export function UnimportedPullRequestList({
                   aria-hidden="true"
                   className="size-1.5 rounded-full bg-coral"
                 />
-                <div className="min-w-0 flex-1">
-                  <h3 className="block text-[11px] font-semibold tracking-[.08em] uppercase">
-                    {pullRequest.repositoryOwner}/{pullRequest.repositoryName}
-                  </h3>
-                  <span className="text-fog mt-0.5 hidden text-[10px] sm:block">
-                    Choose which changes to prepare for review
-                  </span>
-                </div>
+                <h3 className="min-w-0 flex-1 text-[11px] font-semibold tracking-[.08em] uppercase">
+                  {pullRequest.repositoryOwner}/{pullRequest.repositoryName}
+                </h3>
                 <span className="text-fog text-[10px] tabular-nums">
                   {repositoryCount}
                 </span>
