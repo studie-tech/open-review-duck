@@ -18,6 +18,7 @@ const configuration = {
   useManagedModels: false,
   mode: "on_demand" as const,
   reviewPullRequests: true,
+  autoPublishFindings: false,
 };
 
 describe("AI configuration validation", () => {
