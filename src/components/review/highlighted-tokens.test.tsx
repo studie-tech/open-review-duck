@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,12 +30,17 @@ vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
           ? [{ className: "tok-test", from: 0, text, to: text.length }]
           : [],
       })),
+    withClientSyntaxTree: async (
+      _source: string,
+      _language: string,
+      callback: (root: unknown) => unknown,
+    ) => callback({}),
   };
 });
 
-vi.mock("~/lib/tree-sitter-import-navigation", () => ({
-  useImportStatements: (source: string) => {
-    if (!source.startsWith("import")) return [];
+vi.mock("~/lib/tree-sitter-imports", () => ({
+  importStatementsFromTree: (source: string) => {
+    if (!source.includes("import")) return [];
     const local = "helper";
     const from = source.indexOf(local);
     return [
@@ -235,9 +241,11 @@ describe("highlighted source surfaces", () => {
       />,
     );
 
-    const importButton = screen.getByRole("button", {
-      name: "Open helper from ./helper",
-    });
+    const importButton = await waitFor(() =>
+      screen.getByRole("button", {
+        name: "Open helper from ./helper",
+      }),
+    );
     expect(importButton).toHaveClass("tok-test", "text-cyan");
     await userEvent.click(importButton);
     expect(onFollow).toHaveBeenCalledWith(

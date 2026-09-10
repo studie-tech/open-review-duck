@@ -211,11 +211,11 @@ export const aiRouter = createTRPCRouter({
           error: "A local provider URL is required",
         };
       }
+      const workspace = await requirePersonalWorkspaceAdministrator(
+        ctx.db,
+        ctx.auth.userId,
+      );
       try {
-        const workspace = await requirePersonalWorkspaceAdministrator(
-          ctx.db,
-          ctx.auth.userId,
-        );
         const existing = await ctx.db.query.localAiConfigurations.findFirst({
           where: eq(localAiConfigurations.workspaceId, workspace.id),
         });

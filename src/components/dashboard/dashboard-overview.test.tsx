@@ -113,7 +113,7 @@ describe("DashboardOverview", () => {
     expect(screen.getByRole("main").className).not.toMatch(/max-w-/);
   });
 
-  it("ages the hydrated queries from the server read instead of the mount", () => {
+  it("passes hydrated query options from the server read time", () => {
     const fetchedAt = Date.parse("2026-08-21T12:20:00Z");
 
     render(

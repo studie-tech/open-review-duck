@@ -306,9 +306,9 @@ describe("ai.testConfiguration provider credentials", () => {
         clearHeaders: false,
         headers: {},
       }),
-    ).resolves.toEqual({
-      ok: false,
-      error: "Workspace administrator access required",
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Workspace administrator access required",
     });
     expect(mocks.safeRemoteFetch).not.toHaveBeenCalled();
   });

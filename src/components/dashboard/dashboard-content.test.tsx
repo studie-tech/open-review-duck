@@ -947,7 +947,7 @@ describe("PullRequestsContent", () => {
     ).toBeVisible();
   });
 
-  it("ages the hydrated inbox from the server read instead of the mount", () => {
+  it("passes hydrated inbox query options from the server read time", () => {
     const fetchedAt = Date.parse("2026-08-21T12:20:00Z");
 
     render(

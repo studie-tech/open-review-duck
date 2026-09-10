@@ -150,6 +150,45 @@ describe("durable AI state", () => {
     );
   });
 
+  it("persists a completed tool output on first success", async () => {
+    const { db, toolCalls } = createFakeDb();
+    const execute = vi.fn(async () => ({ paths: ["src/a.ts"] }));
+
+    await expect(
+      executeDurableToolCall(db, job, 4, {
+        callId: "call-3",
+        name: "list_files",
+        arguments: { glob: "src/**" },
+        execute,
+        sanitizeError: () => "safe",
+      }),
+    ).resolves.toEqual({ paths: ["src/a.ts"] });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      status: "completed",
+      toolCallId: "call-3",
+    });
+    expect(toolCalls[0]?.encryptedOutput).toBe('sealed:{"paths":["src/a.ts"]}');
+    expect(vault.seal).toHaveBeenCalledWith(
+      {
+        workspaceId: job.workspaceId,
+        recordId: toolCalls[0]?.id,
+        provider: "ai-tool-input",
+      },
+      JSON.stringify({ glob: "src/**" }),
+    );
+    expect(vault.seal).toHaveBeenCalledWith(
+      {
+        workspaceId: job.workspaceId,
+        recordId: toolCalls[0]?.id,
+        provider: "ai-tool-output",
+      },
+      JSON.stringify({ paths: ["src/a.ts"] }),
+    );
+  });
+
   it("persists only the caller's sanitized tool failure", async () => {
     const { db, toolCalls } = createFakeDb();
     const cause = new Error("Bearer secret-provider-token");
