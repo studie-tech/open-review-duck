@@ -69,10 +69,16 @@ function normalizePullRequestLabel(
     name?: string | null;
   };
   if (candidate.active === false) return undefined;
-  const name = candidate.name?.trim();
+  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
   if (!name) return undefined;
-  const color = normalizeLabelColor(candidate.color);
-  const description = candidate.description?.trim();
+  const color =
+    typeof candidate.color === "string"
+      ? normalizeLabelColor(candidate.color)
+      : undefined;
+  const description =
+    typeof candidate.description === "string"
+      ? candidate.description.trim()
+      : undefined;
   return {
     name,
     ...(color ? { color } : {}),

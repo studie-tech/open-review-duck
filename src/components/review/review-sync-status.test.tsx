@@ -88,6 +88,13 @@ describe("review sync status", () => {
         remoteHeadSha: "next",
       }),
     ).toBe(true);
+    expect(
+      shouldAutoSyncReviewRevision({
+        busy: false,
+        current: false,
+        remoteHeadSha: "next",
+      }),
+    ).toBe(true);
   });
 
   it("renders an icon-only control that reports ready and busy states", async () => {

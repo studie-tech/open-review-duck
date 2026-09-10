@@ -583,7 +583,7 @@ export function ProviderConversation({
                         size="sm"
                         variant="ghost"
                         disabled={!replyBody.trim() || replying || managing}
-                        aria-label="Post reply and keep this conversation resolved"
+                        aria-label="Keep resolved: post the reply without reopening this conversation"
                         onClick={() => void submitReply(false)}
                       >
                         Keep resolved
@@ -595,7 +595,7 @@ export function ProviderConversation({
                       disabled={!replyBody.trim() || replying || managing}
                       aria-label={
                         resolved
-                          ? "Post reply and reopen this conversation"
+                          ? "Post and reopen this conversation"
                           : undefined
                       }
                       onClick={() => void submitReply(resolved)}
