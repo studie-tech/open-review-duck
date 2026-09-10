@@ -342,6 +342,7 @@ describe("same-file concept cards", () => {
         members={[units[0], units[2]] as never}
         index={0}
         count={2}
+        diffVisible={false}
         fileSource={[
           "// setup",
           "const configuration = true;",
@@ -377,6 +378,95 @@ describe("same-file concept cards", () => {
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
   });
 
+  it("shows the same side-by-side diff the selected card uses", async () => {
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              ...units[0],
+              changeType: "modified",
+              previousSource: "const configuration = false;",
+              source: "const configuration = true;",
+            },
+          ] as never
+        }
+        index={0}
+        count={2}
+        previousFileSource={["// setup", "const configuration = false;"].join(
+          "\n",
+        )}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Side-by-side code diff" });
+    expect(diff).toHaveTextContent("const configuration = false;");
+    expect(diff).toHaveTextContent("const configuration = true;");
+    expect(
+      screen.queryByRole("button", {
+        name: "Open actions for line 2 of configuration",
+      }),
+    ).not.toBeInTheDocument();
+
+    const [commentButton] = screen.getAllByRole("button", {
+      name: "Open actions for current line 2",
+    });
+    if (!commentButton) throw new Error("Expected a current-line action");
+    await userEvent.click(commentButton);
+    expect(onCommentLine).toHaveBeenCalledWith("configuration", 2);
+  });
+
+  it("marks a commented neighbor line with the poster's avatar", async () => {
+    const onOpenLineComment = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              ...units[0],
+              changeType: "modified",
+              previousSource: "const configuration = false;",
+              source: "const configuration = true;",
+            },
+          ] as never
+        }
+        index={0}
+        count={2}
+        previousFileSource={["// setup", "const configuration = false;"].join(
+          "\n",
+        )}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+        onOpenLineComment={onOpenLineComment}
+        commentThreads={[
+          {
+            comments: [
+              {
+                author: "ada",
+                authorAvatarUrl: "https://avatars.example/ada.png",
+              },
+            ],
+            externalId: "thread-ada",
+            line: 2,
+            side: "right",
+            status: "resolved",
+          },
+        ]}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Open resolved comment by ada",
+      }),
+    );
+    expect(onOpenLineComment).toHaveBeenCalledWith("thread-ada");
+  });
+
   it("mounts only the leading rows of a file card longer than a window", () => {
     vi.stubGlobal(
       "IntersectionObserver",
@@ -403,6 +493,7 @@ describe("same-file concept cards", () => {
         members={[member] as never}
         index={0}
         count={1}
+        diffVisible={false}
         fileSource={Array.from(
           { length: 600 },
           (_, index) => `const line${index + 1} = true;`,
@@ -2582,6 +2673,50 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenLastCalledWith(13);
   });
 
+  it("opens a line conversation from the poster avatar without selecting the line", async () => {
+    const selectLine = vi.fn();
+    const openComment = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={selectLine}
+        rightLineCommentMarkers={
+          new Map([
+            [
+              12,
+              [
+                {
+                  author: "ada",
+                  authorAvatarUrl: "https://avatars.example/ada.png",
+                  resolved: true,
+                  threadExternalId: "thread-ada",
+                },
+              ],
+            ],
+          ])
+        }
+        onOpenLineComment={openComment}
+      />,
+    );
+
+    expect(screen.getByRole("presentation")).toHaveAttribute(
+      "src",
+      "https://avatars.example/ada.png",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open resolved comment by ada",
+      }),
+    );
+    expect(openComment).toHaveBeenCalledWith("thread-ada");
+    expect(selectLine).not.toHaveBeenCalled();
+  });
+
   it("routes row actions to the latest handler after a re-render", async () => {
     const staleSelect = vi.fn();
     const freshSelect = vi.fn();
@@ -2785,7 +2920,7 @@ describe("SideBySideUnitDiff", () => {
     );
 
     const splitColumns =
-      '[class*="grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)]"]';
+      '[class*="grid-cols-[56px_minmax(0,1fr)_56px_minmax(0,1fr)]"]';
     expect(container.querySelectorAll("[data-review-scope]")).toHaveLength(2);
     expect(container.querySelectorAll(splitColumns)).toHaveLength(2);
 

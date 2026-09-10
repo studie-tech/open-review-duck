@@ -35,6 +35,10 @@ import {
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 import { HighlightedTokens } from "./highlighted-tokens";
+import {
+  type ReviewLineCommentMarker,
+  ReviewLineCommentMarkers,
+} from "./review-line-comment-markers";
 import { CONTEXT_PAGE_LINES } from "./review-workspace-constants";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -239,6 +243,39 @@ interface SideBySideUnitDiffProps {
   isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
   renderLineDetails?: (line: number) => ReactNode;
+  className?: string;
+  leftLineCommentMarkers?: ReadonlyMap<
+    number,
+    readonly ReviewLineCommentMarker[]
+  >;
+  rightLineCommentMarkers?: ReadonlyMap<
+    number,
+    readonly ReviewLineCommentMarker[]
+  >;
+  onOpenLineComment?: (threadExternalId: string) => void;
+}
+
+/** Pins conversation avatars to the left of a line number without nesting buttons. */
+function LineCommentGutter({
+  className,
+  markers,
+  onOpen,
+}: {
+  className?: string;
+  markers?: readonly ReviewLineCommentMarker[];
+  onOpen: (threadExternalId: string) => void;
+}) {
+  if (!markers?.length) return null;
+  return (
+    <div
+      className={cn(
+        "pointer-events-auto absolute top-1/2 z-10 -translate-y-1/2",
+        className,
+      )}
+    >
+      <ReviewLineCommentMarkers markers={markers} onOpen={onOpen} />
+    </div>
+  );
 }
 
 /** Separates the reviewed unit from surrounding source context. */
@@ -291,6 +328,8 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   keyboardFocused,
   line,
   lineNumber,
+  markers,
+  onOpenLineComment,
   onSelect,
   reviewLine,
   selected,
@@ -300,11 +339,18 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
     anchored: boolean;
     line: HighlightedLine | undefined;
     lineNumber: number | undefined;
+    markers?: readonly ReviewLineCommentMarker[];
+    onOpenLineComment: (threadExternalId: string) => void;
     reviewLine: number | undefined;
   }) {
   const LineContainer = reviewLine === undefined ? "div" : "button";
   return (
     <div className="group relative">
+      <LineCommentGutter
+        className="left-1"
+        markers={markers}
+        onOpen={onOpenLineComment}
+      />
       <LineContainer
         {...(reviewLine !== undefined
           ? {
@@ -373,13 +419,16 @@ function serverSideBySideWidth() {
 const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   currentLine,
   currentLineNumber,
+  currentMarkers,
   currentReviewLine,
   isFinding,
   keyboardFocused,
   kind,
+  onOpenLineComment,
   onSelect,
   previousLine,
   previousLineNumber,
+  previousMarkers,
   previousReviewLine,
   selected,
   sideBySide,
@@ -387,10 +436,13 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   DiffRowActionProps & {
     currentLine: HighlightedLine | undefined;
     currentLineNumber: number | undefined;
+    currentMarkers?: readonly ReviewLineCommentMarker[];
     currentReviewLine: number | undefined;
     kind: SideBySideDiffRow["kind"];
+    onOpenLineComment: (threadExternalId: string) => void;
     previousLine: HighlightedLine | undefined;
     previousLineNumber: number | undefined;
+    previousMarkers?: readonly ReviewLineCommentMarker[];
     previousReviewLine: number | undefined;
     sideBySide: boolean;
   }) {
@@ -402,18 +454,28 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
       <div
         data-review-scope={reviewLine === undefined ? "context" : "unit"}
         className={cn(
-          "group relative grid grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)]",
+          "group relative grid grid-cols-[56px_minmax(0,1fr)_56px_minmax(0,1fr)]",
           reviewLine === undefined &&
             "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
         )}
       >
+        <LineCommentGutter
+          className="left-0.5"
+          markers={previousMarkers}
+          onOpen={onOpenLineComment}
+        />
+        <LineCommentGutter
+          className="left-1/2"
+          markers={currentMarkers}
+          onOpen={onOpenLineComment}
+        />
         {previousReviewLine !== undefined ? (
           <button
             type="button"
             aria-label={`Open actions for deleted line ${previousReviewLine}`}
             onClick={(event) => onSelect(event, previousReviewLine)}
             className={cn(
-              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               isFinding && FINDING_LINE_HIGHLIGHT,
               selected && "bg-violet/[.055]",
               keyboardFocused &&
@@ -451,7 +513,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         ) : currentReviewLine === undefined ? (
           <div
             className={cn(
-              "col-span-2 grid min-w-0 grid-cols-[42px_minmax(0,1fr)] text-fog",
+              "col-span-2 grid min-w-0 grid-cols-[56px_minmax(0,1fr)] text-fog",
               (kind === "added" || kind === "modified") && "bg-addition/15",
             )}
           >
@@ -477,7 +539,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             aria-label={`Open actions for current line ${currentReviewLine}`}
             onClick={(event) => onSelect(event, currentReviewLine)}
             className={cn(
-              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               (kind === "added" || kind === "modified") &&
                 "bg-addition/15 hover:bg-addition/22",
               isFinding && FINDING_LINE_HIGHLIGHT,
@@ -518,13 +580,23 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
       {kind === "unchanged" ? (
         <div
           className={cn(
-            "grid grid-cols-[42px_42px_minmax(0,1fr)]",
+            "relative grid grid-cols-[56px_56px_minmax(0,1fr)]",
             isFinding && FINDING_LINE_HIGHLIGHT,
             selected && "bg-violet/[.055]",
             keyboardFocused &&
               "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
           )}
         >
+          <LineCommentGutter
+            className="left-0.5"
+            markers={previousMarkers}
+            onOpen={onOpenLineComment}
+          />
+          <LineCommentGutter
+            className="left-[56px]"
+            markers={currentMarkers}
+            onOpen={onOpenLineComment}
+          />
           <span className="text-fog border-r border-line/60 px-2 text-right select-none">
             {previousLineNumber}
           </span>
@@ -533,7 +605,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
               type="button"
               aria-label={`Open actions for current line ${currentReviewLine}`}
               onClick={(event) => onSelect(event, currentReviewLine)}
-              className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
+              className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
             >
               <span className="flex items-center justify-end border-r border-line/60 px-2 transition select-none group-hover:text-cyan">
                 {currentLineNumber}
@@ -563,28 +635,40 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         <>
           {previousLine &&
             (previousReviewLine !== undefined ? (
-              <button
-                type="button"
-                aria-label={`Open actions for deleted line ${previousReviewLine}`}
-                onClick={(event) => onSelect(event, previousReviewLine)}
-                className={cn(
-                  "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                  isFinding && FINDING_LINE_HIGHLIGHT,
-                  selected && "bg-violet/[.055]",
-                  keyboardFocused &&
-                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                )}
-              >
-                <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
-                  {previousLineNumber}
-                </span>
-                <span className="flex items-center justify-center border-x border-line/60 px-2 text-red-700 transition select-none group-hover:text-cyan dark:text-red-200">
-                  −
-                </span>
-                <HighlightedDiffLine line={previousLine} />
-              </button>
+              <div className="relative">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={previousMarkers}
+                  onOpen={onOpenLineComment}
+                />
+                <button
+                  type="button"
+                  aria-label={`Open actions for deleted line ${previousReviewLine}`}
+                  onClick={(event) => onSelect(event, previousReviewLine)}
+                  className={cn(
+                    "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    isFinding && FINDING_LINE_HIGHLIGHT,
+                    selected && "bg-violet/[.055]",
+                    keyboardFocused &&
+                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                  )}
+                >
+                  <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
+                    {previousLineNumber}
+                  </span>
+                  <span className="flex items-center justify-center border-x border-line/60 px-2 text-red-700 transition select-none group-hover:text-cyan dark:text-red-200">
+                    −
+                  </span>
+                  <HighlightedDiffLine line={previousLine} />
+                </button>
+              </div>
             ) : (
-              <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15">
+              <div className="relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={previousMarkers}
+                  onOpen={onOpenLineComment}
+                />
                 <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
                   {previousLineNumber}
                 </span>
@@ -596,33 +680,45 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             ))}
           {currentLine &&
             (currentReviewLine !== undefined ? (
-              <button
-                type="button"
-                aria-label={`Open actions for current line ${currentReviewLine}`}
-                onClick={(event) => onSelect(event, currentReviewLine)}
-                className={cn(
-                  "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                  isFinding && FINDING_LINE_HIGHLIGHT,
-                  selected && "bg-violet/[.055]",
-                  keyboardFocused &&
-                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                )}
-              >
-                <span className="px-2 text-right text-addition select-none">
-                  {currentLineNumber}
-                </span>
-                <span className="flex items-center justify-center border-x border-line/60 px-2 text-addition transition select-none group-hover:text-cyan">
-                  +
-                </span>
-                <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
-                  <HighlightedDiffTokens
-                    line={currentLine}
-                    lineNumber={currentLineNumber}
-                  />
-                </span>
-              </button>
+              <div className="relative">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={currentMarkers}
+                  onOpen={onOpenLineComment}
+                />
+                <button
+                  type="button"
+                  aria-label={`Open actions for current line ${currentReviewLine}`}
+                  onClick={(event) => onSelect(event, currentReviewLine)}
+                  className={cn(
+                    "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    isFinding && FINDING_LINE_HIGHLIGHT,
+                    selected && "bg-violet/[.055]",
+                    keyboardFocused &&
+                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                  )}
+                >
+                  <span className="px-2 text-right text-addition select-none">
+                    {currentLineNumber}
+                  </span>
+                  <span className="flex items-center justify-center border-x border-line/60 px-2 text-addition transition select-none group-hover:text-cyan">
+                    +
+                  </span>
+                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
+                    <HighlightedDiffTokens
+                      line={currentLine}
+                      lineNumber={currentLineNumber}
+                    />
+                  </span>
+                </button>
+              </div>
             ) : (
-              <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15">
+              <div className="relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={currentMarkers}
+                  onOpen={onOpenLineComment}
+                />
                 <span className="px-2 text-right text-addition select-none">
                   {currentLineNumber}
                 </span>
@@ -668,6 +764,10 @@ export const SideBySideUnitDiff = forwardRef<
     isReviewLineCollapsed,
     renderBeforeLine,
     renderLineDetails,
+    className,
+    leftLineCommentMarkers,
+    rightLineCommentMarkers,
+    onOpenLineComment,
   },
   ref,
 ) {
@@ -677,6 +777,13 @@ export const SideBySideUnitDiff = forwardRef<
   useEffect(() => {
     lineHandlerRef.current = onSelectReviewLine;
   }, [onSelectReviewLine]);
+  const commentOpenRef = useRef(onOpenLineComment);
+  useEffect(() => {
+    commentOpenRef.current = onOpenLineComment;
+  }, [onOpenLineComment]);
+  const openLineComment = useCallback((threadExternalId: string) => {
+    commentOpenRef.current?.(threadExternalId);
+  }, []);
   // One subscription for the whole diff: the rows below read the breakpoint
   // from it instead of each mounting a wide and a narrow copy of itself.
   const sideBySide = useSyncExternalStore(
@@ -1022,7 +1129,10 @@ export const SideBySideUnitDiff = forwardRef<
     return (
       <section
         aria-label="Added code diff"
-        className="overflow-hidden rounded-b-xl border border-line"
+        className={cn(
+          "overflow-hidden rounded-b-xl border border-line",
+          className,
+        )}
       >
         {visibleRowStart > 0 || leadingCollapsedRemaining > 0 ? (
           <DiffEdgeRevealButton
@@ -1102,6 +1212,12 @@ export const SideBySideUnitDiff = forwardRef<
                     )}
                     line={line}
                     lineNumber={lineNumber}
+                    markers={
+                      lineNumber === undefined
+                        ? undefined
+                        : rightLineCommentMarkers?.get(lineNumber)
+                    }
+                    onOpenLineComment={openLineComment}
                     onSelect={selectReviewLine}
                     reviewLine={reviewLine}
                     selected={highlightsReviewLine(selectedLine, reviewLine)}
@@ -1132,7 +1248,10 @@ export const SideBySideUnitDiff = forwardRef<
   return (
     <section
       aria-label="Side-by-side code diff"
-      className="overflow-hidden rounded-b-xl border border-line"
+      className={cn(
+        "overflow-hidden rounded-b-xl border border-line",
+        className,
+      )}
     >
       <div className="text-fog sticky top-0 z-10 hidden grid-cols-2 border-b border-line bg-panel/95 font-sans text-[9px] font-semibold tracking-[.12em] uppercase backdrop-blur sm:grid">
         <div className="border-r border-line px-4 py-2">Base</div>
@@ -1237,6 +1356,11 @@ export const SideBySideUnitDiff = forwardRef<
                 <SplitUnitDiffRow
                   currentLine={currentLine}
                   currentLineNumber={currentLineNumber}
+                  currentMarkers={
+                    currentLineNumber === undefined
+                      ? undefined
+                      : rightLineCommentMarkers?.get(currentLineNumber)
+                  }
                   currentReviewLine={
                     currentIsReviewLine ? reviewLine : undefined
                   }
@@ -1246,9 +1370,15 @@ export const SideBySideUnitDiff = forwardRef<
                     reviewLine,
                   )}
                   kind={row.kind}
+                  onOpenLineComment={openLineComment}
                   onSelect={selectReviewLine}
                   previousLine={previousLine}
                   previousLineNumber={previousLineNumber}
+                  previousMarkers={
+                    previousLineNumber === undefined
+                      ? undefined
+                      : leftLineCommentMarkers?.get(previousLineNumber)
+                  }
                   previousReviewLine={
                     previousIsReviewLine ? reviewLine : undefined
                   }

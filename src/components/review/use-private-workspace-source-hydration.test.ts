@@ -43,7 +43,7 @@ describe("workspaceSourcePlan", () => {
     expect(workspaceSourcePlan(data, units, "a", "files")).toEqual({
       activePath: "src/a.ts",
       nextPaths: ["src/c.ts"],
-      previewPaths: ["src/b.ts"],
+      previewPaths: ["src/b.ts", "src/d.ts", "src/e.ts"],
     });
   });
 

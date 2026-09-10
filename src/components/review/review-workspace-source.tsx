@@ -37,6 +37,12 @@ import {
 } from "./review-file-card";
 import { ReviewBinaryPreview } from "./review-image-preview";
 import {
+  type ReviewLineCommentMarker,
+  ReviewLineCommentMarkers,
+  reviewLineCommentMarkersBySide,
+} from "./review-line-comment-markers";
+import { SideBySideUnitDiff } from "./review-workspace-diff";
+import {
   SourceLineWindow,
   WORKSPACE_SOURCE_ROW_HEIGHT_PX,
 } from "./source-line-window";
@@ -211,10 +217,17 @@ function ReviewConceptFileCardSource({
   fileSource,
   members,
   onCommentLine,
+  onOpenLineComment,
+  rightLineCommentMarkers,
 }: {
   fileSource: string;
   members: readonly ReviewUnit[];
   onCommentLine?: (unitId: string, line: number) => void;
+  onOpenLineComment?: (threadExternalId: string) => void;
+  rightLineCommentMarkers?: ReadonlyMap<
+    number,
+    readonly ReviewLineCommentMarker[]
+  >;
 }) {
   const ranges = useMemo(() => reviewCardRanges(members), [members]);
   const startLine = ranges.at(0)?.startLine ?? 1;
@@ -257,15 +270,24 @@ function ReviewConceptFileCardSource({
           startLine={startLine}
           renderLine={(line, lineNumber) => {
             const owner = ownerByLine.get(lineNumber);
+            const markers = rightLineCommentMarkers?.get(lineNumber);
             return (
               <div
                 key={`${members[0]?.id}-${lineNumber}`}
                 className={cn(
-                  "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                  "group relative grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
                   !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
                   owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
                 )}
               >
+                {markers && onOpenLineComment ? (
+                  <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                    <ReviewLineCommentMarkers
+                      markers={markers}
+                      onOpen={onOpenLineComment}
+                    />
+                  </div>
+                ) : null}
                 {owner && onCommentLine ? (
                   <button
                     type="button"
@@ -300,14 +322,18 @@ function ReviewConceptFileCardSource({
   );
 }
 
-/** Shows every same-file member as one continuous card with dimmed gaps. */
+/** Neighbor file card that uses the same source body as the selected card. */
 export function ReviewConceptFileCardPreview({
   members,
   index,
   count,
   fileSource,
+  previousFileSource = "",
+  diffVisible = true,
   onSelect,
   onCommentLine,
+  onOpenLineComment,
+  commentThreads,
   itemLabel = "Card",
   sourceBytes,
 }: {
@@ -315,14 +341,28 @@ export function ReviewConceptFileCardPreview({
   index: number;
   count: number;
   fileSource: string;
+  previousFileSource?: string;
+  diffVisible?: boolean;
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
+  onOpenLineComment?: (threadExternalId: string) => void;
+  commentThreads?: Parameters<typeof reviewLineCommentMarkersBySide>[0];
   itemLabel?: "Card" | "File";
   sourceBytes?: number;
 }) {
-  const ranges = reviewCardRanges(members);
-  const startLine = ranges.at(0)?.startLine ?? 1;
-  const endLine = ranges.at(-1)?.endLine ?? startLine;
+  const first = members[0];
+  const lineCommentMarkers = useMemo(
+    () => reviewLineCommentMarkersBySide(commentThreads ?? []),
+    [commentThreads],
+  );
+  const currentRanges = reviewCardRanges(members, "current");
+  const previousRanges = reviewCardRanges(
+    members,
+    "previous",
+    previousFileSource,
+  );
+  const startLine = currentRanges.at(0)?.startLine ?? 1;
+  const endLine = currentRanges.at(-1)?.endLine ?? startLine;
   const lineCount = endLine - startLine + 1;
   const changedLineCount = members.reduce(
     (total, member) => total + member.changedLineCount,
@@ -331,8 +371,8 @@ export function ReviewConceptFileCardPreview({
   const reviewed = reviewedFileCard(members);
   const heavy = isHeavyReviewSource({
     changedLineCount,
-    language: members[0]?.language,
-    path: members[0]?.path,
+    language: first?.language,
+    path: first?.path,
     source: fileSource,
   });
   const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
@@ -345,6 +385,12 @@ export function ReviewConceptFileCardPreview({
   }
   const fileBytes =
     sourceBytes ?? reviewSourceByteLength({ source: fileSource });
+  const canShowDiff =
+    diffVisible &&
+    first?.kind !== "binary" &&
+    Boolean(fileSource || previousFileSource);
+  const allAdded = members.every((member) => member.changeType === "added");
+  const allDeleted = members.every((member) => member.changeType === "deleted");
   return (
     <article
       className={cn(
@@ -366,18 +412,52 @@ export function ReviewConceptFileCardPreview({
         sourceBytes={fileBytes}
       />
       {expanded ? (
-        <ReviewConceptFileCardSource
-          fileSource={fileSource}
-          members={members}
-          onCommentLine={onCommentLine}
-        />
+        canShowDiff && first ? (
+          <SideBySideUnitDiff
+            previousSource={previousFileSource}
+            currentSource={fileSource}
+            language={first.language ?? "text"}
+            previousStartLine={1}
+            currentStartLine={1}
+            previousFocusRanges={previousRanges}
+            currentFocusRanges={currentRanges}
+            previousFocusStartLine={
+              allAdded ? null : previousRanges.at(0)?.startLine
+            }
+            previousFocusEndLine={
+              allAdded ? null : previousRanges.at(-1)?.endLine
+            }
+            currentFocusStartLine={
+              allDeleted ? null : currentRanges.at(0)?.startLine
+            }
+            currentFocusEndLine={
+              allDeleted ? null : currentRanges.at(-1)?.endLine
+            }
+            onSelectReviewLine={(line) => {
+              const owner = reviewCardMemberForLine(members, line);
+              if (owner) onCommentLine?.(owner.id, line);
+            }}
+            leftLineCommentMarkers={lineCommentMarkers.left}
+            rightLineCommentMarkers={lineCommentMarkers.right}
+            onOpenLineComment={onOpenLineComment}
+            className="rounded-none border-0"
+          />
+        ) : (
+          <ReviewConceptFileCardSource
+            fileSource={fileSource}
+            members={members}
+            onCommentLine={onCommentLine}
+            onOpenLineComment={onOpenLineComment}
+            rightLineCommentMarkers={lineCommentMarkers.right}
+          />
+        )
       ) : (
         <ReviewFileCardSourcePlaceholder
           itemLabel={itemLabel === "File" ? "file" : "card"}
-          language={members[0]?.language}
+          language={first?.language}
           lineCount={lineCount}
           onShow={() => setExpanded(true)}
-          path={members[0]?.path}
+          path={first?.path}
           reviewed={reviewed}
           sourceBytes={fileBytes}
         />
