@@ -5,6 +5,8 @@ import type { RouterOutputs } from "~/trpc/react";
 
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
 type ProviderConversationThread = ProviderConversations["threads"][number];
+type UnitDiscussion = RouterOutputs["review"]["unitDiscussion"];
+type DiscussionComment = UnitDiscussion["comments"][number];
 
 // Only three of the seven `ai_job_status` values are terminal. A deep-review
 // parent sits in `waiting_for_provider` from `startAiJob` until seal-plan marks
@@ -48,6 +50,76 @@ export function useReviewFileAdvance<File extends { path: string }>(
   }, [files, requestedPath]);
 
   return useCallback((path: string) => setRequestedPath(path), []);
+}
+
+/** Conversations that belong on the file card currently in view. */
+export function providerThreadsForVisibleUnits(
+  threads: readonly ProviderConversationThread[] | undefined,
+  visibleUnitIds: readonly string[],
+) {
+  if (!threads?.length || visibleUnitIds.length === 0) return [];
+  const visible = new Set(visibleUnitIds);
+  return threads.filter((thread) => visible.has(thread.unitId));
+}
+
+/** Keeps a just-published conversation visible until the provider lists it. */
+export function mergePendingProviderThreads(
+  threads: readonly ProviderConversationThread[],
+  pending: readonly ProviderConversationThread[],
+) {
+  if (pending.length === 0) return [...threads];
+  const listed = new Set(threads.map(({ externalId }) => externalId));
+  return [
+    ...threads,
+    ...pending.filter(({ externalId }) => !listed.has(externalId)),
+  ];
+}
+
+/** Builds a local conversation from a comment the reviewer just published. */
+export function pendingProviderThreadFromComment(
+  comment: Pick<
+    DiscussionComment,
+    "body" | "line" | "providerExternalId" | "publishedAt" | "unitId"
+  >,
+  path: string,
+): ProviderConversationThread | undefined {
+  if (!comment.providerExternalId) return undefined;
+  const createdAt =
+    comment.publishedAt instanceof Date
+      ? comment.publishedAt.toISOString()
+      : (comment.publishedAt ?? new Date().toISOString());
+  return {
+    comments: [
+      {
+        author: "You",
+        body: comment.body,
+        createdAt,
+        externalId: comment.providerExternalId,
+        publishedByAnotherReviewer: false,
+      },
+    ],
+    externalId: comment.providerExternalId,
+    line: comment.line,
+    path,
+    side: "right",
+    status: "open",
+    unitId: comment.unitId,
+  };
+}
+
+/** Adds a published comment to a unit discussion without dropping the rest. */
+export function withPublishedDiscussionComment(
+  current: UnitDiscussion | undefined,
+  comment: DiscussionComment,
+) {
+  if (!current) {
+    return { comments: [comment], findings: [] };
+  }
+  if (current.comments.some(({ id }) => id === comment.id)) return current;
+  return {
+    ...current,
+    comments: [...current.comments, comment],
+  };
 }
 
 /** One conversation change a reviewer just asked the provider to make. */

@@ -2,6 +2,7 @@
 
 import { ExternalLink, GitPullRequest } from "lucide-react";
 
+import { PullRequestLabelPills } from "~/components/dashboard/pull-request-label-pills";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { providerLabel } from "~/lib/provider-labels";
@@ -72,6 +73,7 @@ export function UnimportedPullRequestList({
                     {pullRequest.state === "draft" ? " · Draft" : ""} ·{" "}
                     {pullRequest.sourceBranch} → {pullRequest.targetBranch}
                   </span>
+                  <PullRequestLabelPills labels={pullRequest.labels} />
                 </span>
                 <span className="col-start-2 flex min-w-0 flex-col items-end text-right sm:col-auto sm:ml-auto sm:shrink-0">
                   <span className="text-mist text-[10px]">

@@ -14,6 +14,7 @@ import Link from "next/link";
 import { Fragment, useMemo } from "react";
 
 import type { CommandCenterItem } from "~/components/command-center";
+import { PullRequestLabelPills } from "~/components/dashboard/pull-request-label-pills";
 import { usePendingNavigation } from "~/components/navigation-progress";
 import { usePageCommandCenter } from "~/components/page-command-center";
 import { Badge } from "~/components/ui/badge";
@@ -85,6 +86,7 @@ export function PullRequestList({
               pullRequest.repositoryOwner,
               pullRequest.repositoryName,
               String(pullRequest.number),
+              ...pullRequest.labels.map((label) => label.name),
             ],
             shortcut: positionShortcut(index + 1),
             searchOnly: true,
@@ -214,6 +216,7 @@ export function PullRequestList({
                       −{pullRequest.deletions}
                     </span>
                   </span>
+                  <PullRequestLabelPills labels={pullRequest.labels} />
                 </span>
                 <span
                   className={cn(

@@ -615,10 +615,16 @@ export function buildReviewWorkspaceCommands(
 
     {
       id: "sync-provider-data",
-      label: updateAvailable ? "Load code changes" : "Sync",
+      label: updateAvailable
+        ? "Load code changes"
+        : externalSyncPending
+          ? "Syncing…"
+          : "Check for updates",
       description: updateAvailable
         ? "Load the synced revision and preserve unaffected sign-offs"
-        : "Poll for the latest code and conversations",
+        : externalSyncPending
+          ? "ReviewDuck is fetching the latest pull request revision"
+          : "ReviewDuck watches the pull-request head and syncs when it moves",
       group: "Review actions",
       icon: <RefreshCw className="size-4" />,
       shortcut: updateAvailable

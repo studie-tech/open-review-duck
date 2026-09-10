@@ -140,10 +140,38 @@ export function isHeavyReviewSource(input: {
  * Reviewed cards fold so finished work stops competing for attention.
  * Heavy data files start folded so opening the review does not paint
  * thousands of JSON rows before the reviewer has asked to see them.
+ * A later sidebar pick can open the selected card without rewriting
+ * this default; see `selectedReviewFileCardExpanded`.
  */
 export function reviewFileCardStartsExpanded(input: {
   heavy: boolean;
   reviewed: boolean;
 }) {
   return !input.reviewed && !input.heavy;
+}
+
+/**
+ * Reports whether the selected file card should show its source.
+ *
+ * The chevron and "Show file" write an explicit reveal for this path and
+ * reviewed state; that choice wins. Choosing the file from the sidebar is
+ * a request to read it, so inspection opens the card until the reviewer
+ * leaves or folds it again. Otherwise the card uses its first-paint default.
+ */
+export function selectedReviewFileCardExpanded(input: {
+  defaultExpanded: boolean;
+  inspected: boolean;
+  path: string;
+  reviewed: boolean;
+  reveal?: { expanded: boolean; path: string; reviewed: boolean };
+}) {
+  if (
+    input.reveal &&
+    input.reveal.path === input.path &&
+    input.reveal.reviewed === input.reviewed
+  ) {
+    return input.reveal.expanded;
+  }
+  if (input.inspected) return true;
+  return input.defaultExpanded;
 }

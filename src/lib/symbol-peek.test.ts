@@ -29,6 +29,20 @@ describe("a definition worth showing", () => {
     },
   );
 
+  it("shows a same-file interface used on a later line", () => {
+    expect(
+      definitionIsWhereTheNameWasRead(
+        {
+          endLine: 4,
+          focusLine: 1,
+          path: "app/src/libs/guide/factcheck.ts",
+          startLine: 1,
+        },
+        { line: 10, path: "app/src/libs/guide/factcheck.ts" },
+      ),
+    ).toBe(false);
+  });
+
   it("shows a declaration the reader is somewhere else in the file from", () => {
     expect(
       definitionIsWhereTheNameWasRead(definition, {

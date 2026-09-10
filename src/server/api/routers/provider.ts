@@ -13,6 +13,7 @@ import {
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import {
   excludeImportedPullRequests,
   sortUnimportedPullRequests,
@@ -789,6 +790,7 @@ export const providerRouter = createTRPCRouter({
       authorLogin: string;
       deletions: number;
       externalId: string;
+      labels: PullRequestLabel[];
       number: number;
       provider: (typeof manualRepositories)[number]["provider"];
       repositoryId: string;
@@ -827,6 +829,7 @@ export const providerRouter = createTRPCRouter({
                       authorLogin: pullRequest.authorLogin,
                       deletions: pullRequest.deletions,
                       externalId: pullRequest.externalId,
+                      labels: pullRequest.labels,
                       number: pullRequest.number,
                       provider: repository.provider,
                       repositoryId: repository.id,

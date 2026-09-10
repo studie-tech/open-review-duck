@@ -16,6 +16,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import type { PullRequestLabel } from "../src/lib/pull-request-labels";
 
 export const createTable = pgTableCreator((name) => `open_review_duck_${name}`);
 
@@ -503,6 +504,10 @@ export const pullRequests = createTable(
     additions: integer().notNull().default(0),
     deletions: integer().notNull().default(0),
     changedFiles: integer().notNull().default(0),
+    labels: jsonb()
+      .$type<PullRequestLabel[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     lastSyncedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp({ withTimezone: true })

@@ -25,6 +25,7 @@ import {
   InlineAiQuestion,
   InlineCommentComposer,
   InlineLineActionChooser,
+  InlineLineActionSurface,
   rememberAiConversationVisibility,
   withoutDeletedAiQuestions,
   withoutDeletedLiveAiQuestions,
@@ -141,6 +142,13 @@ describe("review shortcuts", () => {
   it("steps through review findings on the bracket keys", () => {
     expect(reviewShortcuts.nextFinding).toEqual([{ key: "]" }]);
     expect(reviewShortcuts.previousFinding).toEqual([{ key: "[" }]);
+  });
+
+  it("posts a resolved reply with the same chord, and keeps it resolved behind shift", () => {
+    expect(reviewShortcuts.postComment).toEqual([{ key: "Enter", mod: true }]);
+    expect(reviewShortcuts.postCommentKeepResolved).toEqual([
+      { key: "Enter", mod: true, shift: true },
+    ]);
   });
 });
 
@@ -839,15 +847,12 @@ describe("InlineLineActionChooser", () => {
       />,
     );
 
-    const chooser = screen.getByRole("region", {
-      name: "Choose an action for line 42",
-    });
-    fireEvent.keyDown(chooser, {
+    fireEvent.keyDown(window, {
       code: "Digit1",
       key: "1",
       metaKey: true,
     });
-    fireEvent.keyDown(chooser, {
+    fireEvent.keyDown(window, {
       code: "Digit2",
       ctrlKey: true,
       key: "2",
@@ -884,7 +889,40 @@ describe("InlineLineActionChooser", () => {
     }
   });
 
-  it("lets the workspace handle Escape after focus leaves the chooser", () => {
+  it("cancels on Escape when the originating line kept focus", () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    render(
+      <div>
+        <button type="button" id="review-line-42">
+          42
+        </button>
+        <InlineLineActionChooser
+          canAsk
+          line={42}
+          path="src/server/queue.ts"
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={cancel}
+          onComment={vi.fn()}
+        />
+      </div>,
+    );
+    screen.getByRole("button", { name: "42" }).focus();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.activeElement as HTMLElement, {
+        key: "Escape",
+      });
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+
+  it("cancels on Escape after focus returns to the page", () => {
     const cancel = vi.fn();
     const workspaceEscape = vi.fn();
     render(
@@ -903,11 +941,34 @@ describe("InlineLineActionChooser", () => {
     try {
       fireEvent.keyDown(document.body, { key: "Escape" });
 
-      expect(cancel).not.toHaveBeenCalled();
-      expect(workspaceEscape).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
     } finally {
       document.removeEventListener("keydown", workspaceEscape);
     }
+  });
+
+  it("leaves Escape to an unrelated input the reviewer is editing", () => {
+    const cancel = vi.fn();
+    render(
+      <div>
+        <input aria-label="Filter review path" />
+        <InlineLineActionChooser
+          canAsk
+          line={42}
+          path="src/server/queue.ts"
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={cancel}
+          onComment={vi.fn()}
+        />
+      </div>,
+    );
+    const filter = screen.getByRole("textbox", { name: "Filter review path" });
+    filter.focus();
+    fireEvent.keyDown(filter, { key: "Escape" });
+
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("does not invoke the disabled AI option from its shortcut", () => {
@@ -924,12 +985,7 @@ describe("InlineLineActionChooser", () => {
       />,
     );
 
-    fireEvent.keyDown(
-      screen.getByRole("region", {
-        name: "Choose an action for line 9",
-      }),
-      { code: "Digit2", key: "2", metaKey: true },
-    );
+    fireEvent.keyDown(window, { code: "Digit2", key: "2", metaKey: true });
 
     expect(ask).not.toHaveBeenCalled();
   });
@@ -1021,7 +1077,7 @@ describe("InlineCommentComposer", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("lets the workspace handle Escape after focus leaves the composer", () => {
+  it("cancels on Escape after focus returns to the page", () => {
     const cancel = vi.fn();
     const workspaceEscape = vi.fn();
     render(
@@ -1042,11 +1098,48 @@ describe("InlineCommentComposer", () => {
     try {
       fireEvent.keyDown(document.body, { key: "Escape" });
 
-      expect(cancel).not.toHaveBeenCalled();
-      expect(workspaceEscape).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
     } finally {
       document.removeEventListener("keydown", workspaceEscape);
     }
+  });
+});
+
+describe("InlineLineActionSurface", () => {
+  it("opens the provider composer without asking the parent to remount", async () => {
+    const user = userEvent.setup();
+    const parentRender = vi.fn();
+    function Harness() {
+      parentRender();
+      return (
+        <InlineLineActionSurface
+          canAsk
+          initialDraft=""
+          line={42}
+          path="src/server/queue.ts"
+          pending={false}
+          posting={false}
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={vi.fn()}
+          onDraftChange={vi.fn()}
+          onPost={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    expect(parentRender).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    );
+
+    expect(
+      screen.getByPlaceholderText("Write an inline GitHub comment\u2026"),
+    ).toBeVisible();
+    expect(parentRender).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1793,6 +1886,7 @@ describe("ProviderConversation", () => {
 
   it("publishes a reply inside the existing provider thread", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(
       <ProviderConversation
@@ -1816,7 +1910,7 @@ describe("ProviderConversation", () => {
         }}
         publishedByReviewDuck={false}
         replying={false}
-        {...conversationActions({ onReply: reply })}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
       />,
     );
 
@@ -1829,13 +1923,161 @@ describe("ProviderConversation", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    expect(
+      screen.getByText(
+        "This conversation is resolved. Posting a reply reopens it.",
+      ),
+    ).toBeVisible();
     await user.type(
       screen.getByPlaceholderText("Continue this conversation…"),
       "I restored the previous behavior.",
     );
-    await user.click(screen.getByRole("button", { name: "Reply" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Post reply and reopen this conversation",
+      }),
+    );
 
     expect(reply).toHaveBeenCalledWith("I restored the previous behavior.");
+    expect(resolve).toHaveBeenCalledWith(false);
+  });
+
+  it("can leave a note on a resolved conversation without reopening it", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "901b",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "901b",
+              author: "reviewer",
+              body: "Could this retain the previous behavior?",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Expand GitHub conversation",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    await user.type(
+      screen.getByPlaceholderText("Continue this conversation…"),
+      "Noted, leaving this resolved.",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Post reply and keep this conversation resolved",
+      }),
+    );
+
+    expect(reply).toHaveBeenCalledWith("Noted, leaving this resolved.");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("reopens a resolved conversation from the reply shortcut", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "901c",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "901c",
+              author: "reviewer",
+              body: "Could this retain the previous behavior?",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Expand GitHub conversation",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    const composer = screen.getByPlaceholderText("Continue this conversation…");
+    await user.type(composer, "Please take another look.");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    expect(reply).toHaveBeenCalledWith("Please take another look.");
+    expect(resolve).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps a resolved conversation closed from the shift reply shortcut", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "901d",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "901d",
+              author: "reviewer",
+              body: "Could this retain the previous behavior?",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Expand GitHub conversation",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    const composer = screen.getByPlaceholderText("Continue this conversation…");
+    await user.type(composer, "Leaving a note only.");
+    await user.keyboard("{Meta>}{Shift>}{Enter}{/Shift}{/Meta}");
+
+    expect(reply).toHaveBeenCalledWith("Leaving a note only.");
+    expect(resolve).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved conversations open when the page loads", () => {

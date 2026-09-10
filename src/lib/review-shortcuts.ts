@@ -44,6 +44,9 @@ export const reviewShortcuts = {
   dashboard: [{ key: "g" }, { key: "r" }],
   aiSettings: [{ key: "g" }, { key: "a" }],
   postComment: [{ key: "Enter", mod: true }],
+  // The rare way to leave a note on a resolved conversation without bringing
+  // it back onto the author's unresolved list.
+  postCommentKeepResolved: [{ key: "Enter", mod: true, shift: true }],
 } satisfies Record<string, KeyboardShortcut>;
 
 /**

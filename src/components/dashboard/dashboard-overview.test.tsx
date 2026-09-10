@@ -53,6 +53,7 @@ describe("DashboardOverview", () => {
         totalUnits: 5,
         signedUnits: 2,
         carriedSignOffs: 0,
+        labels: [],
       },
     ];
     const monitors: ComponentProps<

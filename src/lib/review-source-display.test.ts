@@ -6,6 +6,7 @@ import {
   isDataOrGeneratedReviewPath,
   isHeavyReviewSource,
   reviewFileCardStartsExpanded,
+  selectedReviewFileCardExpanded,
   reviewPathExtension,
   reviewSourceByteLength,
   reviewSourceKindLabel,
@@ -77,6 +78,43 @@ describe("review source display", () => {
     expect(
       reviewFileCardStartsExpanded({ reviewed: false, heavy: false }),
     ).toBe(true);
+  });
+
+  it("opens an inspected selected card unless a reveal folded it", () => {
+    expect(
+      selectedReviewFileCardExpanded({
+        defaultExpanded: false,
+        inspected: true,
+        path: "src/village/page.tsx",
+        reviewed: true,
+      }),
+    ).toBe(true);
+    expect(
+      selectedReviewFileCardExpanded({
+        defaultExpanded: false,
+        inspected: true,
+        path: "src/village/page.tsx",
+        reviewed: true,
+        reveal: {
+          expanded: false,
+          path: "src/village/page.tsx",
+          reviewed: true,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      selectedReviewFileCardExpanded({
+        defaultExpanded: false,
+        inspected: false,
+        path: "src/village/page.tsx",
+        reviewed: true,
+        reveal: {
+          expanded: true,
+          path: "src/other.ts",
+          reviewed: true,
+        },
+      }),
+    ).toBe(false);
   });
 
   it("labels hidden source from the language or the path", () => {

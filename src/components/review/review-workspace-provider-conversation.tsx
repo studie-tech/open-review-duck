@@ -194,8 +194,14 @@ export function ProviderConversation({
     if (revealed) setExpanded(true);
   }, [revealed]);
 
-  /** Publishes the draft while preserving it if the provider rejects the reply. */
-  async function submitReply() {
+  /**
+   * Publishes the draft, reopening a resolved conversation when asked.
+   *
+   * A reply on a resolved thread is almost always a continuation, so reopen
+   * is the default path. The draft stays if the provider rejects the reply;
+   * a failed reopen still leaves the published comment in place.
+   */
+  async function submitReply(reopen: boolean) {
     const body = replyBody.trim();
     if (!body || replying || inFlight.current) return;
     inFlight.current = true;
@@ -203,10 +209,16 @@ export function ProviderConversation({
       await onReply(body);
       setReplyBody("");
       setReplyOpen(false);
+      if (reopen) {
+        setResolving(true);
+        await onResolve(false);
+      }
     } catch {
-      // The mutation owns the user-facing error; retain the draft for retry.
+      // The mutation owns the user-facing error. A rejected reply keeps the
+      // draft; a rejected reopen still leaves the published comment in place.
     } finally {
       inFlight.current = false;
+      setResolving(false);
     }
   }
 
@@ -508,11 +520,16 @@ export function ProviderConversation({
                   <p className="text-cloud text-[11px] font-medium">
                     Reply on {providerLabel(provider)}
                   </p>
-                  <span className="text-fog flex items-center gap-1 text-[9px]">
-                    <ShortcutHint shortcut={reviewShortcuts.postComment} />
-                    post
-                  </span>
                 </div>
+                {resolved && (
+                  <p className="border-lime/20 bg-lime/8 text-lime mt-2 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[10px] leading-4">
+                    <CircleCheck
+                      className="size-3.5 shrink-0"
+                      aria-hidden="true"
+                    />
+                    This conversation is resolved. Posting a reply reopens it.
+                  </p>
+                )}
                 <textarea
                   ref={replyInputRef}
                   value={replyBody}
@@ -521,40 +538,80 @@ export function ProviderConversation({
                     if (event.key === "Escape") {
                       event.preventDefault();
                       setReplyOpen(false);
-                    } else if (
-                      event.key === "Enter" &&
-                      (event.metaKey || event.ctrlKey)
-                    ) {
-                      event.preventDefault();
-                      void submitReply();
+                      return;
                     }
+                    if (
+                      event.key !== "Enter" ||
+                      !(event.metaKey || event.ctrlKey)
+                    ) {
+                      return;
+                    }
+                    event.preventDefault();
+                    void submitReply(resolved && !event.shiftKey);
                   }}
                   placeholder="Continue this conversation…"
                   rows={3}
                   className="bg-surface text-cloud focus:border-cyan/45 mt-2 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none"
                 />
-                <div className="mt-2 flex justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={replying}
-                    onClick={() => setReplyOpen(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={!replyBody.trim() || replying}
-                    onClick={() => void submitReply()}
-                  >
-                    {replying ? (
-                      <LoaderCircle className="size-3 animate-spin" />
-                    ) : (
-                      <Send className="size-3" />
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-fog flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] leading-4">
+                    <span className="flex items-center gap-1">
+                      <ShortcutHint shortcut={reviewShortcuts.postComment} />
+                      {resolved ? "post and reopen" : "post"}
+                    </span>
+                    {resolved && (
+                      <span className="flex items-center gap-1">
+                        <ShortcutHint
+                          shortcut={reviewShortcuts.postCommentKeepResolved}
+                        />
+                        keep resolved
+                      </span>
                     )}
-                    {replying ? "Posting…" : "Reply"}
-                  </Button>
+                    <span>· Esc cancels</span>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={replying || managing}
+                      onClick={() => setReplyOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    {resolved && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!replyBody.trim() || replying || managing}
+                        aria-label="Post reply and keep this conversation resolved"
+                        onClick={() => void submitReply(false)}
+                      >
+                        Keep resolved
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={resolved ? "primary" : "secondary"}
+                      disabled={!replyBody.trim() || replying || managing}
+                      aria-label={
+                        resolved
+                          ? "Post reply and reopen this conversation"
+                          : undefined
+                      }
+                      onClick={() => void submitReply(resolved)}
+                    >
+                      {replying ? (
+                        <LoaderCircle className="size-3 animate-spin" />
+                      ) : (
+                        <Send className="size-3" />
+                      )}
+                      {replying
+                        ? "Posting…"
+                        : resolved
+                          ? "Post and reopen"
+                          : "Reply"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : (

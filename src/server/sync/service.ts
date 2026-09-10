@@ -120,6 +120,7 @@ export async function syncPullRequest(
           additions: remote.additions,
           deletions: remote.deletions,
           changedFiles: remote.changedFiles,
+          labels: remote.labels,
           lastSyncedAt: new Date(),
         })
         .where(
@@ -267,6 +268,7 @@ export async function syncPullRequest(
         additions: confirmedRemote.additions,
         deletions: confirmedRemote.deletions,
         changedFiles: changedFileCount,
+        labels: confirmedRemote.labels,
         lastSyncedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -286,6 +288,7 @@ export async function syncPullRequest(
           additions: confirmedRemote.additions,
           deletions: confirmedRemote.deletions,
           changedFiles: changedFileCount,
+          labels: confirmedRemote.labels,
           lastSyncedAt: new Date(),
         },
       })

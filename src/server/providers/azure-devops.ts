@@ -4,6 +4,7 @@ import {
   azureMergeGate,
   azurePolicyCheckState,
 } from "~/lib/provider-merge-gate";
+import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -61,6 +62,11 @@ interface AzurePull {
     uniqueName?: string;
     imageUrl?: string;
   };
+  labels?: Array<{
+    id?: string;
+    name?: string;
+    active?: boolean;
+  }>;
 }
 interface AzurePullStatus {
   id: number;
@@ -934,6 +940,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       additions: 0,
       deletions: 0,
       changedFiles: 0,
+      labels: normalizePullRequestLabels(item.labels),
     };
   }
 

@@ -1,11 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { providerLabel } from "~/lib/provider-labels";
 import { acknowledgeReviewRevision } from "~/lib/review-revision";
 import { api, type RouterOutputs } from "~/trpc/react";
+import {
+  REVIEW_REVISION_PROBE_MS,
+  reviewSyncStatus,
+  shouldAutoSyncReviewRevision,
+} from "./review-sync-status";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 
@@ -25,7 +30,8 @@ interface ReviewSynchronizationControllerInput {
  *
  * The workspace supplies navigation state resets, while this controller keeps
  * provider polling, terminal notifications, revision acknowledgement, and
- * query invalidation in one lifecycle.
+ * query invalidation in one lifecycle. A cheap head-sha probe watches for
+ * new commits and queues a silent sync when the branch moves.
  */
 export function useReviewSynchronizationController({
   manualSyncPending,
@@ -40,15 +46,13 @@ export function useReviewSynchronizationController({
   const [activeSyncId, setActiveSyncId] = useState<string>();
   const [loadingChanges, startLoadingChanges] = useTransition();
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const autoSyncedHeadSha = useRef<string>();
+  const silentSync = useRef(false);
 
   const pollLatestPullRequest = api.review.poll.useMutation({
     onSuccess: (result) => {
       setActiveSyncId(result.syncId);
       void utils.review.activeSyncs.invalidate();
-      toast.info("Pull request synchronization queued", {
-        description:
-          "ReviewDuck will preserve your current review while it runs.",
-      });
     },
   });
   const syncStatus = api.review.syncStatus.useQuery(
@@ -61,6 +65,20 @@ export function useReviewSynchronizationController({
           : false,
     },
   );
+  const revisionProbe = api.review.revisionProbe.useQuery(
+    { pullRequestId: pullRequest.id },
+    {
+      enabled: !activeSyncId,
+      refetchInterval: REVIEW_REVISION_PROBE_MS,
+      refetchOnWindowFocus: true,
+      retry: 1,
+    },
+  );
+
+  const syncing =
+    manualSyncPending ||
+    pollLatestPullRequest.isPending ||
+    ["queued", "running"].includes(syncStatus.data?.status ?? "");
 
   useEffect(() => {
     if (!activeSyncId) return;
@@ -90,9 +108,12 @@ export function useReviewSynchronizationController({
         }),
       ]);
       sendReviewSession({ type: "SYNC_FINISHED" });
-      toast.success("Pull request synchronized", {
-        description: "The latest review revision is loaded.",
-      });
+      if (!silentSync.current) {
+        toast.success("Pull request synchronized", {
+          description: "The latest review revision is loaded.",
+        });
+      }
+      silentSync.current = false;
       router.refresh();
     } else if (status === "failed" || status === "cancelled") {
       setActiveSyncId(undefined);
@@ -104,6 +125,7 @@ export function useReviewSynchronizationController({
           : "Pull request synchronization failed",
         { description: syncStatus.data?.error ?? "Try again in a moment." },
       );
+      silentSync.current = false;
     }
   }, [
     activeSyncId,
@@ -140,14 +162,22 @@ export function useReviewSynchronizationController({
   });
 
   /** Queues durable source synchronization. */
-  async function syncExternalData() {
+  async function syncExternalData(options?: { silent?: boolean }) {
     if (manualSyncPending) return;
+    silentSync.current = Boolean(options?.silent);
     sendReviewSession({ type: "SYNC_STARTED" });
     try {
       await pollLatestPullRequest.mutateAsync({
         pullRequestId: pullRequest.id,
       });
+      if (!options?.silent) {
+        toast.info("Pull request synchronization queued", {
+          description:
+            "ReviewDuck will preserve your current review while it runs.",
+        });
+      }
     } catch (cause) {
+      silentSync.current = false;
       sendReviewSession({ type: "SYNC_FINISHED" });
       toast.error(
         `Could not queue ${providerLabel(pullRequest.provider)} synchronization`,
@@ -158,6 +188,26 @@ export function useReviewSynchronizationController({
       );
     }
   }
+
+  const syncExternalDataRef = useRef(syncExternalData);
+  syncExternalDataRef.current = syncExternalData;
+
+  useEffect(() => {
+    const probe = revisionProbe.data;
+    if (
+      !probe ||
+      !shouldAutoSyncReviewRevision({
+        attemptedHeadSha: autoSyncedHeadSha.current,
+        busy: syncing,
+        current: probe.current,
+        remoteHeadSha: probe.headSha,
+      })
+    ) {
+      return;
+    }
+    autoSyncedHeadSha.current = probe.headSha;
+    void syncExternalDataRef.current({ silent: true });
+  }, [revisionProbe.data, syncing]);
 
   /** Persists the exact pull-request revision currently on screen. */
   function rememberLoadedRevision() {
@@ -187,15 +237,18 @@ export function useReviewSynchronizationController({
 
   return {
     acknowledgeLoadedRevision,
-    externalSyncPending:
-      manualSyncPending ||
-      pollLatestPullRequest.isPending ||
-      ["queued", "running"].includes(syncStatus.data?.status ?? ""),
+    externalSyncPending: syncing,
     loadAvailableChanges,
     loadingChanges,
     markUpdateAvailable: () => setUpdateAvailable(true),
     resetReview,
     syncExternalData,
+    syncStatus: reviewSyncStatus({
+      loadingChanges,
+      probeFailed: revisionProbe.isError && !syncing,
+      syncing,
+      updateAvailable,
+    }),
     updateAvailable,
   };
 }

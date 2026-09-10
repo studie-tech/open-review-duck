@@ -61,7 +61,6 @@ import {
   MAX_CONCEPT_CHANGED_LINES,
   MAX_CONCEPT_FILES,
 } from "~/server/analysis/concepts";
-import { analyzeFiles } from "~/server/analysis/engine";
 import { sha256 } from "~/server/analysis/hash";
 import { importReferenceForLocal } from "~/server/analysis/imports";
 import { isLocalDeployment } from "~/server/deployment";
@@ -93,6 +92,7 @@ import {
   attachedProviderThread,
   providerLifecycleForConnection,
   providerOperationError,
+  providerRevisionIsCurrent,
   providerScopeForPullRequest,
   providerScopeForUnit,
   providerThreadError,
@@ -120,6 +120,7 @@ import {
   signOffFailure,
 } from "~/server/review/sign-off";
 import {
+  analyzeFilesForSymbolPeek,
   declaredSymbolInSnapshot,
   importCandidateReads,
   importedSymbolDefinition,
@@ -183,6 +184,7 @@ export const reviewRouter = createTRPCRouter({
         updatedAt: pullRequests.updatedAt,
         additions: pullRequests.additions,
         deletions: pullRequests.deletions,
+        labels: pullRequests.labels,
         repositoryOwner: repositories.owner,
         repositoryName: repositories.name,
         provider: providerConnections.provider,
@@ -720,11 +722,10 @@ export const reviewRouter = createTRPCRouter({
             scope.pullRequestNumber,
           ),
         ]);
-        const revisionCurrent =
-          remotePullRequest.headSha === scope.headSha &&
-          remotePullRequest.baseSha === scope.baseSha &&
-          scope.snapshot?.headSha === scope.headSha &&
-          scope.snapshot?.baseSha === scope.baseSha;
+        const revisionCurrent = providerRevisionIsCurrent(
+          scope,
+          remotePullRequest,
+        );
         return {
           ...state,
           provider: scope.connection.provider,
@@ -1079,6 +1080,45 @@ export const reviewRouter = createTRPCRouter({
           cause,
           "review",
         );
+      }
+    }),
+
+  revisionProbe: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .query(async ({ ctx, input }) => {
+      const [scope] = await Promise.all([
+        providerScopeForPullRequest(
+          ctx.db,
+          ctx.auth.userId,
+          input.pullRequestId,
+        ),
+        enforceRateLimit(
+          ctx.db,
+          `review-revision-probe:${ctx.auth.userId}`,
+          90,
+          60_000,
+        ),
+      ]);
+      await enforceRateLimit(
+        ctx.db,
+        `review-revision-probe-resource:${ctx.auth.userId}:${input.pullRequestId}`,
+        20,
+        60_000,
+      );
+      try {
+        const provider = await providerForConnection(ctx.db, scope.connection);
+        const remote = await provider.getPullRequest(
+          scope.repositoryExternalId,
+          scope.pullRequestNumber,
+        );
+        return {
+          current: providerRevisionIsCurrent(scope, remote),
+          headSha: remote.headSha,
+          baseSha: remote.baseSha,
+          probedAt: new Date(),
+        };
+      } catch (cause) {
+        throw providerOperationError(scope.connection.provider, cause, "probe");
       }
     }),
 
@@ -1583,9 +1623,11 @@ export const reviewRouter = createTRPCRouter({
             reason: "too_large" as const,
           };
         }
-        const analyzed = analyzeFiles([
-          { path: read.path, content: read.content, changeType: "modified" },
-        ]).units;
+        const analyzed = (
+          await analyzeFilesForSymbolPeek([
+            { path: read.path, content: read.content, changeType: "modified" },
+          ])
+        ).units;
         const exactTarget =
           input.kind === "named"
             ? analyzed.find(
