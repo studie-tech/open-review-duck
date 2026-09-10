@@ -3058,13 +3058,34 @@ export function ReviewWorkspace({
     return () => window.cancelAnimationFrame(frame);
   }, [activeUnitId, pendingProviderThread]);
   const hasLiveConversation = activeUnitHasConversation;
+  /** Posts or rewrites one finding against a line the reviewer can comment on. */
+  function findingCommentActions(finding: DeepReviewFinding, line: number) {
+    if (!activeUnit) return { publishing: false };
+    const jobId = deepReview.data?.jobId;
+    return {
+      publishing:
+        publishComment.isPending &&
+        publishComment.variables?.aiFindingId === finding.id,
+      onPublish: jobId
+        ? () =>
+            publishComment.mutate({
+              unitId: activeUnit.id,
+              line,
+              aiJobId: jobId,
+              aiFindingId: finding.id,
+            })
+        : undefined,
+      onEdit: () =>
+        openInlineComment(line, `**${finding.title}**\n\n${finding.body}`),
+    };
+  }
+
   /** Renders the open finding inline beside the line it accuses. */
   function renderInlineFindingCard(
     finding: DeepReviewFinding,
     lineNumber: number,
   ) {
     if (!activeUnit) return null;
-    const jobId = deepReview.data?.jobId;
     return (
       <DeepReviewInlineFinding
         key={finding.id}
@@ -3073,29 +3094,9 @@ export function ReviewWorkspace({
         locationIndex={activeFindingLocationIndex}
         providerName={providerLabel(initialData.pullRequest.provider)}
         published={findingPublished(finding)}
-        publishing={
-          publishComment.isPending &&
-          publishComment.variables?.aiFindingId === finding.id
-        }
         onOpenLocation={(index) => openFinding(finding, index)}
-        onPublish={
-          jobId
-            ? () =>
-                publishComment.mutate({
-                  unitId: activeUnit.id,
-                  line: lineNumber,
-                  aiJobId: jobId,
-                  aiFindingId: finding.id,
-                })
-            : undefined
-        }
-        onEdit={() =>
-          openInlineComment(
-            lineNumber,
-            `**${finding.title}**\n\n${finding.body}`,
-          )
-        }
         onCollapse={() => collapseFinding(finding.id)}
+        {...findingCommentActions(finding, lineNumber)}
       />
     );
   }
@@ -3128,6 +3129,14 @@ export function ReviewWorkspace({
         : target.kind === "unit"
           ? "Finding with no line in this file"
           : "Finding whose line this unit does not render";
+    const commentLine =
+      target.kind === "line"
+        ? target.line
+        : activeFinding.startLine !== null &&
+            activeUnit.startLine <= activeFinding.startLine &&
+            activeFinding.startLine <= activeUnit.endLine
+          ? activeFinding.startLine
+          : undefined;
     return (
       <div className="mb-3">
         <p className="text-fog px-4 text-[9px] tracking-[.14em] uppercase">
@@ -3139,7 +3148,6 @@ export function ReviewWorkspace({
           locationIndex={activeFindingLocationIndex}
           providerName={providerLabel(initialData.pullRequest.provider)}
           published={findingPublished(activeFinding)}
-          publishing={false}
           onOpenLocation={(index) => openFinding(activeFinding, index)}
           onCollapse={() => collapseFinding(activeFinding.id)}
           onShowInCode={
@@ -3147,6 +3155,9 @@ export function ReviewWorkspace({
               ? () => openFinding(activeFinding, activeFindingLocationIndex)
               : undefined
           }
+          {...(commentLine === undefined
+            ? { publishing: false }
+            : findingCommentActions(activeFinding, commentLine))}
         />
       </div>
     );

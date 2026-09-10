@@ -254,20 +254,26 @@ function unitsForPath(
   return units.filter((unit) => unit.path === path);
 }
 
-/** Returns the innermost unit fully containing a resolved current-side span. */
+/** Returns the innermost unit a current-side finding can be posted on. */
 function unitForAnchor(
   anchor: AnchorResult,
   units: readonly DeepReviewValidationUnit[],
 ): string | null {
   if (anchor.side !== "current") return null;
-  if (anchor.startLine === null || anchor.endLine === null) return null;
+  if (anchor.startLine === null) return null;
   const start = anchor.startLine;
-  const end = anchor.endLine;
+  const end = anchor.endLine ?? start;
   const containing = units.filter(
     (unit) => unit.startLine <= start && unit.endLine >= end,
   );
-  if (containing.length === 0) return null;
-  return containing.reduce((best, unit) =>
+  const candidates =
+    containing.length > 0
+      ? containing
+      : units.filter(
+          (unit) => unit.startLine <= start && start <= unit.endLine,
+        );
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, unit) =>
     unit.endLine - unit.startLine < best.endLine - best.startLine ? unit : best,
   ).id;
 }

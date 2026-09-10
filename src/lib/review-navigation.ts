@@ -5,16 +5,17 @@ interface ReviewNavigationUnit {
 /**
  * Explains, per finding state, why a finding cannot become a review comment.
  *
- * `review_comment.unitId` and `review_comment.line` are both `notNull`, so a
- * finding that never resolved to a line inside a review unit is structurally
- * unpublishable. It is still shown: a discard the reader cannot see is
- * indistinguishable from a finding the reviewer never made.
+ * Gate failures are structurally unpublishable. An `anchored` finding that
+ * somehow lost its line is too: a comment still needs a line to sit on. The
+ * finding is still shown, so a discard stays distinguishable from a finding
+ * the run never made.
  */
 export const unpublishableFindingReason: Record<string, string> = {
   unanchored: "No line in this revision matched the quoted code",
   out_of_scope: "Anchored outside the lines this pull request changed",
   ungrounded: "The agent never proved it read the code it reported on",
   refuted: "A verification pass could not reproduce this",
+  anchored: "This finding no longer names a line a comment can sit on",
 };
 
 export type DeepReviewFindingTarget =

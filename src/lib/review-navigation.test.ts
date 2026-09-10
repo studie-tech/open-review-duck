@@ -453,6 +453,15 @@ describe("deepReviewFindingTarget", () => {
     ).toEqual({ kind: "line", unitIndex: 1, line: 52 });
   });
 
+  it("sends an anchored finding with no stored unit to its path and line", () => {
+    expect(
+      deepReviewFindingTarget(
+        finding({ path: "src/app.ts", startLine: 20 }),
+        units,
+      ),
+    ).toEqual({ kind: "line", unitIndex: 0, line: 20 });
+  });
+
   it("opens the file's unit when a finding has a path but no line", () => {
     expect(
       deepReviewFindingTarget(

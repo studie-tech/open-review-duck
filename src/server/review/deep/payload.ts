@@ -91,10 +91,10 @@ async function openDeepReviewFindingContent(finding: {
 /**
  * Reports whether a finding still names a line a comment could be attached to.
  *
- * `review_comment.unitId` and `review_comment.line` are both not null, so an
- * unanchored, out-of-scope, ungrounded or refuted finding is structurally
- * unpublishable. The read path says so once, here, rather than leaving every
- * caller to rediscover it against a failing insert.
+ * Unanchored, out-of-scope, ungrounded or refuted findings are structurally
+ * unpublishable. A stored `unitId` is not required: the publish mutation
+ * supplies the review unit the reviewer is looking at, and
+ * `reviewUnitContainsLine` is what makes `review_comment.unitId` not null.
  */
 function isDeepReviewFindingPublishable<
   T extends {
@@ -102,17 +102,13 @@ function isDeepReviewFindingPublishable<
     verdict: string | null;
     path: string | null;
     startLine: number | null;
-    unitId: string | null;
   },
->(
-  finding: T,
-): finding is T & { path: string; startLine: number; unitId: string } {
+>(finding: T): finding is T & { path: string; startLine: number } {
   return (
     finding.state === "anchored" &&
     finding.verdict !== "refuted" &&
     finding.path !== null &&
-    finding.startLine !== null &&
-    finding.unitId !== null
+    finding.startLine !== null
   );
 }
 
