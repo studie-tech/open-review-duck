@@ -129,17 +129,14 @@ export function publishedCommentId(
 }
 
 /**
- * Names the reviewer ReviewDuck published one provider comment for.
+ * Returns the ledger row ReviewDuck stored for one provider comment.
  *
- * One workspace connection speaks for every member, so the provider cannot
- * say which of them wrote a comment and will let any of them change it. What
- * ReviewDuck published it knows the author of, and that is what it protects:
- * a root comment through the conversation it opened, a reply through its own
- * identifier. A comment ReviewDuck did not publish — a bot's, or one written
- * in the provider's own interface — has no recorded author and stays open to
- * whoever the provider itself would allow.
+ * The workspace connection used to speak for every member, so authorship and
+ * the identity that posted live here: a root comment through the conversation
+ * it opened, a reply through its own identifier. A comment ReviewDuck did not
+ * publish has no row and stays open to whoever the provider itself would allow.
  */
-export async function publishedCommentAuthor(
+export async function publishedCommentLedger(
   db: typeof database,
   unitId: string,
   thread: { comments: { externalId: string }[]; externalId: string },
@@ -147,7 +144,10 @@ export async function publishedCommentAuthor(
 ) {
   const conversationId = publishedCommentId(thread, commentExternalId);
   const [owned] = await db
-    .select({ userId: reviewComments.userId })
+    .select({
+      userId: reviewComments.userId,
+      publishedAs: reviewComments.publishedAs,
+    })
     .from(reviewComments)
     .where(
       and(
@@ -162,7 +162,18 @@ export async function publishedCommentAuthor(
       ),
     )
     .limit(1);
-  return owned?.userId;
+  return owned;
+}
+
+/** Names the reviewer ReviewDuck published one provider comment for. */
+export async function publishedCommentAuthor(
+  db: typeof database,
+  unitId: string,
+  thread: { comments: { externalId: string }[]; externalId: string },
+  commentExternalId: string,
+) {
+  return (await publishedCommentLedger(db, unitId, thread, commentExternalId))
+    ?.userId;
 }
 
 /**

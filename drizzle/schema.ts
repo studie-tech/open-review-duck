@@ -238,6 +238,7 @@ export const workspaceMembers = createTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     role: varchar({ length: 24 }).notNull().default("member"),
+    publishAsSelf: boolean().notNull().default(false),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -381,6 +382,39 @@ export const providerPatCredentials = createTable("provider_pat_credential", {
     .defaultNow()
     .$onUpdate(() => new Date()),
 });
+
+export const userProviderCredentials = createTable(
+  "user_provider_credential",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectionId: uuid()
+      .notNull()
+      .references(() => providerConnections.id, { onDelete: "cascade" }),
+    provider: providerEnum().notNull(),
+    credentialKind: varchar({ length: 32 }).notNull(),
+    encryptedAccessToken: text().notNull(),
+    encryptedRefreshToken: text(),
+    expiresAt: timestamp({ withTimezone: true }),
+    refreshVersion: integer().notNull().default(0),
+    displayLogin: varchar({ length: 160 }).notNull(),
+    externalAccountId: text().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("user_provider_credential_user_connection_idx").on(
+      t.userId,
+      t.connectionId,
+    ),
+    index("user_provider_credential_connection_idx").on(t.connectionId),
+  ],
+);
 
 export const oauthStates = createTable("oauth_state", {
   id: uuid().primaryKey().defaultRandom(),
@@ -1682,6 +1716,14 @@ export const reviewComments = createTable(
     body: text().notNull(),
     line: integer().notNull(),
     status: reviewCommentStatusEnum().notNull().default("publishing"),
+    /**
+     * Which provider identity opened this ledger row.
+     *
+     * `workspace` is the shared connection (the GitHub App, or the PAT/OAuth
+     * that connected the repository). `reviewer` is the reviewer's own
+     * stored credential. Edit and delete have to reuse that same identity.
+     */
+    publishedAs: varchar({ length: 24 }).notNull().default("workspace"),
     providerExternalId: text(),
     /**
      * The provider's identifier for this comment on its own.
@@ -1820,6 +1862,19 @@ export const workspaceMemberRelations = relations(
     user: one(users, {
       fields: [workspaceMembers.userId],
       references: [users.id],
+    }),
+  }),
+);
+export const userProviderCredentialRelations = relations(
+  userProviderCredentials,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [userProviderCredentials.userId],
+      references: [users.id],
+    }),
+    connection: one(providerConnections, {
+      fields: [userProviderCredentials.connectionId],
+      references: [providerConnections.id],
     }),
   }),
 );

@@ -30,11 +30,48 @@ export async function githubAppJwt(input: {
 
 interface GitHubUserTokenResponse {
   access_token?: unknown;
+  refresh_token?: unknown;
+  expires_in?: unknown;
   error?: unknown;
 }
 
+export interface GitHubUserAuthorizationTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn?: number;
+}
+
+/** Reads one GitHub user-to-server token payload. */
+function githubUserAuthorizationTokens(tokens: GitHubUserTokenResponse) {
+  if (
+    typeof tokens.access_token !== "string" ||
+    tokens.access_token.length === 0 ||
+    tokens.access_token.length > 65_536
+  ) {
+    throw new Error("GitHub user authorization response is invalid");
+  }
+  const refreshToken =
+    typeof tokens.refresh_token === "string" &&
+    tokens.refresh_token.length > 0 &&
+    tokens.refresh_token.length <= 65_536
+      ? tokens.refresh_token
+      : undefined;
+  const expiresIn =
+    typeof tokens.expires_in === "number" &&
+    Number.isFinite(tokens.expires_in) &&
+    tokens.expires_in > 0 &&
+    tokens.expires_in <= 7 * 86_400
+      ? tokens.expires_in
+      : undefined;
+  return {
+    accessToken: tokens.access_token,
+    refreshToken,
+    expiresIn,
+  } satisfies GitHubUserAuthorizationTokens;
+}
+
 /** Exchanges one short-lived GitHub authorization code using PKCE. */
-export async function exchangeGitHubUserCode(
+export async function exchangeGitHubUserAuthorization(
   input: {
     clientId: string;
     clientSecret: string;
@@ -67,15 +104,59 @@ export async function exchangeGitHubUserCode(
     await response.body?.cancel();
     throw new Error(`GitHub user authorization failed (${response.status})`);
   }
-  const tokens = (await response.json()) as GitHubUserTokenResponse;
-  if (
-    typeof tokens.access_token !== "string" ||
-    tokens.access_token.length === 0 ||
-    tokens.access_token.length > 65_536
-  ) {
-    throw new Error("GitHub user authorization response is invalid");
+  return githubUserAuthorizationTokens(
+    (await response.json()) as GitHubUserTokenResponse,
+  );
+}
+
+/** Exchanges one short-lived GitHub authorization code using PKCE. */
+export async function exchangeGitHubUserCode(
+  input: {
+    clientId: string;
+    clientSecret: string;
+    code: string;
+    codeVerifier: string;
+    redirectUri: string;
+  },
+  fetcher: typeof fetch = fetch,
+) {
+  return (await exchangeGitHubUserAuthorization(input, fetcher)).accessToken;
+}
+
+/** Rotates one stored GitHub user-to-server refresh token. */
+export async function refreshGitHubUserToken(
+  input: { clientId: string; clientSecret: string; refreshToken: string },
+  fetcher: typeof fetch = fetch,
+) {
+  const response = await fetcher(
+    "https://github.com/login/oauth/access_token",
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: input.clientId,
+        client_secret: input.clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: input.refreshToken,
+      }),
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`GitHub user token refresh failed (${response.status})`);
   }
-  return tokens.access_token;
+  const tokens = githubUserAuthorizationTokens(
+    (await response.json()) as GitHubUserTokenResponse,
+  );
+  if (!tokens.expiresIn) {
+    throw new Error("GitHub user token refresh response is invalid");
+  }
+  return { ...tokens, expiresIn: tokens.expiresIn };
 }
 
 /** Proves that the authorizing GitHub user owns or administers this installation. */

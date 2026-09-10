@@ -6,7 +6,10 @@ import { and, eq } from "drizzle-orm";
 import type { z } from "zod";
 import { aiJobs, reviewComments } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
-import { providerForConnection } from "~/server/providers/credentials";
+import {
+  preferredPublicationIdentity,
+  providerForPublicationIdentity,
+} from "~/server/providers/user-credentials";
 import {
   claimCommentForPublicationRetry,
   findEquivalentUserComment,
@@ -141,6 +144,22 @@ export async function publishReviewComment(
     comment = await claimCommentForPublicationRetry(db, comment.id);
     retryingPublication = comment !== undefined;
   }
+  const publishedAs =
+    comment?.publishedAs === "reviewer"
+      ? "reviewer"
+      : comment
+        ? "workspace"
+        : await preferredPublicationIdentity(
+            db,
+            scope.connection.workspaceId,
+            userId,
+          );
+  let provider = await providerForPublicationIdentity(
+    db,
+    scope.connection,
+    userId,
+    publishedAs,
+  );
   if (!comment && !equivalentUserCommentFound) {
     const publicationLeaseToken = randomUUID();
     [comment] = await db
@@ -155,6 +174,7 @@ export async function publishReviewComment(
         line: input.line,
         status: "publishing",
         publicationLeaseToken,
+        publishedAs,
       })
       .onConflictDoNothing()
       .returning();
@@ -188,9 +208,18 @@ export async function publishReviewComment(
     });
   }
   const publicationLeaseToken = comment.publicationLeaseToken;
+  const commentIdentity =
+    comment.publishedAs === "reviewer" ? "reviewer" : "workspace";
+  if (commentIdentity !== publishedAs) {
+    provider = await providerForPublicationIdentity(
+      db,
+      scope.connection,
+      userId,
+      commentIdentity,
+    );
+  }
 
   try {
-    const provider = await providerForConnection(db, scope.connection);
     const existingThread = retryingPublication
       ? publishedThreadForComment(
           await provider.listInlineCommentThreads(

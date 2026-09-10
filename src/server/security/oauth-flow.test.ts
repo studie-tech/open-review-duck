@@ -3,6 +3,8 @@ import {
   GITHUB_USER_AUTHORIZATION_STAGE,
   githubAuthorizationInstallationId,
   githubInstallationId,
+  oauthAuthorizationConnectionId,
+  oauthAuthorizationPurpose,
   safeOAuthRedirectPath,
 } from "./oauth-flow";
 
@@ -27,6 +29,23 @@ describe("safeOAuthRedirectPath", () => {
       );
     },
   );
+});
+
+describe("oauthAuthorizationPurpose", () => {
+  it("treats only an explicit personal-identity purpose as user_identity", () => {
+    expect(oauthAuthorizationPurpose("user_identity")).toBe("user_identity");
+    expect(oauthAuthorizationPurpose("workspace")).toBe("workspace");
+    expect(oauthAuthorizationPurpose(undefined)).toBe("workspace");
+  });
+});
+
+describe("oauthAuthorizationConnectionId", () => {
+  it("accepts a UUID and rejects anything else", () => {
+    expect(
+      oauthAuthorizationConnectionId("0bf4a1f7-0f30-4f08-9439-577356ddbc13"),
+    ).toBe("0bf4a1f7-0f30-4f08-9439-577356ddbc13");
+    expect(oauthAuthorizationConnectionId("not-a-uuid")).toBeUndefined();
+  });
 });
 
 describe("githubInstallationId", () => {

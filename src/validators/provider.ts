@@ -29,6 +29,15 @@ export const connectionIdSchema = importRepositorySchema.pick({
   connectionId: true,
 });
 
+export const saveCommentIdentitySchema = z.object({
+  publishAsSelf: z.boolean(),
+});
+
+export const connectPersonalProviderSchema = z.object({
+  connectionId: z.string().uuid(),
+  accessToken: z.string().trim().min(1),
+});
+
 export const repositoryIdSchema = z.object({
   repositoryId: z.string().uuid(),
 });

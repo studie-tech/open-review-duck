@@ -64,11 +64,13 @@ import { sha256 } from "~/server/analysis/hash";
 import { importReferenceForLocal } from "~/server/analysis/imports";
 import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
+import { providerForReviewerWrite } from "~/server/providers/user-credentials";
 import type { ProviderPullRequestLifecycle } from "~/server/providers/types";
 import {
   assertCommentIsTheReviewersToChange,
   forgetPublishedComments,
   publishedCommentId,
+  publishedCommentLedger,
   rewrittenProviderCommentBody,
   visibleProviderCommentBody,
 } from "~/server/review/comments";
@@ -702,7 +704,11 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
         const [state, remotePullRequest] = await Promise.all([
           provider.getPullRequestReviewState(
             scope.repositoryExternalId,
@@ -962,7 +968,11 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
         const [remotePullRequest, currentState] = await Promise.all([
           provider.getPullRequest(
             scope.repositoryExternalId,
@@ -1943,11 +1953,16 @@ export const reviewRouter = createTRPCRouter({
   replyToThread: protectedProcedure
     .input(replyToReviewThreadSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-reply",
+      );
+      const { provider, publishedAs } = await providerForReviewerWrite(
+        ctx.db,
+        scope.connection,
+        ctx.auth.userId,
       );
       try {
         const thread = await attachedProviderThread(provider, scope, input);
@@ -1976,6 +1991,7 @@ export const reviewRouter = createTRPCRouter({
           body: input.body,
           line: thread.line,
           status: "published",
+          publishedAs,
           providerCommentExternalId: reply.externalId,
           publishedAt: new Date(),
         });
@@ -2011,14 +2027,18 @@ export const reviewRouter = createTRPCRouter({
   editThreadComment: protectedProcedure
     .input(editReviewThreadCommentSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-edit-comment",
       );
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
+        const thread = await attachedProviderThread(
+          listingProvider,
+          scope,
+          input,
+        );
         const edited = thread.comments.find(
           ({ externalId }) => externalId === input.commentExternalId,
         );
@@ -2034,6 +2054,18 @@ export const reviewRouter = createTRPCRouter({
           input.unitId,
           thread,
           input.commentExternalId,
+        );
+        const ledger = await publishedCommentLedger(
+          ctx.db,
+          input.unitId,
+          thread,
+          input.commentExternalId,
+        );
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+          ledger?.publishedAs,
         );
         await provider.editInlineComment({
           repositoryExternalId: scope.repositoryExternalId,
@@ -2078,14 +2110,18 @@ export const reviewRouter = createTRPCRouter({
   deleteThreadComment: protectedProcedure
     .input(reviewThreadCommentSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-delete-comment",
       );
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
+        const thread = await attachedProviderThread(
+          listingProvider,
+          scope,
+          input,
+        );
         if (
           !thread.comments.some(
             ({ externalId }) => externalId === input.commentExternalId,
@@ -2102,6 +2138,18 @@ export const reviewRouter = createTRPCRouter({
           input.unitId,
           thread,
           input.commentExternalId,
+        );
+        const ledger = await publishedCommentLedger(
+          ctx.db,
+          input.unitId,
+          thread,
+          input.commentExternalId,
+        );
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+          ledger?.publishedAs,
         );
         await provider.deleteInlineComment({
           repositoryExternalId: scope.repositoryExternalId,
@@ -2124,17 +2172,19 @@ export const reviewRouter = createTRPCRouter({
   deleteThread: protectedProcedure
     .input(reviewThreadSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-delete-thread",
       );
-      const thread = await attachedProviderThread(provider, scope, input).catch(
-        (cause: unknown) => {
-          throw providerThreadError(scope.connection.provider, cause);
-        },
-      );
+      const thread = await attachedProviderThread(
+        listingProvider,
+        scope,
+        input,
+      ).catch((cause: unknown) => {
+        throw providerThreadError(scope.connection.provider, cause);
+      });
       // Deleting a conversation takes every comment in it, so each one has to
       // be the reviewer's to take.
       for (const comment of thread.comments) {
@@ -2152,6 +2202,18 @@ export const reviewRouter = createTRPCRouter({
       const removed: string[] = [];
       try {
         for (const comment of ordered) {
+          const ledger = await publishedCommentLedger(
+            ctx.db,
+            input.unitId,
+            thread,
+            comment.externalId,
+          );
+          const { provider } = await providerForReviewerWrite(
+            ctx.db,
+            scope.connection,
+            ctx.auth.userId,
+            ledger?.publishedAs,
+          );
           await provider.deleteInlineComment({
             repositoryExternalId: scope.repositoryExternalId,
             pullRequestNumber: scope.pullRequestNumber,
