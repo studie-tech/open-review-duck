@@ -140,6 +140,7 @@ function explainInput() {
   };
 }
 
+/** Returns midnight UTC for the current day, matching reserveManagedQuota. */
 function utcDayStart() {
   const day = new Date();
   day.setUTCHours(0, 0, 0, 0);

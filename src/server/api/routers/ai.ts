@@ -205,16 +205,16 @@ export const aiRouter = createTRPCRouter({
           message: "Bring-your-own-provider configuration is local-only",
         });
       }
+      const workspace = await requirePersonalWorkspaceAdministrator(
+        ctx.db,
+        ctx.auth.userId,
+      );
       if (!input.baseUrl) {
         return {
           ok: false as const,
           error: "A local provider URL is required",
         };
       }
-      const workspace = await requirePersonalWorkspaceAdministrator(
-        ctx.db,
-        ctx.auth.userId,
-      );
       try {
         const existing = await ctx.db.query.localAiConfigurations.findFirst({
           where: eq(localAiConfigurations.workspaceId, workspace.id),

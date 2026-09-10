@@ -121,9 +121,7 @@ describe("deep review locks", () => {
       sealReviewPlan(db, parentId),
       sealReviewPlan(db, parentId),
     ]);
-    expect(first.items.map((item) => item.path)).toEqual(
-      second.items.map((item) => item.path),
-    );
+    expect(first).toEqual(second);
     const items = await db.query.aiReviewItems.findMany({
       where: eq(aiReviewItems.parentJobId, parentId),
     });

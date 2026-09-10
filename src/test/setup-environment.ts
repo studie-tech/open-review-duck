@@ -11,7 +11,7 @@ process.env.ENCRYPTION_KEY ??=
 process.env.CRON_SECRET ??= "unit-test-cron-secret-with-at-least-32-characters";
 process.env.STORAGE_ID_KEY ??=
   "unit-test-storage-key-with-at-least-32-characters";
-process.env.LOCAL_DATA_DIR ??= mkdtempSync(
+process.env.LOCAL_DATA_DIR = mkdtempSync(
   path.join(tmpdir(), "reviewduck-test-data-"),
 );
 process.env.OPENROUTER_MANAGEMENT_KEY ??=
