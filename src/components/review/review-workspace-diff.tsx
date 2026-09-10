@@ -243,6 +243,10 @@ interface SideBySideUnitDiffProps {
   isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
   renderLineDetails?: (line: number) => ReactNode;
+  /** Mounts leftover previous-side conversations when that line is not the review line. */
+  renderPreviousLineDetails?: (line: number) => ReactNode;
+  /** When false, skip global `review-line-*` ids so neighbor cards cannot steal navigation. */
+  emitReviewLineAnchors?: boolean;
   className?: string;
   leftLineCommentMarkers?: ReadonlyMap<
     number,
@@ -764,6 +768,8 @@ export const SideBySideUnitDiff = forwardRef<
     isReviewLineCollapsed,
     renderBeforeLine,
     renderLineDetails,
+    renderPreviousLineDetails,
+    emitReviewLineAnchors = true,
     className,
     leftLineCommentMarkers,
     rightLineCommentMarkers,
@@ -1204,7 +1210,7 @@ export const SideBySideUnitDiff = forwardRef<
                 <>
                   <AddedUnitDiffRow
                     added={row.kind === "added"}
-                    anchored={rendersLineDetails}
+                    anchored={emitReviewLineAnchors && rendersLineDetails}
                     isFinding={highlightsReviewLine(findingLine, reviewLine)}
                     keyboardFocused={highlightsReviewLine(
                       keyboardLine,
@@ -1346,7 +1352,7 @@ export const SideBySideUnitDiff = forwardRef<
             {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
             {!lineCollapsed && (
               <>
-                {rendersLineDetails && (
+                {rendersLineDetails && emitReviewLineAnchors && (
                   <span
                     id={`review-line-${reviewLine}`}
                     className="block h-0"
@@ -1385,6 +1391,9 @@ export const SideBySideUnitDiff = forwardRef<
                   selected={highlightsReviewLine(selectedLine, reviewLine)}
                   sideBySide={sideBySide}
                 />
+                {previousLineNumber !== undefined &&
+                  previousLineNumber !== reviewLine &&
+                  renderPreviousLineDetails?.(previousLineNumber)}
                 {rendersLineDetails && renderLineDetails?.(reviewLine)}
               </>
             )}

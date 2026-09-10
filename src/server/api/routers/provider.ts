@@ -29,12 +29,6 @@ import {
   revokeGitHubInstallation,
   revokeProviderOAuth,
 } from "~/server/providers/credentials";
-import {
-  deleteUserProviderCredential,
-  listUserProviderCredentials,
-  revokeUserProviderCredentials,
-  savePersonalProviderPat,
-} from "~/server/providers/user-credentials";
 import { exportRepositoryReviewData } from "~/server/providers/export";
 import {
   reconcileRepositoryIntake,
@@ -46,6 +40,12 @@ import {
   sealProviderPat,
 } from "~/server/providers/pat-credential";
 import { ProviderError } from "~/server/providers/types";
+import {
+  deleteUserProviderCredential,
+  listUserProviderCredentials,
+  revokeUserProviderCredentials,
+  savePersonalProviderPat,
+} from "~/server/providers/user-credentials";
 import {
   ensureProviderWebhook,
   removeProviderWebhook,
@@ -62,10 +62,10 @@ import {
   connectPersonalProviderSchema,
   connectProviderSchema,
   importRepositorySchema,
-  saveCommentIdentitySchema,
   repositoryIdSchema,
   repositoryIntakeSchema,
   repositoryRetentionSchema,
+  saveCommentIdentitySchema,
 } from "~/validators/provider";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
@@ -612,10 +612,17 @@ export const providerRouter = createTRPCRouter({
         } catch (cause) {
           recordRemoteCleanupFailure("revoke_oauth_token", cause);
         }
-        try {
-          await revokeUserProviderCredentials(ctx.db, connection);
-        } catch (cause) {
-          recordRemoteCleanupFailure("revoke_user_oauth_tokens", cause);
+        const userRevokeFailures = await revokeUserProviderCredentials(
+          ctx.db,
+          connection,
+        );
+        if (userRevokeFailures > 0) {
+          recordRemoteCleanupFailure(
+            "revoke_user_oauth_tokens",
+            new Error(
+              `${userRevokeFailures} personal token revocation(s) failed`,
+            ),
+          );
         }
       }
       const removed = await ctx.db.transaction(async (tx) => {
