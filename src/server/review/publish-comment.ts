@@ -6,10 +6,7 @@ import { and, eq } from "drizzle-orm";
 import type { z } from "zod";
 import { aiJobs, reviewComments } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
-import {
-  preferredPublicationIdentity,
-  providerForPublicationIdentity,
-} from "~/server/providers/user-credentials";
+import { providerForReviewerWrite } from "~/server/providers/user-credentials";
 import {
   claimCommentForPublicationRetry,
   findEquivalentUserComment,
@@ -151,21 +148,11 @@ export async function publishReviewComment(
     comment = await claimCommentForPublicationRetry(db, comment.id);
     retryingPublication = comment !== undefined;
   }
-  const publishedAs =
-    comment?.publishedAs === "reviewer"
-      ? "reviewer"
-      : comment
-        ? "workspace"
-        : await preferredPublicationIdentity(
-            db,
-            scope.connection.workspaceId,
-            userId,
-          );
-  let provider = await providerForPublicationIdentity(
+  let { provider, publishedAs } = await providerForReviewerWrite(
     db,
     scope.connection,
     userId,
-    publishedAs,
+    comment?.publishedAs,
   );
   if (!comment && !existingCommentFound) {
     const publicationLeaseToken = randomUUID();
@@ -215,15 +202,13 @@ export async function publishReviewComment(
     });
   }
   const publicationLeaseToken = comment.publicationLeaseToken;
-  const commentIdentity =
-    comment.publishedAs === "reviewer" ? "reviewer" : "workspace";
-  if (commentIdentity !== publishedAs) {
-    provider = await providerForPublicationIdentity(
+  if (comment.publishedAs !== publishedAs) {
+    ({ provider } = await providerForReviewerWrite(
       db,
       scope.connection,
       userId,
-      commentIdentity,
-    );
+      comment.publishedAs,
+    ));
   }
 
   try {

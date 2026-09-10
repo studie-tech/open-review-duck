@@ -21,11 +21,11 @@ import {
   revokeGitHubUserToken,
   verifyGitHubInstallationOwnership,
 } from "~/server/providers/github-app-authorization";
-import { saveUserProviderCredential } from "~/server/providers/user-credentials";
 import {
   hostedProvider,
   oauthCallbackUrl,
 } from "~/server/providers/oauth-callback-url";
+import { saveUserProviderCredential } from "~/server/providers/user-credentials";
 import {
   GITHUB_USER_AUTHORIZATION_STAGE,
   githubAuthorizationInstallationId,
@@ -45,6 +45,68 @@ function securedCallbackResponse(response: NextResponse) {
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("Referrer-Policy", "no-referrer");
   return response;
+}
+
+/** Exchanges a GitLab authorization code for access and refresh tokens. */
+async function exchangeGitLabAuthorizationCode(input: {
+  code: string;
+  verifier: string;
+  redirectUri: string;
+}) {
+  if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
+    throw new Error("OAuth client is not configured");
+  }
+  const tokenResponse = await fetch("https://gitlab.com/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: env.GITLAB_CLIENT_ID,
+      client_secret: env.GITLAB_CLIENT_SECRET,
+      code: input.code,
+      code_verifier: input.verifier,
+      redirect_uri: input.redirectUri,
+    }),
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!tokenResponse.ok) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: `OAuth exchange failed (${tokenResponse.status})` },
+        { status: 502 },
+      ),
+    );
+  }
+  const tokens = (await tokenResponse.json()) as {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    expires_in?: unknown;
+  };
+  if (
+    typeof tokens.access_token !== "string" ||
+    tokens.access_token.length === 0 ||
+    tokens.access_token.length > 65_536 ||
+    typeof tokens.refresh_token !== "string" ||
+    tokens.refresh_token.length === 0 ||
+    tokens.refresh_token.length > 65_536 ||
+    typeof tokens.expires_in !== "number" ||
+    !Number.isFinite(tokens.expires_in) ||
+    tokens.expires_in <= 0 ||
+    tokens.expires_in > 7 * 86_400
+  ) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: "OAuth token response is invalid" },
+        { status: 502 },
+      ),
+    );
+  }
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    expiresIn: tokens.expires_in,
+  };
 }
 
 /** Starts the verification-only GitHub user authorization stage with PKCE. */
@@ -177,58 +239,15 @@ async function completeUserIdentityAuthorization(input: {
     refreshToken = tokens.refreshToken;
     expiresIn = tokens.expiresIn;
   } else {
-    if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
-      throw new Error("OAuth client is not configured");
-    }
-    const tokenResponse = await fetch("https://gitlab.com/oauth/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: env.GITLAB_CLIENT_ID,
-        client_secret: env.GITLAB_CLIENT_SECRET,
-        code: input.code,
-        code_verifier: input.stateSecret.verifier,
-        redirect_uri: input.callback,
-      }),
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
+    const tokens = await exchangeGitLabAuthorizationCode({
+      code: input.code,
+      verifier: input.stateSecret.verifier,
+      redirectUri: input.callback,
     });
-    if (!tokenResponse.ok) {
-      return securedCallbackResponse(
-        NextResponse.json(
-          { error: `OAuth exchange failed (${tokenResponse.status})` },
-          { status: 502 },
-        ),
-      );
-    }
-    const tokens = (await tokenResponse.json()) as {
-      access_token?: unknown;
-      refresh_token?: unknown;
-      expires_in?: unknown;
-    };
-    if (
-      typeof tokens.access_token !== "string" ||
-      tokens.access_token.length === 0 ||
-      tokens.access_token.length > 65_536 ||
-      typeof tokens.refresh_token !== "string" ||
-      tokens.refresh_token.length === 0 ||
-      tokens.refresh_token.length > 65_536 ||
-      typeof tokens.expires_in !== "number" ||
-      !Number.isFinite(tokens.expires_in) ||
-      tokens.expires_in <= 0 ||
-      tokens.expires_in > 7 * 86_400
-    ) {
-      return securedCallbackResponse(
-        NextResponse.json(
-          { error: "OAuth token response is invalid" },
-          { status: 502 },
-        ),
-      );
-    }
-    accessToken = tokens.access_token;
-    refreshToken = tokens.refresh_token;
-    expiresIn = tokens.expires_in;
+    if (tokens instanceof NextResponse) return tokens;
+    accessToken = tokens.accessToken;
+    refreshToken = tokens.refreshToken;
+    expiresIn = tokens.expiresIn;
   }
   const identity = await createProvider(
     input.provider,
@@ -541,61 +560,15 @@ async function completeProviderAuthorization(
       NextResponse.json({ error: "OAuth code is missing" }, { status: 400 }),
     );
   }
-  const tokenUrl = "https://gitlab.com/oauth/token";
-  const clientId = env.GITLAB_CLIENT_ID;
-  const clientSecret = env.GITLAB_CLIENT_SECRET;
-  if (!clientId || !clientSecret)
-    throw new Error("OAuth client is not configured");
-  const form = new URLSearchParams({
-    grant_type: "authorization_code",
-    client_id: clientId,
-    client_secret: clientSecret,
+  const tokens = await exchangeGitLabAuthorizationCode({
     code,
-    code_verifier: stateSecret.verifier,
-    redirect_uri: callback,
+    verifier: stateSecret.verifier,
+    redirectUri: callback,
   });
-  const tokenResponse = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: form,
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!tokenResponse.ok) {
-    return securedCallbackResponse(
-      NextResponse.json(
-        { error: `OAuth exchange failed (${tokenResponse.status})` },
-        { status: 502 },
-      ),
-    );
-  }
-  const tokens = (await tokenResponse.json()) as {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-  };
-  if (
-    typeof tokens.access_token !== "string" ||
-    tokens.access_token.length === 0 ||
-    tokens.access_token.length > 65_536 ||
-    typeof tokens.refresh_token !== "string" ||
-    tokens.refresh_token.length === 0 ||
-    tokens.refresh_token.length > 65_536 ||
-    typeof tokens.expires_in !== "number" ||
-    !Number.isFinite(tokens.expires_in) ||
-    tokens.expires_in <= 0 ||
-    tokens.expires_in > 7 * 86_400
-  ) {
-    return securedCallbackResponse(
-      NextResponse.json(
-        { error: "OAuth token response is invalid" },
-        { status: 502 },
-      ),
-    );
-  }
-  const accessToken = tokens.access_token;
-  const refreshToken = tokens.refresh_token;
-  const expiresIn = tokens.expires_in;
+  if (tokens instanceof NextResponse) return tokens;
+  const accessToken = tokens.accessToken;
+  const refreshToken = tokens.refreshToken;
+  const expiresIn = tokens.expiresIn;
   const baseUrl = "https://gitlab.com/api/v4";
   const identity = await createProvider(
     provider,

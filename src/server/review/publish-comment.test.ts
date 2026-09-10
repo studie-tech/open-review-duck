@@ -1,15 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  preferredPublicationIdentity: vi.fn(),
-  providerForPublicationIdentity: vi.fn(),
+  providerForReviewerWrite: vi.fn(),
   providerScopeForUnit: vi.fn(),
   reviewUnitContainsLine: vi.fn(() => true),
 }));
 
 vi.mock("~/server/providers/user-credentials", () => ({
-  preferredPublicationIdentity: mocks.preferredPublicationIdentity,
-  providerForPublicationIdentity: mocks.providerForPublicationIdentity,
+  providerForReviewerWrite: mocks.providerForReviewerWrite,
 }));
 
 vi.mock("~/server/review/provider-thread", () => ({
@@ -76,8 +74,7 @@ describe("publishReviewComment", () => {
   beforeEach(() => {
     mocks.providerScopeForUnit.mockResolvedValue(scope);
     mocks.reviewUnitContainsLine.mockReturnValue(true);
-    mocks.preferredPublicationIdentity.mockResolvedValue("reviewer");
-    mocks.providerForPublicationIdentity.mockRejectedValue(
+    mocks.providerForReviewerWrite.mockRejectedValue(
       new Error("missing personal credential"),
     );
   });
@@ -102,7 +99,6 @@ describe("publishReviewComment", () => {
         aiFindingIndex: 0,
       }),
     ).resolves.toBe(publishedComment);
-    expect(mocks.preferredPublicationIdentity).not.toHaveBeenCalled();
-    expect(mocks.providerForPublicationIdentity).not.toHaveBeenCalled();
+    expect(mocks.providerForReviewerWrite).not.toHaveBeenCalled();
   });
 });

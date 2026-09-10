@@ -5,7 +5,6 @@ import { sealVaultSecret } from "~/server/security/vault";
 import {
   deleteUserProviderCredential,
   missingPersonalProviderMessage,
-  preferredPublicationIdentity,
   providerForPublicationIdentity,
   providerForReviewerRead,
   providerForReviewerWrite,
@@ -18,7 +17,8 @@ const { providerForConnection, isLocalDeployment } = vi.hoisted(() => ({
   isLocalDeployment: vi.fn(() => false),
 }));
 
-vi.mock("./credentials", () => ({
+vi.mock("./credentials", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./credentials")>()),
   providerForConnection,
 }));
 
@@ -63,38 +63,6 @@ describe("personal publication identity", () => {
     expect(missingPersonalProviderMessage("github")).toContain(
       "Settings → Code providers",
     );
-  });
-
-  it("defaults new writes to the workspace connection", async () => {
-    await expect(
-      preferredPublicationIdentity(
-        {
-          query: {
-            workspaceMembers: {
-              findFirst: vi.fn().mockResolvedValue({ publishAsSelf: false }),
-            },
-          },
-        } as never,
-        connection.workspaceId,
-        "user-1",
-      ),
-    ).resolves.toBe("workspace");
-  });
-
-  it("selects the reviewer identity when the preference is on", async () => {
-    await expect(
-      preferredPublicationIdentity(
-        {
-          query: {
-            workspaceMembers: {
-              findFirst: vi.fn().mockResolvedValue({ publishAsSelf: true }),
-            },
-          },
-        } as never,
-        connection.workspaceId,
-        "user-1",
-      ),
-    ).resolves.toBe("reviewer");
   });
 
   it("keeps workspace writes on the shared connection", async () => {
