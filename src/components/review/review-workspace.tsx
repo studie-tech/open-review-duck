@@ -240,6 +240,7 @@ import {
 } from "./review-workspace-diff";
 import {
   aiJobActive,
+  publishedFindingYieldsToThread,
   reviewCardPinTarget,
   useReviewExitPrefetch,
   useReviewFileAdvance,
@@ -3137,6 +3138,18 @@ export function ReviewWorkspace({
             activeFinding.startLine <= activeUnit.endLine
           ? activeFinding.startLine
           : undefined;
+    // A published finding whose line still renders details already shows the
+    // provider thread there. The detached card would repeat that comment.
+    if (
+      commentLine !== undefined &&
+      publishedFindingYieldsToThread(
+        findingPublished(activeFinding),
+        groupedEntries(providerThreadsByLine, commentLine).length,
+      ) &&
+      (sideBySideVisible || isPrimaryReviewLine(commentLine))
+    ) {
+      return null;
+    }
     return (
       <div className="mb-3">
         <p className="text-fog px-4 text-[9px] tracking-[.14em] uppercase">
@@ -3519,6 +3532,9 @@ export function ReviewWorkspace({
           const published = publishedAiProposals.has(
             `${finding.aiJobId}:${finding.index}`,
           );
+          if (publishedFindingYieldsToThread(published, lineThreads.length)) {
+            return null;
+          }
           const publishingThisFinding =
             publishComment.isPending &&
             publishComment.variables?.aiJobId === finding.aiJobId &&
@@ -3573,7 +3589,14 @@ export function ReviewWorkspace({
         })}
         {/* The model's claim reads above the human conversation about it. */}
         {lineDeepFindings
-          .filter(({ id }) => id !== activeFindingId)
+          .filter(
+            (finding) =>
+              finding.id !== activeFindingId &&
+              !publishedFindingYieldsToThread(
+                findingPublished(finding),
+                lineThreads.length,
+              ),
+          )
           .map((finding) => (
             <DeepReviewFindingChip
               key={finding.id}
@@ -3587,6 +3610,10 @@ export function ReviewWorkspace({
           activeFindingTarget.line === lineNumber &&
           units[activeFindingTarget.unitIndex]?.id === activeUnit.id &&
           !findingRevealExhausted &&
+          !publishedFindingYieldsToThread(
+            findingPublished(activeFinding),
+            lineThreads.length,
+          ) &&
           renderInlineFindingCard(activeFinding, lineNumber)}
         {lineThreads.map((thread) => (
           <ProviderConversation

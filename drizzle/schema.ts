@@ -982,6 +982,7 @@ export const aiPreferences = createTable("ai_preference", {
   selectedModel: varchar({ length: 255 }).notNull().default(""),
   mode: aiModeEnum().notNull().default("on_demand"),
   reviewPullRequests: boolean().notNull().default(false),
+  autoPublishFindings: boolean().notNull().default(false),
   maxReviewTokens: integer(),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp({ withTimezone: true })

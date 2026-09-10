@@ -23,6 +23,7 @@ const configuredLocalAi: LocalConfiguration = {
   managedModel: "gpt-4.1-mini",
   managedModels: ["gpt-4.1-mini"],
   reviewPullRequests: true,
+  autoPublishFindings: false,
   maxReviewTokens: null,
   deepReviewAvailable: true,
   configuration: {
@@ -107,6 +108,11 @@ describe("LocalAiSettings", () => {
     expect(
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
     ).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
+    ).toBeEnabled();
     expect(screen.queryByText(/monthly plan tokens/)).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Test connection" }),
@@ -150,6 +156,11 @@ describe("LocalAiSettings", () => {
     ).toBeDisabled();
     expect(
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
     ).toBeDisabled();
     expect(
       screen.getByText("This deployment cannot run a pull-request review."),
@@ -242,6 +253,7 @@ describe("LocalAiSettings", () => {
       useManagedModels: false,
       mode: "automatic",
       reviewPullRequests: false,
+      autoPublishFindings: false,
       maxReviewTokens: 12_345,
     });
   });
@@ -261,6 +273,11 @@ describe("LocalAiSettings", () => {
     ).toBeDisabled();
     expect(
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
     ).toBeDisabled();
     expect(
       screen.getByRole("textbox", { name: /Tokens per review/ }),

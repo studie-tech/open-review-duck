@@ -123,6 +123,7 @@ export const aiRouter = createTRPCRouter({
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
+      autoPublishFindings: preference?.autoPublishFindings ?? false,
       maxReviewTokens: preference?.maxReviewTokens ?? null,
       // Both review entry points read this: the Review button and the
       // auto-start effect that fires on every pull-request page load. Without
@@ -373,6 +374,7 @@ export const aiRouter = createTRPCRouter({
           selectedModel,
           mode: input.mode,
           reviewPullRequests: input.reviewPullRequests,
+          autoPublishFindings: input.autoPublishFindings,
           maxReviewTokens: input.maxReviewTokens ?? null,
         })
         .onConflictDoUpdate({
@@ -381,6 +383,7 @@ export const aiRouter = createTRPCRouter({
             selectedModel,
             mode: input.mode,
             reviewPullRequests: input.reviewPullRequests,
+            autoPublishFindings: input.autoPublishFindings,
             maxReviewTokens: input.maxReviewTokens ?? null,
           },
         });
