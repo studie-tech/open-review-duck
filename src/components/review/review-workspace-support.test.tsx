@@ -1935,7 +1935,7 @@ describe("ProviderConversation", () => {
     );
     await user.click(
       screen.getByRole("button", {
-        name: "Post reply and reopen this conversation",
+        name: "Post and reopen this conversation",
       }),
     );
 
@@ -1985,7 +1985,7 @@ describe("ProviderConversation", () => {
     );
     await user.click(
       screen.getByRole("button", {
-        name: "Post reply and keep this conversation resolved",
+        name: "Keep resolved: post the reply without reopening this conversation",
       }),
     );
 

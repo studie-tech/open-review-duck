@@ -1446,36 +1446,6 @@ export function ReviewWorkspace({
     selectedFileSourceExpanded ? displayedSource : "",
     activeUnit?.language ?? "text",
   );
-  const displayedLineEntries = useMemo(
-    () =>
-      lines.flatMap((line, index) => {
-        const lineNumber = visibleStartLine + index;
-        if (activeFileCardMembers.length <= 1) return [{ line, lineNumber }];
-        const owner = reviewCardMemberForLine(
-          activeFileCardMembers,
-          lineNumber,
-        );
-        const collapsed = owner
-          ? reviewUnitIsCollapsed({
-              hasVisibleConversation: false,
-              inspected: inspectedFilePath === owner.path,
-              override: unitFoldOverrides.get(owner.id),
-              startsCollapsed: reviewUnitStartsCollapsed(owner),
-            })
-          : false;
-        const opensUnit = activeFileCardMembers.some(
-          (member) => member.startLine === lineNumber,
-        );
-        return collapsed && !opensUnit ? [] : [{ line, lineNumber }];
-      }),
-    [
-      activeFileCardMembers,
-      inspectedFilePath,
-      lines,
-      unitFoldOverrides,
-      visibleStartLine,
-    ],
-  );
   const previousRewriteSource =
     activeUnit?.changeType === "modified" &&
     activeUnit.previousSource &&
@@ -3183,6 +3153,39 @@ export function ReviewWorkspace({
   const unitsWithVisibleConversations = useMemo(
     () => new Set(visibleProviderThreads.map(({ unitId }) => unitId)),
     [visibleProviderThreads],
+  );
+  const displayedLineEntries = useMemo(
+    () =>
+      lines.flatMap((line, index) => {
+        const lineNumber = visibleStartLine + index;
+        if (activeFileCardMembers.length <= 1) return [{ line, lineNumber }];
+        const owner = reviewCardMemberForLine(
+          activeFileCardMembers,
+          lineNumber,
+        );
+        const collapsed = owner
+          ? reviewUnitIsCollapsed({
+              hasVisibleConversation: unitsWithVisibleConversations.has(
+                owner.id,
+              ),
+              inspected: inspectedFilePath === owner.path,
+              override: unitFoldOverrides.get(owner.id),
+              startsCollapsed: reviewUnitStartsCollapsed(owner),
+            })
+          : false;
+        const opensUnit = activeFileCardMembers.some(
+          (member) => member.startLine === lineNumber,
+        );
+        return collapsed && !opensUnit ? [] : [{ line, lineNumber }];
+      }),
+    [
+      activeFileCardMembers,
+      inspectedFilePath,
+      lines,
+      unitFoldOverrides,
+      unitsWithVisibleConversations,
+      visibleStartLine,
+    ],
   );
 
   /** Reports a unit's explicit fold choice or its status-based default. */
@@ -5209,6 +5212,7 @@ export function ReviewWorkspace({
       deletedUnitsToSignOff,
       externalSyncPending,
       fileWaitingUnitIds,
+      loadingChanges,
       filteredReviewActive,
       initialData,
       nextQueueEntry,

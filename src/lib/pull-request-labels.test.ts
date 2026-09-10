@@ -19,6 +19,8 @@ describe("pull request labels", () => {
         { name: "inactive", active: false },
         { name: "   " },
         { color: "fff" },
+        { name: 12, color: { hex: "fff" }, description: 1 },
+        { name: "typed", color: 123, description: true },
       ]),
     ).toEqual([
       {
@@ -28,6 +30,7 @@ describe("pull request labels", () => {
       },
       { name: "bug", color: "d73a4a" },
       { name: "hotfix" },
+      { name: "typed" },
     ]);
     expect(normalizePullRequestLabels(undefined)).toEqual([]);
   });

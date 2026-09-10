@@ -90,7 +90,10 @@ export function useProviderConversationController({
       conversations.data?.threads,
       visibleUnitIds,
     );
-    return mergePendingProviderThreads(listed, pendingThreads);
+    return mergePendingProviderThreads(
+      listed,
+      providerThreadsForVisibleUnits(pendingThreads, visibleUnitIds),
+    );
   }, [conversations.data?.threads, pendingThreads, visibleUnitIds]);
 
   useEffect(() => {

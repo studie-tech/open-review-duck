@@ -59,6 +59,7 @@ export interface ReviewCommandState {
   deletedUnitsToSignOff: readonly unknown[];
   externalSyncPending: boolean;
   fileWaitingUnitIds: readonly string[];
+  loadingChanges: boolean;
   filteredReviewActive: boolean;
   initialData: Pick<WorkspaceData, "concepts" | "pullRequest">;
   nextQueueEntry?: { index: number; unit: { name: string } };
@@ -111,7 +112,7 @@ export interface ReviewCommandActions {
   stepAiQuestion: (direction: -1 | 1) => void;
   stepFinding: (direction: -1 | 1) => void;
   stopWaitingOnActive: () => void;
-  syncExternalData: () => Promise<void>;
+  syncExternalData: (options?: { silent?: boolean }) => Promise<boolean>;
   toggleContext: () => void;
   toggleInsightsPanel: () => void;
   togglePathPanel: () => void;
@@ -252,6 +253,7 @@ export function buildReviewWorkspaceCommands(
     externalSyncPending,
     fileWaitingUnitIds,
     filteredReviewActive,
+    loadingChanges,
     initialData,
     nextQueueEntry,
     nextReview,
@@ -615,23 +617,29 @@ export function buildReviewWorkspaceCommands(
 
     {
       id: "sync-provider-data",
-      label: updateAvailable
-        ? "Load code changes"
-        : externalSyncPending
-          ? "Syncing…"
-          : "Check for updates",
-      description: updateAvailable
-        ? "Load the synced revision and preserve unaffected sign-offs"
-        : externalSyncPending
-          ? "ReviewDuck is fetching the latest pull request revision"
-          : "ReviewDuck watches the pull-request head and syncs when it moves",
+      label: loadingChanges
+        ? "Loading new revision"
+        : updateAvailable
+          ? "Load code changes"
+          : externalSyncPending
+            ? "Syncing…"
+            : "Check for updates",
+      description: loadingChanges
+        ? "ReviewDuck is replacing the workspace with the synced revision"
+        : updateAvailable
+          ? "Load the synced revision and preserve unaffected sign-offs"
+          : externalSyncPending
+            ? "ReviewDuck is fetching the latest pull request revision"
+            : "ReviewDuck watches the pull-request head and syncs when it moves",
       group: "Review actions",
       icon: <RefreshCw className="size-4" />,
       shortcut: updateAvailable
         ? reviewShortcuts.loadChanges
         : reviewShortcuts.refresh,
       disabled:
-        resetReview.isPending || (!updateAvailable && externalSyncPending),
+        resetReview.isPending ||
+        loadingChanges ||
+        (!updateAvailable && externalSyncPending),
       onSelect: updateAvailable
         ? loadAvailableChanges
         : () => void syncExternalData(),
@@ -648,6 +656,7 @@ export function buildReviewWorkspaceCommands(
         pendingConceptSignOffIds.size > 0 ||
         pendingUndoCount > 0 ||
         externalSyncPending ||
+        loadingChanges ||
         resetReview.isPending,
       onSelect: () => setResetDialogOpen(true),
     },

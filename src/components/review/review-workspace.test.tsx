@@ -349,6 +349,26 @@ describe("reshapeProviderThreads", () => {
     expect(providerThreadsForVisibleUnits(threads, [])).toEqual([]);
   });
 
+  it("hides a just-published conversation that belongs to another file card", () => {
+    const pending = pendingProviderThreadFromComment(
+      {
+        body: "Please cap this retry.",
+        line: 129,
+        providerExternalId: "980",
+        publishedAt: new Date("2026-09-09T18:00:00Z"),
+        unitId: "unit-1",
+      },
+      "src/retry.ts",
+    );
+
+    expect(
+      mergePendingProviderThreads(
+        providerThreadsForVisibleUnits(threads, ["unit-2"]),
+        providerThreadsForVisibleUnits(pending ? [pending] : [], ["unit-2"]),
+      ).map(({ externalId }) => externalId),
+    ).toEqual(["910"]);
+  });
+
   it("keeps a just-published conversation until the provider lists it", () => {
     const pending = pendingProviderThreadFromComment(
       {

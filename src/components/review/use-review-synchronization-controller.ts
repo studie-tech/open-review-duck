@@ -163,7 +163,7 @@ export function useReviewSynchronizationController({
 
   /** Queues durable source synchronization. */
   async function syncExternalData(options?: { silent?: boolean }) {
-    if (manualSyncPending) return;
+    if (manualSyncPending) return false;
     silentSync.current = Boolean(options?.silent);
     sendReviewSession({ type: "SYNC_STARTED" });
     try {
@@ -176,6 +176,7 @@ export function useReviewSynchronizationController({
             "ReviewDuck will preserve your current review while it runs.",
         });
       }
+      return true;
     } catch (cause) {
       silentSync.current = false;
       sendReviewSession({ type: "SYNC_FINISHED" });
@@ -186,6 +187,7 @@ export function useReviewSynchronizationController({
             cause instanceof Error ? cause.message : "Try again in a moment.",
         },
       );
+      return false;
     }
   }
 
@@ -205,8 +207,10 @@ export function useReviewSynchronizationController({
     ) {
       return;
     }
-    autoSyncedHeadSha.current = probe.headSha;
-    void syncExternalDataRef.current({ silent: true });
+    void (async () => {
+      const queued = await syncExternalDataRef.current({ silent: true });
+      autoSyncedHeadSha.current = queued ? probe.headSha : undefined;
+    })();
   }, [revisionProbe.data, syncing]);
 
   /** Persists the exact pull-request revision currently on screen. */
