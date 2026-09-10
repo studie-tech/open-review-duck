@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { connectProviderSchema } from "./provider";
+import {
+  connectPersonalProviderSchema,
+  connectProviderSchema,
+  saveCommentIdentitySchema,
+} from "./provider";
 
 describe("provider connection validation", () => {
   it.each(["github", "gitlab"] as const)(
@@ -46,5 +50,25 @@ describe("provider connection validation", () => {
         accessToken: "replacement-token",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("personal comment identity validation", () => {
+  it("accepts a publish-as-self preference", () => {
+    expect(saveCommentIdentitySchema.parse({ publishAsSelf: true })).toEqual({
+      publishAsSelf: true,
+    });
+  });
+
+  it("accepts a personal token for an existing connection", () => {
+    expect(
+      connectPersonalProviderSchema.parse({
+        connectionId: "0bf4a1f7-0f30-4f08-9439-577356ddbc13",
+        accessToken: "personal-token",
+      }),
+    ).toEqual({
+      connectionId: "0bf4a1f7-0f30-4f08-9439-577356ddbc13",
+      accessToken: "personal-token",
+    });
   });
 });

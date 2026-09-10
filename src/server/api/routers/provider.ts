@@ -10,8 +10,10 @@ import {
   pullRequests,
   repositories,
   reviewQueueItems,
+  workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import { personalCredentialUsesOAuth } from "~/lib/personal-provider-identity";
 import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
 import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import {
@@ -27,6 +29,12 @@ import {
   revokeGitHubInstallation,
   revokeProviderOAuth,
 } from "~/server/providers/credentials";
+import {
+  deleteUserProviderCredential,
+  listUserProviderCredentials,
+  revokeUserProviderCredentials,
+  savePersonalProviderPat,
+} from "~/server/providers/user-credentials";
 import { exportRepositoryReviewData } from "~/server/providers/export";
 import {
   reconcileRepositoryIntake,
@@ -51,8 +59,10 @@ import { requirePersonalWorkspaceAdministrator } from "~/server/workspaces/acces
 import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 import {
   connectionIdSchema,
+  connectPersonalProviderSchema,
   connectProviderSchema,
   importRepositorySchema,
+  saveCommentIdentitySchema,
   repositoryIdSchema,
   repositoryIntakeSchema,
   repositoryRetentionSchema,
@@ -124,6 +134,108 @@ export const providerRouter = createTRPCRouter({
       .from(providerConnections)
       .where(eq(providerConnections.workspaceId, workspace.id));
   }),
+
+  commentIdentity: protectedProcedure.query(async ({ ctx }) => {
+    const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+    const [membership, connections, credentials] = await Promise.all([
+      ctx.db.query.workspaceMembers.findFirst({
+        columns: { publishAsSelf: true },
+        where: and(
+          eq(workspaceMembers.workspaceId, workspace.id),
+          eq(workspaceMembers.userId, ctx.auth.userId),
+        ),
+      }),
+      ctx.db.query.providerConnections.findMany({
+        columns: {
+          id: true,
+          provider: true,
+          displayName: true,
+          credentialKind: true,
+        },
+        where: eq(providerConnections.workspaceId, workspace.id),
+      }),
+      listUserProviderCredentials(ctx.db, ctx.auth.userId, workspace.id),
+    ]);
+    const identityByConnection = new Map(
+      credentials.map((credential) => [credential.connectionId, credential]),
+    );
+    return {
+      publishAsSelf: membership?.publishAsSelf === true,
+      connections: connections.map((connection) => ({
+        connectionId: connection.id,
+        provider: connection.provider,
+        displayName: connection.displayName,
+        credentialKind: connection.credentialKind,
+        usesOAuth: personalCredentialUsesOAuth(connection, isLocalDeployment()),
+        identity: identityByConnection.get(connection.id) ?? null,
+      })),
+    };
+  }),
+
+  saveCommentIdentity: protectedProcedure
+    .input(saveCommentIdentitySchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      const [membership] = await ctx.db
+        .update(workspaceMembers)
+        .set({ publishAsSelf: input.publishAsSelf })
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, workspace.id),
+            eq(workspaceMembers.userId, ctx.auth.userId),
+          ),
+        )
+        .returning({ publishAsSelf: workspaceMembers.publishAsSelf });
+      if (!membership) throw new TRPCError({ code: "NOT_FOUND" });
+      return membership;
+    }),
+
+  connectPersonalCredential: protectedProcedure
+    .input(connectPersonalProviderSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      await enforceRateLimit(
+        ctx.db,
+        `personal-provider-connect:${workspace.id}:${ctx.auth.userId}`,
+        10,
+        10 * 60_000,
+      );
+      const connection = await ctx.db.query.providerConnections.findFirst({
+        where: and(
+          eq(providerConnections.id, input.connectionId),
+          eq(providerConnections.workspaceId, workspace.id),
+        ),
+      });
+      if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      try {
+        return await savePersonalProviderPat(ctx.db, {
+          userId: ctx.auth.userId,
+          connection,
+          accessToken: input.accessToken,
+        });
+      } catch (cause) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: providerConnectionErrorMessage(connection.provider, cause),
+          cause,
+        });
+      }
+    }),
+
+  disconnectPersonalCredential: protectedProcedure
+    .input(connectionIdSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
+      const connection = await ctx.db.query.providerConnections.findFirst({
+        where: and(
+          eq(providerConnections.id, input.connectionId),
+          eq(providerConnections.workspaceId, workspace.id),
+        ),
+      });
+      if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      await deleteUserProviderCredential(ctx.db, ctx.auth.userId, connection);
+      return { disconnected: true as const };
+    }),
 
   connect: protectedProcedure
     .input(connectProviderSchema)
@@ -499,6 +611,11 @@ export const providerRouter = createTRPCRouter({
           await revokeProviderOAuth(ctx.db, connection);
         } catch (cause) {
           recordRemoteCleanupFailure("revoke_oauth_token", cause);
+        }
+        try {
+          await revokeUserProviderCredentials(ctx.db, connection);
+        } catch (cause) {
+          recordRemoteCleanupFailure("revoke_user_oauth_tokens", cause);
         }
       }
       const removed = await ctx.db.transaction(async (tx) => {

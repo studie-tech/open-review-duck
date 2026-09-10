@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "~/components/page-container";
+import { CommentIdentity } from "~/components/settings/comment-identity";
 import { ConnectionDetail } from "~/components/settings/connection-detail";
 import {
   type Connection,
@@ -379,6 +380,12 @@ export function ProviderSettings({
             : "Use the provider's authorization flow, or connect with an encrypted access token when organization policy requires it."}
         </p>
       </div>
+
+      {connections.length > 0 && (
+        <div className={cn(mobileDetailOpen && "hidden md:block")}>
+          <CommentIdentity localMode={localMode} />
+        </div>
+      )}
 
       {connections.length === 0 ? (
         <div className="grid flex-1 place-items-center rounded-3xl border border-dashed border-line px-6 py-16">
