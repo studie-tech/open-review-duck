@@ -1,3 +1,5 @@
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
+
 type PriorityInboxGroupId = "continue" | "ready" | "unreviewable";
 export type PriorityInboxView = "all" | PriorityInboxGroupId;
 
@@ -6,6 +8,7 @@ export interface PriorityInboxItem {
   authorLogin: string;
   deletions: number;
   id: string;
+  labels?: readonly PullRequestLabel[];
   number: number;
   provider: "github" | "gitlab" | "azure_devops";
   repositoryName: string;
@@ -140,6 +143,7 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
       String(pullRequest.number),
       pullRequest.provider.replace("_", " "),
       `${pullRequest.provider}:${pullRequest.repositoryOwner}/${pullRequest.repositoryName}`,
+      ...(pullRequest.labels ?? []).map((label) => label.name),
     ]
       .join(" ")
       .toLowerCase();

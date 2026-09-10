@@ -6,6 +6,7 @@ import {
   githubMergeGate,
 } from "~/lib/provider-merge-gate";
 import { githubViewerCanMerge } from "~/lib/provider-permission-recovery";
+import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -77,6 +78,11 @@ interface GitHubPull {
   user: { id: number; login: string; avatar_url: string };
   requested_reviewers?: Array<{ id: number; login: string }>;
   assignees?: Array<{ id: number; login: string }>;
+  labels?: Array<{
+    name: string;
+    color?: string | null;
+    description?: string | null;
+  }>;
   head: { ref: string; sha: string };
   base: { ref: string; sha: string };
   mergeable?: boolean | null;
@@ -398,6 +404,7 @@ export class GitHubProvider implements PullRequestProvider {
       additions: pull.additions ?? 0,
       deletions: pull.deletions ?? 0,
       changedFiles: pull.changed_files ?? 0,
+      labels: normalizePullRequestLabels(pull.labels),
     };
   }
 

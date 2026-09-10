@@ -268,7 +268,7 @@ export async function providerLifecycleForConnection(
 export function providerOperationError(
   provider: ProviderName,
   cause: unknown,
-  operation: "review" | "lifecycle" | "merge",
+  operation: "review" | "lifecycle" | "merge" | "probe",
 ) {
   if (cause instanceof TRPCError) return cause;
   const label = providerLabel(provider);
@@ -286,12 +286,39 @@ export function providerOperationError(
       forbidden: `${label} did not allow merging this pull request. Reconnect it with merge permission, or finish the merge on ${label}.`,
       failed: `${label} could not merge this pull request`,
     },
+    probe: {
+      forbidden: `${label} did not allow reading this pull request. Reconnect it with permission to view pull requests.`,
+      failed: `${label} pull-request revision could not be checked`,
+    },
   }[operation];
   return new TRPCError({
     code: permissionDenied ? "FORBIDDEN" : "BAD_GATEWAY",
     message: permissionDenied ? messages.forbidden : messages.failed,
     cause,
   });
+}
+
+/**
+ * Reports whether the stored pull request still matches the remote revision.
+ *
+ * Head and base must match both the tracked pull request and the snapshot
+ * the reviewer is looking at. A moved branch or a stale snapshot both
+ * mean the workspace is behind.
+ */
+export function providerRevisionIsCurrent(
+  scope: {
+    baseSha: string;
+    headSha: string;
+    snapshot?: { baseSha: string; headSha: string } | null;
+  },
+  remote: { baseSha: string; headSha: string },
+) {
+  return (
+    remote.headSha === scope.headSha &&
+    remote.baseSha === scope.baseSha &&
+    scope.snapshot?.headSha === scope.headSha &&
+    scope.snapshot?.baseSha === scope.baseSha
+  );
 }
 
 /** Gates merge on the exact revision the reviewer just finished. */
@@ -309,11 +336,7 @@ export function scopedProviderLifecycle(
   lifecycle: ProviderPullRequestLifecycle,
   remote: { headSha: string; baseSha: string },
 ) {
-  const revisionCurrent =
-    remote.headSha === scope.headSha &&
-    remote.baseSha === scope.baseSha &&
-    scope.snapshot?.headSha === scope.headSha &&
-    scope.snapshot?.baseSha === scope.baseSha;
+  const revisionCurrent = providerRevisionIsCurrent(scope, remote);
   return {
     ...lifecycle,
     provider: scope.connection.provider,

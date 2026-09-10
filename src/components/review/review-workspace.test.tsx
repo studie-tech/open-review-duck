@@ -19,12 +19,16 @@ import {
 } from "./deep-review-findings";
 import {
   aiJobActive,
+  mergePendingProviderThreads,
+  pendingProviderThreadFromComment,
+  providerThreadsForVisibleUnits,
   reshapeProviderThreads,
   restoreProviderThread,
   reviewCardPinTarget,
   useReviewExitPrefetch,
   useReviewFileAdvance,
   useTerminalReviewRefetch,
+  withPublishedDiscussionComment,
 } from "./review-workspace-hooks";
 import {
   applyAiQuestionStreamUpdate,
@@ -332,6 +336,67 @@ describe("reshapeProviderThreads", () => {
       ],
     },
   ];
+
+  it("keeps sibling-unit conversations on the file card that shows them", () => {
+    expect(
+      providerThreadsForVisibleUnits(threads, ["unit-2"]).map(
+        ({ externalId }) => externalId,
+      ),
+    ).toEqual(["910"]);
+    expect(
+      providerThreadsForVisibleUnits(threads, ["unit-1", "unit-2"]),
+    ).toHaveLength(2);
+    expect(providerThreadsForVisibleUnits(threads, [])).toEqual([]);
+  });
+
+  it("keeps a just-published conversation until the provider lists it", () => {
+    const pending = pendingProviderThreadFromComment(
+      {
+        body: "Please cap this retry.",
+        line: 129,
+        providerExternalId: "980",
+        publishedAt: new Date("2026-09-09T18:00:00Z"),
+        unitId: "unit-1",
+      },
+      "src/retry.ts",
+    );
+
+    expect(pending).toMatchObject({
+      externalId: "980",
+      line: 129,
+      unitId: "unit-1",
+    });
+    expect(
+      mergePendingProviderThreads(threads, pending ? [pending] : []).map(
+        ({ externalId }) => externalId,
+      ),
+    ).toEqual(["901", "910", "980"]);
+    const alreadyListed = threads[0];
+    expect(alreadyListed).toBeDefined();
+    expect(
+      mergePendingProviderThreads(
+        threads,
+        alreadyListed ? [alreadyListed] : [],
+      ).map(({ externalId }) => externalId),
+    ).toEqual(["901", "910"]);
+  });
+
+  it("writes a published comment into a unit discussion that never had one", () => {
+    const comment = {
+      id: "comment-1",
+      unitId: "unit-1",
+      body: "Please cap this retry.",
+      line: 129,
+      source: "user" as const,
+      status: "published" as const,
+      providerExternalId: "980",
+    };
+    const seeded = withPublishedDiscussionComment(undefined, comment as never);
+    expect(seeded.comments).toEqual([comment]);
+    expect(
+      withPublishedDiscussionComment(seeded, comment as never).comments,
+    ).toHaveLength(1);
+  });
 
   it("flips only the named conversation between resolved and open", () => {
     const resolved = reshapeProviderThreads(threads, {

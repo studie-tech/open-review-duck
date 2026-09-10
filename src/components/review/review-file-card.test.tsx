@@ -17,6 +17,7 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
+  reviewUnitIsCollapsed,
   reviewUnitStartsCollapsed,
 } from "./review-file-card";
 
@@ -361,6 +362,38 @@ describe("ReviewFileUnitMarker", () => {
     expect(reviewUnitStartsCollapsed({ status: "signed_off" })).toBe(true);
     expect(reviewUnitStartsCollapsed({ status: "pending" })).toBe(false);
     expect(reviewUnitStartsCollapsed({ status: "waiting" })).toBe(false);
+  });
+
+  it("opens inspected or discussed units unless the reviewer folded them", () => {
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: false,
+        inspected: true,
+        startsCollapsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: true,
+        inspected: false,
+        startsCollapsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: true,
+        inspected: true,
+        override: true,
+        startsCollapsed: true,
+      }),
+    ).toBe(true);
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: false,
+        inspected: false,
+        startsCollapsed: true,
+      }),
+    ).toBe(true);
   });
 
   it("labels the unit as a section with its line span instead of a card title", () => {

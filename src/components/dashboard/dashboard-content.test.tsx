@@ -192,6 +192,7 @@ describe("PullRequestsContent", () => {
       totalUnits: 4,
       signedUnits: 0,
       carriedSignOffs: 0,
+      labels: [],
       ...rest,
     };
   };
@@ -414,6 +415,10 @@ describe("PullRequestsContent", () => {
         number: 101,
         title: "Inventory improvements",
         signedUnits: 2,
+        labels: [
+          { name: "size:XXL", color: "b60205" },
+          { name: "feat", color: "0e8a16" },
+        ],
       }),
       pullRequest({
         id: "unsupported",
@@ -437,6 +442,8 @@ describe("PullRequestsContent", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByText("Continue reviewing")).toBeVisible();
+    expect(screen.getByText("size:XXL")).toBeVisible();
+    expect(screen.getByText("feat")).toBeVisible();
     expect(screen.getAllByText("Ready to start").length).toBeGreaterThan(0);
 
     await user.selectOptions(
@@ -756,6 +763,7 @@ describe("PullRequestsContent", () => {
           targetBranch: "main",
           title: "Add usage metrics",
           webUrl: "https://example.com/pull/77",
+          labels: [{ name: "size:L", color: "d93f0b" }],
         },
       ],
     };
@@ -779,6 +787,7 @@ describe("PullRequestsContent", () => {
       screen.getByRole("heading", { name: "Your priority inbox" }),
     ).toBeVisible();
     expect(screen.getByText("Add usage metrics")).toBeVisible();
+    expect(screen.getByText("size:L")).toBeVisible();
     expect(screen.getByText("Not in your queue")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Add for review" }));
@@ -828,6 +837,7 @@ describe("PullRequestsContent", () => {
           targetBranch: "main",
           title: "Draft usage metrics",
           webUrl: "https://example.com/pull/78",
+          labels: [],
         },
       ],
     };

@@ -4,12 +4,14 @@ import { useState } from "react";
 
 interface ReviewDialogControllerInput {
   importPreviewOpen: boolean;
+  lineActionOpen?: boolean;
   linePickerOpen: boolean;
 }
 
 /** Owns modal visibility and the command-center suspension derived from it. */
 export function useReviewDialogController({
   importPreviewOpen,
+  lineActionOpen = false,
   linePickerOpen,
 }: ReviewDialogControllerInput) {
   const [hierarchyOpen, setHierarchyOpen] = useState(false);
@@ -24,6 +26,7 @@ export function useReviewDialogController({
   return {
     aiReviewDialogOpen,
     commandBindingsSuspended:
+      lineActionOpen ||
       linePickerOpen ||
       importPreviewOpen ||
       hierarchyOpen ||

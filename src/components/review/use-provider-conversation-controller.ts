@@ -1,24 +1,33 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { providerLabel } from "~/lib/provider-labels";
 import { api, type RouterOutputs } from "~/trpc/react";
 import {
+  mergePendingProviderThreads,
   type ProviderThreadChange,
+  pendingProviderThreadFromComment,
+  providerThreadsForVisibleUnits,
   reshapeProviderThreads,
   restoreProviderThread,
+  withPublishedDiscussionComment,
 } from "./review-workspace-hooks";
 import type { ProviderConversationActions } from "./review-workspace-provider-conversation";
 
 type WorkspacePullRequest = RouterOutputs["review"]["workspace"]["pullRequest"];
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
+type ProviderConversationThread = ProviderConversations["threads"][number];
+type DiscussionComment =
+  RouterOutputs["review"]["unitDiscussion"]["comments"][number];
 
 interface ProviderConversationControllerInput {
   clearDraft: () => void;
   pullRequest: WorkspacePullRequest;
   refreshIntervalMs: number;
   settledUnitId?: string;
+  unitPathById: ReadonlyMap<string, string>;
+  visibleUnitIds: readonly string[];
   waitingCount: number;
 }
 
@@ -33,9 +42,14 @@ export function useProviderConversationController({
   pullRequest,
   refreshIntervalMs,
   settledUnitId,
+  unitPathById,
+  visibleUnitIds,
   waitingCount,
 }: ProviderConversationControllerInput) {
   const utils = api.useUtils();
+  const [pendingThreads, setPendingThreads] = useState<
+    ProviderConversationThread[]
+  >([]);
   const discussion = api.review.unitDiscussion.useQuery(
     { unitId: settledUnitId ?? "" },
     { enabled: Boolean(settledUnitId) },
@@ -71,17 +85,55 @@ export function useProviderConversationController({
     );
   }, [conversations.data?.answeredUnitIds]);
 
+  const visibleThreads = useMemo(() => {
+    const listed = providerThreadsForVisibleUnits(
+      conversations.data?.threads,
+      visibleUnitIds,
+    );
+    return mergePendingProviderThreads(listed, pendingThreads);
+  }, [conversations.data?.threads, pendingThreads, visibleUnitIds]);
+
+  useEffect(() => {
+    const listed = new Set(
+      (conversations.data?.threads ?? []).map(({ externalId }) => externalId),
+    );
+    if (listed.size === 0) return;
+    setPendingThreads((current) => {
+      const next = current.filter(({ externalId }) => !listed.has(externalId));
+      return next.length === current.length ? current : next;
+    });
+  }, [conversations.data?.threads]);
+
   const publishComment = api.review.publishComment.useMutation({
-    onSuccess: () => {
+    onSuccess: (comment) => {
       toast.success("Comment published", {
         description: `Your inline comment is now on ${providerLabel(pullRequest.provider)}.`,
       });
       clearDraft();
+      rememberPublishedComment(comment);
       void discussion.refetch();
       void conversations.refetch();
     },
     onError: (error) => toast.error(error.message),
   });
+
+  /** Keeps a just-posted comment on the file card if the reviewer leaves. */
+  function rememberPublishedComment(comment: DiscussionComment) {
+    utils.review.unitDiscussion.setData({ unitId: comment.unitId }, (current) =>
+      withPublishedDiscussionComment(current, comment),
+    );
+    const path = unitPathById.get(comment.unitId);
+    const pending = path
+      ? pendingProviderThreadFromComment(comment, path)
+      : undefined;
+    if (!pending) return;
+    setPendingThreads((current) =>
+      mergePendingProviderThreads(
+        current.filter(({ externalId }) => externalId !== pending.externalId),
+        [pending],
+      ),
+    );
+  }
 
   /** Applies one optimistic provider change and returns its rollback snapshot. */
   async function applyConversationChange(change: ProviderThreadChange) {
@@ -278,5 +330,6 @@ export function useProviderConversationController({
     providerThreadActions,
     publishComment,
     replyingToThread,
+    visibleThreads,
   };
 }

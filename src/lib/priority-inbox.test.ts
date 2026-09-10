@@ -86,6 +86,17 @@ describe("priority inbox", () => {
       }),
     ).toEqual([target]);
     expect(
+      filterPriorityInbox(
+        [item({ id: "labeled", labels: [{ name: "size:XXL" }] })],
+        {
+          view: "all",
+          provider: "all",
+          repositories: [],
+          search: "size:xxl",
+        },
+      ).map(({ id }) => id),
+    ).toEqual(["labeled"]);
+    expect(
       filterPriorityInbox([target, item({ id: "other", signedUnits: 1 })], {
         view: "all",
         provider: "all",

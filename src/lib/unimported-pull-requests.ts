@@ -4,6 +4,7 @@ import {
   type PriorityInboxItem,
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
 
 export interface UnimportedPullRequest {
   additions: number;
@@ -11,6 +12,7 @@ export interface UnimportedPullRequest {
   authorLogin: string;
   deletions: number;
   externalId: string;
+  labels: PullRequestLabel[];
   number: number;
   provider: PriorityInboxItem["provider"];
   repositoryId: string;
@@ -91,6 +93,7 @@ function asPriorityInboxItem(
     authorLogin: pullRequest.authorLogin,
     deletions: pullRequest.deletions,
     id: unimportedPullRequestKey(pullRequest),
+    labels: pullRequest.labels,
     number: pullRequest.number,
     provider: pullRequest.provider,
     repositoryName: pullRequest.repositoryName,

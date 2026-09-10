@@ -1,5 +1,6 @@
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { gitlabMergeGate } from "~/lib/provider-merge-gate";
+import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -48,6 +49,14 @@ interface GitLabMergeRequest {
   sha: string;
   diff_refs: { base_sha: string; head_sha: string };
   author: { id: number; username: string; avatar_url: string | null };
+  labels?: Array<
+    | string
+    | {
+        name: string;
+        color?: string | null;
+        description?: string | null;
+      }
+  >;
   changes_count?: string;
   merge_status?: string;
   detailed_merge_status?: string;
@@ -290,7 +299,7 @@ export class GitLabProvider implements PullRequestProvider {
       ? `&reviewer_id=${encodeURIComponent(options.reviewerExternalAccountId)}`
       : "";
     const items = await this.getAllPages<GitLabMergeRequest>(
-      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests?state=opened&per_page=100${reviewer}`,
+      `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests?state=opened&per_page=100&with_labels_details=true${reviewer}`,
     );
     return items.map((item) => this.normalize(item));
   }
@@ -299,7 +308,7 @@ export class GitLabProvider implements PullRequestProvider {
     return this.normalize(
       await providerFetch<GitLabMergeRequest>(
         this.name,
-        `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests/${number}`,
+        `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/merge_requests/${number}?with_labels_details=true`,
         { headers: this.headers },
       ),
     );
@@ -813,6 +822,7 @@ export class GitLabProvider implements PullRequestProvider {
       additions: 0,
       deletions: 0,
       changedFiles: Number.parseInt(item.changes_count ?? "0", 10) || 0,
+      labels: normalizePullRequestLabels(item.labels),
     };
   }
 

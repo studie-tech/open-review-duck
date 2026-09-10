@@ -33,6 +33,24 @@ export function reviewUnitStartsCollapsed(member: ReviewCardMemberState) {
 }
 
 /**
+ * Reports whether a file-card unit should hide its source lines.
+ *
+ * An explicit fold from the unit chevron wins. Visible conversations and
+ * a file the reviewer just chose to inspect stay open. Otherwise signed-off
+ * units start collapsed.
+ */
+export function reviewUnitIsCollapsed(input: {
+  hasVisibleConversation: boolean;
+  inspected: boolean;
+  override?: boolean;
+  startsCollapsed: boolean;
+}) {
+  if (input.override !== undefined) return input.override;
+  if (input.hasVisibleConversation || input.inspected) return false;
+  return input.startsCollapsed;
+}
+
+/**
  * Reports whether a file-card member still needs the reviewer's attention.
  *
  * Standing sign-off is done. Waiting is paused, not owed. A unit that

@@ -1,3 +1,4 @@
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import type { SourceFile } from "~/server/analysis/types";
 
 export type ProviderName = "github" | "gitlab" | "azure_devops";
@@ -34,6 +35,7 @@ export interface PullRequestSummary {
   additions: number;
   deletions: number;
   changedFiles: number;
+  labels: PullRequestLabel[];
 }
 
 export interface PullRequestListOptions {

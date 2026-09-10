@@ -170,6 +170,7 @@ function createTracked(
     additions: 12,
     deletions: 3,
     changedFiles: 2,
+    labels: [],
     lastSyncedAt: new Date("2026-08-01T00:00:00Z"),
     createdAt: new Date("2026-08-01T00:00:00Z"),
     updatedAt: new Date("2026-08-01T00:00:00Z"),
@@ -197,6 +198,7 @@ function createSummary(
     additions: 0,
     deletions: 0,
     changedFiles: 0,
+    labels: [],
     ...overrides,
   };
 }
@@ -269,6 +271,27 @@ describe("repository pull-request state refresh", () => {
       db,
       expect.objectContaining({ pullRequestNumber: 11 }),
     );
+  });
+
+  it("writes provider labels when they change without a revision move", async () => {
+    const { db, writes } = createClaimedDb([createTracked()]);
+
+    await refreshRepositoryPullRequestStates(
+      db,
+      repository,
+      createListingAccess([
+        createSummary({
+          labels: [{ name: "size:L", color: "d93f0b" }],
+        }),
+      ]),
+    );
+
+    const [write] = writes.filter((entry) => entry.table === pullRequests);
+    expect(write?.values).toMatchObject({
+      labels: [{ name: "size:L", color: "d93f0b" }],
+      headSha: "aaa",
+    });
+    expect(mocks.startPullRequestSync).not.toHaveBeenCalled();
   });
 
   it("keeps the stored diff counts for pull requests seen only in the listing", async () => {

@@ -9,8 +9,14 @@ import {
   importPathCandidates,
 } from "~/lib/import-navigation";
 import { SYMBOL_PEEK_MAXIMUM_LINES } from "~/lib/symbol-peek";
+import { languageAdapterForFile } from "~/server/analysis/adapters";
 import { analyzeFiles } from "~/server/analysis/engine";
 import { parseImportReferences } from "~/server/analysis/imports";
+import {
+  type TreeSitterLanguage,
+  withPreparedTreeSitterLanguages,
+} from "~/server/analysis/tree-sitter";
+import { grammarAssets, type SourceFile } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
 import {
@@ -22,6 +28,45 @@ import { hydrateReviewUnits } from "~/server/storage/review-units";
 import type { symbolDefinitionSchema } from "~/validators/review";
 
 type SymbolDefinitionInput = z.infer<typeof symbolDefinitionSchema>;
+
+/**
+ * Picks the Tree-sitter grammars a peek has to load before it can parse.
+ *
+ * The process-wide cache starts empty after a restart and keeps only a
+ * handful of languages warm. A hover that analyzes without loading first
+ * throws, and the reviewer sees a failed lookup for a name declared nearby.
+ */
+function treeSitterLanguagesFor(
+  ...languages: Array<string | undefined>
+): TreeSitterLanguage[] {
+  const prepared: TreeSitterLanguage[] = [];
+  for (const language of languages) {
+    if (
+      language &&
+      language !== "text" &&
+      language in grammarAssets &&
+      !prepared.includes(language as TreeSitterLanguage)
+    ) {
+      prepared.push(language as TreeSitterLanguage);
+    }
+  }
+  return prepared;
+}
+
+/**
+ * Analyzes files after loading every grammar those paths need.
+ *
+ * Import previews and imported-symbol peeks share this path so a restart
+ * cannot turn a click or hover into a thrown lookup.
+ */
+export async function analyzeFilesForSymbolPeek(files: SourceFile[]) {
+  return withPreparedTreeSitterLanguages(
+    treeSitterLanguagesFor(
+      ...files.map((file) => languageAdapterForFile(file)?.language),
+    ),
+    () => analyzeFiles(files),
+  );
+}
 
 /** Shapes one declaration as the definition card the reviewer reads. */
 function symbolDefinitionOf(
@@ -183,6 +228,47 @@ interface ParsedSymbolFile {
 }
 
 /**
+ * Builds the declaration and import index a hover uses for one file's source.
+ *
+ * Loading the file's grammar here keeps a peek from throwing when the review
+ * was analyzed in an earlier server lifetime and the warm cache is empty.
+ */
+export async function parsedSymbolFileFromSource(
+  path: string,
+  source: string,
+  sourceLanguage: string,
+) {
+  const sourceFile = {
+    path,
+    content: source,
+    changeType: "modified" as const,
+    reviewWholeFile: true,
+  };
+  return withPreparedTreeSitterLanguages(
+    treeSitterLanguagesFor(
+      sourceLanguage,
+      languageAdapterForFile(sourceFile)?.language,
+    ),
+    () => {
+      const declarations: ParsedSymbolFile["declarations"] = new Map();
+      for (const unit of analyzeFiles([sourceFile]).units) {
+        if (unit.kind === "file" || unit.kind === "module") continue;
+        // The first declaration of a name wins, the same way a single `find` did.
+        if (!declarations.has(unit.name)) {
+          declarations.set(unit.name, symbolDefinitionOf(unit, unit.startLine));
+        }
+      }
+      return {
+        declarations,
+        imports: parseImportReferences(source, sourceLanguage),
+        language: sourceLanguage,
+        source,
+      } satisfies ParsedSymbolFile;
+    },
+  );
+}
+
+/**
  * Narrows a whole file to the lines a definition card can actually show.
  *
  * A module answers when no declaration in it does, and the file behind it may
@@ -221,7 +307,9 @@ let symbolFileCacheCharacters = 0;
  * Peek fires on hover, and one parse answers every name in the file, so the
  * declarations and imports are kept against the snapshot revision they came
  * from instead of running the analysis again for the next name on the same
- * line.
+ * line. The parse loads its own grammar: a review analyzed before this
+ * process started has no warm Tree-sitter cache, and throwing there would
+ * hide even snapshot units the hover could have shown.
  */
 export async function parsedSymbolFile(
   db: typeof database,
@@ -250,32 +338,31 @@ export async function parsedSymbolFile(
     }),
   );
   if (!file?.source) return undefined;
-  const declarations: ParsedSymbolFile["declarations"] = new Map();
-  for (const unit of analyzeFiles([
-    {
-      path: input.sourcePath,
-      content: file.source,
-      changeType: "modified",
-      reviewWholeFile: true,
-    },
-  ]).units) {
-    if (unit.kind === "file" || unit.kind === "module") continue;
-    // The first declaration of a name wins, the same way a single `find` did.
-    if (!declarations.has(unit.name)) {
-      declarations.set(unit.name, symbolDefinitionOf(unit, unit.startLine));
-    }
+  // A parse failure must not take the lookup down: the snapshot often already
+  // stores the declaration, and that fallback is how a nearby name still
+  // answers after a restart before the grammar cache is warm.
+  let parsed: ParsedSymbolFile;
+  try {
+    parsed = await parsedSymbolFileFromSource(
+      input.sourcePath,
+      file.source,
+      input.sourceLanguage,
+    );
+  } catch (cause) {
+    console.error(
+      "Symbol definition lookup could not parse the reviewed file",
+      {
+        path: input.sourcePath,
+        message: cause instanceof Error ? cause.message : String(cause),
+      },
+    );
+    return undefined;
   }
   // Two hovers on the same file can both miss while the first is still
   // reading it, and both arrive here. The entry they overwrite has to leave
   // the total, or it keeps a surplus that eventually empties the ring on
   // every insert and quietly costs a parse per hover.
   symbolFileCacheCharacters -= symbolFileCacheWeights.get(key) ?? 0;
-  const parsed = {
-    declarations,
-    imports: parseImportReferences(file.source, input.sourceLanguage),
-    language: input.sourceLanguage,
-    source: file.source,
-  } satisfies ParsedSymbolFile;
   symbolFileCache.set(key, parsed);
   symbolFileCacheCharacters += file.source.length;
   symbolFileCacheWeights.set(key, file.source.length);
@@ -380,9 +467,24 @@ export async function importedSymbolDefinition(
     if (read.content === undefined) {
       return { kind: "unresolved" as const, reason: "too_large" as const };
     }
-    const analyzed = analyzeFiles([
-      { path: read.path, content: read.content, changeType: "modified" },
-    ]).units;
+    let analyzed: ReturnType<typeof analyzeFiles>["units"];
+    try {
+      analyzed = (
+        await analyzeFilesForSymbolPeek([
+          { path: read.path, content: read.content, changeType: "modified" },
+        ])
+      ).units;
+    } catch (cause) {
+      console.error(
+        "Symbol definition lookup could not parse the imported source",
+        {
+          path: read.path,
+          pullRequestId: scope.pullRequestId,
+          message: cause instanceof Error ? cause.message : String(cause),
+        },
+      );
+      return { kind: "unresolved" as const, reason: "unavailable" as const };
+    }
     const declaration = analyzed.find(
       (unit) =>
         unit.name === imported &&

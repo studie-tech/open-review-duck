@@ -259,9 +259,86 @@ describe("provider normalization", () => {
     expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toContain(
       "reviewer_id=42",
     );
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toContain(
+      "with_labels_details=true",
+    );
     expect(requestUrl(fetchMock.mock.calls[1]?.[0])).toContain(
       "searchCriteria.reviewerId=reviewer-id",
     );
+  });
+
+  it("normalizes pull request labels from each provider", async () => {
+    mockJson([
+      {
+        id: 11,
+        number: 7,
+        title: "Review me",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/7",
+        user: { id: 1, login: "author", avatar_url: "" },
+        labels: [
+          { name: "size:XXL", color: "b60205", description: "Huge" },
+          { name: "feat", color: "0e8a16" },
+        ],
+        head: { ref: "feature", sha: "head" },
+        base: { ref: "main", sha: "base" },
+      },
+    ]);
+    const github = await new GitHubProvider("token").listOpenPullRequests("1");
+    expect(github[0]?.labels).toEqual([
+      { name: "size:XXL", color: "b60205", description: "Huge" },
+      { name: "feat", color: "0e8a16" },
+    ]);
+
+    mockJson([
+      {
+        id: 81,
+        iid: 9,
+        title: "Safer sync",
+        description: null,
+        state: "opened",
+        draft: false,
+        web_url: "https://gitlab.com/acme/review/-/merge_requests/9",
+        source_branch: "sync",
+        target_branch: "main",
+        sha: "head",
+        diff_refs: { base_sha: "base", head_sha: "head" },
+        author: { username: "reviewer", avatar_url: null },
+        labels: [{ name: "bug", color: "#d73a4a", description: "Broken" }],
+        changes_count: "4",
+      },
+    ]);
+    const gitlab = await new GitLabProvider("token").listOpenPullRequests("1");
+    expect(gitlab[0]?.labels).toEqual([
+      { name: "bug", color: "d73a4a", description: "Broken" },
+    ]);
+
+    mockJson({
+      pullRequestId: 12,
+      title: "Complete review",
+      status: "active",
+      isDraft: false,
+      sourceRefName: "refs/heads/feature",
+      targetRefName: "refs/heads/main",
+      lastMergeSourceCommit: { commitId: "head" },
+      lastMergeTargetCommit: { commitId: "base" },
+      repository: {
+        id: "repo",
+        name: "reviewduck",
+        project: { name: "platform" },
+      },
+      createdBy: { displayName: "Alex Reviewer" },
+      labels: [
+        { name: "hotfix", active: true },
+        { name: "old", active: false },
+      ],
+    });
+    const azure = await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).getPullRequest("repo", 12);
+    expect(azure.labels).toEqual([{ name: "hotfix" }]);
   });
 
   it("normalizes merged Azure DevOps pull requests", async () => {
