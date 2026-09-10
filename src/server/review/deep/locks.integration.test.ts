@@ -84,6 +84,44 @@ afterAll(async () => {
   await db.delete(users).where(eq(users.id, fixture.userId));
 });
 
+/** Seeds a running parent, child, and selected item for closer races. */
+async function insertOpenCoverageTree() {
+  const parentId = randomUUID();
+  const childId = randomUUID();
+  const itemId = randomUUID();
+  await db.insert(aiJobs).values({
+    id: parentId,
+    workspaceId: fixture.workspaceId,
+    pullRequestId: fixture.pullRequestId,
+    snapshotId: fixture.snapshotId,
+    userId: fixture.userId,
+    kind: "review",
+    status: "running",
+  });
+  await db.insert(aiJobs).values({
+    id: childId,
+    workspaceId: fixture.workspaceId,
+    pullRequestId: fixture.pullRequestId,
+    snapshotId: fixture.snapshotId,
+    userId: fixture.userId,
+    parentJobId: parentId,
+    kind: "review_file",
+    status: "running",
+  });
+  await db.insert(aiReviewItems).values({
+    id: itemId,
+    parentJobId: parentId,
+    workspaceId: fixture.workspaceId,
+    childJobId: childId,
+    path: "src/file.ts",
+    changeType: "modified",
+    changedLineCount: 8,
+    state: "selected",
+    fingerprint: "e".repeat(64),
+  });
+  return { parentId, itemId };
+}
+
 describe("deep review locks", () => {
   it("seals one plan when two callers race", async () => {
     await db.insert(snapshotFiles).values([
@@ -133,39 +171,7 @@ describe("deep review locks", () => {
   });
 
   it("keeps finalize and cancel on one cancelled coverage partition", async () => {
-    const parentId = randomUUID();
-    const childId = randomUUID();
-    const itemId = randomUUID();
-    await db.insert(aiJobs).values({
-      id: parentId,
-      workspaceId: fixture.workspaceId,
-      pullRequestId: fixture.pullRequestId,
-      snapshotId: fixture.snapshotId,
-      userId: fixture.userId,
-      kind: "review",
-      status: "running",
-    });
-    await db.insert(aiJobs).values({
-      id: childId,
-      workspaceId: fixture.workspaceId,
-      pullRequestId: fixture.pullRequestId,
-      snapshotId: fixture.snapshotId,
-      userId: fixture.userId,
-      parentJobId: parentId,
-      kind: "review_file",
-      status: "running",
-    });
-    await db.insert(aiReviewItems).values({
-      id: itemId,
-      parentJobId: parentId,
-      workspaceId: fixture.workspaceId,
-      childJobId: childId,
-      path: "src/file.ts",
-      changeType: "modified",
-      changedLineCount: 8,
-      state: "selected",
-      fingerprint: "e".repeat(64),
-    });
+    const { parentId, itemId } = await insertOpenCoverageTree();
 
     await Promise.all([
       cancelDeepReviewTree(db, parentId),
@@ -182,6 +188,41 @@ describe("deep review locks", () => {
     const parent = await db.query.aiJobs.findFirst({
       where: eq(aiJobs.id, parentId),
     });
-    expect(parent?.deepReviewTerminalState).toBeTruthy();
+    expect(parent).toMatchObject({
+      deepReviewTerminalState: "failed",
+      runFailureClass: "cancelled",
+    });
+  });
+
+  it("reclassifies a generic finalize sweep when cancellation lands after it", async () => {
+    const { parentId, itemId } = await insertOpenCoverageTree();
+
+    await finalizeDeepReview(db, parentId);
+    await expect(
+      db.query.aiReviewItems.findFirst({
+        where: eq(aiReviewItems.id, itemId),
+      }),
+    ).resolves.toMatchObject({
+      state: "failed",
+      failureClass: "unknown",
+    });
+
+    await cancelDeepReviewTree(db, parentId);
+    await expect(
+      db.query.aiReviewItems.findFirst({
+        where: eq(aiReviewItems.id, itemId),
+      }),
+    ).resolves.toMatchObject({
+      state: "failed",
+      failureClass: "cancelled",
+    });
+    await expect(
+      db.query.aiJobs.findFirst({
+        where: eq(aiJobs.id, parentId),
+      }),
+    ).resolves.toMatchObject({
+      deepReviewTerminalState: "failed",
+      runFailureClass: "cancelled",
+    });
   });
 });
