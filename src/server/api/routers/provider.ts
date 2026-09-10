@@ -233,8 +233,15 @@ export const providerRouter = createTRPCRouter({
         ),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
-      await deleteUserProviderCredential(ctx.db, ctx.auth.userId, connection);
-      return { disconnected: true as const };
+      const { revoked } = await deleteUserProviderCredential(
+        ctx.db,
+        ctx.auth.userId,
+        connection,
+      );
+      return {
+        disconnected: true as const,
+        remoteRevokeComplete: revoked,
+      };
     }),
 
   connect: protectedProcedure

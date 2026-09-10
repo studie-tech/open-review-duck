@@ -2873,6 +2873,7 @@ export function ReviewWorkspace({
         next.set(thread.unitId, false);
         return next;
       });
+      if (thread.side === "left") setShowDiff(true);
       setPendingProviderThread({
         externalId: thread.externalId,
         line: thread.line,

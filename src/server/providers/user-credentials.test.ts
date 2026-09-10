@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { providerConnections } from "@/drizzle/schema";
 import { sealVaultSecret } from "~/server/security/vault";
 import {
+  deleteUserProviderCredential,
   missingPersonalProviderMessage,
   preferredPublicationIdentity,
   providerForPublicationIdentity,
+  providerForReviewerRead,
   providerForReviewerWrite,
   revokeUserProviderCredentials,
   saveUserProviderCredential,
@@ -170,6 +172,27 @@ describe("personal publication identity", () => {
       ),
     ).rejects.toBeInstanceOf(TRPCError);
   });
+
+  it("reads review state through the workspace when post-as-self has no credential", async () => {
+    const workspaceProvider = { name: "workspace" };
+    providerForConnection.mockResolvedValue(workspaceProvider);
+    await expect(
+      providerForReviewerRead(
+        {
+          query: {
+            workspaceMembers: {
+              findFirst: vi.fn().mockResolvedValue({ publishAsSelf: true }),
+            },
+            userProviderCredentials: {
+              findFirst: vi.fn().mockResolvedValue(undefined),
+            },
+          },
+        } as never,
+        connection,
+        "user-1",
+      ),
+    ).resolves.toBe(workspaceProvider);
+  });
 });
 
 describe("saveUserProviderCredential", () => {
@@ -187,6 +210,8 @@ describe("saveUserProviderCredential", () => {
     });
     let insertCalls = 0;
     const db = {
+      transaction: async (callback: (tx: typeof db) => Promise<unknown>) =>
+        callback(db),
       query: {
         userProviderCredentials: {
           findFirst: vi.fn().mockResolvedValue(undefined),
@@ -256,5 +281,36 @@ describe("revokeUserProviderCredentials", () => {
     await expect(
       revokeUserProviderCredentials(db as never, connection),
     ).resolves.toBe(1);
+  });
+});
+
+describe("deleteUserProviderCredential", () => {
+  it("reports when the provider could not confirm revocation", async () => {
+    const { openVaultSecret } = await import("~/server/security/vault");
+    vi.mocked(openVaultSecret).mockRejectedValue(
+      new Error("sealed under a different id"),
+    );
+    const db = {
+      query: {
+        userProviderCredentials: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: "cred-1",
+            credentialKind: "github_user",
+            encryptedAccessToken: "ciphertext",
+          }),
+        },
+      },
+      delete: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(undefined),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn().mockResolvedValue(undefined),
+      })),
+    };
+
+    await expect(
+      deleteUserProviderCredential(db as never, "user-1", connection),
+    ).resolves.toEqual({ revoked: false });
+    expect(db.delete).toHaveBeenCalled();
   });
 });
