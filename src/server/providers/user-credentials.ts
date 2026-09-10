@@ -94,6 +94,39 @@ export async function providerForPublicationIdentity(
 }
 
 /**
+ * Resolves a provider for a read that follows the reviewer's publication
+ * preference, falling back to the workspace connection when they asked to
+ * post as themselves but have not connected that identity yet.
+ *
+ * Writes still fail closed so a missing personal credential cannot silently
+ * approve or comment as ReviewDuck.
+ */
+export async function providerForReviewerRead(
+  db: Database,
+  connection: ProviderConnection,
+  userId: string,
+) {
+  const identity = await preferredPublicationIdentity(
+    db,
+    connection.workspaceId,
+    userId,
+  );
+  if (identity === "reviewer") {
+    const credential = await db.query.userProviderCredentials.findFirst({
+      columns: { id: true },
+      where: and(
+        eq(userProviderCredentials.userId, userId),
+        eq(userProviderCredentials.connectionId, connection.id),
+      ),
+    });
+    if (!credential) {
+      return providerForConnection(db, connection);
+    }
+  }
+  return providerForPublicationIdentity(db, connection, userId, identity);
+}
+
+/**
  * Resolves the provider client one write should use, and names that identity
  * so the ledger can edit or delete with the same credential later.
  *
@@ -209,94 +242,101 @@ export async function saveUserProviderCredential(
     externalAccountId: string;
   },
 ) {
-  const existing = await db.query.userProviderCredentials.findFirst({
-    where: and(
-      eq(userProviderCredentials.userId, input.userId),
-      eq(userProviderCredentials.connectionId, input.connection.id),
-    ),
-    columns: { id: true },
-  });
-  const credentialId = existing?.id ?? randomUUID();
-  const encryptedAccessToken = await sealUserSecret(
-    input.connection,
-    credentialId,
-    accessVaultProvider(input.connection.provider, input.credentialKind),
-    input.accessToken,
-  );
-  const encryptedRefreshToken = input.refreshToken
-    ? await sealUserSecret(
-        input.connection,
-        credentialId,
-        `${input.connection.provider}-user-oauth-refresh`,
-        input.refreshToken,
-      )
-    : null;
-  const values = {
-    id: credentialId,
-    userId: input.userId,
-    connectionId: input.connection.id,
-    provider: input.connection.provider,
-    credentialKind: input.credentialKind,
-    encryptedAccessToken,
-    encryptedRefreshToken,
-    expiresAt:
-      input.expiresIn !== undefined
-        ? new Date(Date.now() + input.expiresIn * 1_000)
-        : null,
-    displayLogin: input.displayLogin,
-    externalAccountId: input.externalAccountId,
-  };
-  const [saved] = await db
-    .insert(userProviderCredentials)
-    .values(values)
-    .onConflictDoUpdate({
-      target: [
-        userProviderCredentials.userId,
-        userProviderCredentials.connectionId,
-      ],
-      set: {
-        provider: values.provider,
-        credentialKind: values.credentialKind,
-        encryptedAccessToken,
-        encryptedRefreshToken,
-        expiresAt: values.expiresAt,
-        displayLogin: values.displayLogin,
-        externalAccountId: values.externalAccountId,
-        refreshVersion: sql`${userProviderCredentials.refreshVersion} + 1`,
-      },
-    })
-    .returning();
-  if (!saved) throw new Error("Could not persist personal provider credential");
-  if (saved.id !== credentialId) {
-    await db
-      .update(userProviderCredentials)
-      .set({
-        encryptedAccessToken: await sealUserSecret(
+  return db.transaction(async (tx) => {
+    const existing = await tx.query.userProviderCredentials.findFirst({
+      where: and(
+        eq(userProviderCredentials.userId, input.userId),
+        eq(userProviderCredentials.connectionId, input.connection.id),
+      ),
+      columns: { id: true },
+    });
+    const credentialId = existing?.id ?? randomUUID();
+    const encryptedAccessToken = await sealUserSecret(
+      input.connection,
+      credentialId,
+      accessVaultProvider(input.connection.provider, input.credentialKind),
+      input.accessToken,
+    );
+    const encryptedRefreshToken = input.refreshToken
+      ? await sealUserSecret(
           input.connection,
-          saved.id,
-          accessVaultProvider(input.connection.provider, input.credentialKind),
-          input.accessToken,
-        ),
-        encryptedRefreshToken: input.refreshToken
-          ? await sealUserSecret(
-              input.connection,
-              saved.id,
-              `${input.connection.provider}-user-oauth-refresh`,
-              input.refreshToken,
-            )
+          credentialId,
+          `${input.connection.provider}-user-oauth-refresh`,
+          input.refreshToken,
+        )
+      : null;
+    const values = {
+      id: credentialId,
+      userId: input.userId,
+      connectionId: input.connection.id,
+      provider: input.connection.provider,
+      credentialKind: input.credentialKind,
+      encryptedAccessToken,
+      encryptedRefreshToken,
+      expiresAt:
+        input.expiresIn !== undefined
+          ? new Date(Date.now() + input.expiresIn * 1_000)
           : null,
+      displayLogin: input.displayLogin,
+      externalAccountId: input.externalAccountId,
+    };
+    const [saved] = await tx
+      .insert(userProviderCredentials)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          userProviderCredentials.userId,
+          userProviderCredentials.connectionId,
+        ],
+        set: {
+          provider: values.provider,
+          credentialKind: values.credentialKind,
+          encryptedAccessToken,
+          encryptedRefreshToken,
+          expiresAt: values.expiresAt,
+          displayLogin: values.displayLogin,
+          externalAccountId: values.externalAccountId,
+          refreshVersion: sql`${userProviderCredentials.refreshVersion} + 1`,
+        },
       })
-      .where(eq(userProviderCredentials.id, saved.id));
-  }
-  await db.insert(credentialAuditEvents).values({
-    workspaceId: input.connection.workspaceId,
-    actorId: input.userId,
-    credentialId: input.connection.id,
-    action: existing ? "rotated" : "authorized",
-    provider: input.connection.provider,
-    metadata: { credentialKind: input.credentialKind, subject: "reviewer" },
+      .returning();
+    if (!saved) {
+      throw new Error("Could not persist personal provider credential");
+    }
+    if (saved.id !== credentialId) {
+      await tx
+        .update(userProviderCredentials)
+        .set({
+          encryptedAccessToken: await sealUserSecret(
+            input.connection,
+            saved.id,
+            accessVaultProvider(
+              input.connection.provider,
+              input.credentialKind,
+            ),
+            input.accessToken,
+          ),
+          encryptedRefreshToken: input.refreshToken
+            ? await sealUserSecret(
+                input.connection,
+                saved.id,
+                `${input.connection.provider}-user-oauth-refresh`,
+                input.refreshToken,
+              )
+            : null,
+        })
+        .where(eq(userProviderCredentials.id, saved.id));
+    }
+    await tx.insert(credentialAuditEvents).values({
+      workspaceId: input.connection.workspaceId,
+      actorId: input.userId,
+      credentialId: input.connection.id,
+      action: existing ? "rotated" : "authorized",
+      provider: input.connection.provider,
+      metadata: { credentialKind: input.credentialKind, subject: "reviewer" },
+    });
+    return publicUserProviderCredential(saved);
   });
-  return publicUserProviderCredential(saved);
 }
 
 /** Drops one personal credential after optionally revoking it at the provider. */
@@ -311,8 +351,8 @@ export async function deleteUserProviderCredential(
       eq(userProviderCredentials.connectionId, connection.id),
     ),
   });
-  if (!credential) return;
-  await revokeStoredUserCredential(connection, credential);
+  if (!credential) return { revoked: true };
+  const revoked = await revokeStoredUserCredential(connection, credential);
   await db
     .delete(userProviderCredentials)
     .where(eq(userProviderCredentials.id, credential.id));
@@ -327,6 +367,7 @@ export async function deleteUserProviderCredential(
       subject: "reviewer",
     },
   });
+  return { revoked };
 }
 
 /** Revokes every personal grant on a workspace connection before it is deleted. */

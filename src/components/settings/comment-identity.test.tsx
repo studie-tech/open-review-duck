@@ -6,7 +6,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommentIdentity } from "./comment-identity";
 
-const { saveMutate, identityData } = vi.hoisted(() => ({
+const { disconnectOnSuccess, saveMutate, identityData } = vi.hoisted(() => ({
+  disconnectOnSuccess: {
+    current: undefined as
+      | ((result: { remoteRevokeComplete: boolean }) => void | Promise<void>)
+      | undefined,
+  },
   saveMutate: vi.fn(),
   identityData: {
     publishAsSelf: false,
@@ -23,8 +28,14 @@ const { saveMutate, identityData } = vi.hoisted(() => ({
   },
 }));
 
+const toast = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+  warning: vi.fn(),
+}));
+
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast,
 }));
 
 vi.mock("~/lib/hosted-provider-authorization", () => ({
@@ -44,7 +55,12 @@ vi.mock("~/trpc/react", () => ({
         useMutation: () => ({ isPending: false, mutate: saveMutate }),
       },
       disconnectPersonalCredential: {
-        useMutation: () => ({ isPending: false, mutate: vi.fn() }),
+        useMutation: (options: {
+          onSuccess?: (result: { remoteRevokeComplete: boolean }) => void;
+        }) => {
+          disconnectOnSuccess.current = options.onSuccess;
+          return { isPending: false, mutate: vi.fn() };
+        },
       },
       connectPersonalCredential: {
         useMutation: () => ({
@@ -61,8 +77,12 @@ vi.mock("~/trpc/react", () => ({
 afterEach(() => {
   cleanup();
   saveMutate.mockReset();
+  toast.error.mockReset();
+  toast.success.mockReset();
+  toast.warning.mockReset();
   identityData.publishAsSelf = false;
-  identityData.connections[0]!.identity = null;
+  const firstConnection = identityData.connections[0];
+  if (firstConnection) firstConnection.identity = null;
 });
 
 describe("CommentIdentity", () => {
@@ -85,5 +105,15 @@ describe("CommentIdentity", () => {
     expect(
       screen.getByText(/Not connected — posts still appear as ReviewDuck/),
     ).toBeInTheDocument();
+  });
+
+  it("warns when disconnect cannot confirm remote revocation", async () => {
+    render(<CommentIdentity localMode />);
+
+    await disconnectOnSuccess.current?.({ remoteRevokeComplete: false });
+
+    expect(toast.warning).toHaveBeenCalledWith(
+      expect.stringMatching(/could not confirm revocation/),
+    );
   });
 });

@@ -64,8 +64,11 @@ import { sha256 } from "~/server/analysis/hash";
 import { importReferenceForLocal } from "~/server/analysis/imports";
 import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
-import { providerForReviewerWrite } from "~/server/providers/user-credentials";
 import type { ProviderPullRequestLifecycle } from "~/server/providers/types";
+import {
+  providerForReviewerRead,
+  providerForReviewerWrite,
+} from "~/server/providers/user-credentials";
 import {
   assertCommentIsTheReviewersToChange,
   forgetPublishedComments,
@@ -704,7 +707,7 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const { provider } = await providerForReviewerWrite(
+        const provider = await providerForReviewerRead(
           ctx.db,
           scope.connection,
           ctx.auth.userId,
@@ -1953,19 +1956,18 @@ export const reviewRouter = createTRPCRouter({
   replyToThread: protectedProcedure
     .input(replyToReviewThreadSchema)
     .mutation(async ({ ctx, input }) => {
-      const { scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-reply",
       );
-      const { provider, publishedAs } = await providerForReviewerWrite(
-        ctx.db,
-        scope.connection,
-        ctx.auth.userId,
-      );
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
+        const thread = await attachedProviderThread(
+          listingProvider,
+          scope,
+          input,
+        );
         const parentCommentExternalId = thread.comments[0]?.externalId;
         if (!parentCommentExternalId) {
           throw new TRPCError({
@@ -1974,6 +1976,18 @@ export const reviewRouter = createTRPCRouter({
               "This provider conversation is no longer attached to the current review unit",
           });
         }
+        const ledger = await publishedCommentLedger(
+          ctx.db,
+          input.unitId,
+          thread,
+          parentCommentExternalId,
+        );
+        const { provider, publishedAs } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+          ledger?.publishedAs,
+        );
         const reply = await provider.replyToInlineThread({
           repositoryExternalId: scope.repositoryExternalId,
           pullRequestNumber: scope.pullRequestNumber,

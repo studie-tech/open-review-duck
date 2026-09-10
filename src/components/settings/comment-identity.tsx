@@ -24,9 +24,15 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
     onError: (error) => toast.error(error.message),
   });
   const disconnect = api.provider.disconnectPersonalCredential.useMutation({
-    onSuccess: async () => {
+    onSuccess: async ({ remoteRevokeComplete }) => {
       await utils.provider.commentIdentity.invalidate();
-      toast.success("Personal account disconnected");
+      if (remoteRevokeComplete) {
+        toast.success("Personal account disconnected");
+      } else {
+        toast.warning(
+          "Personal account disconnected locally. The provider could not confirm revocation; revoke access in the provider's settings.",
+        );
+      }
     },
     onError: (error) => toast.error(error.message),
   });
