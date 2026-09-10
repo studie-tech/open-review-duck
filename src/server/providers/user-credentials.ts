@@ -10,12 +10,15 @@ import {
   workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
-import type { PublicationIdentity } from "~/lib/personal-provider-identity";
 import { providerLabel } from "~/lib/provider-labels";
 import type { db as database } from "~/server/db";
 import { isLocalDeployment } from "~/server/deployment";
 import { createProvider } from "~/server/providers";
-import { providerForConnection } from "~/server/providers/credentials";
+import {
+  providerForConnection,
+  refreshGitLabOAuthToken,
+  revokeGitLabOAuthToken,
+} from "~/server/providers/credentials";
 import {
   refreshGitHubUserToken,
   revokeGitHubUserToken,
@@ -32,6 +35,9 @@ type UserProviderCredential = typeof userProviderCredentials.$inferSelect;
 
 const USER_OAUTH_KINDS = new Set(["github_user", "oauth"]);
 
+/** Which provider identity opened a comment ReviewDuck published. */
+export type PublicationIdentity = "workspace" | "reviewer";
+
 /** Tells the reviewer they still need to connect a personal provider identity. */
 export function missingPersonalProviderMessage(provider: ProviderName) {
   return `Connect your ${providerLabel(provider)} account to post as yourself. Open Settings → Code providers and connect your account.`;
@@ -42,12 +48,12 @@ export function expiredPersonalProviderMessage(provider: ProviderName) {
   return `Your ${providerLabel(provider)} authorization expired. Reconnect your account in Settings → Code providers.`;
 }
 
-/** Reads whether this reviewer asked to post as themselves in this workspace. */
-export async function reviewerPublishesAsSelf(
+/** Chooses the identity the reviewer currently wants new provider writes to use. */
+export async function preferredPublicationIdentity(
   db: Database,
   workspaceId: string,
   userId: string,
-) {
+): Promise<PublicationIdentity> {
   const membership = await db.query.workspaceMembers.findFirst({
     columns: { publishAsSelf: true },
     where: and(
@@ -55,18 +61,7 @@ export async function reviewerPublishesAsSelf(
       eq(workspaceMembers.userId, userId),
     ),
   });
-  return membership?.publishAsSelf === true;
-}
-
-/** Chooses the identity the reviewer currently wants new provider writes to use. */
-export async function preferredPublicationIdentity(
-  db: Database,
-  workspaceId: string,
-  userId: string,
-): Promise<PublicationIdentity> {
-  return (await reviewerPublishesAsSelf(db, workspaceId, userId))
-    ? "reviewer"
-    : "workspace";
+  return membership?.publishAsSelf === true ? "reviewer" : "workspace";
 }
 
 /**
@@ -468,7 +463,7 @@ async function refreshUserProviderCredential(
     const tokens =
       row.credential.credentialKind === "github_user"
         ? await refreshGitHubUserGrant(refreshToken)
-        : await refreshGitLabUserGrant(refreshToken);
+        : await refreshGitLabOAuthToken(refreshToken);
     const encryptedAccessToken = await sealUserSecret(
       row.connection,
       row.credential.id,
@@ -514,52 +509,6 @@ async function refreshGitHubUserGrant(refreshToken: string) {
     clientSecret: env.GITHUB_APP_CLIENT_SECRET,
     refreshToken,
   });
-}
-
-/** Exchanges a GitLab personal OAuth refresh token. */
-async function refreshGitLabUserGrant(refreshToken: string) {
-  if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
-    throw new Error("GitLab OAuth client is not configured");
-  }
-  const response = await fetch("https://gitlab.com/oauth/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: env.GITLAB_CLIENT_ID,
-      client_secret: env.GITLAB_CLIENT_SECRET,
-    }),
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    throw new Error(`GitLab user token refresh failed (${response.status})`);
-  }
-  const tokens = (await response.json()) as {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-  };
-  if (
-    typeof tokens.access_token !== "string" ||
-    tokens.access_token.length === 0 ||
-    tokens.access_token.length > 65_536 ||
-    typeof tokens.expires_in !== "number" ||
-    !Number.isFinite(tokens.expires_in) ||
-    tokens.expires_in <= 0 ||
-    tokens.expires_in > 7 * 86_400 ||
-    typeof tokens.refresh_token !== "string" ||
-    tokens.refresh_token.length === 0 ||
-    tokens.refresh_token.length > 65_536
-  ) {
-    throw new Error("GitLab user token refresh response is invalid");
-  }
-  return {
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresIn: tokens.expires_in,
-  };
 }
 
 /** Revokes one stored personal grant when the provider accepts revocation. */
@@ -624,23 +573,7 @@ async function revokeStoredUserCredential(
       );
     }
     for (const token of tokens) {
-      const response = await fetch("https://gitlab.com/oauth/revoke", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: env.GITLAB_CLIENT_ID,
-          client_secret: env.GITLAB_CLIENT_SECRET,
-          token,
-        }),
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-      });
-      await response.body?.cancel();
-      if (!response.ok) {
-        throw new Error(
-          `GitLab user token revocation failed (${response.status})`,
-        );
-      }
+      await revokeGitLabOAuthToken(token);
     }
     return true;
   } catch (cause) {

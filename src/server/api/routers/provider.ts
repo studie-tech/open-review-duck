@@ -13,7 +13,6 @@ import {
   workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
-import { personalCredentialUsesOAuth } from "~/lib/personal-provider-identity";
 import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
 import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import {
@@ -166,7 +165,12 @@ export const providerRouter = createTRPCRouter({
         provider: connection.provider,
         displayName: connection.displayName,
         credentialKind: connection.credentialKind,
-        usesOAuth: personalCredentialUsesOAuth(connection, isLocalDeployment()),
+        usesOAuth:
+          !isLocalDeployment() &&
+          ((connection.provider === "github" &&
+            connection.credentialKind === "github_app") ||
+            (connection.provider === "gitlab" &&
+              connection.credentialKind === "oauth")),
         identity: identityByConnection.get(connection.id) ?? null,
       })),
     };
