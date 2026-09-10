@@ -46,7 +46,7 @@ export function useReviewSynchronizationController({
   const [activeSyncId, setActiveSyncId] = useState<string>();
   const [loadingChanges, startLoadingChanges] = useTransition();
   const [updateAvailable, setUpdateAvailable] = useState(false);
-  const autoSyncedHeadSha = useRef<string>();
+  const autoSyncedHeadSha = useRef<string | undefined>(undefined);
   const silentSync = useRef(false);
 
   const pollLatestPullRequest = api.review.poll.useMutation({
