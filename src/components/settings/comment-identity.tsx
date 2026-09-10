@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
 import { modalSurfaceClassName } from "~/components/ui/modal-surface";
 import {
-  startHostedProviderAuthorization,
   type HostedAuthorizationProvider,
+  startHostedProviderAuthorization,
 } from "~/lib/hosted-provider-authorization";
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
