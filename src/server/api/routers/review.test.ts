@@ -268,9 +268,20 @@ describe("deep review read path", () => {
       false,
       false,
     ]);
-    expect(run.findings[1]?.verdictReason).toBe(
-      "src/alpha.ts:12 already guards this",
-    );
+  });
+
+  it("keeps an anchored finding publishable when no unit was bound", async () => {
+    const { db } = createReadDb({
+      items: [
+        item({ id: "item-alpha", path: "src/alpha.ts", state: "completed" }),
+      ],
+      findings: [await finding({ id: "f-unbound", unitId: null })],
+      locations: [],
+    });
+
+    const run = await deepReviewRunPayload(db, job);
+
+    expect(run.findings.map(({ publishable }) => publishable)).toEqual([true]);
   });
 
   it("attaches each cross-file location to its finding, in the named order", async () => {
@@ -520,15 +531,34 @@ describe("deep review publication", () => {
     );
   });
 
+  it("publishes an anchored finding that never stored a unit id", async () => {
+    // The comment's unit comes from the reviewer's selected line, not from a
+    // unit bound during validation. A span that crossed a unit boundary still
+    // names a line a comment can sit on.
+    const db = createPublishDb({
+      finding: await finding({
+        id: "f-publishable",
+        orderIndex: 3,
+        unitId: null,
+      }),
+      item: { parentJobId },
+    });
+
+    expect(await deepReviewFindingForPublication(db, request)).toEqual({
+      body: "**A title**\n\nA body",
+      orderIndex: 3,
+    });
+  });
+
   it("refuses every finding a comment could not carry a line for", async () => {
-    // `review_comment.line` and `review_comment.unitId` are both not null, so
-    // each of these is structurally unpublishable rather than merely stale.
+    // Gate failures and a missing line are structurally unpublishable. A
+    // missing stored unit is not: the publish path supplies that unit.
     for (const seed of [
       { state: "unanchored", startLine: null, unitId: null },
       { state: "out_of_scope" },
       { state: "ungrounded" },
       { state: "refuted", verdict: "refuted" },
-      { unitId: null },
+      { startLine: null },
     ]) {
       const db = createPublishDb({
         finding: await finding({ id: "f-publishable", ...seed }),

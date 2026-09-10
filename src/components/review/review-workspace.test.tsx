@@ -797,11 +797,26 @@ describe("DeepReviewInlineFinding", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("still offers publication when the finding never stored a unit", async () => {
+    // The comment's unit comes from the line the reviewer is looking at, not
+    // from a unit bound while the finding was validated.
+    const user = userEvent.setup();
+    const onPublish = vi.fn();
+    renderCard({
+      finding: finding({ unitId: null }),
+      onPublish,
+    });
+
+    await user.click(screen.getByRole("button", { name: /Post to GitHub/ }));
+    expect(onPublish).toHaveBeenCalledOnce();
+  });
+
   it.each<[DeepReviewFinding["state"], string]>([
     ["unanchored", "No line in this revision matched the quoted code"],
     ["out_of_scope", "Anchored outside the lines this pull request changed"],
     ["ungrounded", "The agent never proved it read the code it reported on"],
     ["refuted", "A verification pass could not reproduce this"],
+    ["anchored", "This finding no longer names a line a comment can sit on"],
   ])("keeps a %s finding visible but unpublishable", (state, reason) => {
     renderCard({
       finding: finding({ state, publishable: false }),
