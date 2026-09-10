@@ -22,7 +22,6 @@ export interface PriorityInboxItem {
 export interface PriorityInboxGroup {
   id: PriorityInboxGroupId;
   label: string;
-  description: string;
   rank: number;
 }
 
@@ -30,20 +29,16 @@ const groups = {
   continue: {
     id: "continue",
     label: "Continue reviewing",
-    description: "Pick up where you left off",
     rank: 0,
   },
   ready: {
     id: "ready",
     label: "Ready to start",
-    description: "Prepared changes waiting for a first pass",
     rank: 1,
   },
   unreviewable: {
     id: "unreviewable",
     label: "Not reviewable here",
-    description:
-      "Open on the provider or synchronize if supported files landed",
     rank: 2,
   },
 } satisfies Record<PriorityInboxGroupId, PriorityInboxGroup>;

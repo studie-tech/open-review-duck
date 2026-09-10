@@ -36,7 +36,6 @@ export function ReviewPreparationList({
       {failedSyncs.length > 0 && (
         <PreparationGroupHeading
           count={failedSyncs.length}
-          description="Fix the connection or retry the preparation"
           label="Preparation needs attention"
           tone="failure"
         />
@@ -94,7 +93,6 @@ export function ReviewPreparationList({
       {synchronizing.length > 0 && (
         <PreparationGroupHeading
           count={synchronizing.length}
-          description="Reviews appear here automatically when ready"
           label="Preparing for review"
           tone="progress"
         />
@@ -151,12 +149,10 @@ function PreparationIdentity({
 /** Labels one preparation state using the inbox's existing group anatomy. */
 function PreparationGroupHeading({
   count,
-  description,
   label,
   tone,
 }: {
   count: number;
-  description: string;
   label: string;
   tone: "failure" | "progress";
 }) {
@@ -170,14 +166,9 @@ function PreparationGroupHeading({
             : "bg-cyan size-1.5 rounded-full"
         }
       />
-      <div className="min-w-0 flex-1">
-        <h3 className="block text-[11px] font-semibold tracking-[.08em] uppercase">
-          {label}
-        </h3>
-        <span className="text-fog mt-0.5 hidden text-[10px] sm:block">
-          {description}
-        </span>
-      </div>
+      <h3 className="min-w-0 flex-1 text-[11px] font-semibold tracking-[.08em] uppercase">
+        {label}
+      </h3>
       <span className="text-fog text-[10px] tabular-nums">{count}</span>
     </div>
   );

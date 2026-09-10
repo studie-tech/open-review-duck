@@ -51,6 +51,12 @@ const queryState = vi.hoisted(() => ({
   unimportedError: undefined as { message: string } | undefined,
   unimportedRefetch: vi.fn(),
   unimportedInvalidate: vi.fn(),
+  startAiMutate: vi.fn(),
+  aiConfiguration: {
+    deepReviewAvailable: true,
+    mode: "on_demand",
+    reviewPullRequests: false,
+  },
 }));
 
 vi.mock("~/trpc/react", () => ({
@@ -123,8 +129,43 @@ vi.mock("~/trpc/react", () => ({
         ),
       },
     },
+    ai: {
+      configuration: {
+        useQuery: vi.fn(() => ({
+          data: queryState.aiConfiguration,
+        })),
+      },
+      start: {
+        useMutation: vi.fn((options?: { onSuccess?: () => void }) => ({
+          mutate: (input: { pullRequestId: string; kind: string }) => {
+            queryState.startAiMutate(input);
+            options?.onSuccess?.();
+          },
+          isPending: false,
+        })),
+      },
+    },
   },
 }));
+
+/** Opens a jsdom dialog the way a browser would, then restores the original. */
+function withBrowserShowModal() {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLDialogElement.prototype,
+    "showModal",
+  );
+  HTMLDialogElement.prototype.showModal = function showModal(
+    this: HTMLDialogElement,
+  ) {
+    this.setAttribute("open", "");
+  };
+  return () => {
+    if (original)
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", original);
+    else
+      delete (HTMLDialogElement.prototype as { showModal?: unknown }).showModal;
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -160,6 +201,12 @@ afterEach(() => {
     manualRepositoryCount: 0,
   };
   queryState.unimportedError = undefined;
+  queryState.startAiMutate.mockReset();
+  queryState.aiConfiguration = {
+    deepReviewAvailable: true,
+    mode: "on_demand",
+    reviewPullRequests: false,
+  };
 });
 
 describe("PullRequestsContent", () => {
@@ -898,5 +945,158 @@ describe("PullRequestsContent", () => {
         refetchOnWindowFocus: true,
       }),
     );
+  });
+
+  it("omits instructional inbox and section subtitles", () => {
+    queryState.activeSyncs = [];
+    render(
+      <PullRequestsContent
+        fetchedAt={Date.now()}
+        initialPullRequests={[
+          pullRequest({ id: "ready", title: "Inventory improvements" }),
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "What needs your attention." }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Continue an active review first/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Grouped by the next useful action/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Pick up where you left off/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Prepared changes waiting for a first pass/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks for confirmation before removing a pull request from the queue", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      queryState.activeSyncs = [];
+      const user = userEvent.setup();
+      render(
+        <PullRequestsContent
+          fetchedAt={Date.now()}
+          initialPullRequests={[
+            pullRequest({ id: "ready", title: "Inventory improvements" }),
+          ]}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Remove Inventory improvements from my queue",
+        }),
+      );
+      expect(queryState.removeMutate).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("heading", {
+          name: "Remove this pull request from your queue?",
+        }),
+      ).toBeVisible();
+
+      await user.keyboard("{Enter}");
+      expect(queryState.removeMutate).toHaveBeenCalledWith({
+        pullRequestId: "ready",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the pull request queued when removal is dismissed with Escape", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      queryState.activeSyncs = [];
+      const user = userEvent.setup();
+      render(
+        <PullRequestsContent
+          fetchedAt={Date.now()}
+          initialPullRequests={[
+            pullRequest({ id: "ready", title: "Inventory improvements" }),
+          ]}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Remove Inventory improvements from my queue",
+        }),
+      );
+      await user.keyboard("{Escape}");
+      expect(queryState.removeMutate).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("heading", {
+          name: "Remove this pull request from your queue?",
+        }),
+      ).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("starts an AI review from the inbox with the same confirmation as the workspace", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      queryState.activeSyncs = [];
+      const user = userEvent.setup();
+      render(
+        <PullRequestsContent
+          fetchedAt={Date.now()}
+          initialPullRequests={[
+            pullRequest({ id: "ready", title: "Inventory improvements" }),
+          ]}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Review Inventory improvements with AI",
+        }),
+      );
+      expect(
+        screen.getByRole("heading", {
+          name: "Review this pull request with AI?",
+        }),
+      ).toBeVisible();
+      expect(queryState.startAiMutate).not.toHaveBeenCalled();
+
+      await user.keyboard("{Enter}");
+      expect(queryState.startAiMutate).toHaveBeenCalledWith({
+        pullRequestId: "ready",
+        kind: "review",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("hides inbox AI review actions when deep review is unavailable", () => {
+    queryState.activeSyncs = [];
+    queryState.aiConfiguration = {
+      deepReviewAvailable: false,
+      mode: "on_demand",
+      reviewPullRequests: false,
+    };
+    render(
+      <PullRequestsContent
+        fetchedAt={Date.now()}
+        initialPullRequests={[
+          pullRequest({ id: "ready", title: "Inventory improvements" }),
+        ]}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Review Inventory improvements with AI",
+      }),
+    ).not.toBeInTheDocument();
   });
 });

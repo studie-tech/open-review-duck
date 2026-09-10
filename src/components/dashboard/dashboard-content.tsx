@@ -80,30 +80,15 @@ type WorkView =
   | "unimported";
 
 const workCopy = {
-  all: [
-    "Your priority inbox",
-    "Grouped by the next useful action, then repository.",
-  ],
-  continue: ["In progress", "Pick up where you left off."],
-  ready: ["Ready to start", "Prepared changes waiting for a first pass."],
-  unreviewable: [
-    "Not reviewable here",
-    "Open on the provider or synchronize if supported files landed.",
-  ],
-  reviewed: [
-    "Reviewed, awaiting merge",
-    "Fully reviewed at the current provider revision.",
-  ],
-  closed: ["Closed history", "Merged and closed pull requests."],
-  removed: [
-    "Removed from my queue",
-    "Hidden until restored or a new revision arrives.",
-  ],
-  unimported: [
-    "Un-imported PRs",
-    "Open changes from repositories you prepare by hand.",
-  ],
-} satisfies Record<WorkView, readonly [string, string]>;
+  all: "Your priority inbox",
+  continue: "In progress",
+  ready: "Ready to start",
+  unreviewable: "Not reviewable here",
+  reviewed: "Reviewed, awaiting merge",
+  closed: "Closed history",
+  removed: "Removed from my queue",
+  unimported: "Un-imported PRs",
+} satisfies Record<WorkView, string>;
 
 /** Returns whether the selected My work tab shows history instead of the inbox. */
 function isHistoryView(
@@ -149,6 +134,9 @@ export function PullRequestsContent({
       retry: false,
       refetchOnWindowFocus: false,
     });
+  const aiConfiguration = api.ai.configuration.useQuery();
+  const canStartAiReview = aiConfiguration.data?.deepReviewAvailable ?? false;
+  const aiReviewDisabled = aiConfiguration.data?.mode === "off";
   const [pendingPreparationKeys, setPendingPreparationKeys] = useState(
     () => new Set<string>(),
   );
@@ -510,7 +498,7 @@ export function PullRequestsContent({
         hasPreparationWork ||
         availableUnimported.length > 0;
   const listKind = isHistoryView(workView) ? workView : "active";
-  const [sectionTitle, sectionDetail] = workCopy[workView];
+  const sectionTitle = workCopy[workView];
   const listedCount =
     workView === "unimported"
       ? visibleUnimported.length
@@ -603,11 +591,6 @@ export function PullRequestsContent({
           <h1 className="font-editorial mt-2 text-3xl font-medium tracking-[-.04em] sm:text-4xl">
             What needs your attention.
           </h1>
-          <p className="text-mist mt-2 max-w-xl text-sm leading-6">
-            Continue an active review first, then pick up the next prepared
-            change — or add an un-imported pull request from a manual
-            repository.
-          </p>
         </div>
         <Button asChild>
           <Link href="/settings/providers">
@@ -710,10 +693,7 @@ export function PullRequestsContent({
 
           <div className="min-w-0">
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 className="text-base font-medium">{sectionTitle}</h2>
-                <p className="text-mist mt-1 text-xs">{sectionDetail}</p>
-              </div>
+              <h2 className="text-base font-medium">{sectionTitle}</h2>
               <span
                 aria-live="polite"
                 className="text-fog text-xs tabular-nums"
@@ -919,6 +899,8 @@ export function PullRequestsContent({
                         kind={listKind}
                         showPriorityGroups={!isHistoryView(workView)}
                         pendingPullRequestId={pendingPullRequestId}
+                        canStartAiReview={canStartAiReview}
+                        aiReviewDisabled={aiReviewDisabled}
                         onRemove={
                           listKind === "active" || listKind === "reviewed"
                             ? (pullRequest) =>
@@ -979,12 +961,7 @@ function UnimportedInboxSection({
     <div className="space-y-3">
       {heading && (
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h3 className="text-base font-medium">Un-imported PRs</h3>
-            <p className="text-mist mt-1 text-xs">
-              Open changes from repositories you prepare by hand.
-            </p>
-          </div>
+          <h3 className="text-base font-medium">Un-imported PRs</h3>
           <span className="text-fog text-xs tabular-nums">
             {pullRequests.length === totalCount
               ? `${totalCount} pull requests`

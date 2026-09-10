@@ -53,7 +53,9 @@ import {
   useCommandCenterBindings,
 } from "~/components/command-center";
 import { usePendingNavigation } from "~/components/navigation-progress";
+import { AiReviewConfirmationDialog } from "~/components/review/ai-review-confirmation-dialog";
 import { ContextRevealControl } from "~/components/review/context-reveal-control";
+import { useStartPullRequestAiReview } from "~/components/review/use-start-pull-request-ai-review";
 import { ThemeToggle } from "~/components/theme-toggle";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -3636,15 +3638,10 @@ export function ReviewWorkspace({
       </>
     );
   }
-  const startPullRequestReview = api.ai.start.useMutation({
+  const startPullRequestReview = useStartPullRequestAiReview({
     onSuccess: () => {
-      toast.success("Pull request review started", {
-        description:
-          "Findings will appear inline as the review agent completes its analysis.",
-      });
       void pullRequestReview.refetch();
     },
-    onError: showAiStartError,
   });
   const reviewRunning =
     startPullRequestReview.isPending ||
@@ -7736,25 +7733,8 @@ export function ReviewWorkspace({
         )}
 
         {aiReviewDialogOpen && (
-          <ConfirmationDialog
-            title="Review this pull request with AI?"
-            description={
-              <>
-                The review agent will inspect all changed files and add
-                evidence-backed findings beside the relevant code. This uses
-                your configured model and contributes to this PR&apos;s token
-                usage.
-              </>
-            }
-            confirmLabel="Start AI review"
-            pendingLabel={
-              <>
-                <LoaderCircle className="size-4 animate-spin" />
-                Starting…
-              </>
-            }
+          <AiReviewConfirmationDialog
             pending={startPullRequestReview.isPending}
-            icon={<Sparkles className="text-violet size-4" />}
             onCancel={() => setAiReviewDialogOpen(false)}
             onConfirm={reviewPullRequestWithAi}
           />
