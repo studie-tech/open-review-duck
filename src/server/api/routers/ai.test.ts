@@ -312,6 +312,34 @@ describe("ai.testConfiguration provider credentials", () => {
     });
     expect(mocks.safeRemoteFetch).not.toHaveBeenCalled();
   });
+
+  it("refuses a member before returning a missing-URL provider error", async () => {
+    mocks.isLocalDeployment.mockReturnValue(true);
+    mocks.requireAdmin.mockRejectedValueOnce(
+      new TRPCError({
+        code: "FORBIDDEN",
+        message: "Workspace administrator access required",
+      }),
+    );
+    const { db } = createFakeDb();
+
+    await expect(
+      caller(db).testConfiguration({
+        provider: "openrouter",
+        model: "example/model",
+        useManagedModels: false,
+        mode: "on_demand",
+        reviewPullRequests: false,
+        autoPublishFindings: false,
+        clearApiKey: false,
+        clearHeaders: false,
+        headers: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Workspace administrator access required",
+    });
+  });
 });
 
 describe("ai.start deep review refusal", () => {

@@ -39,7 +39,10 @@ afterAll(async () => {
 
 describe("OpenRouter workspace key revocation", () => {
   it("deletes the credential after a successful provider revoke and is idle on retry", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     await db.insert(managedAiCredentials).values({
       id: fixture.credentialId,
@@ -56,8 +59,9 @@ describe("OpenRouter workspace key revocation", () => {
       }),
     ).resolves.toBe(1);
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+    expect(fetchMock).toHaveBeenCalledWith(
       "https://openrouter.ai/api/v1/keys/hash-abc",
+      expect.objectContaining({ method: "DELETE" }),
     );
     await expect(
       db.query.managedAiCredentials.findFirst({
@@ -74,7 +78,10 @@ describe("OpenRouter workspace key revocation", () => {
   });
 
   it("deletes the row when the provider already reports the key gone", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, { status: 404 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const credentialId = randomUUID();
     await db.insert(managedAiCredentials).values({
