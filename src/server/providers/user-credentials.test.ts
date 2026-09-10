@@ -178,8 +178,8 @@ describe("saveUserProviderCredential", () => {
     });
     let insertCalls = 0;
     const db = {
-      transaction: async (callback: (tx: typeof db) => Promise<unknown>) =>
-        callback(db),
+      transaction: async (callback: (tx: never) => Promise<unknown>) =>
+        callback(db as never),
       query: {
         userProviderCredentials: {
           findFirst: vi.fn().mockResolvedValue(undefined),

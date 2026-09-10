@@ -105,6 +105,10 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
             connection.credentialKind,
             connection.provider,
           );
+          const hostedProvider =
+            connection.provider === "github" || connection.provider === "gitlab"
+              ? connection.provider
+              : undefined;
           return (
             <div
               key={connection.connectionId}
@@ -144,38 +148,36 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
                 </Button>
               ) : (
                 <div className="flex flex-wrap gap-2">
-                  {canReconnect &&
-                    (connection.provider === "github" ||
-                      connection.provider === "gitlab") && (
-                      <Button
-                        size="sm"
-                        disabled={pending}
-                        onClick={() => {
-                          setAuthorizationPending(true);
-                          void startHostedProviderAuthorization(
-                            connection.provider,
-                            "/settings/providers",
-                            undefined,
-                            {
-                              purpose: "user_identity",
-                              connectionId: connection.connectionId,
-                            },
-                          ).catch((cause: unknown) => {
-                            setAuthorizationPending(false);
-                            toast.error(
-                              cause instanceof Error
-                                ? cause.message
-                                : "Authorization failed",
-                            );
-                          });
-                        }}
-                      >
-                        {authorizationPending && (
-                          <Loader2 className="size-4 animate-spin" />
-                        )}
-                        Connect with {providerLabel(connection.provider)}
-                      </Button>
-                    )}
+                  {canReconnect && hostedProvider && (
+                    <Button
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => {
+                        setAuthorizationPending(true);
+                        void startHostedProviderAuthorization(
+                          hostedProvider,
+                          "/settings/providers",
+                          undefined,
+                          {
+                            purpose: "user_identity",
+                            connectionId: connection.connectionId,
+                          },
+                        ).catch((cause: unknown) => {
+                          setAuthorizationPending(false);
+                          toast.error(
+                            cause instanceof Error
+                              ? cause.message
+                              : "Authorization failed",
+                          );
+                        });
+                      }}
+                    >
+                      {authorizationPending && (
+                        <Loader2 className="size-4 animate-spin" />
+                      )}
+                      Connect with {providerLabel(connection.provider)}
+                    </Button>
+                  )}
                   <Button
                     variant={canReconnect ? "secondary" : "primary"}
                     size="sm"
