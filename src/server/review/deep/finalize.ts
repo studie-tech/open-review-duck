@@ -37,7 +37,8 @@ const SURFACED_FINDING_STATES = [
 
 const BUDGET_SWEEP_REASON =
   "The review stopped at its token budget before this file was reviewed.";
-const UNKNOWN_SWEEP_REASON = "The review ended before this file was reviewed.";
+export const UNKNOWN_SWEEP_REASON =
+  "The review ended before this file was reviewed.";
 
 /** A failure that ended the run itself, outranking every pending cause. */
 export interface DeepReviewRunFailure {

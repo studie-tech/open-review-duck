@@ -27,6 +27,7 @@ import {
   deepReviewSweepFailure,
   deepReviewTreeUsage,
   finalizeDeepReview,
+  UNKNOWN_SWEEP_REASON,
 } from "./finalize";
 
 interface FakeItem {
@@ -125,7 +126,12 @@ function createFakeDb(state: FakeState) {
             updates.push({ table: "aiReviewItems", values });
             order.push("sweep");
             const swept = state.items.filter(
-              (item) => item.state === "selected",
+              (item) =>
+                item.state === "selected" ||
+                (values.failureClass === "cancelled" &&
+                  item.state === "failed" &&
+                  item.failureClass === "unknown" &&
+                  item.reason === UNKNOWN_SWEEP_REASON),
             );
             for (const item of swept) {
               item.state = "failed";
@@ -561,6 +567,29 @@ describe("finalizeDeepReview", () => {
 
     // The cancellation reached the item first, so the reviewer is told the run
     // was cancelled rather than that it merely ended.
+    expect(state.items[0]).toMatchObject({
+      state: "failed",
+      failureClass: "cancelled",
+      reason: "The review was cancelled before this file was reviewed.",
+    });
+  });
+
+  it("reclassifies a generic finalize sweep when cancellation lands after it", async () => {
+    const state: FakeState = {
+      parent,
+      items: [item({ id: "a", state: "selected" })],
+      findings: [],
+      usageRows: [],
+    };
+    const { db } = createFakeDb(state);
+
+    await finalizeDeepReview(db, "parent-1");
+    expect(state.items[0]).toMatchObject({
+      state: "failed",
+      failureClass: "unknown",
+    });
+
+    await cancelDeepReviewTree(db, "parent-1");
     expect(state.items[0]).toMatchObject({
       state: "failed",
       failureClass: "cancelled",
