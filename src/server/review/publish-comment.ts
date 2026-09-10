@@ -137,8 +137,15 @@ export async function publishReviewComment(
           body,
           line: input.line,
         })
-      : undefined;
-  const equivalentUserCommentFound = comment !== undefined;
+      : input.aiJobId !== undefined
+        ? await db.query.reviewComments.findFirst({
+            where: and(
+              eq(reviewComments.aiJobId, input.aiJobId),
+              eq(reviewComments.aiFindingIndex, aiResultIndex ?? -1),
+            ),
+          })
+        : undefined;
+  const existingCommentFound = comment !== undefined;
   if (comment?.status === "published") return comment;
   if (comment?.status === "failed" || comment?.status === "publishing") {
     comment = await claimCommentForPublicationRetry(db, comment.id);
@@ -160,7 +167,7 @@ export async function publishReviewComment(
     userId,
     publishedAs,
   );
-  if (!comment && !equivalentUserCommentFound) {
+  if (!comment && !existingCommentFound) {
     const publicationLeaseToken = randomUUID();
     [comment] = await db
       .insert(reviewComments)

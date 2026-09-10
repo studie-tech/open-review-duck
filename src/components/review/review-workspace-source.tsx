@@ -440,6 +440,7 @@ export function ReviewConceptFileCardPreview({
             leftLineCommentMarkers={lineCommentMarkers.left}
             rightLineCommentMarkers={lineCommentMarkers.right}
             onOpenLineComment={onOpenLineComment}
+            emitReviewLineAnchors={false}
             className="rounded-none border-0"
           />
         ) : (

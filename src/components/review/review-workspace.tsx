@@ -3353,6 +3353,36 @@ export function ReviewWorkspace({
     ));
   }
 
+  /** Mounts leftover provider conversations for the given threads. */
+  function renderProviderConversations(threads: typeof visibleProviderThreads) {
+    return threads.map((thread) => (
+      <ProviderConversation
+        key={thread.externalId}
+        provider={initialData.pullRequest.provider}
+        revealed={focusedProviderThreadId === thread.externalId}
+        thread={thread}
+        newSince={
+          activeUnit?.status === "waiting" ? activeUnit.waitingSince : null
+        }
+        managing={managingThread(thread.externalId)}
+        replying={replyingToThread(thread.externalId)}
+        {...providerThreadActions(thread.unitId, thread.externalId)}
+        publishedByReviewDuck={publishedProviderThreadIds.has(
+          thread.externalId,
+        )}
+      />
+    ));
+  }
+
+  /** Mounts previous-side conversations that the current-line details would miss. */
+  function renderPreviousSideConversations(lineNumber: number) {
+    return renderProviderConversations(
+      groupedEntries(providerThreadsByLine, lineNumber).filter(
+        (thread) => thread.side === "left",
+      ),
+    );
+  }
+
   /** Renders every review artifact attached to one source line in either code view. */
   function renderReviewLineDetails(lineNumber: number) {
     if (!activeUnit) return null;
@@ -3379,7 +3409,15 @@ export function ReviewWorkspace({
     const lineQuestions = activeThreadId
       ? groupedEntries(lineQuestionGroups, activeThreadId)
       : NO_GROUPED_ENTRIES;
-    const lineThreads = groupedEntries(providerThreadsByLine, lineNumber);
+    const hidePreviousSideHere =
+      !sideBySideVisible &&
+      previousRewriteLines.length > 0 &&
+      lineNumber >= previousUnitStartLine &&
+      lineNumber < previousUnitStartLine + previousRewriteLines.length;
+    const lineThreads = groupedEntries(
+      providerThreadsByLine,
+      lineNumber,
+    ).filter((thread) => thread.side !== "left" || !hidePreviousSideHere);
     const lineComments = groupedEntries(publishedCommentsByLine, lineNumber);
 
     return (
@@ -3639,23 +3677,7 @@ export function ReviewWorkspace({
             lineThreads.length,
           ) &&
           renderInlineFindingCard(activeFinding, lineNumber)}
-        {lineThreads.map((thread) => (
-          <ProviderConversation
-            key={thread.externalId}
-            provider={initialData.pullRequest.provider}
-            revealed={focusedProviderThreadId === thread.externalId}
-            thread={thread}
-            newSince={
-              activeUnit.status === "waiting" ? activeUnit.waitingSince : null
-            }
-            managing={managingThread(thread.externalId)}
-            replying={replyingToThread(thread.externalId)}
-            {...providerThreadActions(thread.unitId, thread.externalId)}
-            publishedByReviewDuck={publishedProviderThreadIds.has(
-              thread.externalId,
-            )}
-          />
-        ))}
+        {renderProviderConversations(lineThreads)}
         {lineComments.map((comment) => (
           <div
             key={comment.id}
@@ -6748,6 +6770,9 @@ export function ReviewWorkspace({
                       onOpenLineComment={openLineCommentThread}
                       renderBeforeLine={renderFileUnitMarkers}
                       renderLineDetails={renderReviewLineDetails}
+                      renderPreviousLineDetails={
+                        renderPreviousSideConversations
+                      }
                     />
                   )}
                   {activeFileCardHydrationPending &&
@@ -6908,27 +6933,31 @@ export function ReviewWorkspace({
                                         "left",
                                       );
                                     return (
-                                      <div
+                                      <Fragment
                                         key={`${activeUnit.id}-previous-${previousIndex}`}
-                                        className="group relative grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
                                       >
-                                        {previousMarkers.length > 0 ? (
-                                          <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
-                                            <ReviewLineCommentMarkers
-                                              markers={previousMarkers}
-                                              onOpen={openLineCommentThread}
+                                        <div className="group relative grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20">
+                                          {previousMarkers.length > 0 ? (
+                                            <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                                              <ReviewLineCommentMarkers
+                                                markers={previousMarkers}
+                                                onOpen={openLineCommentThread}
+                                              />
+                                            </div>
+                                          ) : null}
+                                          <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
+                                            {previousLineNumber}
+                                          </span>
+                                          <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
+                                            <HighlightedTokens
+                                              tokens={line.tokens}
                                             />
-                                          </div>
-                                        ) : null}
-                                        <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
-                                          {previousLineNumber}
-                                        </span>
-                                        <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
-                                          <HighlightedTokens
-                                            tokens={line.tokens}
-                                          />
-                                        </pre>
-                                      </div>
+                                          </pre>
+                                        </div>
+                                        {renderPreviousSideConversations(
+                                          previousLineNumber,
+                                        )}
+                                      </Fragment>
                                     );
                                   },
                                 )}

@@ -418,6 +418,7 @@ describe("same-file concept cards", () => {
     if (!commentButton) throw new Error("Expected a current-line action");
     await userEvent.click(commentButton);
     expect(onCommentLine).toHaveBeenCalledWith("configuration", 2);
+    expect(document.getElementById("review-line-2")).toBeNull();
   });
 
   it("marks a commented neighbor line with the poster's avatar", async () => {
@@ -2654,6 +2655,7 @@ describe("SideBySideUnitDiff", () => {
       screen.getByRole("region", { name: "Side-by-side code diff" }),
     ).toHaveTextContent("const value = 2;");
     expect(screen.getByText("Inline details for line 12")).toBeInTheDocument();
+    expect(document.getElementById("review-line-12")).not.toBeNull();
 
     const [commentButton] = screen.getAllByRole("button", {
       name: "Open actions for current line 12",
@@ -2715,6 +2717,44 @@ describe("SideBySideUnitDiff", () => {
     );
     expect(openComment).toHaveBeenCalledWith("thread-ada");
     expect(selectLine).not.toHaveBeenCalled();
+  });
+
+  it("mounts previous-side conversations when that line is not the review line", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={vi.fn()}
+        renderLineDetails={(line) => <div>Current details {line}</div>}
+        renderPreviousLineDetails={(line) => <div>Previous details {line}</div>}
+      />,
+    );
+
+    expect(screen.getByText("Previous details 10")).toBeInTheDocument();
+    expect(screen.getByText("Current details 12")).toBeInTheDocument();
+  });
+
+  it("can skip global review-line anchors", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={vi.fn()}
+        emitReviewLineAnchors={false}
+        renderLineDetails={(line) =>
+          line === 12 ? <div>Inline details for line 12</div> : null
+        }
+      />,
+    );
+
+    expect(screen.getByText("Inline details for line 12")).toBeInTheDocument();
+    expect(document.getElementById("review-line-12")).toBeNull();
   });
 
   it("routes row actions to the latest handler after a re-render", async () => {

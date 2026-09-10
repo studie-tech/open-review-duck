@@ -267,6 +267,27 @@ export async function saveUserProviderCredential(
     })
     .returning();
   if (!saved) throw new Error("Could not persist personal provider credential");
+  if (saved.id !== credentialId) {
+    await db
+      .update(userProviderCredentials)
+      .set({
+        encryptedAccessToken: await sealUserSecret(
+          input.connection,
+          saved.id,
+          accessVaultProvider(input.connection.provider, input.credentialKind),
+          input.accessToken,
+        ),
+        encryptedRefreshToken: input.refreshToken
+          ? await sealUserSecret(
+              input.connection,
+              saved.id,
+              `${input.connection.provider}-user-oauth-refresh`,
+              input.refreshToken,
+            )
+          : null,
+      })
+      .where(eq(userProviderCredentials.id, saved.id));
+  }
   await db.insert(credentialAuditEvents).values({
     workspaceId: input.connection.workspaceId,
     actorId: input.userId,
@@ -316,9 +337,13 @@ export async function revokeUserProviderCredentials(
   const credentials = await db.query.userProviderCredentials.findMany({
     where: eq(userProviderCredentials.connectionId, connection.id),
   });
+  let failures = 0;
   for (const credential of credentials) {
-    await revokeStoredUserCredential(connection, credential);
+    if (!(await revokeStoredUserCredential(connection, credential))) {
+      failures += 1;
+    }
   }
+  return failures;
 }
 
 /** Opens a usable personal access token, refreshing OAuth grants when needed. */
@@ -501,10 +526,12 @@ async function revokeStoredUserCredential(
   connection: ProviderConnection,
   credential: UserProviderCredential,
 ) {
-  if (isLocalDeployment()) return;
+  if (isLocalDeployment()) return true;
   try {
     if (credential.credentialKind === "github_user") {
-      if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_CLIENT_SECRET) return;
+      if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_CLIENT_SECRET) {
+        return true;
+      }
       const token = await openVaultSecret(
         {
           workspaceId: connection.workspaceId,
@@ -521,15 +548,15 @@ async function revokeStoredUserCredential(
         clientSecret: env.GITHUB_APP_CLIENT_SECRET,
         token,
       });
-      return;
+      return true;
     }
     if (
       credential.credentialKind !== "oauth" ||
       connection.provider !== "gitlab"
     ) {
-      return;
+      return true;
     }
-    if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) return;
+    if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) return true;
     const tokens = [
       await openVaultSecret(
         {
@@ -574,12 +601,14 @@ async function revokeStoredUserCredential(
         );
       }
     }
+    return true;
   } catch (cause) {
     console.error("Personal provider credential revocation failed", {
       provider: connection.provider,
       connectionId: connection.id,
       cause,
     });
+    return false;
   }
 }
 

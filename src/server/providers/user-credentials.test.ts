@@ -1,19 +1,42 @@
 import { TRPCError } from "@trpc/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { providerConnections } from "@/drizzle/schema";
+import { sealVaultSecret } from "~/server/security/vault";
 import {
   missingPersonalProviderMessage,
   preferredPublicationIdentity,
   providerForPublicationIdentity,
   providerForReviewerWrite,
+  revokeUserProviderCredentials,
+  saveUserProviderCredential,
 } from "./user-credentials";
 
-const { providerForConnection } = vi.hoisted(() => ({
+const { providerForConnection, isLocalDeployment } = vi.hoisted(() => ({
   providerForConnection: vi.fn(),
+  isLocalDeployment: vi.fn(() => false),
 }));
 
 vi.mock("./credentials", () => ({
   providerForConnection,
+}));
+
+vi.mock("~/server/deployment", () => ({
+  isLocalDeployment,
+}));
+
+vi.mock("~/server/security/vault", () => ({
+  openVaultSecret: vi.fn(),
+  sealVaultSecret: vi.fn(
+    async (context: { recordId: string }, secret: string) =>
+      `sealed:${context.recordId}:${secret}`,
+  ),
+}));
+
+vi.mock("~/env", () => ({
+  env: {
+    GITHUB_APP_CLIENT_ID: "github-client",
+    GITHUB_APP_CLIENT_SECRET: "github-secret",
+  },
 }));
 
 const connection = {
@@ -146,5 +169,92 @@ describe("personal publication identity", () => {
         "reviewer",
       ),
     ).rejects.toBeInstanceOf(TRPCError);
+  });
+});
+
+describe("saveUserProviderCredential", () => {
+  beforeEach(() => {
+    vi.mocked(sealVaultSecret).mockImplementation(
+      async (context: { recordId: string }, secret: string) =>
+        `sealed:${context.recordId}:${secret}`,
+    );
+  });
+
+  it("reseals tokens when the upsert keeps a different record id", async () => {
+    const survivingId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const updateSet = vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(undefined),
+    });
+    let insertCalls = 0;
+    const db = {
+      query: {
+        userProviderCredentials: {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+      insert: vi.fn(() => {
+        insertCalls += 1;
+        if (insertCalls === 1) {
+          return {
+            values: vi.fn().mockReturnValue({
+              onConflictDoUpdate: vi.fn().mockReturnValue({
+                returning: vi.fn().mockResolvedValue([
+                  {
+                    id: survivingId,
+                    connectionId: connection.id,
+                    credentialKind: "github_user",
+                    displayLogin: "ada",
+                    externalAccountId: "1",
+                  },
+                ]),
+              }),
+            }),
+          };
+        }
+        return { values: vi.fn().mockResolvedValue(undefined) };
+      }),
+      update: vi.fn(() => ({ set: updateSet })),
+    };
+
+    await saveUserProviderCredential(db as never, {
+      userId: "user-1",
+      connection,
+      credentialKind: "github_user",
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      displayLogin: "ada",
+      externalAccountId: "1",
+    });
+
+    expect(updateSet).toHaveBeenCalledWith({
+      encryptedAccessToken: `sealed:${survivingId}:access-token`,
+      encryptedRefreshToken: `sealed:${survivingId}:refresh-token`,
+    });
+  });
+});
+
+describe("revokeUserProviderCredentials", () => {
+  it("counts a stored grant whose provider revoke fails", async () => {
+    const { openVaultSecret } = await import("~/server/security/vault");
+    vi.mocked(openVaultSecret).mockRejectedValue(
+      new Error("sealed under a different id"),
+    );
+    const db = {
+      query: {
+        userProviderCredentials: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: "cred-1",
+              credentialKind: "github_user",
+              encryptedAccessToken: "ciphertext",
+            },
+          ]),
+        },
+      },
+    };
+
+    await expect(
+      revokeUserProviderCredentials(db as never, connection),
+    ).resolves.toBe(1);
   });
 });
