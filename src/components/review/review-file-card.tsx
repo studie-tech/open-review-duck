@@ -289,7 +289,7 @@ export function ReviewFileCardHeader({
       className={cn(
         "flex items-stretch border-b",
         selected
-          ? "bg-cyan/[.05] border-cyan/20"
+          ? "bg-lime/[.06] border-lime/25"
           : fullyReviewed
             ? "border-addition/25"
             : "border-line",
@@ -339,11 +339,11 @@ export function ReviewFileCardHeader({
             )}
             {selected &&
               (outstanding > 0 ? (
-                <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+                <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-2 py-0.5">
                   {outstanding} remaining
                 </span>
               ) : fullyReviewed ? (
-                <span className="border-cyan/25 bg-cyan/10 text-cyan rounded-full border px-2 py-0.5">
+                <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-2 py-0.5">
                   Selected
                 </span>
               ) : onResumeWaiting ? (
@@ -352,13 +352,13 @@ export function ReviewFileCardHeader({
                   aria-label="Resume waiting on this file"
                   title="Take back the wait and return this file to the review path"
                   onClick={onResumeWaiting}
-                  className="border-cyan/25 bg-cyan/10 text-cyan hover:bg-cyan/15 flex items-center gap-1 rounded-full border px-2 py-0.5 transition"
+                  className="border-lime/25 bg-lime/10 text-lime hover:bg-lime/15 flex items-center gap-1 rounded-full border px-2 py-0.5 transition"
                 >
                   <Clock3 className="size-2.5" aria-hidden />
                   Waiting
                 </button>
               ) : (
-                <span className="border-cyan/25 bg-cyan/10 text-cyan flex items-center gap-1 rounded-full border px-2 py-0.5">
+                <span className="border-lime/25 bg-lime/10 text-lime flex items-center gap-1 rounded-full border px-2 py-0.5">
                   <Clock3 className="size-2.5" aria-hidden />
                   Waiting
                 </span>

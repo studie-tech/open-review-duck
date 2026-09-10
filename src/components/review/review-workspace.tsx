@@ -187,6 +187,11 @@ import {
 } from "./review-file-card";
 import { ReviewFilesPanel } from "./review-files-panel";
 import { ReviewBinaryPreview } from "./review-image-preview";
+import {
+  ReviewLineCommentMarkers,
+  reviewLineCommentMarkersBySide,
+  reviewLineCommentMarkersForLine,
+} from "./review-line-comment-markers";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   REVIEW_INSIGHTS_PANEL_WIDTHS,
@@ -1831,77 +1836,6 @@ export function ReviewWorkspace({
       openInlineComment,
     ],
   );
-  // File cards are re-rendered only when their members or source move, so
-  // unrelated workspace state never re-reconciles hundreds of source lines.
-  const conceptFileCardPreviews = useMemo(
-    () =>
-      viewerCardWindow.cards.map((card, windowIndex) => {
-        const cardIndex = viewerCardWindow.start + windowIndex;
-        const firstActionable = actionableReviewCardMember(card.members);
-        const fileContext = fileContexts.find(({ path }) => path === card.path);
-        const itemLabel = reviewMode === "files" ? "File" : "Card";
-        const sourceBytes = reviewSourceByteLength(fileContext);
-        /** Opens this file card at its first remaining review unit. */
-        const openCard = () => {
-          inspectReviewFile(
-            card.path,
-            card.members.map((member) => member.id),
-          );
-          selectUnit(
-            firstActionable
-              ? (unitIndexById.get(firstActionable.id) ?? -1)
-              : -1,
-          );
-        };
-        if (
-          reviewMode === "files" &&
-          Math.abs(cardIndex - activeConceptCardIndex) >
-            FILES_VIEWER_PREVIEW_RADIUS
-        ) {
-          return (
-            <article
-              key={card.path}
-              className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30"
-            >
-              <ReviewFileCardHeader
-                members={card.members}
-                index={cardIndex}
-                count={activeConceptFileCards.length}
-                selected={false}
-                itemLabel={itemLabel}
-                onSelect={openCard}
-                sourceBytes={sourceBytes}
-              />
-            </article>
-          );
-        }
-        return (
-          <ReviewConceptFileCardPreview
-            key={card.path}
-            members={card.members}
-            index={cardIndex}
-            count={activeConceptFileCards.length}
-            fileSource={fileContext?.source ?? ""}
-            itemLabel={itemLabel}
-            onSelect={openCard}
-            onCommentLine={commentOnMemberLine}
-            sourceBytes={sourceBytes}
-          />
-        );
-      }),
-    [
-      activeConceptCardIndex,
-      activeConceptFileCards.length,
-      commentOnMemberLine,
-      fileContexts,
-      inspectReviewFile,
-      reviewMode,
-      selectUnit,
-      unitIndexById,
-      viewerCardWindow.cards,
-      viewerCardWindow.start,
-    ],
-  );
 
   /** Opens the anchor unit for one concept-first path entry. */
   function selectConceptPath(index: number) {
@@ -2948,6 +2882,88 @@ export function ReviewWorkspace({
       setFocusedProviderThreadId(thread.externalId);
     },
     [selectUnit, unitIndexById, units],
+  );
+  const commentThreadsByPath = useMemo(() => {
+    const byPath = new Map<string, ProviderDiscussionThread[]>();
+    for (const thread of providerDiscussionThreads) {
+      const group = byPath.get(thread.path) ?? [];
+      group.push(thread);
+      byPath.set(thread.path, group);
+    }
+    return byPath;
+  }, [providerDiscussionThreads]);
+  const visibleLineCommentMarkers = useMemo(
+    () => reviewLineCommentMarkersBySide(visibleProviderThreads),
+    [visibleProviderThreads],
+  );
+  /** Opens a conversation from a gutter avatar on the selected or neighbor card. */
+  const openLineCommentThread = useCallback(
+    (threadExternalId: string) => {
+      const thread =
+        visibleProviderThreads.find(
+          (item) => item.externalId === threadExternalId,
+        ) ??
+        providerDiscussionThreads.find(
+          (item) => item.externalId === threadExternalId,
+        );
+      if (thread) openProviderDiscussion(thread);
+    },
+    [openProviderDiscussion, providerDiscussionThreads, visibleProviderThreads],
+  );
+  // File cards are re-rendered only when their members or source move, so
+  // unrelated workspace state never re-reconciles hundreds of source lines.
+  const conceptFileCardPreviews = useMemo(
+    () =>
+      viewerCardWindow.cards.map((card, windowIndex) => {
+        const cardIndex = viewerCardWindow.start + windowIndex;
+        const firstActionable = actionableReviewCardMember(card.members);
+        const fileContext = fileContexts.find(({ path }) => path === card.path);
+        const itemLabel = reviewMode === "files" ? "File" : "Card";
+        const sourceBytes = reviewSourceByteLength(fileContext);
+        /** Opens this file card at its first remaining review unit. */
+        const openCard = () => {
+          inspectReviewFile(
+            card.path,
+            card.members.map((member) => member.id),
+          );
+          selectUnit(
+            firstActionable
+              ? (unitIndexById.get(firstActionable.id) ?? -1)
+              : -1,
+          );
+        };
+        return (
+          <ReviewConceptFileCardPreview
+            key={card.path}
+            members={card.members}
+            index={cardIndex}
+            count={activeConceptFileCards.length}
+            fileSource={fileContext?.source ?? ""}
+            previousFileSource={fileContext?.previousSource ?? ""}
+            diffVisible={showDiff}
+            itemLabel={itemLabel}
+            onSelect={openCard}
+            onCommentLine={commentOnMemberLine}
+            onOpenLineComment={openLineCommentThread}
+            commentThreads={commentThreadsByPath.get(card.path)}
+            sourceBytes={sourceBytes}
+          />
+        );
+      }),
+    [
+      activeConceptFileCards.length,
+      commentOnMemberLine,
+      commentThreadsByPath,
+      fileContexts,
+      inspectReviewFile,
+      openLineCommentThread,
+      reviewMode,
+      selectUnit,
+      showDiff,
+      unitIndexById,
+      viewerCardWindow.cards,
+      viewerCardWindow.start,
+    ],
   );
   const manualSyncPending = reviewSession === "synchronizing";
   const {
@@ -5529,15 +5545,6 @@ export function ReviewWorkspace({
             />
           )}
         </button>
-        <ReviewSyncStatusButton
-          provider={initialData.pullRequest.provider}
-          status={syncStatus}
-          onClick={
-            updateAvailable
-              ? loadAvailableChanges
-              : () => void syncExternalData()
-          }
-        />
         <button
           type="button"
           onClick={undoLastSignOff}
@@ -5603,6 +5610,15 @@ export function ReviewWorkspace({
             className="hidden sm:inline-flex"
           />
         </button>
+        <ReviewSyncStatusButton
+          provider={initialData.pullRequest.provider}
+          status={syncStatus}
+          onClick={
+            updateAvailable
+              ? loadAvailableChanges
+              : () => void syncExternalData()
+          }
+        />
         <a
           href={initialData.pullRequest.webUrl}
           target="_blank"
@@ -6592,7 +6608,7 @@ export function ReviewWorkspace({
                   />
                   <div
                     className={cn(
-                      "overflow-hidden border-x border-b border-cyan/35 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]",
+                      "overflow-hidden border-x border-b border-lime/50 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-accent)_18%,transparent)]",
                       selectedCardStuck
                         ? "rounded-none border-t-0"
                         : "rounded-t-xl border-t",
@@ -6666,11 +6682,7 @@ export function ReviewWorkspace({
                 </div>
                 <div
                   ref={codeOverviewRef}
-                  className={cn(
-                    "-mt-px",
-                    !sideBySideVisible &&
-                      "overflow-hidden rounded-b-xl border-x border-b border-line bg-code",
-                  )}
+                  className="-mt-px overflow-hidden rounded-b-xl border-x border-b border-lime/50 bg-code"
                 >
                   {!selectedFileSourceExpanded &&
                   activeFileCardSourceAvailable ? (
@@ -6695,6 +6707,7 @@ export function ReviewWorkspace({
                     <SideBySideUnitDiff
                       key={activeUnit.id}
                       ref={diffContextRef}
+                      className="rounded-none border-0"
                       previousSource={diffPreviousSource}
                       currentSource={diffCurrentSource}
                       language={activeUnit.language}
@@ -6730,6 +6743,9 @@ export function ReviewWorkspace({
                       expanded={fullFileVisible}
                       isReviewLineCollapsed={isFileUnitLineCollapsed}
                       onSelectReviewLine={commentOnCardLine}
+                      leftLineCommentMarkers={visibleLineCommentMarkers.left}
+                      rightLineCommentMarkers={visibleLineCommentMarkers.right}
+                      onOpenLineComment={openLineCommentThread}
                       renderBeforeLine={renderFileUnitMarkers}
                       renderLineDetails={renderReviewLineDetails}
                     />
@@ -6852,6 +6868,12 @@ export function ReviewWorkspace({
                             );
                           }
                           const isUnitLine = isPrimaryReviewLine(lineNumber);
+                          const lineCommentMarkers =
+                            reviewLineCommentMarkersForLine(
+                              visibleLineCommentMarkers,
+                              lineNumber,
+                              "right",
+                            );
                           const isChangedLine =
                             isUnitLine && changedCurrentLines.has(lineNumber);
                           const isContextLine = !isUnitLine;
@@ -6879,11 +6901,25 @@ export function ReviewWorkspace({
                                   (line, previousIndex) => {
                                     const previousLineNumber =
                                       previousUnitStartLine + previousIndex;
+                                    const previousMarkers =
+                                      reviewLineCommentMarkersForLine(
+                                        visibleLineCommentMarkers,
+                                        previousLineNumber,
+                                        "left",
+                                      );
                                     return (
                                       <div
                                         key={`${activeUnit.id}-previous-${previousIndex}`}
-                                        className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
+                                        className="group relative grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
                                       >
+                                        {previousMarkers.length > 0 ? (
+                                          <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                                            <ReviewLineCommentMarkers
+                                              markers={previousMarkers}
+                                              onOpen={openLineCommentThread}
+                                            />
+                                          </div>
+                                        ) : null}
                                         <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
                                           {previousLineNumber}
                                         </span>
@@ -6899,7 +6935,7 @@ export function ReviewWorkspace({
                               <div
                                 id={`review-line-${lineNumber}`}
                                 className={cn(
-                                  "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
+                                  "group relative grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
                                   contextVisible &&
                                     isUnitLine &&
                                     "border-l-cyan/35 bg-cyan/[.012]",
@@ -6923,6 +6959,14 @@ export function ReviewWorkspace({
                                     "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
                                 )}
                               >
+                                {lineCommentMarkers.length > 0 ? (
+                                  <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                                    <ReviewLineCommentMarkers
+                                      markers={lineCommentMarkers}
+                                      onOpen={openLineCommentThread}
+                                    />
+                                  </div>
+                                ) : null}
                                 {isUnitLine && activeUnit.kind !== "binary" ? (
                                   <span
                                     className={cn(

@@ -157,13 +157,15 @@ describe("usePrivateWorkspaceSourceHydration", () => {
       usePrivateWorkspaceSourceHydration(data, 25, "files"),
     );
 
-    await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(10));
+    await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(46));
 
     expect(result.current.sourceStatus("src/25.ts")).toBe("ready");
     expect(result.current.units[25]?.source).toBe("ready:src/25.ts");
-    // Five file tasks (active, next, and three other rendered neighbors), each
+    // Twenty-three file tasks (active plus the hydrated neighbor window), each
     // with one context stage and one unit-derivation stage—not all fifty files.
-    expect(hydrate).toHaveBeenCalledTimes(10);
+    expect(hydrate).toHaveBeenCalledTimes(46);
+    expect(result.current.sourceStatus("src/00.ts")).toBe("idle");
+    expect(result.current.sourceStatus("src/49.ts")).toBe("idle");
   });
 
   it("reuses verified files across mode changes and review-state updates", async () => {
