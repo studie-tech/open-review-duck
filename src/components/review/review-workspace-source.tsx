@@ -164,9 +164,11 @@ export function ReviewFileCardSourcePlaceholder({
 
 /** Preserves atomic line numbers when a full file is not available yet. */
 function ReviewConceptFileCardFallbackMember({
+  deleted = false,
   member,
   onCommentLine,
 }: {
+  deleted?: boolean;
   member: ReviewUnit;
   onCommentLine?: (unitId: string, line: number) => void;
 }) {
@@ -185,7 +187,10 @@ function ReviewConceptFileCardFallbackMember({
               className={cn(
                 "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
                 !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+                owner &&
+                  (deleted
+                    ? "border-l-2 border-l-coral/40 bg-coral/[.08] hover:bg-coral/[.12]"
+                    : "border-l-2 border-l-cyan/30 bg-cyan/[.012]"),
               )}
             >
               {owner && onCommentLine ? (
@@ -202,7 +207,14 @@ function ReviewConceptFileCardFallbackMember({
                   {lineNumber}
                 </span>
               )}
-              <pre className="syntax-code overflow-visible text-cloud">
+              <pre
+                className={cn(
+                  "syntax-code overflow-visible text-cloud",
+                  deleted &&
+                    owner &&
+                    "text-cloud/80 line-through decoration-coral/35",
+                )}
+              >
                 <HighlightedTokens tokens={line.tokens} />
               </pre>
             </div>
@@ -330,6 +342,7 @@ function ReviewConceptFileCardSource({
         members.map((member) => (
           <ReviewConceptFileCardFallbackMember
             key={member.id}
+            deleted={deleted}
             member={member}
             onCommentLine={onCommentLine}
           />

@@ -500,10 +500,9 @@ async function followImportedDefinition(
     if (fromStored) return fromStored;
   }
 
-  // Only now does a hover become provider traffic, and one unresolved name can
-  // try every extension the specifier could carry. The repository pays for that
-  // fan-out, so it is gated per pull request the way every other
-  // provider-backed procedure in this router is.
+  // Candidate source reads are the expensive fan-out. Config maps may already
+  // have been fetched for this snapshot, but they are cached and shared; this
+  // gate still covers one unresolved name trying every extension it could carry.
   await enforceRateLimit(
     db,
     `review-symbol-resource:${userId}:${scope.pullRequestId}`,
