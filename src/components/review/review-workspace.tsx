@@ -53,7 +53,10 @@ import {
   useCommandCenterBindings,
 } from "~/components/command-center";
 import { usePendingNavigation } from "~/components/navigation-progress";
-import { AiReviewConfirmationDialog } from "~/components/review/ai-review-confirmation-dialog";
+import {
+  AiReviewStatusDialog,
+  aiReviewStatusLabel,
+} from "~/components/review/ai-review-status-dialog";
 import { ContextRevealControl } from "~/components/review/context-reveal-control";
 import { useStartPullRequestAiReview } from "~/components/review/use-start-pull-request-ai-review";
 import { ThemeToggle } from "~/components/theme-toggle";
@@ -2773,8 +2776,7 @@ export function ReviewWorkspace({
   const pullRequestReview = api.ai.reviewStatus.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
-      refetchInterval: (query) =>
-        aiJobActive(query.state.data?.status) ? 2_000 : false,
+      refetchInterval: 2_000,
     },
   );
   const explanationRunning =
@@ -3942,7 +3944,9 @@ export function ReviewWorkspace({
       aiConfiguration.data.reviewPullRequests &&
       aiConfiguration.data.mode !== "off" &&
       !pullRequestReview.isLoading &&
-      !pullRequestReview.data &&
+      (!pullRequestReview.data ||
+        (!aiJobActive(pullRequestReview.data.status) &&
+          pullRequestReview.data.snapshotId !== initialData.snapshot?.id)) &&
       !startPullRequestReview.isPending &&
       !pullReviewRequested.current
     ) {
@@ -3957,6 +3961,7 @@ export function ReviewWorkspace({
     aiConfiguration.data?.mode,
     aiConfiguration.data?.reviewPullRequests,
     initialData.pullRequest.id,
+    initialData.snapshot?.id,
     pullRequestReview.data,
     pullRequestReview.isLoading,
     startPullRequestReview,
@@ -4383,16 +4388,6 @@ export function ReviewWorkspace({
       setAiQuestionThreadId(startedThreadId);
     }
     return Boolean(startedThreadId);
-  }
-
-  /** Starts a complete evidence-based review of the pull request. */
-  function reviewPullRequestWithAi() {
-    if (reviewRunning) return;
-    setAiReviewDialogOpen(false);
-    startPullRequestReview.mutate({
-      pullRequestId: initialData.pullRequest.id,
-      kind: "review",
-    });
   }
 
   /** Asks the model to regroup this layout once the reviewer has agreed. */
@@ -4898,7 +4893,7 @@ export function ReviewWorkspace({
             type="button"
             variant="secondary"
             className="min-w-0 px-2.5"
-            disabled={aiDisabled || reviewRunning}
+            disabled={aiDisabled && !pullRequestReview.data}
             onClick={() => setAiReviewDialogOpen(true)}
           >
             {reviewRunning ? (
@@ -4907,7 +4902,7 @@ export function ReviewWorkspace({
               <Sparkles className="size-3.5 shrink-0" />
             )}
             <span className="truncate">
-              {reviewRunning ? "Reviewing…" : "Review"}
+              {aiReviewStatusLabel(pullRequestReview.data)}
             </span>
             <ShortcutHint
               shortcut={reviewShortcuts.reviewPullRequest}
@@ -5559,6 +5554,24 @@ export function ReviewWorkspace({
             />
           )}
         </button>
+        {pullRequestReview.data && (
+          <button
+            type="button"
+            onClick={() => setAiReviewDialogOpen(true)}
+            aria-label={aiReviewStatusLabel(pullRequestReview.data)}
+            title={aiReviewStatusLabel(pullRequestReview.data)}
+            className="text-violet flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] hover:bg-surface-subtle"
+          >
+            {reviewRunning ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <Sparkles className="size-4" />
+            )}
+            <span className="hidden lg:inline">
+              {aiReviewStatusLabel(pullRequestReview.data)}
+            </span>
+          </button>
+        )}
         <button
           type="button"
           onClick={undoLastSignOff}
@@ -7844,10 +7857,10 @@ export function ReviewWorkspace({
         )}
 
         {aiReviewDialogOpen && (
-          <AiReviewConfirmationDialog
-            pending={startPullRequestReview.isPending}
-            onCancel={() => setAiReviewDialogOpen(false)}
-            onConfirm={reviewPullRequestWithAi}
+          <AiReviewStatusDialog
+            pullRequestId={initialData.pullRequest.id}
+            startDisabled={aiConfiguration.data?.mode === "off"}
+            onClose={() => setAiReviewDialogOpen(false)}
           />
         )}
 

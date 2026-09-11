@@ -309,7 +309,9 @@ export function buildReviewWorkspaceCommands(
   } = actions;
   const reviewPullRequestCommand: CommandCenterItem = {
     id: "review-pull-request-with-ai",
-    label: "Review the full pull request",
+    label: reviewRunning
+      ? "View AI review progress"
+      : "AI review status and results",
     description:
       aiConfiguration.data?.mode === "off"
         ? "Enable AI assistance in settings first"
@@ -317,7 +319,7 @@ export function buildReviewWorkspaceCommands(
     group: "Review actions",
     icon: <Sparkles className="size-4" />,
     shortcut: reviewShortcuts.reviewPullRequest,
-    disabled: reviewRunning || aiConfiguration.data?.mode === "off",
+    disabled: false,
     onSelect: () => setAiReviewDialogOpen(true),
   };
   const reviewCommands: CommandCenterItem[] = [

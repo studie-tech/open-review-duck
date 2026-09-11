@@ -449,3 +449,32 @@ describe("ai.usage over a review tree", () => {
     });
   });
 });
+
+describe("persisted PR review lookup", () => {
+  it("keeps an older snapshot's run discoverable while scoping it to its reviewer", async () => {
+    const job = {
+      id: "saved-run",
+      status: "completed",
+      snapshotId: "old-snapshot",
+      agentVersion: "old-version",
+    };
+    const { db, captured } = createFakeDb({ aiJob: job });
+    const result = await caller(db).reviewStatus({
+      pullRequestId: "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10",
+    });
+    expect(result).toEqual(job);
+    const sql = renderSql(captured.jobWhere);
+    expect(sql).toContain('"userId"');
+    expect(sql).toContain('"parentJobId" is null');
+    expect(sql).not.toContain('"snapshotId"');
+    expect(sql).not.toContain('"agentVersion"');
+  });
+
+  it("refuses details when the requested run is not owned by the caller", async () => {
+    const { db, captured } = createFakeDb();
+    await expect(
+      caller(db).reviewRun({ jobId: "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(renderSql(captured.jobWhere)).toContain('"userId"');
+  });
+});
