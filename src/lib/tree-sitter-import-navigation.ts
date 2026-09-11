@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ImportReference, ImportStatement } from "./import-navigation";
 import { withClientSyntaxTree } from "./syntax-highlighting";
+import { findDeclarationLineFromTree } from "./tree-sitter-declarations";
 import { importStatementsFromTree } from "./tree-sitter-imports";
 
 // A unit and its expanded file context parse the same source, and reviewers
@@ -75,6 +76,19 @@ export function useImportStatements(source: string, language: string) {
     source,
     language,
     parseTreeSitterImportStatements,
+  );
+}
+
+/** Finds a declaration line with the browser Tree-sitter grammar. */
+export async function findImportedDeclarationLine(
+  source: string,
+  imported: string,
+  language: string,
+  startLine = 1,
+) {
+  if (imported === "*" || language === "text") return undefined;
+  return withClientSyntaxTree(source, language, (root) =>
+    findDeclarationLineFromTree(source, root, imported, startLine),
   );
 }
 

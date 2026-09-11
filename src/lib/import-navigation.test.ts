@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { findImportedDeclarationLine } from "~/server/analysis/declarations";
 import {
   importReferenceForLocal,
   isImportOnlySource,
   parseImportReferences,
   parseImportStatements,
 } from "~/server/analysis/imports";
+import { importMapsFromProjectFiles } from "./import-maps";
 import {
-  findImportedDeclarationLine,
   findImportTargetUnit,
   importPathCandidates,
   importReferenceIsUsed,
@@ -195,6 +196,37 @@ describe("parseImportReferences", () => {
     for (const [language, source] of fixtures) {
       expect(parseImportStatements(source, language).length).toBeGreaterThan(0);
     }
+    expect(parseImportReferences("import app.model.User;", "java")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          imported: "User",
+          local: "User",
+          specifier: "app.model.User",
+        }),
+      ]),
+    );
+    expect(
+      parseImportReferences("use crate::model::{User, Team};", "rust"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          imported: "User",
+          specifier: "crate::model",
+        }),
+        expect.objectContaining({
+          imported: "Team",
+          specifier: "crate::model",
+        }),
+      ]),
+    );
+    expect(parseImportReferences('import (\n  "net/http"\n)\n', "go")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          local: "http",
+          specifier: "net/http",
+        }),
+      ]),
+    );
   });
 
   it("returns the widest statement per import in source order", () => {
@@ -273,6 +305,52 @@ describe("import path resolution", () => {
         "typescript",
       ),
     ).toBe("src/components/panel/index.tsx");
+  });
+
+  it("resolves Node subpath imports from package.json maps", () => {
+    const maps = importMapsFromProjectFiles([
+      {
+        path: "package.json",
+        content: JSON.stringify({ imports: { "#/*": "./src/*" } }),
+      },
+    ]);
+
+    expect(
+      importPathCandidates(
+        "src/app/page.tsx",
+        "#/lib/toast",
+        "typescript",
+        maps,
+      ),
+    ).toContain("src/lib/toast.ts");
+  });
+
+  it("resolves Java packages, Rust crate paths, and quoted includes", () => {
+    expect(
+      importPathCandidates(
+        "src/main/java/app/Service.java",
+        "app.model.User",
+        "java",
+      ),
+    ).toContain("src/main/java/app/model/User.java");
+    expect(
+      importPathCandidates("src/main.rs", "crate::model::user", "rust"),
+    ).toEqual(
+      expect.arrayContaining(["src/model/user.rs", "src/model/user/mod.rs"]),
+    );
+    expect(importPathCandidates("src/app.c", "helpers.h", "c")).toContain(
+      "src/helpers.h",
+    );
+  });
+
+  it("leaves npm packages and language standard libraries unresolved", () => {
+    expect(
+      importPathCandidates("src/app/page.tsx", "react", "typescript"),
+    ).toEqual([]);
+    expect(
+      importPathCandidates("src/Main.java", "java.util.List", "java"),
+    ).toEqual([]);
+    expect(importPathCandidates("main.go", "fmt", "go")).toEqual([]);
   });
 
   it("resolves common T3 aliases and Python modules", () => {

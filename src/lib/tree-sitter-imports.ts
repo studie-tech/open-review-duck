@@ -264,6 +264,252 @@ function pythonReferences(source: string, node: SyntaxNode) {
   return references;
 }
 
+/** Returns whether a node is a leaf identifier used in a qualified name. */
+function isNameLeaf(type: string) {
+  return (
+    type === "identifier" ||
+    type === "type_identifier" ||
+    type === "simple_identifier" ||
+    type === "property_identifier" ||
+    type === "name" ||
+    type === "constant" ||
+    type.endsWith("_identifier")
+  );
+}
+
+/** Collects identifier leaves under a node, skipping an optional alias subtree. */
+function identifierLeaves(node: SyntaxNode, skip?: SyntaxNode): SyntaxNode[] {
+  return descendants(node).filter((child) => {
+    if (!isNameLeaf(child.type)) return false;
+    if (!skip) return true;
+    return child.startIndex < skip.startIndex || child.endIndex > skip.endIndex;
+  });
+}
+
+/** Returns the grammar node that holds a qualified import path. */
+function qualifiedImportName(node: SyntaxNode, skip?: SyntaxNode) {
+  return (
+    node.childForFieldName("path") ??
+    node.childForFieldName("name") ??
+    node.namedChildren.find((child) => {
+      if (!child || (skip && child.startIndex === skip.startIndex)) {
+        return false;
+      }
+      return (
+        child.type.includes("identifier") ||
+        child.type.includes("name") ||
+        child.type.includes("type") ||
+        child.type === "qualified_name"
+      );
+    })
+  );
+}
+
+/** Extracts a dotted or slash-separated import from JVM-family grammars. */
+function dottedPackageReferences(source: string, node: SyntaxNode) {
+  const alias =
+    node.childForFieldName("alias") ??
+    descendants(node).find((child) =>
+      ["import_alias", "namespace_aliasing_clause", "use_as_clause"].includes(
+        child.type,
+      ),
+    );
+  const aliasName = alias
+    ? (alias.childForFieldName("name") ??
+      alias.childForFieldName("alias") ??
+      identifierLeaves(alias)[0])
+    : undefined;
+  const star = descendants(node).some(
+    (child) => child.type === "asterisk" || syntaxText(source, child) === "*",
+  );
+  const nameNode = qualifiedImportName(node, alias);
+  if (!nameNode) return staticModuleReference(source, node);
+  const specifier = syntaxText(source, nameNode)
+    .replace(/\.\s*\*$/, "")
+    .replace(/\\\s*\*$/, "")
+    .replaceAll(/\s+/g, "");
+  const imported = star
+    ? "*"
+    : (specifier
+        .split(/[./\\]/)
+        .filter(Boolean)
+        .at(-1) ?? "*");
+  const localNode = aliasName ?? identifierLeaves(nameNode).at(-1) ?? nameNode;
+  return [
+    reference(localNode, {
+      specifier,
+      imported,
+      local: aliasName ? syntaxText(source, aliasName) : imported,
+      kind: star ? "namespace" : "named",
+    }),
+  ];
+}
+
+/** Extracts Go import specs, including aliases and the last path segment. */
+function goReferences(source: string, node: SyntaxNode) {
+  const specs = descendants(node).filter(
+    (child) => child.type === "import_spec",
+  );
+  const targets = specs.length > 0 ? specs : [node];
+  return targets.flatMap((spec) => {
+    const pathNode =
+      spec.childForFieldName("path") ??
+      descendants(spec).find((child) => {
+        const type = child.type.toLowerCase();
+        return type.includes("string") || type === "interpreted_string_literal";
+      });
+    if (!pathNode) return [];
+    const specifier = literalValue(source, pathNode);
+    const nameNode = spec.childForFieldName("name");
+    const local = nameNode
+      ? syntaxText(source, nameNode)
+      : (specifier.split("/").pop() ?? specifier);
+    if (local === "." || local === "_") {
+      return [
+        reference(pathNode, {
+          specifier,
+          imported: "*",
+          local: "*",
+          kind: "module",
+        }),
+      ];
+    }
+    return [
+      reference(nameNode ?? pathNode, {
+        specifier,
+        imported: "*",
+        local,
+        kind: "module",
+      }),
+    ];
+  });
+}
+
+/** Walks a Rust use tree into one reference per imported name. */
+function rustUseTree(
+  source: string,
+  node: SyntaxNode,
+  prefix: string[],
+): ImportReference[] {
+  if (node.type === "use_as_clause") {
+    const path = node.childForFieldName("path") ?? node.namedChildren[0];
+    const alias = node.childForFieldName("alias") ?? node.namedChildren[1];
+    if (!path) return [];
+    const parts = [...prefix, ...rustPathParts(source, path)];
+    const imported = parts.at(-1) ?? "*";
+    const localNode = alias ?? path;
+    return [
+      reference(localNode, {
+        specifier: parts.slice(0, -1).join("::") || parts.join("::"),
+        imported,
+        local: syntaxText(source, localNode),
+        kind: "named",
+      }),
+    ];
+  }
+  if (node.type === "use_wildcard") {
+    const path = node.namedChildren[0];
+    const parts = [...prefix, ...(path ? rustPathParts(source, path) : [])];
+    return [
+      reference(node, {
+        specifier: parts.join("::"),
+        imported: "*",
+        local: "*",
+        kind: "namespace",
+      }),
+    ];
+  }
+  if (node.type === "use_list") {
+    return node.namedChildren.flatMap((child) =>
+      child ? rustUseTree(source, child, prefix) : [],
+    );
+  }
+  if (node.type === "scoped_use_list") {
+    const path = node.childForFieldName("path");
+    const list = node.childForFieldName("list");
+    const next = [...prefix, ...(path ? rustPathParts(source, path) : [])];
+    return list ? rustUseTree(source, list, next) : [];
+  }
+  const parts = [...prefix, ...rustPathParts(source, node)];
+  if (parts.length === 0) return [];
+  const imported = parts.at(-1) ?? "*";
+  const specifier = parts.slice(0, -1).join("::") || parts.join("::");
+  const localNode = identifierLeaves(node).at(-1) ?? node;
+  return [
+    reference(localNode, {
+      specifier,
+      imported,
+      local: imported,
+      kind: imported === "*" ? "namespace" : "named",
+    }),
+  ];
+}
+
+/** Collects the path segments of a Rust identifier or scoped identifier. */
+function rustPathParts(source: string, node: SyntaxNode) {
+  return syntaxText(source, node)
+    .split("::")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && part !== "{" && part !== "}");
+}
+
+/** Extracts Rust use and extern-crate bindings. */
+function rustReferences(source: string, node: SyntaxNode) {
+  if (node.type === "mod_item") {
+    const name = node.childForFieldName("name");
+    if (!name) return [];
+    return [
+      reference(name, {
+        specifier: `self::${syntaxText(source, name)}`,
+        imported: syntaxText(source, name),
+        local: syntaxText(source, name),
+        kind: "named",
+      }),
+    ];
+  }
+  const argument = node.childForFieldName("argument") ?? node.namedChildren[0];
+  if (!argument) return staticModuleReference(source, node);
+  return rustUseTree(source, argument, []);
+}
+
+/** Extracts PHP namespace uses and require/include path literals. */
+function phpReferences(source: string, node: SyntaxNode) {
+  if (node.type === "namespace_use_declaration") {
+    return dottedPackageReferences(source, node);
+  }
+  return staticModuleReference(source, node);
+}
+
+/** Extracts C# using directives as namespace or type imports. */
+function csharpReferences(source: string, node: SyntaxNode) {
+  return dottedPackageReferences(source, node);
+}
+
+/** Dispatches a language's import node to the extractor that understands it. */
+function referencesForLanguage(
+  language: string,
+  source: string,
+  node: SyntaxNode,
+) {
+  if (language === "python") return pythonReferences(source, node);
+  if (language === "javascript" || language === "typescript") {
+    return javascriptReferences(source, node);
+  }
+  if (
+    language === "java" ||
+    language === "kotlin" ||
+    language === "groovy" ||
+    language === "scala"
+  ) {
+    return dottedPackageReferences(source, node);
+  }
+  if (language === "csharp") return csharpReferences(source, node);
+  if (language === "go") return goReferences(source, node);
+  if (language === "rust") return rustReferences(source, node);
+  if (language === "php") return phpReferences(source, node);
+  return staticModuleReference(source, node);
+}
+
 /** Extracts a module reference from the literal carried by an import node. */
 function staticModuleReference(source: string, node: SyntaxNode) {
   const literal = descendants(node).find((candidate) => {
@@ -366,12 +612,7 @@ export function importStatementsFromTree(
   root: SyntaxNode,
 ) {
   return importNodes(source, language, root).map((node): ImportStatement => {
-    const references =
-      language === "python"
-        ? pythonReferences(source, node)
-        : language === "javascript" || language === "typescript"
-          ? javascriptReferences(source, node)
-          : staticModuleReference(source, node);
+    const references = referencesForLanguage(language, source, node);
     return {
       from: node.startIndex,
       to: node.endIndex,

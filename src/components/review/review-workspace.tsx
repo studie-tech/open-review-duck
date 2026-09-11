@@ -11,6 +11,7 @@ import {
   CornerUpLeft,
   ExternalLink,
   FileCode2,
+  FileX2,
   FolderInput,
   GitBranch,
   Info,
@@ -70,7 +71,6 @@ import {
 import { aiErrorPresentation } from "~/lib/ai-errors";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
 import {
-  findImportedDeclarationLine,
   findImportTargetUnit,
   type ImportReference,
 } from "~/lib/import-navigation";
@@ -151,7 +151,10 @@ import {
   useHighlightedSource,
 } from "~/lib/syntax-highlighting";
 import { formatTokenCount } from "~/lib/token-usage";
-import { useImportReferences } from "~/lib/tree-sitter-import-navigation";
+import {
+  findImportedDeclarationLine,
+  useImportReferences,
+} from "~/lib/tree-sitter-import-navigation";
 import { useSettledValue } from "~/lib/use-settled-value";
 import { cn } from "~/lib/utils";
 import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
@@ -186,6 +189,7 @@ import {
   relatedReviewRanges,
   reviewCardRanges,
   reviewedFileCard,
+  reviewFileCardIsDeleted,
   reviewUnitIsCollapsed,
   reviewUnitStartsCollapsed,
 } from "./review-file-card";
@@ -1839,7 +1843,6 @@ export function ReviewWorkspace({
       openInlineComment,
     ],
   );
-
   /** Opens the anchor unit for one concept-first path entry. */
   function selectConceptPath(index: number) {
     // The entry is anchored on the concept's first member that this snapshot
@@ -1923,7 +1926,7 @@ export function ReviewWorkspace({
           source: moduleUnit.unit.source,
           startLine: moduleUnit.unit.startLine,
           endLine: moduleUnit.unit.endLine,
-          focusLine: findImportedDeclarationLine(
+          focusLine: await findImportedDeclarationLine(
             moduleUnit.unit.source,
             reference.imported,
             moduleUnit.unit.language,
@@ -6307,8 +6310,12 @@ export function ReviewWorkspace({
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <h1
-                      className="truncate text-sm font-medium"
-                      title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                      className={cn(
+                        "truncate text-sm font-medium",
+                        activeFileIsDeleted &&
+                          "text-coral decoration-coral/50 line-through",
+                      )}
+                      title={`${activeUnit.path}${activeFileIsDeleted ? " (deleted)" : ""}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
                     >
                       {reviewMode === "files"
                         ? (activeUnit.path.split("/").at(-1) ?? activeUnit.path)
@@ -6358,20 +6365,28 @@ export function ReviewWorkspace({
                           Updated
                         </Badge>
                       )}
-                    {activeUnit.changeType !== "modified" && (
-                      <Badge
-                        className={cn(
-                          "capitalize",
-                          activeUnit.changeType === "deleted" &&
-                            "border-red-500/25 bg-red-400/10 text-red-700 dark:border-red-300/20 dark:text-red-200",
-                        )}
-                      >
-                        {activeUnit.changeType}
+                    {activeFileIsDeleted ? (
+                      <Badge className="border-coral/30 bg-coral/10 text-coral">
+                        <FileX2 className="size-3" aria-hidden />
+                        File deleted
                       </Badge>
+                    ) : (
+                      activeUnit.changeType !== "modified" && (
+                        <Badge className="capitalize">
+                          {activeUnit.changeType}
+                        </Badge>
+                      )
                     )}
                   </div>
                   <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
-                    <span className="text-mist font-mono">
+                    <span
+                      className={cn(
+                        "font-mono",
+                        activeFileIsDeleted
+                          ? "text-coral/80 decoration-coral/40 line-through"
+                          : "text-mist",
+                      )}
+                    >
                       {activeUnit.path}
                     </span>
                     <span aria-hidden="true">·</span>
@@ -6645,7 +6660,10 @@ export function ReviewWorkspace({
                   />
                   <div
                     className={cn(
-                      "overflow-hidden border-x border-b border-lime/50 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-accent)_18%,transparent)]",
+                      "overflow-hidden border-x border-b bg-panel",
+                      activeFileIsDeleted
+                        ? "border-coral/40 shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-coral)_10%,transparent)]"
+                        : "border-lime/50 shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-accent)_18%,transparent)]",
                       selectedCardStuck
                         ? "rounded-none border-t-0"
                         : "rounded-t-xl border-t",
@@ -6724,6 +6742,7 @@ export function ReviewWorkspace({
                   {!selectedFileSourceExpanded &&
                   activeFileCardSourceAvailable ? (
                     <ReviewFileCardSourcePlaceholder
+                      deleted={activeFileIsDeleted}
                       framed
                       itemLabel={reviewMode === "files" ? "file" : "card"}
                       language={activeUnit.language}
@@ -6982,7 +7001,11 @@ export function ReviewWorkspace({
                                   "group relative grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
                                   contextVisible &&
                                     isUnitLine &&
+                                    !activeFileIsDeleted &&
                                     "border-l-cyan/35 bg-cyan/[.012]",
+                                  activeFileIsDeleted &&
+                                    isUnitLine &&
+                                    "border-l-coral/45 bg-coral/[.09] hover:bg-coral/[.14]",
                                   isChangedLine &&
                                     "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
                                   isContextLine &&
@@ -7017,6 +7040,7 @@ export function ReviewWorkspace({
                                       "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
                                       isChangedLine &&
                                         "bg-addition/20 text-addition",
+                                      activeFileIsDeleted && "text-coral",
                                     )}
                                   >
                                     <button
@@ -7036,7 +7060,14 @@ export function ReviewWorkspace({
                                     {lineNumber}
                                   </span>
                                 )}
-                                <pre className="syntax-code overflow-visible text-cloud">
+                                <pre
+                                  className={cn(
+                                    "syntax-code overflow-visible text-cloud",
+                                    activeFileIsDeleted &&
+                                      isUnitLine &&
+                                      "text-cloud/80 line-through decoration-coral/35",
+                                  )}
+                                >
                                   <HighlightedTokens
                                     tokens={line.tokens}
                                     renderToken={({

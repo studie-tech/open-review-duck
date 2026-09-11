@@ -17,6 +17,7 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
+  reviewFileCardIsDeleted,
   reviewUnitIsCollapsed,
   reviewUnitStartsCollapsed,
 } from "./review-file-card";
@@ -134,7 +135,57 @@ describe("reviewCardRanges", () => {
   });
 });
 
+describe("reviewFileCardIsDeleted", () => {
+  it("is true only when every member is a deletion", () => {
+    expect(reviewFileCardIsDeleted([{ changeType: "deleted" }])).toBe(true);
+    expect(
+      reviewFileCardIsDeleted([
+        { changeType: "deleted" },
+        { changeType: "modified" },
+      ]),
+    ).toBe(false);
+    expect(reviewFileCardIsDeleted([])).toBe(false);
+  });
+});
+
 describe("ReviewFileCardHeader", () => {
+  it("makes a deleted file card unmistakable", () => {
+    render(
+      <ReviewFileCardHeader
+        members={
+          [
+            {
+              ...units[0],
+              path: "app/src/app/welcome/page.tsx",
+              changeType: "deleted",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        selected
+        itemLabel="File"
+        sourceBytes={247}
+      />,
+    );
+
+    expect(screen.getByText("This file is deleted")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "You are reviewing the last version on the base branch. It will not be in the merge.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Deleted")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Last version before removal · 1 unit · 1 changed lines · 247 B",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("app/src/app/welcome/page.tsx")).toHaveClass(
+      "line-through",
+    );
+  });
+
   it("does not call a waiting-only card reviewed", () => {
     render(
       <ReviewFileCardHeader
