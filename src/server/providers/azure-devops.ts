@@ -27,6 +27,7 @@ import type {
   RepositoryBranch,
   RepositoryIdentity,
 } from "./types";
+import { ProviderError } from "./types";
 
 interface AzureRepository {
   id: string;
@@ -503,6 +504,35 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     );
   }
 
+  /** Resolves the common ancestor of the exact target and source revisions. */
+  async getPullRequestDiffBase(
+    repositoryExternalId: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<string> {
+    const query = new URLSearchParams({
+      baseVersion: baseSha,
+      baseVersionType: "commit",
+      targetVersion: headSha,
+      targetVersionType: "commit",
+      diffCommonCommit: "true",
+      $top: "1",
+      "api-version": "7.1",
+    });
+    const comparison = await providerFetch<{ commonCommit?: string }>(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/diffs/commits?${query}`,
+      { headers: this.headers },
+    );
+    if (!comparison.commonCommit) {
+      throw new ProviderError(
+        this.name,
+        "Azure DevOps did not return the PR merge base",
+      );
+    }
+    return comparison.commonCommit;
+  }
+
   /** Fetches the changed source files required for static analysis. */
   async getChangedFiles(
     repositoryExternalId: string,
@@ -519,6 +549,11 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     ]);
     const latest = iterations.value.at(-1);
     if (!latest) return [];
+    const diffBaseSha = await this.getPullRequestDiffBase(
+      repositoryExternalId,
+      pull.baseSha,
+      pull.headSha,
+    );
     const changes = await this.getAllChanges(
       `${this.organizationUrl}/_apis/git/repositories/${repositoryExternalId}/pullrequests/${number}/iterations/${latest.id}/changes?api-version=7.1`,
     );
@@ -535,7 +570,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         const normalizedChangeType = change.changeType.toLowerCase();
         const deleted = normalizedChangeType.includes("delete");
         const added = normalizedChangeType.includes("add");
-        const ref = deleted ? pull.baseSha : pull.headSha;
+        const ref = deleted ? diffBaseSha : pull.headSha;
         const path = change.item.path.replace(/^\//, "");
         const oversizedHash = change.item.objectId ?? `${ref}:${path}`;
         return loadChangedSource({
@@ -543,7 +578,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
           fetchPath: change.item.path,
           previousFetchPath: change.originalPath ?? change.item.path,
           ref,
-          previousRef: pull.baseSha,
+          previousRef: diffBaseSha,
           changeType: deleted
             ? "deleted"
             : added

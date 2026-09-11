@@ -206,6 +206,15 @@ export interface PullRequestProvider {
     number: number,
     options?: ChangedFilesOptions,
   ): Promise<SourceFile[]>;
+  /**
+   * Resolves the diff base from immutable PR revisions when baseSha is a target tip.
+   * Providers that already expose the merge base as baseSha can omit this method.
+   */
+  getPullRequestDiffBase?(
+    repositoryExternalId: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<string>;
   /** Lists regular files in an immutable repository revision. */
   listRepositoryFiles(
     repositoryExternalId: string,

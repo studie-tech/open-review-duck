@@ -666,6 +666,9 @@ describe("provider normalization", () => {
   it("retrieves deleted GitHub source from the base revision", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
       if (url.includes("/files?")) {
         return jsonResponse([{ filename: "src/legacy.ts", status: "removed" }]);
       }
@@ -681,7 +684,7 @@ describe("provider normalization", () => {
         html_url: "https://github.com/acme/review/pull/7",
         user: { login: "reviewer", avatar_url: "" },
         head: { ref: "cleanup", sha: "head-sha" },
-        base: { ref: "main", sha: "base-sha" },
+        base: { ref: "main", sha: "target-sha" },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -854,6 +857,9 @@ describe("provider normalization", () => {
   it("keeps GitHub base content for precise first-revision comparison", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
       if (url.includes("/files?")) {
         return jsonResponse([
           { filename: "src/format.ts", status: "modified" },
@@ -874,7 +880,7 @@ describe("provider normalization", () => {
         html_url: "https://github.com/acme/review/pull/8",
         user: { login: "reviewer", avatar_url: "" },
         head: { ref: "format", sha: "head-sha" },
-        base: { ref: "main", sha: "base-sha" },
+        base: { ref: "main", sha: "target-sha" },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -891,6 +897,9 @@ describe("provider normalization", () => {
   it("keeps smaller GitHub sources when the pull request exceeds its budget", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
       if (url.includes("/files?")) {
         return jsonResponse(
           ["one.ts", "two.ts", "three.ts"].map((filename) => ({
@@ -918,7 +927,7 @@ describe("provider normalization", () => {
         html_url: "https://github.com/acme/review/pull/9",
         user: { login: "reviewer", avatar_url: "" },
         head: { ref: "large", sha: "head-sha" },
-        base: { ref: "main", sha: "base-sha" },
+        base: { ref: "main", sha: "target-sha" },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -1433,6 +1442,9 @@ describe("provider normalization", () => {
   it("retrieves modified Azure source from both revisions", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/diffs/commits?")) {
+        return jsonResponse({ commonCommit: "base-sha" });
+      }
       if (url.includes("/iterations?")) {
         return jsonResponse({ value: [{ id: 3 }] });
       }
@@ -1469,7 +1481,7 @@ describe("provider normalization", () => {
         sourceRefName: "refs/heads/sync",
         targetRefName: "refs/heads/main",
         lastMergeSourceCommit: { commitId: "head-sha" },
-        lastMergeTargetCommit: { commitId: "base-sha" },
+        lastMergeTargetCommit: { commitId: "target-sha" },
         repository: { webUrl: "https://dev.azure.com/acme/repo" },
         createdBy: { displayName: "Duck", uniqueName: "duck@example.com" },
       });
@@ -1498,6 +1510,9 @@ describe("provider normalization", () => {
     }> = [];
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/diffs/commits?")) {
+        return jsonResponse({ commonCommit: "base-sha" });
+      }
       if (url.includes("/iterations?")) {
         return jsonResponse({ value: [{ id: 3 }] });
       }
@@ -1542,7 +1557,7 @@ describe("provider normalization", () => {
         sourceRefName: "refs/heads/worker-move",
         targetRefName: "refs/heads/main",
         lastMergeSourceCommit: { commitId: "head-sha" },
-        lastMergeTargetCommit: { commitId: "base-sha" },
+        lastMergeTargetCommit: { commitId: "target-sha" },
         repository: { webUrl: "https://dev.azure.com/acme/repo" },
         createdBy: { displayName: "Duck" },
       });
@@ -1577,6 +1592,9 @@ describe("provider normalization", () => {
   it("keeps smaller Azure sources when the pull request exceeds its budget", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/diffs/commits?")) {
+        return jsonResponse({ commonCommit: "base-sha" });
+      }
       if (url.includes("/iterations?")) {
         return jsonResponse({ value: [{ id: 3 }] });
       }
