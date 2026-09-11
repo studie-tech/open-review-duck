@@ -113,7 +113,7 @@ describe("ReviewFilesPanel", () => {
     expect(screen.getByText("page.tsx")).toHaveClass("line-through");
     expect(screen.getByText("Deleted")).toBeVisible();
     expect(
-      screen.getByRole("treeitem", {
+      screen.getByRole("listitem", {
         name: "app/src/app/welcome/page.tsx, deleted, 0 of 1 review units reviewed",
       }),
     ).toBeVisible();
