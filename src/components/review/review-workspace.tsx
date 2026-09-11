@@ -189,7 +189,6 @@ import {
   relatedReviewRanges,
   reviewCardRanges,
   reviewedFileCard,
-  reviewFileCardIsDeleted,
   reviewUnitIsCollapsed,
   reviewUnitStartsCollapsed,
 } from "./review-file-card";

@@ -573,9 +573,7 @@ async function definitionFromImportedSource(
   language: string,
 ): Promise<ImportedDefinitionResult> {
   const imported = input.imported ?? input.symbol;
-  let analyzed: Awaited<
-    ReturnType<typeof analyzeFilesForSymbolPeek>
-  >["units"];
+  let analyzed: Awaited<ReturnType<typeof analyzeFilesForSymbolPeek>>["units"];
   try {
     analyzed = (
       await analyzeFilesForSymbolPeek([
