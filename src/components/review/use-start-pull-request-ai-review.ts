@@ -8,8 +8,13 @@ import { showAiStartError } from "./review-workspace-diff";
 export function useStartPullRequestAiReview(options?: {
   onSuccess?: () => void;
 }) {
+  const utils = api.useUtils();
   return api.ai.start.useMutation({
-    onSuccess: () => {
+    onSuccess: (job) => {
+      utils.ai.reviewStatus.setData({ pullRequestId: job.pullRequestId }, job);
+      void utils.ai.reviewRuns.invalidate();
+      void utils.ai.reviewHistory.invalidate();
+      void utils.review.deepReviewFindings.invalidate();
       toast.success("Pull request review started", {
         description:
           "Findings will appear inline as the review agent completes its analysis.",

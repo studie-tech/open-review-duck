@@ -18,8 +18,11 @@ import type { CommandCenterItem } from "~/components/command-center";
 import { PullRequestLabelPills } from "~/components/dashboard/pull-request-label-pills";
 import { usePendingNavigation } from "~/components/navigation-progress";
 import { usePageCommandCenter } from "~/components/page-command-center";
-import { AiReviewConfirmationDialog } from "~/components/review/ai-review-confirmation-dialog";
-import { useStartPullRequestAiReview } from "~/components/review/use-start-pull-request-ai-review";
+import {
+  AiReviewStatusDialog,
+  aiReviewStatusLabel,
+} from "~/components/review/ai-review-status-dialog";
+import { aiJobActive } from "~/components/review/review-workspace-hooks";
 import { Badge } from "~/components/ui/badge";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
 import { LinkNavigationStatus } from "~/components/ui/link-status";
@@ -27,7 +30,7 @@ import { Spinner } from "~/components/ui/spinner";
 import { priorityInboxGroup } from "~/lib/priority-inbox";
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
-import type { RouterOutputs } from "~/trpc/react";
+import { api, type RouterOutputs } from "~/trpc/react";
 
 type PullRequests = RouterOutputs["review"]["dashboard"];
 export type PullRequestListKind = "active" | "reviewed" | "closed" | "removed";
@@ -88,9 +91,13 @@ export function PullRequestList({
     useState<PullRequests[number]>();
   const showAiReview =
     canStartAiReview && (kind === "active" || kind === "reviewed");
-  const startAiReview = useStartPullRequestAiReview({
-    onSuccess: () => setPullRequestToReview(undefined),
-  });
+  const reviewRuns = api.ai.reviewRuns.useQuery(
+    { pullRequestIds: pullRequests.map(({ id }) => id) },
+    {
+      enabled: showAiReview && pullRequests.length > 0,
+      refetchInterval: 4_000,
+    },
+  );
   const commands = useMemo<CommandCenterItem[]>(
     () => [
       ...(kind === "active"
@@ -149,6 +156,10 @@ export function PullRequestList({
           const matchesTypedPosition =
             !typedPosition || position.startsWith(typedPosition);
           const pending = pendingPullRequestId === pullRequest.id;
+          const aiRun = reviewRuns.data?.find(
+            (run) => run.pullRequestId === pullRequest.id,
+          );
+          const aiRunning = aiJobActive(aiRun?.status);
           const progress = pullRequest.totalUnits
             ? Math.round(
                 (pullRequest.signedUnits / pullRequest.totalUnits) * 100,
@@ -298,27 +309,20 @@ export function PullRequestList({
                   {showAiReview && (
                     <button
                       type="button"
-                      aria-label={`Review ${pullRequest.title} with AI`}
-                      title={
-                        aiReviewDisabled
-                          ? "Enable AI assistance in settings first"
-                          : "Review with AI"
-                      }
-                      disabled={
-                        pending ||
-                        aiReviewDisabled ||
-                        (startAiReview.isPending &&
-                          pullRequestToReview?.id === pullRequest.id)
-                      }
+                      aria-label={`${aiReviewStatusLabel(aiRun)}: ${pullRequest.title}`}
+                      title={aiReviewStatusLabel(aiRun)}
                       onClick={() => setPullRequestToReview(pullRequest)}
-                      className="text-mist hover:text-violet hover:bg-violet/[.06] grid size-9 place-items-center rounded-lg transition disabled:opacity-50"
+                      className={cn(
+                        "hover:text-violet hover:bg-violet/[.06] flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-xs transition",
+                        aiRun ? "text-violet" : "text-mist",
+                      )}
                     >
-                      {startAiReview.isPending &&
-                      pullRequestToReview?.id === pullRequest.id ? (
+                      {aiRunning ? (
                         <Loader2 className="size-4 animate-spin" />
                       ) : (
                         <Sparkles className="size-4" />
                       )}
+                      {aiRun && <span>{aiReviewStatusLabel(aiRun)}</span>}
                     </button>
                   )}
                   {kind === "removed" ? (
@@ -393,16 +397,10 @@ export function PullRequestList({
         />
       )}
       {pullRequestToReview && (
-        <AiReviewConfirmationDialog
-          pending={startAiReview.isPending}
-          onCancel={() => setPullRequestToReview(undefined)}
-          onConfirm={() => {
-            if (startAiReview.isPending) return;
-            startAiReview.mutate({
-              pullRequestId: pullRequestToReview.id,
-              kind: "review",
-            });
-          }}
+        <AiReviewStatusDialog
+          pullRequestId={pullRequestToReview.id}
+          startDisabled={aiReviewDisabled}
+          onClose={() => setPullRequestToReview(undefined)}
         />
       )}
     </>

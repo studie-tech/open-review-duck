@@ -62,7 +62,13 @@ const queryState = vi.hoisted(() => ({
 vi.mock("~/trpc/react", () => ({
   api: {
     useUtils: vi.fn(() => ({
+      ai: {
+        reviewStatus: { setData: vi.fn() },
+        reviewRuns: { invalidate: vi.fn() },
+        reviewHistory: { invalidate: vi.fn() },
+      },
       review: {
+        deepReviewFindings: { invalidate: vi.fn() },
         dashboard: {
           setData: queryState.dashboardSetData,
           invalidate: queryState.dashboardInvalidate,
@@ -130,19 +136,31 @@ vi.mock("~/trpc/react", () => ({
       },
     },
     ai: {
+      reviewRuns: { useQuery: vi.fn(() => ({ data: [] })) },
+      reviewStatus: {
+        useQuery: vi.fn(() => ({ data: null, isLoading: false })),
+      },
+      reviewHistory: {
+        useQuery: vi.fn(() => ({ data: [], isLoading: false })),
+      },
+      reviewRun: { useQuery: vi.fn(() => ({ data: null, isLoading: false })) },
       configuration: {
         useQuery: vi.fn(() => ({
           data: queryState.aiConfiguration,
         })),
       },
       start: {
-        useMutation: vi.fn((options?: { onSuccess?: () => void }) => ({
-          mutate: (input: { pullRequestId: string; kind: string }) => {
-            queryState.startAiMutate(input);
-            options?.onSuccess?.();
-          },
-          isPending: false,
-        })),
+        useMutation: vi.fn(
+          (options?: {
+            onSuccess?: (job: { pullRequestId: string }) => void;
+          }) => ({
+            mutate: (input: { pullRequestId: string; kind: string }) => {
+              queryState.startAiMutate(input);
+              options?.onSuccess?.({ pullRequestId: input.pullRequestId });
+            },
+            isPending: false,
+          }),
+        ),
       },
     },
   },
@@ -1041,7 +1059,7 @@ describe("PullRequestsContent", () => {
     }
   });
 
-  it("starts an AI review from the inbox with the same confirmation as the workspace", async () => {
+  it("starts an AI review from the inbox only after confirming its token usage", async () => {
     const restore = withBrowserShowModal();
     try {
       queryState.activeSyncs = [];
@@ -1057,17 +1075,15 @@ describe("PullRequestsContent", () => {
 
       await user.click(
         screen.getByRole("button", {
-          name: "Review Inventory improvements with AI",
+          name: "Review with AI: Inventory improvements",
         }),
       );
+      expect(screen.getByRole("heading", { name: "AI review" })).toBeVisible();
       expect(
-        screen.getByRole("heading", {
-          name: "Review this pull request with AI?",
-        }),
+        screen.getByText(/contributes to this pull request’s token usage/),
       ).toBeVisible();
       expect(queryState.startAiMutate).not.toHaveBeenCalled();
-
-      await user.keyboard("{Enter}");
+      await user.click(screen.getByRole("button", { name: "Start AI review" }));
       expect(queryState.startAiMutate).toHaveBeenCalledWith({
         pullRequestId: "ready",
         kind: "review",
@@ -1095,7 +1111,7 @@ describe("PullRequestsContent", () => {
 
     expect(
       screen.queryByRole("button", {
-        name: "Review Inventory improvements with AI",
+        name: "Review with AI: Inventory improvements",
       }),
     ).not.toBeInTheDocument();
   });

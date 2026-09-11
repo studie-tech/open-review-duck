@@ -1,7 +1,18 @@
 import "server-only";
 
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, gte, isNull, lt, ne, or, sql, sum } from "drizzle-orm";
+import {
+  and,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+  sum,
+} from "drizzle-orm";
 import {
   aiJobs,
   aiPreferences,
@@ -289,6 +300,33 @@ export async function createAiJob(
     await managedReservationPricing(db, scope.model);
   }
   return db.transaction(async (tx) => {
+    // A PR-wide lock survives snapshot refreshes and agent upgrades. Check
+    // before reserving quota so simultaneous starts reuse the same run.
+    if (
+      input.kind === "review" &&
+      !input.unitId &&
+      (input.reviewScope ?? "pull_request") === "pull_request"
+    ) {
+      const key = `active-pr-review:${input.userId}:${input.pullRequestId}`;
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
+      const active = await tx.query.aiJobs.findFirst({
+        where: and(
+          eq(aiJobs.pullRequestId, input.pullRequestId),
+          eq(aiJobs.userId, input.userId),
+          eq(aiJobs.kind, "review"),
+          eq(aiJobs.reviewScope, "pull_request"),
+          isNull(aiJobs.parentJobId),
+          isNull(aiJobs.unitId),
+          inArray(aiJobs.status, [
+            "queued",
+            "running",
+            "waiting_for_provider",
+            "streaming",
+          ]),
+        ),
+      });
+      if (active) return active;
+    }
     if (input.clientRequestId) {
       const requestKey = `ai-question:${input.userId}:${input.clientRequestId}`;
       await tx.execute(

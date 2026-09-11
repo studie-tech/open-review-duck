@@ -1,6 +1,12 @@
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ isLocalDeployment: vi.fn(() => false) }));
+
+vi.mock("~/server/ai/plan", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/server/ai/plan")>()),
+  managedSaasModel: () => "test-model",
+}));
 
 vi.mock("~/server/deployment", () => ({
   isLocalDeployment: mocks.isLocalDeployment,
@@ -100,4 +106,71 @@ describe("createAiJob deep review gate", () => {
       createAiJob(unreachableDatabase(), jobInput("explain", false)),
     ).rejects.toThrow(REACHED_DATABASE);
   });
+});
+
+/** Supplies current context while returning a still-active older review. */
+function databaseWithActiveReview(status: string) {
+  const active = {
+    id: "existing-run",
+    snapshotId: "old-snapshot",
+    agentVersion: "old-agent",
+    status,
+  };
+  const lookup = vi.fn(
+    async (_config: { where: import("drizzle-orm").SQL | undefined }) => active,
+  );
+  const execute = vi.fn(async () => undefined);
+  const insert = vi.fn(() => {
+    throw new Error("Duplicate review reserved quota or inserted a job");
+  });
+  const tx = { query: { aiJobs: { findFirst: lookup } }, execute, insert };
+  const chain = {
+    from: () => chain,
+    innerJoin: () => chain,
+    where: () => chain,
+    limit: async () => [{ workspace: { id: "workspace-1" } }],
+  };
+  const db = {
+    select: () => chain,
+    query: {
+      reviewSnapshots: { findFirst: async () => ({ id: "new-snapshot" }) },
+      aiPreferences: { findFirst: async () => undefined },
+      reviewUnits: { findMany: async () => [{ id: "unit-1" }] },
+      managedAiModels: { findFirst: async () => ({ supportsTools: true }) },
+    },
+    transaction: async (run: (transaction: typeof tx) => Promise<unknown>) =>
+      run(tx),
+  };
+  return {
+    db: db as unknown as Parameters<typeof createAiJob>[0],
+    active,
+    lookup,
+    execute,
+    insert,
+  };
+}
+
+describe("active PR review reuse", () => {
+  it.each(["queued", "running", "waiting_for_provider", "streaming"])(
+    "reuses a %s run from before snapshot refresh without reserving more quota",
+    async (status) => {
+      const fixture = databaseWithActiveReview(status);
+      expect(await createAiJob(fixture.db, jobInput("review", true))).toBe(
+        fixture.active,
+      );
+      expect(fixture.insert).not.toHaveBeenCalled();
+      const where = fixture.lookup.mock.calls[0]?.[0].where;
+      if (!where) throw new Error("Missing active review lookup");
+      const predicate = new PgDialect().sqlToQuery(where);
+      expect(predicate.sql).not.toContain('"snapshotId"');
+      expect(predicate.sql).not.toContain('"agentVersion"');
+      expect(predicate.params).toContain(
+        jobInput("review", true).pullRequestId,
+      );
+      expect(predicate.params).toContain("reviewer-1");
+      expect(fixture.execute.mock.invocationCallOrder[0]).toBeLessThan(
+        fixture.lookup.mock.invocationCallOrder[0] ?? 0,
+      );
+    },
+  );
 });
