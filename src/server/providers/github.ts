@@ -594,6 +594,29 @@ export class GitHubProvider implements PullRequestProvider {
     );
   }
 
+  /** Resolves the common ancestor without confusing the target tip with the PR base. */
+  async getPullRequestDiffBase(
+    repositoryExternalId: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<string> {
+    const comparison = await providerFetch<{
+      merge_base_commit?: { sha?: string };
+    }>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}?per_page=1`,
+      { headers: this.headers },
+    );
+    const sha = comparison.merge_base_commit?.sha;
+    if (!sha) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not return the PR merge base",
+      );
+    }
+    return sha;
+  }
+
   /** Fetches the changed source files required for static analysis. */
   async getChangedFiles(
     repositoryExternalId: string,
@@ -606,6 +629,11 @@ export class GitHubProvider implements PullRequestProvider {
       ),
       this.getPullRequest(repositoryExternalId, number),
     ]);
+    const diffBaseSha = await this.getPullRequestDiffBase(
+      repositoryExternalId,
+      pull.baseSha,
+      pull.headSha,
+    );
     return collectProviderSourceFiles(
       files,
       options?.maximumSourceBytes,
@@ -615,12 +643,12 @@ export class GitHubProvider implements PullRequestProvider {
           deleted && file.previous_filename
             ? file.previous_filename
             : file.filename;
-        const ref = deleted ? pull.baseSha : pull.headSha;
+        const ref = deleted ? diffBaseSha : pull.headSha;
         return loadChangedSource({
           path,
           previousFetchPath: file.previous_filename ?? path,
           ref,
-          previousRef: pull.baseSha,
+          previousRef: diffBaseSha,
           changeType: this.changeType(file.status),
           needsPrevious: file.status !== "added" && !deleted,
           oversizedHash: file.sha ?? `${ref}:${path}`,
