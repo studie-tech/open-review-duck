@@ -1,3 +1,10 @@
+import { supportedExtensions } from "~/server/analysis/types";
+import {
+  applyImportMappings,
+  emptyImportPathContext,
+  type ImportPathContext,
+} from "./import-maps";
+
 type ImportReferenceKind = "default" | "module" | "named" | "namespace";
 
 export interface ImportReference {
@@ -36,34 +43,56 @@ export type PairedImportStatement =
     };
 
 const SOURCE_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".mts",
-  ".cts",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-  ".py",
-  ".java",
-  ".cs",
-  ".c",
-  ".h",
-  ".cc",
-  ".cpp",
-  ".cxx",
-  ".hpp",
-  ".php",
-  ".rb",
-  ".rs",
-  ".lua",
-  ".go",
-  ".kt",
-  ".kts",
-  ".hcl",
-  ".tf",
-  ".mk",
+  ...new Set(Object.values(supportedExtensions).flat()),
 ] as const;
+
+const DOTTED_PACKAGE_LANGUAGES = new Set([
+  "python",
+  "java",
+  "kotlin",
+  "groovy",
+  "scala",
+  "csharp",
+]);
+
+const FILE_INCLUDE_LANGUAGES = new Set([
+  "c",
+  "cpp",
+  "objc",
+  "php",
+  "ruby",
+  "lua",
+  "shell",
+  "makefile",
+  "css",
+  "scss",
+  "protobuf",
+  "solidity",
+  "erlang",
+  "elisp",
+]);
+
+const JVM_SOURCE_ROOTS = [
+  "",
+  "src",
+  "src/main/java",
+  "src/main/kotlin",
+  "src/main/scala",
+  "src/main/groovy",
+  "lib",
+  "app/src/main/java",
+  "app/src/main/kotlin",
+];
+
+const CSHARP_SOURCE_ROOTS = ["", "src"];
+
+const EXTERNAL_SPECIFIER_PREFIXES: Partial<Record<string, readonly string[]>> =
+  {
+    csharp: ["System."],
+    java: ["java.", "javax.", "jakarta.", "jdk."],
+    kotlin: ["java.", "javax.", "jakarta.", "jdk.", "kotlin."],
+    scala: ["scala.", "java.", "javax."],
+  };
 
 /** Scores how closely two import statements describe the same dependency edge. */
 function importStatementMatchScore(
@@ -196,35 +225,156 @@ function directoryName(path: string) {
   return path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 }
 
-/** Builds possible repository paths for a relative import specifier. */
-function candidateBases(sourcePath: string, specifier: string) {
-  const normalizedSource = normalizeRepositoryPath(sourcePath);
-  if (!normalizedSource || specifier.includes("\0")) return [];
-  const sourceDirectory = directoryName(normalizedSource);
-  if (specifier.startsWith(".")) {
-    if (normalizedSource.endsWith(".py")) {
-      const dotCount = /^\.+/.exec(specifier)?.[0].length ?? 1;
-      let directory = sourceDirectory;
-      for (let index = 1; index < dotCount; index += 1) {
-        directory = directoryName(directory);
-      }
-      const modulePath = specifier.slice(dotCount).replaceAll(".", "/");
-      return [
-        normalizeRepositoryPath(
-          `${directory}${directory && modulePath ? "/" : ""}${modulePath}`,
-        ),
-      ].filter((path): path is string => Boolean(path));
+/** Returns whether a specifier already looks like a repository file path. */
+function specifierLooksLikeFilePath(specifier: string) {
+  const normalized = specifier.replaceAll("\\", "/");
+  return (
+    normalized.includes("/") ||
+    SOURCE_EXTENSIONS.some((extension) => normalized.endsWith(extension))
+  );
+}
+
+/** Joins a directory and specifier into a repository-relative path. */
+function joinFromDirectory(directory: string, specifier: string) {
+  return normalizeRepositoryPath(
+    `${directory}${directory && specifier ? "/" : ""}${specifier}`,
+  );
+}
+
+/** Resolves a relative specifier against the file that imported it. */
+function relativeCandidateBases(sourcePath: string, specifier: string) {
+  const sourceDirectory = directoryName(sourcePath);
+  if (sourcePath.endsWith(".py")) {
+    const dotCount = /^\.+/.exec(specifier)?.[0].length ?? 1;
+    let directory = sourceDirectory;
+    for (let index = 1; index < dotCount; index += 1) {
+      directory = directoryName(directory);
     }
-    return [
-      normalizeRepositoryPath(
-        `${sourceDirectory}${sourceDirectory ? "/" : ""}${specifier}`,
-      ),
-    ].filter((path): path is string => Boolean(path));
+    const modulePath = specifier.slice(dotCount).replaceAll(".", "/");
+    const joined = joinFromDirectory(directory, modulePath);
+    return joined ? [joined] : [];
   }
-  if (normalizedSource.endsWith(".py")) {
-    const modulePath = normalizeRepositoryPath(specifier.replaceAll(".", "/"));
-    return modulePath ? [modulePath] : [];
+  const joined = joinFromDirectory(sourceDirectory, specifier);
+  return joined ? [joined] : [];
+}
+
+/** Converts a dotted package name into repository path fragments. */
+function dottedPackageBases(specifier: string, language: string) {
+  const modulePath = normalizeRepositoryPath(
+    specifier.replaceAll(".", "/").replaceAll("\\", "/"),
+  );
+  if (!modulePath) return [];
+  if (language === "python") return [modulePath];
+  const roots = language === "csharp" ? CSHARP_SOURCE_ROOTS : JVM_SOURCE_ROOTS;
+  return roots.flatMap((root) => {
+    const joined = joinFromDirectory(root, modulePath);
+    return joined ? [joined] : [];
+  });
+}
+
+/** Resolves a Rust `crate` / `super` / `self` path onto source files. */
+function rustCandidateBases(
+  sourcePath: string,
+  specifier: string,
+  context: ImportPathContext,
+) {
+  const segments = specifier.split("::").filter(Boolean);
+  if (segments.length === 0) return [];
+  const crateRoot = rustCrateRoot(sourcePath, context.crateRoots);
+  const srcRoot = crateRoot ? `${crateRoot}/src` : "src";
+  let directory: string | undefined;
+  if (segments[0] === "crate" || specifier.startsWith("::")) {
+    const rest = segments[0] === "crate" ? segments.slice(1) : segments;
+    directory = rest.length > 0 ? `${srcRoot}/${rest.join("/")}` : srcRoot;
+  } else {
+    directory = rustModuleDirectory(sourcePath);
+    for (const segment of segments) {
+      if (segment === "self") continue;
+      if (segment === "super") {
+        directory = directoryName(directory);
+        continue;
+      }
+      directory = directory ? `${directory}/${segment}` : segment;
+    }
   }
+  const normalized = normalizeRepositoryPath(directory ?? "");
+  return normalized ? [normalized] : [];
+}
+
+/** Chooses the Cargo package that contains a Rust source file. */
+function rustCrateRoot(sourcePath: string, crateRoots: readonly string[]) {
+  const known = crateRoots
+    .filter(
+      (root) =>
+        sourcePath === root || sourcePath.startsWith(root ? `${root}/` : ""),
+    )
+    .sort((left, right) => right.length - left.length)[0];
+  if (known !== undefined) return known;
+  if (sourcePath.startsWith("src/")) return "";
+  const index = sourcePath.indexOf("/src/");
+  return index >= 0 ? sourcePath.slice(0, index) : "";
+}
+
+/** Returns the directory a Rust file contributes child modules into. */
+function rustModuleDirectory(sourcePath: string) {
+  const base = sourcePath.slice(sourcePath.lastIndexOf("/") + 1);
+  const directory = directoryName(sourcePath);
+  if (base === "mod.rs" || base === "lib.rs" || base === "main.rs") {
+    return directory;
+  }
+  return sourcePath.replace(/\.[^./]+$/, "");
+}
+
+/**
+ * Reports whether a specifier belongs to another package, not this repository.
+ *
+ * Project mappings always win. Bare npm packages, language standard libraries,
+ * and Go imports that are not this module stay unresolved so a hover does not
+ * spend provider reads on files that cannot exist here.
+ */
+export function isExternalImportSpecifier(
+  specifier: string,
+  language: string | undefined,
+  context: ImportPathContext = emptyImportPathContext(),
+) {
+  if (applyImportMappings(specifier, context.mappings).length > 0) {
+    return false;
+  }
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return false;
+  if (specifier.startsWith("crate") || specifier.startsWith("super::")) {
+    return false;
+  }
+  if (specifier.startsWith("self::") || specifier.startsWith("::")) {
+    return false;
+  }
+  const prefixes = EXTERNAL_SPECIFIER_PREFIXES[language ?? ""] ?? [];
+  if (prefixes.some((prefix) => specifier.startsWith(prefix))) return true;
+  if (language === "go") {
+    return !context.mappings.some((mapping) =>
+      specifier.startsWith(mapping.pattern.replace(/\*$/, "")),
+    );
+  }
+  if (
+    language === "javascript" ||
+    language === "typescript" ||
+    language === undefined
+  ) {
+    if (specifier.startsWith("#") || specifier.startsWith("@/")) return false;
+    if (specifier.startsWith("~/")) return false;
+    if (specifier.startsWith("@") && !specifier.startsWith("@/")) return true;
+    return !specifierLooksLikeFilePath(specifier);
+  }
+  return false;
+}
+
+/**
+ * Ecosystem defaults used only when the project never declared the specifier.
+ *
+ * `~/` and `@/` remain the usual T3 / Next mappings so a review still works
+ * when tsconfig was not fetched. Declared project maps override them.
+ */
+function fallbackAliasBases(specifier: string, language: string | undefined) {
+  if (language !== "javascript" && language !== "typescript") return [];
   if (specifier.startsWith("~/")) {
     const path = normalizeRepositoryPath(`src/${specifier.slice(2)}`);
     return path ? [path] : [];
@@ -239,49 +389,124 @@ function candidateBases(sourcePath: string, specifier: string) {
   return [];
 }
 
+/** Builds possible repository paths for one import specifier. */
+function candidateBases(
+  sourcePath: string,
+  specifier: string,
+  language?: string,
+  context: ImportPathContext = emptyImportPathContext(),
+) {
+  const normalizedSource = normalizeRepositoryPath(sourcePath);
+  if (!normalizedSource || specifier.includes("\0")) return [];
+  if (specifier.startsWith(".")) {
+    return relativeCandidateBases(normalizedSource, specifier);
+  }
+  const mapped = applyImportMappings(specifier, context.mappings)
+    .map((path) => normalizeRepositoryPath(path))
+    .filter((path): path is string => path !== undefined);
+  if (mapped.length > 0) return mapped;
+  if (isExternalImportSpecifier(specifier, language, context)) return [];
+  if (language === "rust") {
+    return rustCandidateBases(normalizedSource, specifier, context);
+  }
+  if (language && DOTTED_PACKAGE_LANGUAGES.has(language)) {
+    return dottedPackageBases(specifier, language);
+  }
+  if (language === "go" && specifierLooksLikeFilePath(specifier)) {
+    const path = normalizeRepositoryPath(specifier);
+    return path ? [path] : [];
+  }
+  if (
+    language &&
+    FILE_INCLUDE_LANGUAGES.has(language) &&
+    specifierLooksLikeFilePath(specifier)
+  ) {
+    const fromFile = joinFromDirectory(
+      directoryName(normalizedSource),
+      specifier,
+    );
+    const fromRoot = normalizeRepositoryPath(specifier);
+    return [fromFile, fromRoot].filter((path): path is string => Boolean(path));
+  }
+  return fallbackAliasBases(specifier, language);
+}
+
+/** Extensions a language's modules are usually stored under. */
+function preferredImportExtensions(language: string | undefined) {
+  if (language === "python") return [".py"] as const;
+  if (language === "javascript") {
+    return [
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+    ] as const;
+  }
+  if (language === "typescript") {
+    return [
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+    ] as const;
+  }
+  if (language && language in supportedExtensions) {
+    return supportedExtensions[language as keyof typeof supportedExtensions];
+  }
+  return SOURCE_EXTENSIONS;
+}
+
 /** Builds supported file candidates for an imported module path. */
 export function importPathCandidates(
   sourcePath: string,
   specifier: string,
   language?: string,
+  context: ImportPathContext = emptyImportPathContext(),
 ) {
-  const languageExtensions: Partial<Record<string, readonly string[]>> = {
-    java: [".java"],
-    csharp: [".cs"],
-    cpp: [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"],
-    c: [".c", ".h"],
-    php: [".php", ".phtml"],
-    shell: [".sh", ".bash", ".zsh", ".ksh"],
-    ruby: [".rb", ".rake"],
-    rust: [".rs"],
-    lua: [".lua"],
-    go: [".go"],
-    kotlin: [".kt", ".kts"],
-    hcl: [".hcl", ".tf", ".tfvars"],
-    makefile: [".mk"],
-  };
-  const preferredExtensions =
-    language === "python"
-      ? [".py"]
-      : language === "javascript"
-        ? [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]
-        : language === "typescript"
-          ? [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]
-          : (languageExtensions[language ?? ""] ?? [...SOURCE_EXTENSIONS]);
+  const preferredExtensions = preferredImportExtensions(language);
   const candidates: string[] = [];
-  for (const base of candidateBases(sourcePath, specifier)) {
+  for (const base of candidateBases(
+    sourcePath,
+    specifier,
+    language,
+    context,
+  ).filter(Boolean)) {
     if (SOURCE_EXTENSIONS.some((extension) => base.endsWith(extension))) {
       candidates.push(base);
-    } else {
+      continue;
+    }
+    if (language === "python") {
       candidates.push(
         ...preferredExtensions.map((extension) => `${base}${extension}`),
-        ...(language === "python"
-          ? [`${base}/__init__.py`]
-          : preferredExtensions.map(
-              (extension) => `${base}/index${extension}`,
-            )),
+        `${base}/__init__.py`,
       );
+      continue;
     }
+    if (language === "go") {
+      const packageName = base.slice(base.lastIndexOf("/") + 1);
+      candidates.push(`${base}.go`, `${base}/${packageName}.go`);
+      continue;
+    }
+    if (language === "rust") {
+      candidates.push(`${base}.rs`, `${base}/mod.rs`);
+      continue;
+    }
+    if (language === "php") {
+      candidates.push(`${base}.php`, `${base}.phtml`);
+      continue;
+    }
+    candidates.push(
+      ...preferredExtensions.map((extension) => `${base}${extension}`),
+      ...preferredExtensions.map((extension) => `${base}/index${extension}`),
+    );
   }
   return [...new Set(candidates)];
 }
@@ -292,8 +517,14 @@ export function resolveImportPath(
   specifier: string,
   paths: ReadonlySet<string>,
   language?: string,
+  context: ImportPathContext = emptyImportPathContext(),
 ) {
-  const candidates = importPathCandidates(sourcePath, specifier, language);
+  const candidates = importPathCandidates(
+    sourcePath,
+    specifier,
+    language,
+    context,
+  );
   const direct = candidates.find((path) => paths.has(path));
   if (direct || language !== "python") return direct;
   const suffixMatches = [...paths].filter((path) =>
@@ -328,12 +559,14 @@ export function findImportTargetUnit<
   language: string,
   reference: ImportTargetReference,
   units: readonly Unit[],
+  context: ImportPathContext = emptyImportPathContext(),
 ) {
   const targetPath = resolveImportPath(
     sourcePath,
     reference.specifier,
     new Set(units.map((unit) => unit.path)),
     language,
+    context,
   );
   const submodulePath =
     language === "python" && reference.kind === "named"
@@ -366,25 +599,4 @@ export function findImportTargetUnit<
     exactUnit: reference.kind === "named" ? exactUnit : moduleUnit,
     moduleUnit,
   };
-}
-
-/** Finds the declaration line for a binding outside the review path. */
-export function findImportedDeclarationLine(
-  source: string,
-  imported: string,
-  language: string,
-  startLine = 1,
-) {
-  if (imported === "*") return undefined;
-  const escapedName = imported.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const declaration =
-    language === "python"
-      ? new RegExp(
-          `^\\s*(?:async\\s+def|def|class)\\s+${escapedName}\\b|^\\s*${escapedName}\\s*=`,
-        )
-      : new RegExp(
-          `^\\s*(?:export\\s+)?(?:declare\\s+)?(?:abstract\\s+)?(?:type|interface|enum|const|let|var|function|class)\\s+${escapedName}\\b`,
-        );
-  const index = source.split("\n").findIndex((line) => declaration.test(line));
-  return index < 0 ? undefined : startLine + index;
 }

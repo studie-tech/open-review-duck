@@ -38,7 +38,6 @@ import {
 } from "@/drizzle/schema";
 import { conceptStatusFromMembers } from "~/lib/concept-progress";
 import {
-  findImportedDeclarationLine,
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
@@ -60,6 +59,7 @@ import {
   MAX_CONCEPT_CHANGED_LINES,
   MAX_CONCEPT_FILES,
 } from "~/server/analysis/concepts";
+import { findImportedDeclarationLine } from "~/server/analysis/declarations";
 import { sha256 } from "~/server/analysis/hash";
 import { importReferenceForLocal } from "~/server/analysis/imports";
 import { isLocalDeployment } from "~/server/deployment";
@@ -83,6 +83,7 @@ import {
   recomputeReviewStats,
   reviewExperience,
 } from "~/server/review/experience";
+import { projectImportMaps } from "~/server/review/project-import-maps";
 import {
   accessiblePullRequest,
   attachedProviderThread,
@@ -1553,10 +1554,19 @@ export const reviewRouter = createTRPCRouter({
       const snapshot = scope.snapshot;
       if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
+      const provider = await providerForConnection(ctx.db, scope.connection);
+      const maps = await projectImportMaps(
+        provider,
+        scope.repositoryExternalId,
+        snapshot.headSha,
+        snapshot.id,
+        input.sourcePath,
+      );
       const candidates = importPathCandidates(
         input.sourcePath,
         input.specifier,
         input.sourceLanguage,
+        maps,
       );
       if (candidates.length === 0) {
         return {
@@ -1580,6 +1590,7 @@ export const reviewRouter = createTRPCRouter({
         input.sourceLanguage,
         input,
         storedUnits,
+        maps,
       );
       if (storedTarget) {
         if (storedTarget.exactUnit) {
@@ -1609,7 +1620,6 @@ export const reviewRouter = createTRPCRouter({
         }
       }
 
-      const provider = await providerForConnection(ctx.db, scope.connection);
       for await (const read of importCandidateReads(
         provider,
         scope.repositoryExternalId,
@@ -1750,12 +1760,22 @@ export const reviewRouter = createTRPCRouter({
         parsedFile &&
           (!analyzedDeclaration ||
             definitionIsWhereTheNameWasRead(analyzedDeclaration, read))
-          ? sameFileDeclarationPeek({
-              language: parsedFile.language,
-              path: input.sourcePath,
-              source: parsedFile.source,
-              symbol: input.symbol,
-            })
+          ? (() => {
+              const focusLine = findImportedDeclarationLine(
+                parsedFile.source,
+                input.symbol,
+                parsedFile.language,
+              );
+              return focusLine === undefined
+                ? undefined
+                : sameFileDeclarationPeek({
+                    language: parsedFile.language,
+                    path: input.sourcePath,
+                    source: parsedFile.source,
+                    symbol: input.symbol,
+                    focusLine,
+                  });
+            })()
           : undefined,
         read,
       );

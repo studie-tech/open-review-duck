@@ -9,6 +9,7 @@ import {
   FileCode2,
   FileDiff,
   FileImage,
+  FileX2,
   Folder,
   FolderOpen,
   FoldVertical,
@@ -151,14 +152,19 @@ function ReviewFileRow({
 }) {
   const name = file.path.split("/").at(-1) ?? file.path;
   const waitLabel = `${file.waitingUnits} waiting ${file.waitingUnits === 1 ? "unit" : "units"}`;
+  const deleted = file.changeType === "deleted";
   return (
     <li
       data-review-file-path={file.path}
       aria-current={selected ? "page" : undefined}
-      aria-label={`${file.path}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
+      aria-label={`${file.path}${deleted ? ", deleted" : ""}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
       className={cn(
         "group flex min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 transition",
-        selected ? "bg-cyan/[.075]" : "hover:bg-surface-subtle",
+        selected
+          ? deleted
+            ? "bg-coral/[.08]"
+            : "bg-cyan/[.075]"
+          : "hover:bg-surface-subtle",
       )}
       style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
     >
@@ -173,18 +179,32 @@ function ReviewFileRow({
         id={reviewFileTreeControlId(file.path)}
         onClick={() => onSelect(file)}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-        title={file.path}
+        title={deleted ? `${file.path} (deleted)` : file.path}
       >
-        {isPreviewableReviewImage(file.path) ? (
+        {deleted ? (
+          <FileX2 className="text-coral size-3 shrink-0" />
+        ) : isPreviewableReviewImage(file.path) ? (
           <FileImage className="text-fog size-3 shrink-0" />
         ) : file.isBinary ? (
           <FileCode2 className="text-fog size-3 shrink-0" />
         ) : (
           <FileDiff className="text-fog size-3 shrink-0" />
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-cloud">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate font-mono text-[10px]",
+            deleted
+              ? "text-coral/90 line-through decoration-coral/40"
+              : "text-cloud",
+          )}
+        >
           {name}
         </span>
+        {deleted && (
+          <span className="border-coral/25 bg-coral/10 text-coral shrink-0 rounded border px-1 py-px text-[8px] font-medium tracking-wide uppercase">
+            Deleted
+          </span>
+        )}
         {file.waitingUnits > 0 && !onResumeWaiting && (
           <span className="text-cyan flex shrink-0 items-center gap-0.5 text-[8px]">
             <Clock3 className="size-2.5" />

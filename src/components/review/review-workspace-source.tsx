@@ -34,6 +34,7 @@ import {
   ReviewFileCardHeader,
   reviewCardRanges,
   reviewedFileCard,
+  reviewFileCardIsDeleted,
 } from "./review-file-card";
 import { ReviewBinaryPreview } from "./review-image-preview";
 import {
@@ -107,6 +108,7 @@ export function reviewCardMemberForLine(
  * that calls it. This placeholder is what the reviewer uses to open it again.
  */
 export function ReviewFileCardSourcePlaceholder({
+  deleted = false,
   framed = false,
   itemLabel = "file",
   language,
@@ -116,6 +118,7 @@ export function ReviewFileCardSourcePlaceholder({
   reviewed,
   sourceBytes,
 }: {
+  deleted?: boolean;
   framed?: boolean;
   itemLabel?: "card" | "file";
   language?: string;
@@ -130,7 +133,8 @@ export function ReviewFileCardSourcePlaceholder({
     <div
       className={cn(
         "flex items-center justify-between gap-3 px-4 py-3 font-sans",
-        framed && "rounded-b-xl border-x border-b border-line bg-code",
+        framed && "rounded-b-xl border-x border-b bg-code",
+        framed && (deleted ? "border-coral/25" : "border-line"),
       )}
     >
       <div className="min-w-0">
@@ -139,9 +143,11 @@ export function ReviewFileCardSourcePlaceholder({
           {lineCount === 1 ? "line" : "lines"} of {kind} hidden
         </p>
         <p className="text-fog mt-0.5 text-[10px]">
-          {reviewed
-            ? "Folded after review. Open it again if you need another look."
-            : "Hidden so the review stays responsive."}
+          {deleted
+            ? "This file is deleted. Open the last version if you need another look."
+            : reviewed
+              ? "Folded after review. Open it again if you need another look."
+              : "Hidden so the review stays responsive."}
           {sourceBytes ? ` · ${formatReviewSourceBytes(sourceBytes)}` : null}
         </p>
       </div>
@@ -229,6 +235,7 @@ function ReviewConceptFileCardSource({
     readonly ReviewLineCommentMarker[]
   >;
 }) {
+  const deleted = reviewFileCardIsDeleted(members);
   const ranges = useMemo(() => reviewCardRanges(members), [members]);
   const startLine = ranges.at(0)?.startLine ?? 1;
   const endLine = ranges.at(-1)?.endLine ?? startLine;
@@ -277,7 +284,10 @@ function ReviewConceptFileCardSource({
                 className={cn(
                   "group relative grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
                   !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                  owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+                  owner &&
+                    (deleted
+                      ? "border-l-2 border-l-coral/40 bg-coral/[.08] hover:bg-coral/[.12]"
+                      : "border-l-2 border-l-cyan/30 bg-cyan/[.012]"),
                 )}
               >
                 {markers && onOpenLineComment ? (
@@ -302,7 +312,14 @@ function ReviewConceptFileCardSource({
                     {lineNumber}
                   </span>
                 )}
-                <pre className="syntax-code overflow-visible text-cloud">
+                <pre
+                  className={cn(
+                    "syntax-code overflow-visible text-cloud",
+                    deleted &&
+                      owner &&
+                      "text-cloud/80 line-through decoration-coral/35",
+                  )}
+                >
                   <HighlightedTokens tokens={line.tokens} />
                 </pre>
               </div>
@@ -369,6 +386,7 @@ export function ReviewConceptFileCardPreview({
     0,
   );
   const reviewed = reviewedFileCard(members);
+  const deleted = reviewFileCardIsDeleted(members);
   const heavy = isHeavyReviewSource({
     changedLineCount,
     language: first?.language,
@@ -395,9 +413,11 @@ export function ReviewConceptFileCardPreview({
     <article
       className={cn(
         "mx-4 overflow-hidden rounded-xl border",
-        reviewed
-          ? "border-addition/30 bg-addition/10"
-          : "border-line bg-surface/30",
+        deleted
+          ? "border-coral/30 bg-coral/[.04]"
+          : reviewed
+            ? "border-addition/30 bg-addition/10"
+            : "border-line bg-surface/30",
       )}
     >
       <ReviewFileCardHeader
@@ -454,6 +474,7 @@ export function ReviewConceptFileCardPreview({
         )
       ) : (
         <ReviewFileCardSourcePlaceholder
+          deleted={deleted}
           itemLabel={itemLabel === "File" ? "file" : "card"}
           language={first?.language}
           lineCount={lineCount}

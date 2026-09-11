@@ -1,5 +1,11 @@
 import { basename } from "node:path";
 import {
+  type ImportPathContext,
+  importMapsFromProjectFiles,
+  mergeImportPathContexts,
+  PROJECT_IMPORT_CONFIG_NAMES,
+} from "~/lib/import-maps";
+import {
   type ImportStatement,
   resolveImportPath,
   resolvePythonImportedSubmodulePath,
@@ -2002,8 +2008,23 @@ function clusterConceptUnits(units: AnalyzedUnit[]) {
   return [...orderedReviewable, ...fileContexts];
 }
 
+/** Builds import maps from project files already present in the analysis set. */
+function importMapsFromAnalyzedFiles(files: SourceFile[]) {
+  return importMapsFromProjectFiles(
+    files.flatMap((file) => {
+      const name = basename(file.path);
+      return PROJECT_IMPORT_CONFIG_NAMES.has(name)
+        ? [{ path: file.path, content: file.content }]
+        : [];
+    }),
+  );
+}
+
 /** Extracts review units and produces their dependency-aware review order. */
-export function analyzeFiles(files: SourceFile[]): AnalysisResult {
+export function analyzeFiles(
+  files: SourceFile[],
+  importMaps?: ImportPathContext,
+): AnalysisResult {
   const rawUnits = files.flatMap((file) => {
     const { adapter, reviewUnits: unscopedReviewUnits } =
       rawFileReviewUnits(file);
@@ -2080,7 +2101,11 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     appendToIndex(byShortKey, shortKey, unit.stableKey);
     appendToIndex(byName, unit.name, unit.stableKey);
   }
-  const importAliases = buildImportAliases(files, rawUnits);
+  const importAliases = buildImportAliases(
+    files,
+    rawUnits,
+    mergeImportPathContexts(importMapsFromAnalyzedFiles(files), importMaps),
+  );
   const dependencies = new Map(
     rawUnits.map((unit) => [
       unit.stableKey,
@@ -2124,6 +2149,7 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
 function buildImportAliases(
   files: SourceFile[],
   units: Array<Pick<AnalyzedUnit, "stableKey" | "path" | "name" | "kind">>,
+  importMaps?: ImportPathContext,
 ) {
   const paths = new Set(files.map(({ path }) => path));
   const unitsByPathAndName = new Map<string, string[]>();
@@ -2145,6 +2171,7 @@ function buildImportAliases(
         item.specifier,
         paths,
         language,
+        importMaps,
       );
       if (item.kind === "named") {
         const matches = targetPath

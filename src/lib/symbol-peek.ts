@@ -1,5 +1,4 @@
 import { builtinTypes, keywords, type SyntaxToken } from "./highlight-tokens";
-import { findImportedDeclarationLine } from "./import-navigation";
 
 /** Longest excerpt a definition preview shows before the reader scrolls it. */
 export const SYMBOL_PEEK_MAXIMUM_LINES = 18;
@@ -127,20 +126,15 @@ export function sameFileDeclarationPeek({
   source,
   startLine = 1,
   symbol,
+  focusLine,
 }: {
   language: string;
   path: string;
   source: string;
   startLine?: number;
   symbol: string;
+  focusLine: number;
 }) {
-  const focusLine = findImportedDeclarationLine(
-    source,
-    symbol,
-    language,
-    startLine,
-  );
-  if (focusLine === undefined) return undefined;
   const lines = source.split("\n");
   const offset = Math.min(
     Math.max(0, focusLine - startLine - SAME_FILE_PEEK_LEAD_LINES),

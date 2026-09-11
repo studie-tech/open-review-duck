@@ -4,12 +4,13 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import type { z } from "zod";
 import { type providerConnections, reviewUnits } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
-import {
-  findImportedDeclarationLine,
-  importPathCandidates,
-} from "~/lib/import-navigation";
+import { importPathCandidates } from "~/lib/import-navigation";
 import { SYMBOL_PEEK_MAXIMUM_LINES } from "~/lib/symbol-peek";
 import { languageAdapterForFile } from "~/server/analysis/adapters";
+import {
+  findImportedDeclarationLine,
+  findImportedReexport,
+} from "~/server/analysis/declarations";
 import { analyzeFiles } from "~/server/analysis/engine";
 import { parseImportReferences } from "~/server/analysis/imports";
 import {
@@ -23,11 +24,17 @@ import {
   ProviderError,
   type PullRequestProvider,
 } from "~/server/providers/types";
+import { projectImportMaps } from "~/server/review/project-import-maps";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
 import type { symbolDefinitionSchema } from "~/validators/review";
 
 type SymbolDefinitionInput = z.infer<typeof symbolDefinitionSchema>;
+
+type ImportedDefinitionResult =
+  | ReturnType<typeof symbolDefinitionOf>
+  | { kind: "unresolved"; reason: "unavailable" | "too_large" }
+  | undefined;
 
 /**
  * Picks the Tree-sitter grammars a peek has to load before it can parse.
@@ -397,12 +404,50 @@ export async function importedSymbolDefinition(
   },
   input: SymbolDefinitionInput,
 ) {
+  const provider = await providerForConnection(db, scope.connection);
+  return followImportedDefinition(
+    db,
+    userId,
+    snapshot,
+    scope,
+    input,
+    provider,
+    new Set(),
+  );
+}
+
+/** Follows one import, and at most one re-export hop, to a declaration. */
+async function followImportedDefinition(
+  db: typeof database,
+  userId: string,
+  snapshot: { headSha: string; id: string },
+  scope: {
+    connection: typeof providerConnections.$inferSelect;
+    pullRequestId: string;
+    repositoryExternalId: string;
+  },
+  input: SymbolDefinitionInput,
+  provider: Awaited<ReturnType<typeof providerForConnection>>,
+  seen: Set<string>,
+): Promise<ImportedDefinitionResult> {
   if (!input.specifier) return undefined;
   const imported = input.imported ?? input.symbol;
+  const seenKey = `${input.sourcePath}\0${input.specifier}\0${imported}`;
+  if (seen.has(seenKey)) return undefined;
+  seen.add(seenKey);
+
+  const maps = await projectImportMaps(
+    provider,
+    scope.repositoryExternalId,
+    snapshot.headSha,
+    snapshot.id,
+    input.sourcePath,
+  );
   const candidates = importPathCandidates(
     input.sourcePath,
     input.specifier,
     input.sourceLanguage,
+    maps,
   );
   if (candidates.length === 0) return undefined;
 
@@ -421,6 +466,33 @@ export async function importedSymbolDefinition(
   const [known] = stored;
   if (known) return symbolDefinitionOf(known, known.startLine, known.id);
 
+  const [storedFile] = await hydrateReviewUnits(
+    db,
+    await db.query.reviewUnits.findMany({
+      where: and(
+        eq(reviewUnits.snapshotId, snapshot.id),
+        inArray(reviewUnits.path, candidates),
+        eq(reviewUnits.kind, "file"),
+      ),
+      limit: 1,
+    }),
+  );
+  if (storedFile?.source) {
+    const fromStored = await definitionFromImportedSource(
+      db,
+      userId,
+      snapshot,
+      scope,
+      input,
+      provider,
+      seen,
+      storedFile.path,
+      storedFile.source,
+      storedFile.language,
+    );
+    if (fromStored) return fromStored;
+  }
+
   // Only now does a hover become provider traffic, and one unresolved name can
   // try every extension the specifier could carry. The repository pays for that
   // fan-out, so it is gated per pull request the way every other
@@ -431,7 +503,6 @@ export async function importedSymbolDefinition(
     30,
     60_000,
   );
-  const provider = await providerForConnection(db, scope.connection);
   // A file answers before the directory of the same name, the way the runtime
   // resolves it, so the two are bounded apart rather than as one list: a flat
   // bound would spend itself on extensions and never reach an index at all.
@@ -467,44 +538,93 @@ export async function importedSymbolDefinition(
     if (read.content === undefined) {
       return { kind: "unresolved" as const, reason: "too_large" as const };
     }
-    let analyzed: ReturnType<typeof analyzeFiles>["units"];
-    try {
-      analyzed = (
-        await analyzeFilesForSymbolPeek([
-          { path: read.path, content: read.content, changeType: "modified" },
-        ])
-      ).units;
-    } catch (cause) {
-      console.error(
-        "Symbol definition lookup could not parse the imported source",
-        {
-          path: read.path,
-          pullRequestId: scope.pullRequestId,
-          message: cause instanceof Error ? cause.message : String(cause),
-        },
-      );
-      return { kind: "unresolved" as const, reason: "unavailable" as const };
-    }
-    const declaration = analyzed.find(
-      (unit) =>
-        unit.name === imported &&
-        unit.kind !== "file" &&
-        unit.kind !== "module",
+    const found = await definitionFromImportedSource(
+      db,
+      userId,
+      snapshot,
+      scope,
+      input,
+      provider,
+      seen,
+      read.path,
+      read.content,
+      input.sourceLanguage,
     );
-    if (declaration) {
-      return symbolDefinitionOf(declaration, declaration.startLine);
-    }
-    const module = analyzed.find((unit) => unit.kind === "file");
-    if (module) {
-      const focusLine = findImportedDeclarationLine(
-        module.source,
-        imported,
-        module.language,
-        module.startLine,
-      );
-      const windowed = windowedModuleSource(module, focusLine);
-      return symbolDefinitionOf(windowed, focusLine ?? windowed.startLine);
-    }
+    if (found) return found;
   }
   return undefined;
+}
+
+/** Reads a declaration, or one re-export, out of an imported source file. */
+async function definitionFromImportedSource(
+  db: typeof database,
+  userId: string,
+  snapshot: { headSha: string; id: string },
+  scope: {
+    connection: typeof providerConnections.$inferSelect;
+    pullRequestId: string;
+    repositoryExternalId: string;
+  },
+  input: SymbolDefinitionInput,
+  provider: Awaited<ReturnType<typeof providerForConnection>>,
+  seen: Set<string>,
+  path: string,
+  content: string,
+  language: string,
+): Promise<ImportedDefinitionResult> {
+  const imported = input.imported ?? input.symbol;
+  let analyzed: Awaited<
+    ReturnType<typeof analyzeFilesForSymbolPeek>
+  >["units"];
+  try {
+    analyzed = (
+      await analyzeFilesForSymbolPeek([
+        { path, content, changeType: "modified" },
+      ])
+    ).units;
+  } catch (cause) {
+    console.error(
+      "Symbol definition lookup could not parse the imported source",
+      {
+        path,
+        pullRequestId: scope.pullRequestId,
+        message: cause instanceof Error ? cause.message : String(cause),
+      },
+    );
+    return { kind: "unresolved" as const, reason: "unavailable" as const };
+  }
+  const declaration = analyzed.find(
+    (unit) =>
+      unit.name === imported && unit.kind !== "file" && unit.kind !== "module",
+  );
+  if (declaration) {
+    return symbolDefinitionOf(declaration, declaration.startLine);
+  }
+  const reexport = findImportedReexport(content, imported, language);
+  if (reexport) {
+    return followImportedDefinition(
+      db,
+      userId,
+      snapshot,
+      scope,
+      {
+        ...input,
+        sourcePath: path,
+        specifier: reexport.specifier,
+        imported: reexport.imported,
+      },
+      provider,
+      seen,
+    );
+  }
+  const module = analyzed.find((unit) => unit.kind === "file");
+  if (!module) return undefined;
+  const focusLine = findImportedDeclarationLine(
+    module.source,
+    imported,
+    module.language,
+    module.startLine,
+  );
+  const windowed = windowedModuleSource(module, focusLine);
+  return symbolDefinitionOf(windowed, focusLine ?? windowed.startLine);
 }

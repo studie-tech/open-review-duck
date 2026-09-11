@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  FileX2,
   LoaderCircle,
   Undo2,
 } from "lucide-react";
@@ -64,6 +65,42 @@ function outstandingReviewCardMember(member: ReviewCardMemberState) {
 /** Reports whether every atomic unit in a file card has been signed off. */
 export function reviewedFileCard(members: readonly ReviewCardMemberState[]) {
   return members.length > 0 && !members.some(outstandingReviewCardMember);
+}
+
+/** Reports whether a file card is a whole-file deletion. */
+export function reviewFileCardIsDeleted(
+  members: readonly { changeType: string }[],
+) {
+  return (
+    members.length > 0 &&
+    members.every((member) => member.changeType === "deleted")
+  );
+}
+
+/**
+ * Explains that the source below is the last revision, not surviving code.
+ *
+ * A deleted file still has to be reviewed, but painting it like a live module
+ * hides the only fact that matters: nothing on this card lands in the merge.
+ */
+export function ReviewDeletedFileNotice() {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 border-t border-coral/20 bg-coral/[.07] px-3 py-2 font-sans"
+    >
+      <FileX2 className="text-coral mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <div className="min-w-0">
+        <p className="text-coral text-[10px] font-semibold tracking-wide uppercase">
+          This file is deleted
+        </p>
+        <p className="text-mist mt-0.5 text-[10px] leading-4">
+          You are reviewing the last version on the base branch. It will not be
+          in the merge.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 /** Chooses the member a file card should open for the next review action. */
@@ -191,6 +228,7 @@ export function CopyReviewPathButton({ path }: { path: string }) {
 
 /** Path, copy control, and meta for a card title that must stay selectable. */
 export function ReviewCardPathTitle({
+  deleted = false,
   meta,
   onSelect,
   path,
@@ -198,6 +236,7 @@ export function ReviewCardPathTitle({
   selected,
   subtitle,
 }: {
+  deleted?: boolean;
   meta: ReactNode;
   onSelect?: () => void;
   path: string;
@@ -222,7 +261,14 @@ export function ReviewCardPathTitle({
         )}
       >
         <span className="flex min-w-0 items-center gap-1">
-          <span className="text-cloud min-w-0 truncate font-mono text-[10px]">
+          <span
+            className={cn(
+              "min-w-0 truncate font-mono text-[10px]",
+              deleted
+                ? "text-coral/90 line-through decoration-coral/50"
+                : "text-cloud",
+            )}
+          >
             {path}
           </span>
           <span className="pointer-events-auto">
@@ -284,88 +330,116 @@ export function ReviewFileCardHeader({
   );
   const itemName = itemLabel.toLowerCase();
   const fileName = first.path.split("/").at(-1) ?? first.path;
+  const deleted = reviewFileCardIsDeleted(members);
   return (
-    <div
-      className={cn(
-        "flex items-stretch border-b",
-        selected
-          ? "bg-lime/[.06] border-lime/25"
-          : fullyReviewed
-            ? "border-addition/25"
-            : "border-line",
-      )}
-    >
-      {onToggleExpanded && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${fileName}`}
-          onClick={onToggleExpanded}
-          className="hover:bg-surface-subtle text-fog flex shrink-0 items-center px-2 transition"
-        >
-          <ChevronRight
-            className={cn(
-              "size-3.5 transition-transform",
-              expanded && "rotate-90",
-            )}
-            aria-hidden
-          />
-        </button>
-      )}
-      <ReviewCardPathTitle
-        path={first.path}
-        selected={selected}
-        onSelect={onSelect}
-        selectLabel={`Select review ${itemName} for ${first.path}`}
-        subtitle={
-          <>
-            Reviewing {members.length} individual{" "}
-            {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
-            {changedLines} changed lines
-            {sourceBytes ? ` · ${formatReviewSourceBytes(sourceBytes)}` : null}
-          </>
-        }
-        meta={
-          <>
-            {actions}
-            <span className="text-fog">
-              {itemLabel} {index + 1}/{count}
-            </span>
-            {fullyReviewed && (
-              <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
-                <Check className="size-2.5" aria-hidden />
-                Reviewed
+    <div>
+      <div
+        className={cn(
+          "flex items-stretch border-b",
+          deleted
+            ? selected
+              ? "border-coral/25 bg-coral/[.08]"
+              : "border-coral/20 bg-coral/[.04]"
+            : selected
+              ? "bg-lime/[.06] border-lime/25"
+              : fullyReviewed
+                ? "border-addition/25"
+                : "border-line",
+        )}
+      >
+        {onToggleExpanded && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${fileName}`}
+            onClick={onToggleExpanded}
+            className="hover:bg-surface-subtle text-fog flex shrink-0 items-center px-2 transition"
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 transition-transform",
+                expanded && "rotate-90",
+              )}
+              aria-hidden
+            />
+          </button>
+        )}
+        <ReviewCardPathTitle
+          deleted={deleted}
+          path={first.path}
+          selected={selected}
+          onSelect={onSelect}
+          selectLabel={`Select review ${itemName} for ${first.path}`}
+          subtitle={
+            deleted ? (
+              <>
+                Last version before removal · {members.length}{" "}
+                {members.length === 1 ? "unit" : "units"} · {changedLines}{" "}
+                changed lines
+                {sourceBytes
+                  ? ` · ${formatReviewSourceBytes(sourceBytes)}`
+                  : null}
+              </>
+            ) : (
+              <>
+                Reviewing {members.length} individual{" "}
+                {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
+                {changedLines} changed lines
+                {sourceBytes
+                  ? ` · ${formatReviewSourceBytes(sourceBytes)}`
+                  : null}
+              </>
+            )
+          }
+          meta={
+            <>
+              {actions}
+              <span className="text-fog">
+                {itemLabel} {index + 1}/{count}
               </span>
-            )}
-            {selected &&
-              (outstanding > 0 ? (
-                <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-2 py-0.5">
-                  {outstanding} remaining
+              {deleted && (
+                <span className="border-coral/30 bg-coral/10 text-coral flex items-center gap-1 rounded-full border px-2 py-0.5">
+                  <FileX2 className="size-2.5" aria-hidden />
+                  Deleted
                 </span>
-              ) : fullyReviewed ? (
-                <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-2 py-0.5">
-                  Selected
+              )}
+              {fullyReviewed && (
+                <span className="border-addition/30 bg-addition/10 text-addition flex items-center gap-1 rounded-full border px-2 py-0.5">
+                  <Check className="size-2.5" aria-hidden />
+                  Reviewed
                 </span>
-              ) : onResumeWaiting ? (
-                <button
-                  type="button"
-                  aria-label="Resume waiting on this file"
-                  title="Take back the wait and return this file to the review path"
-                  onClick={onResumeWaiting}
-                  className="border-lime/25 bg-lime/10 text-lime hover:bg-lime/15 flex items-center gap-1 rounded-full border px-2 py-0.5 transition"
-                >
-                  <Clock3 className="size-2.5" aria-hidden />
-                  Waiting
-                </button>
-              ) : (
-                <span className="border-lime/25 bg-lime/10 text-lime flex items-center gap-1 rounded-full border px-2 py-0.5">
-                  <Clock3 className="size-2.5" aria-hidden />
-                  Waiting
-                </span>
-              ))}
-          </>
-        }
-      />
+              )}
+              {selected &&
+                (outstanding > 0 ? (
+                  <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-2 py-0.5">
+                    {outstanding} remaining
+                  </span>
+                ) : fullyReviewed ? (
+                  <span className="border-lime/25 bg-lime/10 text-lime rounded-full border px-2 py-0.5">
+                    Selected
+                  </span>
+                ) : onResumeWaiting ? (
+                  <button
+                    type="button"
+                    aria-label="Resume waiting on this file"
+                    title="Take back the wait and return this file to the review path"
+                    onClick={onResumeWaiting}
+                    className="border-lime/25 bg-lime/10 text-lime hover:bg-lime/15 flex items-center gap-1 rounded-full border px-2 py-0.5 transition"
+                  >
+                    <Clock3 className="size-2.5" aria-hidden />
+                    Waiting
+                  </button>
+                ) : (
+                  <span className="border-lime/25 bg-lime/10 text-lime flex items-center gap-1 rounded-full border px-2 py-0.5">
+                    <Clock3 className="size-2.5" aria-hidden />
+                    Waiting
+                  </span>
+                ))}
+            </>
+          }
+        />
+      </div>
+      {deleted ? <ReviewDeletedFileNotice /> : null}
     </div>
   );
 }

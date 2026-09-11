@@ -78,6 +78,47 @@ describe("ReviewFilesPanel", () => {
     ).toBePartiallyChecked();
   });
 
+  it("marks deleted files with a strikethrough name and Deleted chip", () => {
+    render(
+      <ReviewFilesPanel
+        files={reviewFileEntries(
+          [
+            {
+              id: "deleted-file",
+              path: "app/src/app/welcome/page.tsx",
+              previousPath: null,
+              changeType: "deleted",
+              additions: 0,
+              deletions: 8,
+              isBinary: false,
+              skipReason: null,
+            },
+          ],
+          [
+            {
+              id: "gone",
+              path: "app/src/app/welcome/page.tsx",
+              status: "pending",
+              revisionState: "unchanged",
+            },
+          ],
+        )}
+        search=""
+        selectedPath="app/src/app/welcome/page.tsx"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("page.tsx")).toHaveClass("line-through");
+    expect(screen.getByText("Deleted")).toBeVisible();
+    expect(
+      screen.getByRole("treeitem", {
+        name: "app/src/app/welcome/page.tsx, deleted, 0 of 1 review units reviewed",
+      }),
+    ).toBeVisible();
+  });
+
   it("keeps added files on one line without an Added label", () => {
     render(
       <ReviewFilesPanel

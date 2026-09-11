@@ -113,6 +113,7 @@ describe("a same-file constant the analyzer never stored", () => {
         path: "app/src/server/api/routers/quests.ts",
         source,
         symbol: "QUEST_RESET_BATCH_SIZE",
+        focusLine: 3,
       }),
     ).toMatchObject({
       focusLine: 3,
@@ -121,17 +122,6 @@ describe("a same-file constant the analyzer never stored", () => {
       startLine: 1,
       unitKind: "constant",
     });
-  });
-
-  it("leaves a name with no declaration in the file unanswered", () => {
-    expect(
-      sameFileDeclarationPeek({
-        language: "typescript",
-        path: "app/src/server/api/routers/quests.ts",
-        source,
-        symbol: "UNKNOWN_BATCH",
-      }),
-    ).toBeUndefined();
   });
 
   it("prefers a parsed unit that lives somewhere else in the file", () => {
@@ -146,6 +136,7 @@ describe("a same-file constant the analyzer never stored", () => {
       path: "quests.ts",
       source,
       symbol: "QUEST_RESET_BATCH_SIZE",
+      focusLine: 3,
     });
 
     expect(
@@ -167,6 +158,7 @@ describe("a same-file constant the analyzer never stored", () => {
       path: "quests.ts",
       source,
       symbol: "QUEST_RESET_BATCH_SIZE",
+      focusLine: 3,
     });
 
     expect(
@@ -188,6 +180,7 @@ describe("a same-file constant the analyzer never stored", () => {
       path: "quests.ts",
       source,
       symbol: "QUEST_RESET_BATCH_SIZE",
+      focusLine: 3,
     });
 
     expect(
