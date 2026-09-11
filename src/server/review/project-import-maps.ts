@@ -134,9 +134,13 @@ function cachedSnapshotFiles(snapshotId: string) {
 }
 
 /** Follows relative tsconfig `extends` edges that have not been fetched yet. */
-function missingTsconfigExtends(files: Map<string, string | null>): string[] {
+function missingTsconfigExtends(
+  files: Map<string, string | null>,
+  wanted: ReadonlySet<string>,
+): string[] {
   const missing: string[] = [];
   for (const [path, content] of files) {
+    if (!wanted.has(path)) continue;
     const name = path.slice(path.lastIndexOf("/") + 1);
     if (
       content === null ||
@@ -190,14 +194,15 @@ export async function projectImportMaps(
       for (const path of unread) {
         if (!found.has(path)) cache.files.set(path, null);
       }
-      for (const path of missingTsconfigExtends(cache.files)) {
+      for (const path of missingTsconfigExtends(cache.files, wanted)) {
         wanted.add(path);
       }
     }
     const context = importMapsFromProjectFiles(
-      [...cache.files].flatMap(([path, content]) =>
-        content ? [{ path, content }] : [],
-      ),
+      [...wanted].flatMap((path) => {
+        const content = cache.files.get(path);
+        return content ? [{ path, content }] : [];
+      }),
     );
     cache.contexts.set(sourcePath, context);
     return context;

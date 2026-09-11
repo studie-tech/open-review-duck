@@ -5,9 +5,9 @@ import {
 } from "./declarations";
 
 describe("tree-sitter declaration lookup", () => {
-  it("finds TypeScript, Python, Go, and Rust declarations", () => {
+  it("finds TypeScript, Python, Go, and Rust declarations", async () => {
     expect(
-      findImportedDeclarationLine(
+      await findImportedDeclarationLine(
         [
           "export const api = createApi();",
           "",
@@ -19,21 +19,21 @@ describe("tree-sitter declaration lookup", () => {
       ),
     ).toBe(22);
     expect(
-      findImportedDeclarationLine(
+      await findImportedDeclarationLine(
         "class ReviewTarget:\n    pass",
         "ReviewTarget",
         "python",
       ),
     ).toBe(1);
     expect(
-      findImportedDeclarationLine(
+      await findImportedDeclarationLine(
         "package review\n\nfunc Normalize(path string) string { return path }\n",
         "Normalize",
         "go",
       ),
     ).toBe(3);
     expect(
-      findImportedDeclarationLine(
+      await findImportedDeclarationLine(
         "pub fn normalize(path: &str) -> &str { path }\n",
         "normalize",
         "rust",
@@ -41,9 +41,9 @@ describe("tree-sitter declaration lookup", () => {
     ).toBe(1);
   });
 
-  it("follows a TypeScript barrel re-export", () => {
+  it("follows a TypeScript barrel re-export", async () => {
     expect(
-      findImportedReexport(
+      await findImportedReexport(
         'export { showFormErrorToast } from "./form-toast";\n',
         "showFormErrorToast",
         "typescript",

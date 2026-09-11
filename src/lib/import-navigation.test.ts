@@ -196,6 +196,8 @@ describe("parseImportReferences", () => {
     for (const [language, source] of fixtures) {
       expect(parseImportStatements(source, language).length).toBeGreaterThan(0);
     }
+    expect(parseImportReferences("package com.acme;", "java")).toEqual([]);
+    expect(parseImportReferences("package app.review", "kotlin")).toEqual([]);
     expect(parseImportReferences("import app.model.User;", "java")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -472,9 +474,9 @@ describe("import path resolution", () => {
     });
   });
 
-  it("locates declarations that are not standalone review units", () => {
+  it("locates declarations that are not standalone review units", async () => {
     expect(
-      findImportedDeclarationLine(
+      await findImportedDeclarationLine(
         [
           "export const api = createApi();",
           "",
@@ -486,7 +488,7 @@ describe("import path resolution", () => {
       ),
     ).toBe(22);
     expect(
-      findImportedDeclarationLine(
+      await findImportedDeclarationLine(
         "class ReviewTarget:\n    pass",
         "ReviewTarget",
         "python",

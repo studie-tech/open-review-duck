@@ -416,6 +416,8 @@ export async function importedSymbolDefinition(
   );
 }
 
+const MAXIMUM_REEXPORT_HOPS = 1;
+
 /** Follows one import, and at most one re-export hop, to a declaration. */
 async function followImportedDefinition(
   db: typeof database,
@@ -429,6 +431,7 @@ async function followImportedDefinition(
   input: SymbolDefinitionInput,
   provider: Awaited<ReturnType<typeof providerForConnection>>,
   seen: Set<string>,
+  hops = 0,
 ): Promise<ImportedDefinitionResult> {
   if (!input.specifier) return undefined;
   const imported = input.imported ?? input.symbol;
@@ -466,17 +469,20 @@ async function followImportedDefinition(
   const [known] = stored;
   if (known) return symbolDefinitionOf(known, known.startLine, known.id);
 
-  const [storedFile] = await hydrateReviewUnits(
-    db,
-    await db.query.reviewUnits.findMany({
-      where: and(
-        eq(reviewUnits.snapshotId, snapshot.id),
-        inArray(reviewUnits.path, candidates),
-        eq(reviewUnits.kind, "file"),
-      ),
-      limit: 1,
-    }),
-  );
+  const storedFiles = await db.query.reviewUnits.findMany({
+    where: and(
+      eq(reviewUnits.snapshotId, snapshot.id),
+      inArray(reviewUnits.path, candidates),
+      eq(reviewUnits.kind, "file"),
+    ),
+  });
+  const preferredFile = storedFiles.sort(
+    (left, right) =>
+      candidates.indexOf(left.path) - candidates.indexOf(right.path),
+  )[0];
+  const [storedFile] = preferredFile
+    ? await hydrateReviewUnits(db, [preferredFile])
+    : [];
   if (storedFile?.source) {
     const fromStored = await definitionFromImportedSource(
       db,
@@ -489,6 +495,7 @@ async function followImportedDefinition(
       storedFile.path,
       storedFile.source,
       storedFile.language,
+      hops,
     );
     if (fromStored) return fromStored;
   }
@@ -549,6 +556,7 @@ async function followImportedDefinition(
       read.path,
       read.content,
       input.sourceLanguage,
+      hops,
     );
     if (found) return found;
   }
@@ -571,6 +579,7 @@ async function definitionFromImportedSource(
   path: string,
   content: string,
   language: string,
+  hops = 0,
 ): Promise<ImportedDefinitionResult> {
   const imported = input.imported ?? input.symbol;
   let analyzed: Awaited<ReturnType<typeof analyzeFilesForSymbolPeek>>["units"];
@@ -598,8 +607,8 @@ async function definitionFromImportedSource(
   if (declaration) {
     return symbolDefinitionOf(declaration, declaration.startLine);
   }
-  const reexport = findImportedReexport(content, imported, language);
-  if (reexport) {
+  const reexport = await findImportedReexport(content, imported, language);
+  if (reexport && hops < MAXIMUM_REEXPORT_HOPS) {
     return followImportedDefinition(
       db,
       userId,
@@ -613,11 +622,12 @@ async function definitionFromImportedSource(
       },
       provider,
       seen,
+      hops + 1,
     );
   }
   const module = analyzed.find((unit) => unit.kind === "file");
   if (!module) return undefined;
-  const focusLine = findImportedDeclarationLine(
+  const focusLine = await findImportedDeclarationLine(
     module.source,
     imported,
     module.language,

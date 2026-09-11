@@ -6,8 +6,8 @@ const statementTypes = {
   javascript: new Set(["import_statement"]),
   typescript: new Set(["import_statement"]),
   python: new Set(["import_statement", "import_from_statement"]),
-  java: new Set(["package_declaration", "import_declaration"]),
-  kotlin: new Set(["package_header", "import_header"]),
+  java: new Set(["import_declaration"]),
+  kotlin: new Set(["import_header"]),
   csharp: new Set(["using_directive"]),
   c: new Set(["preproc_include"]),
   cpp: new Set(["preproc_include", "import_declaration"]),
@@ -501,6 +501,9 @@ function referencesForLanguage(
     language === "groovy" ||
     language === "scala"
   ) {
+    if (node.type === "package_declaration" || node.type === "package_header") {
+      return [];
+    }
     return dottedPackageReferences(source, node);
   }
   if (language === "csharp") return csharpReferences(source, node);
