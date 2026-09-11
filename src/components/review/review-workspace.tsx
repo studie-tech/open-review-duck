@@ -618,6 +618,7 @@ export function ReviewWorkspace({
   const codeOverviewRef = useRef<HTMLDivElement>(null);
   const [selectedCardStuck, setSelectedCardStuck] = useState(false);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
+  const importPreviewRequestRef = useRef(0);
   const [sessionId, setSessionId] = useState<string>();
   const [signOffQueue, dispatchSignOffQueue] = useReducer(
     signOffQueueReducer,
@@ -1884,6 +1885,7 @@ export function ReviewWorkspace({
   /** Navigates an import to its review unit or opens its source context. */
   async function followImport(reference: ImportReference) {
     if (!activeUnit) return;
+    const requestId = ++importPreviewRequestRef.current;
     const resolutionKey = `${activeUnit.id}:${reference.from}:${reference.to}`;
     const localTarget = findImportTargetUnit(
       activeUnit.path,
@@ -1917,6 +1919,13 @@ export function ReviewWorkspace({
         ({ unit }) => unit.id === localTarget.moduleUnit?.id,
       );
       if (moduleUnit) {
+        const focusLine = await findImportedDeclarationLine(
+          moduleUnit.unit.source,
+          reference.imported,
+          moduleUnit.unit.language,
+          moduleUnit.unit.startLine,
+        );
+        if (requestId !== importPreviewRequestRef.current) return;
         setImportPreview({
           kind: "preview",
           path: moduleUnit.unit.path,
@@ -1925,12 +1934,7 @@ export function ReviewWorkspace({
           source: moduleUnit.unit.source,
           startLine: moduleUnit.unit.startLine,
           endLine: moduleUnit.unit.endLine,
-          focusLine: await findImportedDeclarationLine(
-            moduleUnit.unit.source,
-            reference.imported,
-            moduleUnit.unit.language,
-            moduleUnit.unit.startLine,
-          ),
+          focusLine,
           inReviewPath: true,
         });
         return;
@@ -1947,6 +1951,7 @@ export function ReviewWorkspace({
         imported: reference.imported,
         kind: reference.kind,
       });
+      if (requestId !== importPreviewRequestRef.current) return;
       if (result.kind === "unit") {
         const index = units.findIndex((unit) => unit.id === result.unitId);
         if (index >= 0) {
@@ -1972,6 +1977,7 @@ export function ReviewWorkspace({
             : "This import could not be found at the reviewed revision",
       );
     } catch (cause) {
+      if (requestId !== importPreviewRequestRef.current) return;
       toast.error(
         cause instanceof Error
           ? cause.message
@@ -6736,7 +6742,10 @@ export function ReviewWorkspace({
                 </div>
                 <div
                   ref={codeOverviewRef}
-                  className="-mt-px overflow-hidden rounded-b-xl border-x border-b border-lime/50 bg-code"
+                  className={cn(
+                    "-mt-px overflow-hidden rounded-b-xl border-x border-b bg-code",
+                    activeFileIsDeleted ? "border-coral/40" : "border-lime/50",
+                  )}
                 >
                   {!selectedFileSourceExpanded &&
                   activeFileCardSourceAvailable ? (
