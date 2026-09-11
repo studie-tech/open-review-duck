@@ -1609,7 +1609,7 @@ export const reviewRouter = createTRPCRouter({
             source: moduleUnit.source,
             startLine: moduleUnit.startLine,
             endLine: moduleUnit.endLine,
-            focusLine: findImportedDeclarationLine(
+            focusLine: await findImportedDeclarationLine(
               moduleUnit.source,
               input.imported,
               moduleUnit.language,
@@ -1670,12 +1670,12 @@ export const reviewRouter = createTRPCRouter({
           endLine: target.endLine,
           focusLine:
             exactTarget?.startLine ??
-            findImportedDeclarationLine(
+            (await findImportedDeclarationLine(
               target.source,
               input.imported,
               target.language,
               target.startLine,
-            ),
+            )),
           inReviewPath: false,
         };
       }
@@ -1755,28 +1755,30 @@ export const reviewRouter = createTRPCRouter({
             };
       const read = { line: input.line, path: input.sourcePath };
       const analyzedDeclaration = parsedFile?.declarations.get(input.symbol);
+      let sameFilePeek: ReturnType<typeof sameFileDeclarationPeek> | undefined;
+      if (
+        parsedFile &&
+        (!analyzedDeclaration ||
+          definitionIsWhereTheNameWasRead(analyzedDeclaration, read))
+      ) {
+        const focusLine = await findImportedDeclarationLine(
+          parsedFile.source,
+          input.symbol,
+          parsedFile.language,
+        );
+        if (focusLine !== undefined) {
+          sameFilePeek = sameFileDeclarationPeek({
+            language: parsedFile.language,
+            path: input.sourcePath,
+            source: parsedFile.source,
+            symbol: input.symbol,
+            focusLine,
+          });
+        }
+      }
       const local = localDefinitionForPeek(
         analyzedDeclaration,
-        parsedFile &&
-          (!analyzedDeclaration ||
-            definitionIsWhereTheNameWasRead(analyzedDeclaration, read))
-          ? (() => {
-              const focusLine = findImportedDeclarationLine(
-                parsedFile.source,
-                input.symbol,
-                parsedFile.language,
-              );
-              return focusLine === undefined
-                ? undefined
-                : sameFileDeclarationPeek({
-                    language: parsedFile.language,
-                    path: input.sourcePath,
-                    source: parsedFile.source,
-                    symbol: input.symbol,
-                    focusLine,
-                  });
-            })()
-          : undefined,
+        sameFilePeek,
         read,
       );
       const imported = resolvedInput.specifier
