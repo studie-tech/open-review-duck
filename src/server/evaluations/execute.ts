@@ -66,3 +66,11 @@ export async function completeEvaluationRun(runId: string) {
     .set({ status: "completed", completedAt: new Date() })
     .where(and(eq(evalRuns.id, runId), eq(evalRuns.status, "running")));
 }
+
+/** Records workflow failure without overwriting cancellation or completion. */
+export async function failEvaluationRun(runId: string) {
+  await db
+    .update(evalRuns)
+    .set({ status: "failed", completedAt: new Date() })
+    .where(and(eq(evalRuns.id, runId), eq(evalRuns.status, "running")));
+}

@@ -1,8 +1,13 @@
 /** Evaluates cases sequentially in durable steps with a bounded per-case budget. */
 export async function evaluationWorkflow(runId: string, caseIds: string[]) {
   "use workflow";
-  for (const caseId of caseIds) await evaluateStep(runId, caseId);
-  await completeStep(runId);
+  try {
+    for (const caseId of caseIds) await evaluateStep(runId, caseId);
+    await completeStep(runId);
+  } catch (error) {
+    await failStep(runId);
+    throw error;
+  }
 }
 
 /** Persists a single case before advancing the workflow. */
@@ -21,4 +26,11 @@ async function completeStep(runId: string) {
     "~/server/evaluations/execute"
   );
   await completeEvaluationRun(runId);
+}
+
+/** Releases the active-run slot after a durable step exhausts its retries. */
+async function failStep(runId: string) {
+  "use step";
+  const { failEvaluationRun } = await import("~/server/evaluations/execute");
+  await failEvaluationRun(runId);
 }

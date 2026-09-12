@@ -339,7 +339,22 @@ export function Evaluations({ findingId }: { findingId?: string }) {
                         <button
                           type="button"
                           className="min-w-0 flex-1 text-left"
-                          onClick={() => setEditor(row)}
+                          onClick={async () => {
+                            try {
+                              setEditor(
+                                await utils.evaluations.case.fetch({
+                                  datasetId: selectedId,
+                                  id: row.id,
+                                }),
+                              );
+                            } catch (error) {
+                              toast.error(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not load case",
+                              );
+                            }
+                          }}
                         >
                           <span className="text-cloud block text-sm font-medium leading-5 [overflow-wrap:anywhere] hover:underline">
                             {row.title}
@@ -605,7 +620,7 @@ function Experiment({
   onStarted,
 }: {
   datasetId: string;
-  cases: (EvalCase & { id: string })[];
+  cases: { id: string; label: EvalCase["label"]; split: EvalCase["split"] }[];
   runs: RouterOutputs["evaluations"]["detail"]["runs"];
   runId: string;
   setRunId: (id: string) => void;
@@ -894,14 +909,7 @@ function RunResults({
     baseline.data &&
     baseline.data.snapshot.mode === data.snapshot.mode &&
     baseline.data.snapshot.split === data.snapshot.split &&
-    JSON.stringify(
-      [...baseline.data.snapshot.cases].sort((a, b) =>
-        a.id.localeCompare(b.id),
-      ),
-    ) ===
-      JSON.stringify(
-        [...data.snapshot.cases].sort((a, b) => a.id.localeCompare(b.id)),
-      );
+    baseline.data.snapshot.casesFingerprint === data.snapshot.casesFingerprint;
   return (
     <section className={cn(panel, "space-y-5")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1073,12 +1081,11 @@ function RunResults({
                 </div>
                 <p className="text-cloud text-sm">{row.finding}</p>
                 <p className="text-mist text-sm">{row.rationale}</p>
-                <details className="text-mist text-xs">
-                  <summary className="cursor-pointer">Frozen source</summary>
-                  <pre className="bg-code mt-3 max-h-72 overflow-auto rounded-lg p-3">
-                    {row.source}
-                  </pre>
-                </details>
+                <FrozenSource
+                  datasetId={datasetId}
+                  runId={data.id}
+                  caseId={row.id}
+                />
                 <pre className="bg-code text-mist max-h-96 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-xs">
                   {row.result?.output ?? "No model output was recorded."}
                 </pre>
@@ -1130,5 +1137,33 @@ function RunResults({
         })}
       </div>
     </section>
+  );
+}
+
+/** Loads captured code only when a reviewer expands its disclosure. */
+function FrozenSource({
+  datasetId,
+  runId,
+  caseId,
+}: {
+  datasetId: string;
+  runId: string;
+  caseId: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const example = api.evaluations.runCase.useQuery(
+    { datasetId, runId, id: caseId },
+    { enabled: expanded },
+  );
+  return (
+    <details
+      className="text-mist text-xs"
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer">Frozen source</summary>
+      <pre className="bg-code mt-3 max-h-72 overflow-auto rounded-lg p-3">
+        {example.data?.source ?? example.error?.message ?? "Loading source…"}
+      </pre>
+    </details>
   );
 }

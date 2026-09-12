@@ -1,8 +1,14 @@
 import http from "node:http";
 
+const slow = { started: 0, finished: 0 };
+
 /** Serves deterministic OpenAI-compatible responses solely for browser QA. */
 const server = http.createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
+  if (req.url === "/qa/slow") {
+    res.end(JSON.stringify(slow));
+    return;
+  }
   if (req.url.endsWith("/models")) {
     res.end(JSON.stringify({ data: [{ id: "reviewduck-eval-fixture" }] }));
     return;
@@ -20,8 +26,11 @@ const server = http.createServer(async (req, res) => {
     );
     return;
   }
-  if (system.includes("QA_SLOW"))
+  if (system.includes("QA_SLOW")) {
+    slow.started++;
     await new Promise((resolve) => setTimeout(resolve, 5000));
+    slow.finished++;
+  }
   const strict = system.includes(
     "check whether a guard already proves it impossible",
   );

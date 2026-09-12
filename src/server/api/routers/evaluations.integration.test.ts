@@ -37,6 +37,7 @@ import {
 import type { EvalCase } from "~/lib/evaluations";
 import { createCallerFactory } from "~/server/api/trpc";
 import { db } from "~/server/db";
+import { failEvaluationRun } from "~/server/evaluations/execute";
 import { sealEval } from "~/server/evaluations/store";
 import { sealVaultSecret } from "~/server/security/vault";
 import { persistSourceBlob } from "~/server/storage/source-blobs";
@@ -177,8 +178,21 @@ describe("evaluation authorization and lifecycle", () => {
       }),
     });
     let captured = await caller().run({ datasetId, runId: run.id });
-    expect(captured.snapshot.cases).toHaveLength(1);
-    expect(captured.snapshot.cases[0]).toMatchObject(example);
+    expect(captured.cases).toHaveLength(1);
+    expect(captured.cases[0]).not.toHaveProperty("source");
+    expect(captured.snapshot).not.toHaveProperty("cases");
+    expect(
+      await caller().runCase({ datasetId, runId: run.id, id: saved.id }),
+    ).toMatchObject(example);
+    expect((await caller().detail({ datasetId })).cases[0]).not.toHaveProperty(
+      "source",
+    );
+    await expect(
+      caller(otherUserId).case({ datasetId, id: saved.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(otherUserId).runCase({ datasetId, runId: run.id, id: saved.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(
       captured.snapshot.prompts["deep_review.scout.system_repository"],
     ).toBe("Frozen prompt");
@@ -193,11 +207,27 @@ describe("evaluation authorization and lifecycle", () => {
     expect(captured.metrics).toMatchObject({ tp: 1, recall: 1 });
     await caller().deleteCase({ datasetId, id: saved.id });
     expect(
-      (await caller().run({ datasetId, runId: run.id })).cases[0]?.source,
+      (await caller().runCase({ datasetId, runId: run.id, id: saved.id }))
+        .source,
     ).toBe(example.source);
-    await caller().cancel({ datasetId, runId: run.id });
+    await failEvaluationRun(run.id);
     expect((await caller().run({ datasetId, runId: run.id })).status).toBe(
+      "failed",
+    );
+    const next = await caller().startRun({
+      datasetId,
+      name: "After failure",
+      mode: "discovery",
+      split: "holdout",
+      prompt: "Frozen prompt",
+    });
+    await caller().cancel({ datasetId, runId: next.id });
+    await failEvaluationRun(next.id);
+    expect((await caller().run({ datasetId, runId: next.id })).status).toBe(
       "cancelled",
+    );
+    expect((await caller().run({ datasetId, runId: run.id })).status).toBe(
+      "failed",
     );
     await expect(
       caller(otherUserId).run({ datasetId, runId: run.id }),
@@ -309,12 +339,18 @@ describe("evaluation authorization and lifecycle", () => {
       caller(otherUserId).finding({ findingId }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     const saved = await caller().saveCase({ datasetId, example: captured });
+    await db
+      .update(snapshotFiles)
+      .set({ currentBlobId: null, previousBlobId: null })
+      .where(eq(snapshotFiles.snapshotId, snapshotId));
+    await expect(caller().finding({ findingId })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("Original source"),
+    });
     await db.delete(pullRequests).where(eq(pullRequests.id, pullRequestId));
-    expect(
-      (await caller().detail({ datasetId })).cases.find(
-        (row) => row.id === saved.id,
-      )?.source,
-    ).toBe(example.source);
+    expect((await caller().case({ datasetId, id: saved.id })).source).toBe(
+      example.source,
+    );
   });
   it("rejects empty splits and missing case IDs", async () => {
     const empty = await caller().create({ name: "Empty" });
