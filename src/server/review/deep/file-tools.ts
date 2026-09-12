@@ -77,7 +77,7 @@ export interface DeepReviewFileToolContext {
   onFinishFile?: (input: { summary: string }) => void;
 }
 
-const deepReviewReportFindingSchema = z.object({
+export const deepReviewReportFindingSchema = z.object({
   findings: z
     .array(
       z.object({

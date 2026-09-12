@@ -753,6 +753,18 @@ describe("groupDeepReviewFindings", () => {
 });
 
 describe("DeepReviewInlineFinding", () => {
+  it("offers evaluation capture only to permitted users", () => {
+    const rendered = renderCard({ canEvaluate: true });
+    expect(screen.getByRole("link", { name: "Save to evals" })).toHaveAttribute(
+      "href",
+      `/evaluations?finding=${encodeURIComponent(finding().id)}`,
+    );
+    rendered.unmount();
+    renderCard({ canEvaluate: false });
+    expect(
+      screen.queryByRole("link", { name: "Save to evals" }),
+    ).not.toBeInTheDocument();
+  });
   it("offers publication for an anchored finding that was not refuted", async () => {
     const user = userEvent.setup();
     const onPublish = vi.fn();

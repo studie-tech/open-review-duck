@@ -91,6 +91,7 @@ async function requirePromptAdministrator(
   db: Parameters<typeof ensurePersonalWorkspace>[0],
   userId: string,
 ) {
+  if (isLocalDeployment()) return;
   await ensurePersonalWorkspace(db, userId);
   const user = await db.query.users.findFirst({
     columns: { isAdmin: true },
@@ -129,7 +130,7 @@ export const aiRouter = createTRPCRouter({
       ? (preference?.selectedModel ?? "")
       : managedSaasModel();
     return {
-      canEditPrompts: Boolean(user?.isAdmin),
+      canEditPrompts: local || Boolean(user?.isAdmin),
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
