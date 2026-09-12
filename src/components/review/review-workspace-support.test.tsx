@@ -1914,6 +1914,79 @@ function conversationActions(
 }
 
 describe("ProviderConversation", () => {
+  it("keeps edit and reply submission blocked until both image uploads finish", async () => {
+    const completions: Array<(value: string) => void> = [];
+    const upload = vi.fn(
+      () => new Promise<string>((resolve) => completions.push(resolve)),
+    );
+    const edit = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ProviderConversation
+        provider="github"
+        thread={{
+          externalId: "906",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "906",
+              author: "reviewer",
+              body: "Original",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        onUploadImage={upload}
+        {...conversationActions({ onEditComment: edit, onReply: reply })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit the comment by reviewer" }),
+    );
+    const editor = screen.getByRole("textbox", {
+      name: "Edit the comment by reviewer on GitHub",
+    });
+    const response = screen.getByPlaceholderText("Continue this conversation…");
+    fireEvent.change(response, { target: { value: "Reply" } });
+    const clipboardData = {
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () =>
+            new File(["image"], "image.png", { type: "image/png" }),
+        },
+      ],
+    };
+    fireEvent.paste(editor, { clipboardData });
+    fireEvent.paste(response, { clipboardData });
+    expect(upload).toHaveBeenCalledTimes(2);
+    await act(async () =>
+      completions[0]?.("![first](https://provider.example/first)"),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Reply" }),
+    ).toBeDisabled();
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    expect(edit).not.toHaveBeenCalled();
+    await act(async () =>
+      completions[1]?.("![second](https://provider.example/second)"),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Reply" }),
+    ).toBeEnabled();
+  });
+
   it("opens a resolved conversation selected from the PR-wide list", () => {
     const { rerender } = render(
       <ProviderConversation

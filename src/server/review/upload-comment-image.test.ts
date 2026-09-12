@@ -40,6 +40,14 @@ beforeEach(() => {
   mocks.upload.mockResolvedValue("https://dev.azure.com/image.png");
 });
 describe("authorized comment image uploads", () => {
+  it("rejects excess requests before the authorization query", async () => {
+    mocks.rate.mockRejectedValueOnce(new Error("Too many requests"));
+    await expect(uploadCommentImage(database, "user", input)).rejects.toThrow(
+      "Too many requests",
+    );
+    expect(mocks.scope).not.toHaveBeenCalled();
+    expect(mocks.writer).not.toHaveBeenCalled();
+  });
   it("uses the authorized provider scope and reviewer credentials", async () => {
     expect(await uploadCommentImage(database, "user", input)).toEqual({
       markdown: "![Image](<https://dev.azure.com/image.png>)",
