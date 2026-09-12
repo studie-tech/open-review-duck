@@ -219,6 +219,14 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
   await expect(
     page.getByText(examples[2].rationale, { exact: true }),
   ).toBeVisible();
+  const sourceToggle = page
+    .getByText("Frozen source", { exact: true })
+    .filter({ visible: true });
+  await sourceToggle.click();
+  await expect(sourceToggle.locator("..").locator("pre")).toContainText(
+    examples[2].source,
+  );
+  await sourceToggle.click();
   await captureScreenshot(page, "05-outcome-inspection.png");
   // Historical cases and labels must not follow later edits.
   const latest = await client.evaluations.detail.query({ datasetId: selected });
@@ -227,7 +235,13 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
   await client.evaluations.saveCase.mutate({
     datasetId: selected,
     id: first.id,
-    example: { ...first, rationale: "Updated annotation after baseline" },
+    example: {
+      ...(await client.evaluations.case.query({
+        datasetId: selected,
+        id: first.id,
+      })),
+      rationale: "Updated annotation after baseline",
+    },
   });
   const frozen = await client.evaluations.run.query({
     datasetId: selected,
@@ -289,6 +303,8 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
   });
   expect(failed.metrics.graded).toBe(0);
   expect(failed.cases[0]?.result?.prediction).toBe("error");
+  const slowURL = new URL("/qa/slow", providerURL);
+  const beforeSlow = await (await fetch(slowURL)).json();
   const cancel = await client.evaluations.startRun.mutate({
     datasetId: selected,
     name: "QA · cancellation",
@@ -296,6 +312,9 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
     split: "development",
     prompt: "QA_SLOW",
   });
+  await expect
+    .poll(async () => (await (await fetch(slowURL)).json()).started)
+    .toBe(beforeSlow.started + 1);
   await client.evaluations.cancel.mutate({
     datasetId: selected,
     runId: cancel.id,
@@ -308,6 +327,33 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
       })
     ).status,
   ).toBe("cancelled");
+  await expect
+    .poll(
+      async () => {
+        const run = await client.evaluations.run.query({
+          datasetId: selected,
+          runId: cancel.id,
+        });
+        return {
+          status: run.status,
+          persisted: run.cases.filter((row) => row.result).length,
+        };
+      },
+      { timeout: 30_000 },
+    )
+    .toEqual({ status: "cancelled", persisted: 1 });
+  // Allow the workflow to advance beyond the in-flight result before checking its terminal state.
+  await page.waitForTimeout(2000);
+  const settled = await client.evaluations.run.query({
+    datasetId: selected,
+    runId: cancel.id,
+  });
+  expect(settled.status).toBe("cancelled");
+  expect(settled.cases.filter((row) => row.result)).toHaveLength(1);
+  expect(await (await fetch(slowURL)).json()).toEqual({
+    started: beforeSlow.started + 1,
+    finished: beforeSlow.finished + 1,
+  });
   // Browser reload and mobile navigation preserve access and layout.
   await page.reload();
   await page.getByLabel("Dataset", { exact: true }).selectOption(selected);

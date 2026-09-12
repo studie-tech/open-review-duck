@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { start } from "workflow/api";
@@ -116,11 +116,13 @@ export const evaluationsRouter = createTRPCRouter({
     });
     const cases = await Promise.all(
       rows.map(async (row) => ({
-        ...(await openEval<EvalCase>(
-          ctx.dataset.workspaceId,
-          row.id,
-          row.encryptedContent,
-        )),
+        ...caseSummary(
+          await openEval<EvalCase>(
+            ctx.dataset.workspaceId,
+            row.id,
+            row.encryptedContent,
+          ),
+        ),
         id: row.id,
       })),
     );
@@ -132,6 +134,32 @@ export const evaluationsRouter = createTRPCRouter({
     });
     return { ...ctx.dataset, cases, runs };
   }),
+  case: datasetProcedure
+    .input(z.object({ id: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.query.evalCases.findFirst({
+        where: and(
+          eq(evalCases.id, input.id),
+          eq(evalCases.datasetId, ctx.dataset.id),
+        ),
+      });
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      return {
+        ...(await openEval<EvalCase>(
+          ctx.dataset.workspaceId,
+          row.id,
+          row.encryptedContent,
+        )),
+        id: row.id,
+      };
+    }),
+  runCase: runProcedure
+    .input(z.object({ id: z.uuid() }))
+    .query(({ ctx, input }) => {
+      const example = ctx.snapshot.cases.find((row) => row.id === input.id);
+      if (!example) throw new TRPCError({ code: "NOT_FOUND" });
+      return example;
+    }),
   saveCase: datasetProcedure
     .input(z.object({ id: z.uuid().optional(), example: evalCaseSchema }))
     .mutation(async ({ ctx, input }) => {
@@ -249,6 +277,12 @@ export const evaluationsRouter = createTRPCRouter({
         source(file.currentBlobId),
         source(file.previousBlobId),
       ]);
+      if (!current && !previous)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Original source is no longer available. Create a case with code context manually.",
+        });
       return evalCaseSchema.parse({
         title: content.title,
         path: row.path,
@@ -390,7 +424,8 @@ export const evaluationsRouter = createTRPCRouter({
       })),
     );
     const cases = ctx.snapshot.cases.map((example) => ({
-      ...example,
+      ...caseSummary(example),
+      id: example.id,
       result: outputs.find((output) => output.caseId === example.id) ?? null,
     }));
     return {
@@ -398,7 +433,21 @@ export const evaluationsRouter = createTRPCRouter({
       name: ctx.run.name,
       status: ctx.run.status,
       createdAt: ctx.run.createdAt,
-      snapshot: ctx.snapshot,
+      snapshot: {
+        version: ctx.snapshot.version,
+        mode: ctx.snapshot.mode,
+        split: ctx.snapshot.split,
+        model: ctx.snapshot.model,
+        provider: ctx.snapshot.provider,
+        prompts: ctx.snapshot.prompts,
+        casesFingerprint: createHash("sha256")
+          .update(
+            JSON.stringify(
+              [...ctx.snapshot.cases].sort((a, b) => a.id.localeCompare(b.id)),
+            ),
+          )
+          .digest("hex"),
+      },
       cases,
       metrics: evalMetrics(
         cases
@@ -457,3 +506,14 @@ export const evaluationsRouter = createTRPCRouter({
         .where(eq(evalResults.id, result.id));
     }),
 });
+
+/** Omits code bodies from frequently refreshed case lists and results. */
+function caseSummary(example: EvalCase) {
+  const {
+    source: _source,
+    previousSource: _previous,
+    existingCode: _code,
+    ...summary
+  } = example;
+  return summary;
+}
