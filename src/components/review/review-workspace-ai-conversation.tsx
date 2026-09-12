@@ -473,6 +473,7 @@ export function InlineCommentComposer({
         </span>
       </div>
       <CommentImageTextarea
+        disabled={pending}
         ref={input}
         value={draft}
         onUploadImage={onUploadImage}
