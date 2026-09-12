@@ -3286,7 +3286,9 @@ describe("native comment attachments", () => {
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain(
       "/repositories/repo/pullRequests/4/attachments/image-unique.png?",
     );
-    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.body).toBe(file);
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.body).toEqual(
+      new TextEncoder().encode("bytes"),
+    );
   });
   it("uploads GitLab multipart data and returns an absolute native URL", async () => {
     mockJson({ full_path: "/-/project/4/uploads/secret/image.png" });
@@ -3297,7 +3299,14 @@ describe("native comment attachments", () => {
         file: new File(["bytes"], "image.png"),
       }),
     ).toBe("https://gitlab.com/-/project/4/uploads/secret/image.png");
-    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.body).toBeInstanceOf(FormData);
+    const request = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(request?.body).toBeInstanceOf(Uint8Array);
+    expect(new Headers(request?.headers).get("content-type")).toMatch(
+      /^multipart\/form-data; boundary=/,
+    );
+    expect(new TextDecoder().decode(request?.body as Uint8Array)).toContain(
+      'name="file"; filename="image.png"',
+    );
   });
   it("uses GitHub's user-attachment endpoint and rejects installation tokens", async () => {
     mockJson({ url: "https://github.com/user-attachments/assets/image" });

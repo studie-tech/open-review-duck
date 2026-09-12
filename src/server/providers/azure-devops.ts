@@ -178,7 +178,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
           ...this.headers,
           "Content-Type": "application/octet-stream",
         },
-        body: input.file,
+        body: new Uint8Array(await input.file.arrayBuffer()),
       },
     );
     return attachment.url;
