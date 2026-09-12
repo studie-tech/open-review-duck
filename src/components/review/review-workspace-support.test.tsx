@@ -1973,18 +1973,14 @@ describe("ProviderConversation", () => {
       completions[0]?.("![first](https://provider.example/first)"),
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Reply" }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeDisabled();
     fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
     expect(edit).not.toHaveBeenCalled();
     await act(async () =>
       completions[1]?.("![second](https://provider.example/second)"),
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(
-      screen.getByRole("button", { name: "Reply" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeEnabled();
   });
 
   it("opens a resolved conversation selected from the PR-wide list", () => {
