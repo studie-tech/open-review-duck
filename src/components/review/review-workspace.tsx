@@ -3131,6 +3131,7 @@ export function ReviewWorkspace({
     if (!activeUnit) return null;
     return (
       <DeepReviewInlineFinding
+        canEvaluate={Boolean(aiConfiguration.data?.canEditPrompts)}
         key={finding.id}
         finding={finding}
         variant="line"
@@ -3204,6 +3205,7 @@ export function ReviewWorkspace({
           {label}
         </p>
         <DeepReviewInlineFinding
+          canEvaluate={Boolean(aiConfiguration.data?.canEditPrompts)}
           finding={activeFinding}
           variant="detached"
           locationIndex={activeFindingLocationIndex}

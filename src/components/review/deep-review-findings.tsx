@@ -9,6 +9,7 @@ import {
   Send,
   ShieldCheck,
 } from "lucide-react";
+import Link from "next/link";
 import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -360,6 +361,7 @@ export function DeepReviewFindingChip({
  */
 export function DeepReviewInlineFinding({
   finding,
+  canEvaluate = false,
   locationIndex,
   onCollapse,
   onEdit,
@@ -372,6 +374,7 @@ export function DeepReviewInlineFinding({
   variant,
 }: {
   finding: DeepReviewFinding;
+  canEvaluate?: boolean;
   locationIndex: number;
   onCollapse: () => void;
   onEdit?: () => void;
@@ -472,6 +475,14 @@ export function DeepReviewInlineFinding({
       {finding.contentAvailable ? (
         <>
           <p className="text-cloud mt-1 text-sm font-medium">{finding.title}</p>
+          {canEvaluate && (
+            <Link
+              className="text-cyan mt-2 inline-block text-xs hover:underline"
+              href={`/evaluations?finding=${encodeURIComponent(finding.id)}`}
+            >
+              Save to evals
+            </Link>
+          )}
           <p className="text-mist mt-1.5 text-xs leading-5">{finding.body}</p>
         </>
       ) : (

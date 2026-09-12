@@ -1964,3 +1964,63 @@ export const conceptMemberRelations = relations(
 
 /** Creates a SQL expression used to atomically increment a numeric column. */
 export const increment = (value: number) => sql`${value}`;
+
+/** Human-curated evaluation collections, isolated to their owning workspace. */
+export const evalDatasets = createTable(
+  "eval_dataset",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar({ length: 120 }).notNull(),
+    description: text().notNull().default(""),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("eval_dataset_workspace_idx").on(t.workspaceId)],
+);
+
+/** Frozen source and human annotations survive deletion of the original review. */
+export const evalCases = createTable(
+  "eval_case",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    datasetId: uuid()
+      .notNull()
+      .references(() => evalDatasets.id, { onDelete: "cascade" }),
+    encryptedContent: text().notNull(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("eval_case_dataset_idx").on(t.datasetId)],
+);
+
+/** Immutable experiment inputs; lifecycle fields never change the captured data. */
+export const evalRuns = createTable(
+  "eval_run",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    datasetId: uuid()
+      .notNull()
+      .references(() => evalDatasets.id, { onDelete: "cascade" }),
+    name: varchar({ length: 120 }).notNull(),
+    encryptedSnapshot: text().notNull(),
+    status: varchar({ length: 24 }).notNull().default("running"),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [index("eval_run_dataset_idx").on(t.datasetId)],
+);
+
+/** One independently persisted result per captured case, including failures. */
+export const evalResults = createTable(
+  "eval_result",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    runId: uuid()
+      .notNull()
+      .references(() => evalRuns.id, { onDelete: "cascade" }),
+    caseId: uuid().notNull(),
+    encryptedOutput: text().notNull(),
+  },
+  (t) => [uniqueIndex("eval_result_run_case_idx").on(t.runId, t.caseId)],
+);
