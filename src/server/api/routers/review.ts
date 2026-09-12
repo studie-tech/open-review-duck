@@ -124,6 +124,10 @@ import {
 } from "~/server/review/symbol-peek";
 import { unitsWithoutSource } from "~/server/review/units";
 import {
+  uploadCommentImage,
+  uploadCommentImageSchema,
+} from "~/server/review/upload-comment-image";
+import {
   assignProviderThreadsToUnits,
   hasNewProviderActivity,
   providerActivityForUnit,
@@ -1946,6 +1950,12 @@ export const reviewRouter = createTRPCRouter({
       if (!job) return null;
       return await deepReviewRunPayload(ctx.db, job);
     }),
+
+  uploadCommentImage: protectedProcedure
+    .input(uploadCommentImageSchema)
+    .mutation(({ ctx, input }) =>
+      uploadCommentImage(ctx.db, ctx.auth.userId, input),
+    ),
 
   publishComment: protectedProcedure
     .input(publishReviewCommentSchema)

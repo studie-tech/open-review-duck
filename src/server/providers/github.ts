@@ -241,6 +241,40 @@ export class GitHubProvider implements PullRequestProvider {
     };
   }
 
+  /** Uses the native user-attachment endpoint also used by GitHub CLI. */
+  async uploadCommentImage(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    file: File;
+  }) {
+    if (
+      this.installation ||
+      new URL(this.apiUrl).hostname !== "api.github.com"
+    ) {
+      throw new ProviderError(
+        this.name,
+        "Image uploads require a personal GitHub.com connection with repository write access. You can also attach the image on GitHub and paste its link here.",
+      );
+    }
+    const url = new URL("https://uploads.github.com/user-attachments/assets");
+    url.searchParams.set("name", input.file.name);
+    url.searchParams.set("content_type", input.file.type);
+    url.searchParams.set("repository_id", input.repositoryExternalId);
+    const attachment = await providerFetch<{ url: string }>(
+      this.name,
+      url.href,
+      {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/octet-stream",
+        },
+        body: input.file,
+      },
+    );
+    return attachment.url;
+  }
+
   /** Fetches the account identity associated with a provider token. */
   async getConnectionIdentity() {
     if (this.installation) {

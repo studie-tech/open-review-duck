@@ -3268,3 +3268,60 @@ describe("provider normalization", () => {
     expect(resolved).toBe(JSON.stringify({ resolved: true }));
   });
 });
+
+describe("native comment attachments", () => {
+  it("uploads Azure bytes to the scoped pull request with a unique filename", async () => {
+    mockJson({ url: "https://dev.azure.com/acme/attachment" });
+    const file = new File(["bytes"], "image-unique.png", { type: "image/png" });
+    expect(
+      await new AzureDevOpsProvider(
+        "secret",
+        "https://dev.azure.com/acme",
+      ).uploadCommentImage({
+        repositoryExternalId: "repo",
+        pullRequestNumber: 4,
+        file,
+      }),
+    ).toBe("https://dev.azure.com/acme/attachment");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain(
+      "/repositories/repo/pullRequests/4/attachments/image-unique.png?",
+    );
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.body).toBe(file);
+  });
+  it("uploads GitLab multipart data and returns an absolute native URL", async () => {
+    mockJson({ full_path: "/-/project/4/uploads/secret/image.png" });
+    expect(
+      await new GitLabProvider("secret").uploadCommentImage({
+        repositoryExternalId: "4",
+        pullRequestNumber: 2,
+        file: new File(["bytes"], "image.png"),
+      }),
+    ).toBe("https://gitlab.com/-/project/4/uploads/secret/image.png");
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.body).toBeInstanceOf(FormData);
+  });
+  it("uses GitHub's user-attachment endpoint and rejects installation tokens", async () => {
+    mockJson({ url: "https://github.com/user-attachments/assets/image" });
+    const input = {
+      repositoryExternalId: "42",
+      pullRequestNumber: 2,
+      file: new File(["bytes"], "image.png", { type: "image/png" }),
+    };
+    await expect(
+      new GitHubProvider("secret").uploadCommentImage(input),
+    ).resolves.toContain("user-attachments");
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain(
+      "https://uploads.github.com/user-attachments/assets?",
+    );
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain(
+      "repository_id=42",
+    );
+    await expect(
+      new GitHubProvider(
+        "secret",
+        "https://api.github.com",
+        true,
+      ).uploadCommentImage(input),
+    ).rejects.toThrow("personal GitHub.com connection");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});

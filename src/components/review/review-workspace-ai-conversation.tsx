@@ -26,6 +26,10 @@ import { isEditableTarget } from "~/lib/keyboard-shortcuts";
 import { providerLabel } from "~/lib/provider-labels";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import type { RouterOutputs } from "~/trpc/react";
+import {
+  CommentImageTextarea,
+  type UploadCommentImage,
+} from "./comment-image-textarea";
 import { ProviderCommentBody } from "./review-workspace-markdown";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -422,6 +426,7 @@ export function InlineCommentComposer({
   onCancel,
   onDraftChange,
   onPost,
+  onUploadImage,
   path,
   pending,
   posting,
@@ -432,11 +437,13 @@ export function InlineCommentComposer({
   onCancel: () => void;
   onDraftChange: (value: string) => void;
   onPost: (body: string) => void;
+  onUploadImage?: UploadCommentImage;
   path: string;
   pending: boolean;
   posting: boolean;
   provider: WorkspaceData["pullRequest"]["provider"];
 }) {
+  const [uploading, setUploading] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const escapeBoundary = useInlineEscapeDismissal<HTMLDivElement>(onCancel, {
     dismissWhileOpen: true,
@@ -465,19 +472,22 @@ export function InlineCommentComposer({
           {path}
         </span>
       </div>
-      <textarea
+      <CommentImageTextarea
         ref={input}
         value={draft}
-        onChange={(event) => {
-          setDraft(event.target.value);
-          onDraftChange(event.target.value);
+        onUploadImage={onUploadImage}
+        onUploadingChange={setUploading}
+        onValueChange={(value) => {
+          setDraft(value);
+          onDraftChange(value);
         }}
         onKeyDown={(event) => {
           if (
             event.key === "Enter" &&
             (event.metaKey || event.ctrlKey) &&
             draft.trim() &&
-            !pending
+            !pending &&
+            !uploading
           ) {
             event.preventDefault();
             onPost(draft);
@@ -489,7 +499,10 @@ export function InlineCommentComposer({
       />
       <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-fog flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] leading-4">
-          <span>Posts immediately to {providerLabel(provider)}.</span>
+          <span>
+            Posts immediately to {providerLabel(provider)}. Paste images to
+            attach.
+          </span>
           <span className="flex items-center gap-1">
             <ShortcutHint shortcut={reviewShortcuts.postComment} />
             post
@@ -503,7 +516,7 @@ export function InlineCommentComposer({
           <Button
             size="sm"
             variant="secondary"
-            disabled={!draft.trim() || pending}
+            disabled={!draft.trim() || pending || uploading}
             onClick={() => onPost(draft)}
           >
             {posting ? (
@@ -529,6 +542,7 @@ export function InlineLineActionSurface({
   onCancel,
   onDraftChange,
   onPost,
+  onUploadImage,
   path,
   pending,
   posting,
@@ -542,6 +556,7 @@ export function InlineLineActionSurface({
   onCancel: () => void;
   onDraftChange: (value: string) => void;
   onPost: (body: string) => void;
+  onUploadImage?: UploadCommentImage;
   path: string;
   pending: boolean;
   posting: boolean;
@@ -567,6 +582,7 @@ export function InlineLineActionSurface({
       line={line}
       onCancel={onCancel}
       onDraftChange={onDraftChange}
+      onUploadImage={onUploadImage}
       onPost={onPost}
       path={path}
       pending={pending}

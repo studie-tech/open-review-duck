@@ -251,6 +251,12 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     pullRequestNumber: number,
   ): Promise<ProviderReviewThread[]>;
+  /** Uploads an image into the provider so comments retain its access rules. */
+  uploadCommentImage?(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    file: File;
+  }): Promise<string>;
   /** Publishes an inline review comment to the code provider. */
   publishInlineComment(input: {
     repositoryExternalId: string;
