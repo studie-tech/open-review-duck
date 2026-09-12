@@ -2008,10 +2008,11 @@ function clusterConceptUnits(units: AnalyzedUnit[]) {
   return [...orderedReviewable, ...fileContexts];
 }
 
-/** Builds import maps from project files already present in the analysis set. */
+/** Builds import maps from living project files already in the analysis set. */
 function importMapsFromAnalyzedFiles(files: SourceFile[]) {
   return importMapsFromProjectFiles(
     files.flatMap((file) => {
+      if (file.changeType === "deleted") return [];
       const name = basename(file.path);
       return PROJECT_IMPORT_CONFIG_NAMES.has(name)
         ? [{ path: file.path, content: file.content }]
