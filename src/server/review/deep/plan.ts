@@ -217,14 +217,23 @@ async function readSealedPlan(
     where: eq(aiReviewItems.parentJobId, parent.id),
     orderBy: [asc(aiReviewItems.path)],
   });
-  // A sealed plan that selected nothing has no item rows to find it by, so
-  // either the terminal state or its survey child proves it ran.
-  const skipped = parent.deepReviewTerminalState === "skipped";
   const children = await reader.query.aiJobs.findMany({
     where: eq(aiJobs.parentJobId, parent.id),
   });
   const surveyJobId =
     children.find((child) => child.kind === "review_survey")?.id ?? null;
+  // Item rows, survey children, and the parent terminal state are written in
+  // one transaction. The caller may have loaded `parent` before that commit,
+  // so a concurrent sealer can see items while still holding a queued
+  // snapshot. Re-read after the rows so skipped is taken from a snapshot at
+  // least as new as them.
+  const current =
+    rows.length > 0 || surveyJobId
+      ? await readReviewParent(reader, parent.id)
+      : parent;
+  // A sealed plan that selected nothing has no item rows to find it by, so
+  // either the terminal state or its survey child proves it ran.
+  const skipped = current.deepReviewTerminalState === "skipped";
   if (rows.length === 0 && !skipped && !surveyJobId) return null;
   const items = rows.map((row) => ({
     itemId: row.id,
@@ -239,7 +248,7 @@ async function readSealedPlan(
   items.sort(compareSealedItems);
   return sealedReviewPlan({
     parentJobId: parent.id,
-    ruleConfigDigest: parent.ruleConfigDigest ?? rulebookCorpusDigest(),
+    ruleConfigDigest: current.ruleConfigDigest ?? rulebookCorpusDigest(),
     skipped,
     items,
     surveyJobId,
