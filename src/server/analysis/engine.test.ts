@@ -646,6 +646,39 @@ describe("review analysis engine", () => {
     expect(save?.reviewOrder).toBeGreaterThan(normalize?.reviewOrder ?? -1);
   });
 
+  it("does not let a deleted tsconfig map current imports", () => {
+    const result = analyzeFiles([
+      {
+        path: "tsconfig.json",
+        content: JSON.stringify({
+          compilerOptions: { paths: { "@/*": ["./legacy/*"] } },
+        }),
+        changeType: "deleted",
+      },
+      {
+        path: "legacy/lib/toast.ts",
+        content: "export function toast() { return 'old' }",
+      },
+      {
+        path: "src/lib/toast.ts",
+        content: "export function toast() { return 'new' }",
+      },
+      {
+        path: "app.ts",
+        content: [
+          'import { toast } from "@/lib/toast";',
+          "export function show() { return toast() }",
+        ].join("\n"),
+      },
+    ]);
+    const stale = result.units.find(
+      ({ path, name }) => path === "legacy/lib/toast.ts" && name === "toast",
+    );
+    const show = result.units.find(({ name }) => name === "show");
+
+    expect(show?.dependencies).not.toContain(stale?.stableKey);
+  });
+
   it("resolves aliased imports even when exported names are duplicated", () => {
     const result = analyzeFiles([
       {
