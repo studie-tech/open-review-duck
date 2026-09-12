@@ -463,6 +463,7 @@ export function ProviderConversation({
                 {editing === comment.externalId ? (
                   <div className="mt-2">
                     <CommentImageTextarea
+                      disabled={managing}
                       ref={editInputRef}
                       aria-label={`Edit the comment by ${comment.author} on ${providerLabel(provider)}`}
                       value={editBody}
@@ -541,6 +542,7 @@ export function ProviderConversation({
                   </p>
                 )}
                 <CommentImageTextarea
+                  disabled={replying || managing}
                   ref={replyInputRef}
                   value={replyBody}
                   onUploadImage={onUploadImage}
