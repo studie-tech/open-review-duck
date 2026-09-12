@@ -155,6 +155,7 @@ import { useImportReferences } from "~/lib/tree-sitter-import-navigation";
 import { useSettledValue } from "~/lib/use-settled-value";
 import { cn } from "~/lib/utils";
 import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
+import { commentImageBase64 } from "./comment-image-textarea";
 import {
   DeepReviewFindingChip,
   DeepReviewFindingRow,
@@ -2773,6 +2774,21 @@ export function ReviewWorkspace({
   // refuse.
   const deepReviewAvailable =
     aiConfiguration.data?.deepReviewAvailable ?? false;
+  const imageUpload = api.review.uploadCommentImage.useMutation();
+  /** Uploads clipboard bytes under the unit's existing provider authorization. */
+  async function uploadCommentImage(unitId: string, file: File) {
+    const result = await imageUpload.mutateAsync({
+      unitId,
+      base64: await commentImageBase64(file),
+      contentType: file.type as
+        | "image/png"
+        | "image/jpeg"
+        | "image/gif"
+        | "image/webp",
+    });
+    return result.markdown;
+  }
+
   const pullRequestReview = api.ai.reviewStatus.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
@@ -3358,6 +3374,7 @@ export function ReviewWorkspace({
     return threads.map((thread) => (
       <ProviderConversation
         key={thread.externalId}
+        onUploadImage={(file) => uploadCommentImage(thread.unitId, file)}
         provider={initialData.pullRequest.provider}
         revealed={focusedProviderThreadId === thread.externalId}
         thread={thread}
@@ -3687,6 +3704,7 @@ export function ReviewWorkspace({
           <InlineLineActionSurface
             key={`${lineNumber}-${draftRevision}`}
             canAsk={canAskAi}
+            onUploadImage={(file) => uploadCommentImage(activeUnit.id, file)}
             initialDraft={commentDraft.current}
             initialMode={commentDraft.current ? "provider" : "choose"}
             line={lineNumber}
@@ -4868,12 +4886,7 @@ export function ReviewWorkspace({
   function renderAiActionButtons() {
     const aiDisabled = aiConfiguration.data?.mode === "off";
     return (
-      <div
-        className={cn(
-          "grid w-full gap-2",
-          deepReviewAvailable ? "grid-cols-2" : "grid-cols-1",
-        )}
-      >
+      <div className="grid w-full min-w-0 grid-cols-1 gap-2">
         <Button
           type="button"
           variant="secondary"
@@ -4888,11 +4901,28 @@ export function ReviewWorkspace({
             className="ml-auto hidden sm:inline-flex"
           />
         </Button>
-        {deepReviewAvailable && (
+        {(deepReviewAvailable || pullRequestReview.data) && (
           <Button
             type="button"
             variant="secondary"
-            className="min-w-0 px-2.5"
+            className={cn(
+              "min-w-0 px-2.5",
+              pullRequestReview.data &&
+                (reviewRunning
+                  ? "border-violet/30 text-violet"
+                  : pullRequestReview.data.status === "failed" ||
+                      pullRequestReview.data.deepReviewTerminalState ===
+                        "failed"
+                    ? "border-coral/30 text-coral"
+                    : pullRequestReview.data.status === "cancelled" ||
+                        ["partial", "skipped"].includes(
+                          pullRequestReview.data.deepReviewTerminalState ?? "",
+                        )
+                      ? "border-amber-500/30 text-amber-500"
+                      : "border-lime/30 text-lime"),
+            )}
+            aria-label={aiReviewStatusLabel(pullRequestReview.data)}
+            title={aiReviewStatusLabel(pullRequestReview.data)}
             disabled={aiDisabled && !pullRequestReview.data}
             onClick={() => setAiReviewDialogOpen(true)}
           >
@@ -4901,9 +4931,7 @@ export function ReviewWorkspace({
             ) : (
               <Sparkles className="size-3.5 shrink-0" />
             )}
-            <span className="truncate">
-              {aiReviewStatusLabel(pullRequestReview.data)}
-            </span>
+            <span className="whitespace-nowrap">AI review</span>
             <ShortcutHint
               shortcut={reviewShortcuts.reviewPullRequest}
               className="ml-auto hidden sm:inline-flex"
@@ -5554,24 +5582,6 @@ export function ReviewWorkspace({
             />
           )}
         </button>
-        {pullRequestReview.data && (
-          <button
-            type="button"
-            onClick={() => setAiReviewDialogOpen(true)}
-            aria-label={aiReviewStatusLabel(pullRequestReview.data)}
-            title={aiReviewStatusLabel(pullRequestReview.data)}
-            className="text-violet flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] hover:bg-surface-subtle"
-          >
-            {reviewRunning ? (
-              <LoaderCircle className="size-4 animate-spin" />
-            ) : (
-              <Sparkles className="size-4" />
-            )}
-            <span className="hidden lg:inline">
-              {aiReviewStatusLabel(pullRequestReview.data)}
-            </span>
-          </button>
-        )}
         <button
           type="button"
           onClick={undoLastSignOff}

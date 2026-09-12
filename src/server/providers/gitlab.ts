@@ -138,6 +138,23 @@ export class GitLabProvider implements PullRequestProvider {
   ) {
     this.headers = { Authorization: `Bearer ${token}` };
   }
+  /** Stores an image as a native project Markdown upload. */
+  async uploadCommentImage(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    file: File;
+  }) {
+    const body = new FormData();
+    body.set("file", input.file);
+    const attachment = await providerFetch<{ full_path: string }>(
+      this.name,
+      `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/uploads`,
+      { method: "POST", headers: this.headers, body },
+    );
+    return new URL(attachment.full_path, `${new URL(this.apiUrl).origin}/`)
+      .href;
+  }
+
   /** Fetches the account identity associated with a provider token. */
   async getConnectionIdentity() {
     const user = await providerFetch<GitLabUser>(

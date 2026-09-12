@@ -163,6 +163,27 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       Authorization: `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
     };
   }
+  /** Uploads a native pull-request attachment using the reviewer's identity. */
+  async uploadCommentImage(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    file: File;
+  }) {
+    const attachment = await providerFetch<{ url: string }>(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${encodeURIComponent(input.repositoryExternalId)}/pullRequests/${input.pullRequestNumber}/attachments/${encodeURIComponent(input.file.name)}?api-version=7.1`,
+      {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/octet-stream",
+        },
+        body: input.file,
+      },
+    );
+    return attachment.url;
+  }
+
   /** Fetches the account identity associated with a provider token. */
   async getConnectionIdentity() {
     const data = await providerFetch<AzureConnectionData>(

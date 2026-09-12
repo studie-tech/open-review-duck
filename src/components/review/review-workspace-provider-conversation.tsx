@@ -23,6 +23,10 @@ import { providerLabel } from "~/lib/provider-labels";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import {
+  CommentImageTextarea,
+  type UploadCommentImage,
+} from "./comment-image-textarea";
 import { ProviderCommentBody } from "./review-workspace-markdown";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -128,6 +132,7 @@ export function ProviderConversation({
   onDeleteThread,
   onEditComment,
   onReply,
+  onUploadImage,
   onResolve,
   provider,
   revealed = false,
@@ -135,6 +140,7 @@ export function ProviderConversation({
   thread,
   publishedByReviewDuck,
 }: ProviderConversationActions & {
+  onUploadImage?: UploadCommentImage;
   className?: string;
   managing?: boolean;
   /** Marks comments after this moment as the activity a wait was paused for. */
@@ -154,6 +160,7 @@ export function ProviderConversation({
   const hasNewComments = thread.comments.some(({ createdAt }) =>
     isNewComment(createdAt),
   );
+  const [uploading, setUploading] = useState(false);
   const [expanded, setExpanded] = useState(
     thread.status !== "resolved" || hasNewComments,
   );
@@ -203,7 +210,7 @@ export function ProviderConversation({
    */
   async function submitReply(reopen: boolean) {
     const body = replyBody.trim();
-    if (!body || replying || inFlight.current) return;
+    if (uploading || !body || replying || inFlight.current) return;
     inFlight.current = true;
     try {
       await onReply(body);
@@ -225,7 +232,7 @@ export function ProviderConversation({
   /** Saves an edited comment, keeping the draft open if the provider says no. */
   async function submitEdit(commentExternalId: string) {
     const body = editBody.trim();
-    if (!body || managing || inFlight.current) return;
+    if (uploading || !body || managing || inFlight.current) return;
     inFlight.current = true;
     try {
       await onEditComment(commentExternalId, body);
@@ -319,7 +326,7 @@ export function ProviderConversation({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            disabled={managing}
+            disabled={uploading || managing}
             aria-label={
               resolved
                 ? "Reopen this conversation"
@@ -357,7 +364,7 @@ export function ProviderConversation({
           </button>
           <button
             type="button"
-            disabled={managing || holdsAnotherReviewersComment}
+            disabled={uploading || managing || holdsAnotherReviewersComment}
             aria-label="Delete this conversation"
             title={
               holdsAnotherReviewersComment
@@ -424,7 +431,7 @@ export function ProviderConversation({
                     <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
                       <button
                         type="button"
-                        disabled={managing}
+                        disabled={uploading || managing}
                         aria-label={`Edit the comment by ${comment.author}`}
                         title="Edit this comment"
                         onClick={() => {
@@ -437,7 +444,7 @@ export function ProviderConversation({
                       </button>
                       <button
                         type="button"
-                        disabled={managing}
+                        disabled={uploading || managing}
                         aria-label={`Delete the comment by ${comment.author}`}
                         title="Delete this comment"
                         onClick={() =>
@@ -455,11 +462,13 @@ export function ProviderConversation({
                 </div>
                 {editing === comment.externalId ? (
                   <div className="mt-2">
-                    <textarea
+                    <CommentImageTextarea
                       ref={editInputRef}
                       aria-label={`Edit the comment by ${comment.author} on ${providerLabel(provider)}`}
                       value={editBody}
-                      onChange={(event) => setEditBody(event.target.value)}
+                      onUploadImage={onUploadImage}
+                      onUploadingChange={setUploading}
+                      onValueChange={setEditBody}
                       onKeyDown={(event) => {
                         if (event.key === "Escape") {
                           event.preventDefault();
@@ -483,7 +492,7 @@ export function ProviderConversation({
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={managing}
+                        disabled={uploading || managing}
                         onClick={() => setEditing(undefined)}
                       >
                         Cancel
@@ -493,6 +502,7 @@ export function ProviderConversation({
                         variant="secondary"
                         disabled={
                           managing ||
+                          uploading ||
                           !editBody.trim() ||
                           editBody.trim() === comment.body.trim()
                         }
@@ -530,10 +540,12 @@ export function ProviderConversation({
                     This conversation is resolved. Posting a reply reopens it.
                   </p>
                 )}
-                <textarea
+                <CommentImageTextarea
                   ref={replyInputRef}
                   value={replyBody}
-                  onChange={(event) => setReplyBody(event.target.value)}
+                  onUploadImage={onUploadImage}
+                  onUploadingChange={setUploading}
+                  onValueChange={setReplyBody}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
                       event.preventDefault();
@@ -573,7 +585,7 @@ export function ProviderConversation({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={replying || managing}
+                      disabled={uploading || replying || managing}
                       onClick={() => setReplyOpen(false)}
                     >
                       Cancel
@@ -582,7 +594,9 @@ export function ProviderConversation({
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={!replyBody.trim() || replying || managing}
+                        disabled={
+                          uploading || !replyBody.trim() || replying || managing
+                        }
                         aria-label="Keep resolved: post the reply without reopening this conversation"
                         onClick={() => void submitReply(false)}
                       >
@@ -592,7 +606,9 @@ export function ProviderConversation({
                     <Button
                       size="sm"
                       variant={resolved ? "primary" : "secondary"}
-                      disabled={!replyBody.trim() || replying || managing}
+                      disabled={
+                        uploading || !replyBody.trim() || replying || managing
+                      }
                       aria-label={
                         resolved
                           ? "Post and reopen this conversation"
