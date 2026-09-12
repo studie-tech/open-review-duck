@@ -31,8 +31,8 @@ export async function uploadCommentImage(
   userId: string,
   input: z.infer<typeof uploadCommentImageSchema>,
 ) {
-  const scope = await providerScopeForUnit(db, userId, input.unitId);
   await enforceRateLimit(db, `review-image:${userId}`, 20, 60_000);
+  const scope = await providerScopeForUnit(db, userId, input.unitId);
   const bytes = Buffer.from(input.base64, "base64");
   const signature =
     input.contentType === "image/png"

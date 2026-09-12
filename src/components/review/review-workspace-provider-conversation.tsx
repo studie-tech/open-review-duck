@@ -13,7 +13,7 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
@@ -160,7 +160,11 @@ export function ProviderConversation({
   const hasNewComments = thread.comments.some(({ createdAt }) =>
     isNewComment(createdAt),
   );
-  const [uploading, setUploading] = useState(false);
+  const [activeUploads, setActiveUploads] = useState(0);
+  const uploading = activeUploads > 0;
+  const trackUpload = useCallback((active: boolean) => {
+    setActiveUploads((count) => Math.max(0, count + (active ? 1 : -1)));
+  }, []);
   const [expanded, setExpanded] = useState(
     thread.status !== "resolved" || hasNewComments,
   );
@@ -247,7 +251,7 @@ export function ProviderConversation({
 
   /** Resolves or reopens the conversation, leaving the error to the mutation. */
   async function submitResolution(resolve: boolean) {
-    if (managing || inFlight.current) return;
+    if (uploading || managing || inFlight.current) return;
     inFlight.current = true;
     setResolving(true);
     try {
@@ -264,7 +268,7 @@ export function ProviderConversation({
   /** Carries out the deletion the reviewer just confirmed. */
   async function confirmDelete() {
     const target = confirmingDelete;
-    if (!target || managing || inFlight.current) return;
+    if (uploading || !target || managing || inFlight.current) return;
     inFlight.current = true;
     try {
       await (target.kind === "thread"
@@ -468,7 +472,7 @@ export function ProviderConversation({
                       aria-label={`Edit the comment by ${comment.author} on ${providerLabel(provider)}`}
                       value={editBody}
                       onUploadImage={onUploadImage}
-                      onUploadingChange={setUploading}
+                      onUploadingChange={trackUpload}
                       onValueChange={setEditBody}
                       onKeyDown={(event) => {
                         if (event.key === "Escape") {
@@ -546,7 +550,7 @@ export function ProviderConversation({
                   ref={replyInputRef}
                   value={replyBody}
                   onUploadImage={onUploadImage}
-                  onUploadingChange={setUploading}
+                  onUploadingChange={trackUpload}
                   onValueChange={setReplyBody}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
