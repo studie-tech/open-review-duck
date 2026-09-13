@@ -22,6 +22,7 @@ import type {
   RepositoryBranch,
   RepositoryIdentity,
 } from "./types";
+import { ProviderError } from "./types";
 
 interface GitLabProject {
   id: number;
@@ -492,6 +493,31 @@ export class GitLabProvider implements PullRequestProvider {
       mergeActionLabel: "Merge",
       hasMergePermission,
     });
+  }
+
+  /** Removes GitLab's draft title prefix while preserving the rest of the title. */
+  async markPullRequestReadyForReview(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+  }) {
+    const url = `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}`;
+    const current = await providerFetch<GitLabMergeRequest>(this.name, url, {
+      headers: this.headers,
+    });
+    const title = current.title.replace(
+      /^(?:(?:draft|wip):\s*|\[(?:draft|wip)\]\s*|\((?:draft|wip)\)\s*)+/i,
+      "",
+    );
+    const pull = await providerFetch<GitLabMergeRequest>(this.name, url, {
+      method: "PUT",
+      headers: { ...this.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (pull.draft !== false)
+      throw new ProviderError(
+        this.name,
+        "GitLab did not mark this merge request ready for review",
+      );
   }
 
   /** Merges the merge request at the exact reviewed GitLab commit. */

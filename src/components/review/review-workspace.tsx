@@ -60,7 +60,7 @@ import {
 } from "~/components/review/ai-review-status-dialog";
 import { ContextRevealControl } from "~/components/review/context-reveal-control";
 import { useStartPullRequestAiReview } from "~/components/review/use-start-pull-request-ai-review";
-import { ThemeToggle } from "~/components/theme-toggle";
+import { ThemeToggle, toggleColorTheme } from "~/components/theme-toggle";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
@@ -74,7 +74,7 @@ import {
   findImportTargetUnit,
   type ImportReference,
 } from "~/lib/import-navigation";
-import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
+import { formatShortcut } from "~/lib/keyboard-shortcuts";
 import { takeOptimisticActionBatch } from "~/lib/optimistic-action-queue";
 import { providerLabel } from "~/lib/provider-labels";
 import { followPendingProviderLifecycle } from "~/lib/provider-lifecycle";
@@ -215,7 +215,11 @@ import {
   initialReviewSessionState,
   reviewSessionReducer,
 } from "./review-session-machine";
-import { ReviewSyncStatusButton } from "./review-sync-status";
+import {
+  REVIEW_TOOLBAR_BUTTON_CLASS,
+  ReviewSyncStatusButton,
+} from "./review-sync-status";
+import { ReviewToolbar, ReviewToolbarTooltip } from "./review-toolbar-tooltip";
 import { ReviewWaitingCompletion } from "./review-waiting-completion";
 import {
   aiConversationVisibility,
@@ -1122,6 +1126,29 @@ export function ReviewWorkspace({
       refetchInterval: followPendingProviderLifecycle,
     },
   );
+  const markReadyForReview = api.review.markReadyForReview.useMutation({
+    onSuccess: () => {
+      toast.success("Pull request marked ready for review");
+      void Promise.all([
+        utils.review.providerLifecycle.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+        utils.review.providerReviewState.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+        utils.review.dashboard.invalidate(),
+      ]);
+      router.refresh();
+    },
+    onError: (error) => {
+      toast.error("Could not mark pull request ready", {
+        description: error.message,
+      });
+      void utils.review.providerLifecycle.invalidate({
+        pullRequestId: initialData.pullRequest.id,
+      });
+    },
+  });
   const mergePullRequest = api.review.mergePullRequest.useMutation({
     onSuccess: (state) => {
       utils.review.providerLifecycle.setData(
@@ -5376,6 +5403,50 @@ export function ReviewWorkspace({
     },
     unitCommands,
   );
+  /** Toggles the discussion panel using the same action for pointer and keyboard. */
+  function toggleDiscussions() {
+    setDiscussionsOpen((open) => {
+      if (!open) setInsightsPanelOpen(false);
+      return !open;
+    });
+  }
+  reviewCommands.push(
+    {
+      id: "toggle-discussions",
+      label: "Toggle discussions",
+      group: "Review actions",
+      shortcut: reviewShortcuts.discussions,
+      disabled: completionChromeHidden,
+      onSelect: toggleDiscussions,
+    },
+    {
+      id: "open-review-commands",
+      label: "Open review commands",
+      group: "Review actions",
+      shortcut: reviewShortcuts.commands,
+      onSelect: openCommands,
+    },
+    {
+      id: "open-review-provider",
+      label: "Open pull request in provider",
+      group: "Review actions",
+      shortcut: reviewShortcuts.openProvider,
+      onSelect: () => {
+        window.open(
+          initialData.pullRequest.webUrl,
+          "_blank",
+          "noopener,noreferrer",
+        );
+      },
+    },
+    {
+      id: "toggle-review-theme",
+      label: "Toggle color theme",
+      group: "Review actions",
+      shortcut: reviewShortcuts.toggleTheme,
+      onSelect: toggleColorTheme,
+    },
+  );
   const pendingShortcut = useCommandCenterBindings({
     commands: reviewCommands,
     onOpen: openCommands,
@@ -5550,133 +5621,132 @@ export function ReviewWorkspace({
             />
           </div>
         </div>
-        <button
-          type="button"
-          aria-controls="review-discussions-panel"
-          aria-expanded={discussionsOpen}
-          aria-label={`Show pull request discussions, ${openProviderDiscussionCount} open`}
-          title={`${openProviderDiscussionCount} open ${openProviderDiscussionCount === 1 ? "discussion" : "discussions"}`}
-          onClick={() => {
-            setDiscussionsOpen((open) => {
-              if (!open) setInsightsPanelOpen(false);
-              return !open;
-            });
-          }}
-          className={cn(
-            "flex h-9 shrink-0 items-center gap-2 rounded-lg border px-2.5 text-[10px] transition",
-            completionChromeHidden && "hidden",
-            discussionsOpen
-              ? "border-cyan/30 bg-cyan/[.08] text-cyan"
-              : "text-mist hover:text-cloud border-line hover:bg-surface-subtle",
-          )}
-        >
-          {providerConversations.isLoading && !providerConversations.data ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : (
-            <MessageSquareText className="size-4" />
-          )}
-          <span className="hidden lg:inline">Discussions</span>
-          <span
-            className={cn(
-              "grid min-w-4 place-items-center rounded-md px-1 py-0.5 font-mono text-[9px]",
-              openProviderDiscussionCount > 0
-                ? "bg-coral/10 text-coral"
-                : "bg-lime/10 text-lime",
-            )}
-          >
-            {openProviderDiscussionCount}
-          </span>
-          {openProviderDiscussionCount > 0 && (
-            <span
-              className="bg-coral size-1.5 rounded-full"
-              aria-hidden="true"
-            />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={undoLastSignOff}
-          disabled={!canUndoSignOff}
-          aria-busy={undoPending || undefined}
-          aria-label="Undo the last sign-off"
-          title={
-            undoableSignOff
-              ? `Return ${undoableSignOff.entry.label} to the review path`
-              : "No sign-off from this session left to undo"
-          }
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <Undo2 className="size-4" />
-          <span className="hidden sm:inline">Undo</span>
-          {undoPending && (
-            <span
-              title={`${pendingUndoUnitIds.size} undo saves pending`}
-              className="border-cyan/25 bg-cyan/10 text-cyan min-w-4 rounded-full border px-1 text-center font-mono tabular-nums"
+        <ReviewToolbar>
+          {!completionChromeHidden && (
+            <ReviewToolbarTooltip
+              shortcut={reviewShortcuts.discussions}
+              label={`${openProviderDiscussionCount} open ${openProviderDiscussionCount === 1 ? "discussion" : "discussions"}`}
             >
-              {pendingUndoUnitIds.size}
-            </span>
+              <button
+                type="button"
+                aria-controls="review-discussions-panel"
+                aria-expanded={discussionsOpen}
+                aria-label={`Show pull request discussions, ${openProviderDiscussionCount} open`}
+                onClick={toggleDiscussions}
+                className={cn(
+                  REVIEW_TOOLBAR_BUTTON_CLASS,
+                  completionChromeHidden && "hidden",
+                  discussionsOpen
+                    ? "border-cyan/30 bg-cyan/[.08] text-cyan"
+                    : "",
+                )}
+              >
+                {providerConversations.isLoading &&
+                !providerConversations.data ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <MessageSquareText className="size-4" />
+                )}
+                {openProviderDiscussionCount > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="bg-coral absolute right-1 top-1 size-1.5 rounded-full ring-2 ring-surface"
+                  />
+                )}
+              </button>
+            </ReviewToolbarTooltip>
           )}
-          <ShortcutHint
+          <ReviewToolbarTooltip
             shortcut={reviewShortcuts.undoSignOff}
-            className="hidden 2xl:inline-flex"
-          />
-        </button>
-        <button
-          type="button"
-          onClick={() => setResetDialogOpen(true)}
-          disabled={
-            pendingSignOffCount > 0 ||
-            undoPending ||
-            externalSyncPending ||
-            resetReview.isPending
-          }
-          aria-label="Reset review"
-          title={
-            pendingSignOffCount > 0 || undoPending
-              ? "Wait for pending review changes to finish before resetting"
-              : "Sync the latest code and clear all of your sign-offs (Shift+R)"
-          }
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <RotateCcw className="size-4" />
-          <span className="hidden sm:inline">Reset</span>
-          <ShortcutHint
+            label={
+              undoableSignOff
+                ? `Undo: return ${undoableSignOff.entry.label} to the review path`
+                : "No sign-off from this session left to undo"
+            }
+          >
+            <button
+              type="button"
+              onClick={undoLastSignOff}
+              disabled={!canUndoSignOff}
+              aria-busy={undoPending || undefined}
+              aria-label="Undo the last sign-off"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              {undoPending ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Undo2 className="size-4" />
+              )}
+            </button>
+          </ReviewToolbarTooltip>
+          <ReviewToolbarTooltip
             shortcut={reviewShortcuts.reset}
-            className="hidden 2xl:inline-flex"
+            label={
+              pendingSignOffCount > 0 || undoPending
+                ? "Wait for pending review changes to finish before resetting"
+                : "Sync the latest code and clear all of your sign-offs"
+            }
+          >
+            <button
+              type="button"
+              onClick={() => setResetDialogOpen(true)}
+              disabled={
+                pendingSignOffCount > 0 ||
+                undoPending ||
+                externalSyncPending ||
+                resetReview.isPending
+              }
+              aria-label="Reset review"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              <RotateCcw className="size-4" />
+            </button>
+          </ReviewToolbarTooltip>
+          <ReviewToolbarTooltip
+            label="Open review commands"
+            shortcut={reviewShortcuts.commands}
+          >
+            <button
+              type="button"
+              onClick={openCommands}
+              aria-label="Open review commands"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              <Keyboard className="size-4" />
+            </button>
+          </ReviewToolbarTooltip>
+          <ReviewSyncStatusButton
+            provider={initialData.pullRequest.provider}
+            status={syncStatus}
+            onClick={
+              updateAvailable
+                ? loadAvailableChanges
+                : () => void syncExternalData()
+            }
           />
-        </button>
-        <button
-          type="button"
-          onClick={openCommands}
-          aria-label="Open review commands"
-          title="Open review commands"
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle"
-        >
-          <Keyboard className="size-4" />
-          <ShortcutHint
-            shortcut={commandMenuShortcut}
-            className="hidden sm:inline-flex"
-          />
-        </button>
-        <ReviewSyncStatusButton
-          provider={initialData.pullRequest.provider}
-          status={syncStatus}
-          onClick={
-            updateAvailable
-              ? loadAvailableChanges
-              : () => void syncExternalData()
-          }
-        />
-        <a
-          href={initialData.pullRequest.webUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Open pull request in provider"
-          className="text-mist hover:text-cloud grid size-9 place-items-center rounded-full hover:bg-surface-subtle"
-        >
-          <ExternalLink className="size-4" />
-        </a>
-        <ThemeToggle className="size-9 rounded-full" />
+          <ReviewToolbarTooltip
+            label={`Open pull request in ${providerLabel(initialData.pullRequest.provider)}`}
+            shortcut={reviewShortcuts.openProvider}
+          >
+            <a
+              href={initialData.pullRequest.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open pull request in provider"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              <ExternalLink className="size-4" />
+            </a>
+          </ReviewToolbarTooltip>
+          <ReviewToolbarTooltip
+            label="Toggle color theme"
+            shortcut={reviewShortcuts.toggleTheme}
+          >
+            <ThemeToggle
+              className={cn(REVIEW_TOOLBAR_BUTTON_CLASS, "bg-transparent")}
+            />
+          </ReviewToolbarTooltip>
+        </ReviewToolbar>
       </header>
 
       {updateAvailable && (
@@ -5693,7 +5763,7 @@ export function ReviewWorkspace({
             size="sm"
             loading={loadingChanges}
             onClick={loadAvailableChanges}
-            title="Load the synced code changes (R)"
+            title={`Load the synced code changes (${formatShortcut(reviewShortcuts.loadChanges).join(" then ")})`}
           >
             <span>{loadingChanges ? "Loading changes…" : "Load changes"}</span>
             {!loadingChanges && (
@@ -6221,7 +6291,15 @@ export function ReviewWorkspace({
                     providerLifecycle.error?.message
                   }
                   loading={providerLifecycle.isFetching}
-                  mutationPending={mergePullRequest.isPending}
+                  mutationPending={
+                    mergePullRequest.isPending || markReadyForReview.isPending
+                  }
+                  readyError={markReadyForReview.error?.message}
+                  onMarkReady={() =>
+                    markReadyForReview.mutate({
+                      pullRequestId: initialData.pullRequest.id,
+                    })
+                  }
                   permissionDenied={
                     mergePullRequest.error?.data?.code === "FORBIDDEN" ||
                     providerLifecycle.error?.data?.code === "FORBIDDEN"
@@ -6231,7 +6309,10 @@ export function ReviewWorkspace({
                   reviewPath={`/review/${initialData.pullRequest.id}`}
                   onRefresh={() => {
                     void providerLifecycle.refetch().then((result) => {
-                      if (!result.error) mergePullRequest.reset();
+                      if (!result.error) {
+                        mergePullRequest.reset();
+                        markReadyForReview.reset();
+                      }
                     });
                   }}
                   onMerge={() =>

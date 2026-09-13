@@ -268,7 +268,7 @@ export async function providerLifecycleForConnection(
 export function providerOperationError(
   provider: ProviderName,
   cause: unknown,
-  operation: "review" | "lifecycle" | "merge" | "probe",
+  operation: "review" | "lifecycle" | "merge" | "probe" | "ready",
 ) {
   if (cause instanceof TRPCError) return cause;
   const label = providerLabel(provider);
@@ -285,6 +285,10 @@ export function providerOperationError(
     merge: {
       forbidden: `${label} did not allow merging this pull request. Reconnect it with merge permission, or finish the merge on ${label}.`,
       failed: `${label} could not merge this pull request`,
+    },
+    ready: {
+      forbidden: `${label} did not allow marking this pull request ready. Check that the connected account can edit this pull request.`,
+      failed: `${label} could not mark this pull request ready for review`,
     },
     probe: {
       forbidden: `${label} did not allow reading this pull request. Reconnect it with permission to view pull requests.`,

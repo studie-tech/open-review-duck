@@ -80,34 +80,57 @@ afterEach(() => {
   toast.success.mockReset();
   toast.warning.mockReset();
   identityData.publishAsSelf = false;
+  identityData.connections.splice(1);
   const firstConnection = identityData.connections[0];
   if (firstConnection) firstConnection.identity = null;
 });
 
 describe("CommentIdentity", () => {
   it("saves the publish-as-myself preference", async () => {
-    render(<CommentIdentity localMode />);
+    render(<CommentIdentity localMode connectionId="connection-1" />);
 
-    await userEvent.click(
-      screen.getByRole("checkbox", { name: "Post comments as myself" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+    await userEvent.click(screen.getByRole("radio", { name: /^My account/ }));
 
     expect(saveMutate).toHaveBeenCalledWith({ publishAsSelf: true });
   });
 
-  it("offers a personal token when the reviewer is not connected", () => {
-    render(<CommentIdentity localMode />);
-
+  it("keeps setup hidden until needed and scopes it to the selected connection", async () => {
+    const firstConnection = identityData.connections[0];
+    if (!firstConnection) throw new Error("Missing test connection");
+    identityData.connections.push({
+      ...firstConnection,
+      connectionId: "connection-2",
+      displayName: "Other GitHub",
+    });
+    const { rerender } = render(
+      <CommentIdentity localMode connectionId="connection-1" />,
+    );
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByText("Other GitHub")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Change" }));
     expect(
-      screen.getByRole("button", { name: "Connect with a token" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Connect my account" }),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Not connected — posts still appear as ReviewDuck/),
-    ).toBeInTheDocument();
+      screen.getByText(/Your preference applies to all connections/),
+    ).toBeVisible();
+    identityData.publishAsSelf = true;
+    rerender(<CommentIdentity localMode connectionId="connection-1" />);
+    expect(screen.getByText(/Posting here is paused/)).toBeVisible();
+    expect(screen.getByText(/1 other connection also needs/)).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Connect my account" }),
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent("Acme GitHub");
+    expect(screen.getByLabelText(/Personal access token/)).toHaveAttribute(
+      "type",
+      "password",
+    );
   });
 
   it("warns when disconnect cannot confirm remote revocation", async () => {
-    render(<CommentIdentity localMode />);
+    render(<CommentIdentity localMode connectionId="connection-1" />);
 
     await disconnectOnSuccess.current?.({ remoteRevokeComplete: false });
 

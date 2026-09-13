@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectionDetail } from "./connection-detail";
 import type { Connection } from "./provider-common";
 
+vi.mock("./comment-identity", () => ({ CommentIdentity: () => null }));
+
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));

@@ -498,6 +498,27 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     });
   }
 
+  /** Publishes an Azure draft without changing its merge or completion options. */
+  async markPullRequestReadyForReview(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+  }) {
+    const pull = await providerFetch<AzurePull>(
+      this.name,
+      `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}?api-version=7.1`,
+      {
+        method: "PATCH",
+        headers: { ...this.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ isDraft: false }),
+      },
+    );
+    if (pull.isDraft !== false)
+      throw new ProviderError(
+        this.name,
+        "Azure DevOps did not mark this pull request ready for review",
+      );
+  }
+
   /** Completes the pull request at the exact reviewed Azure commit. */
   async mergePullRequest(input: {
     repositoryExternalId: string;

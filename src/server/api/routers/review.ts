@@ -798,6 +798,78 @@ export const reviewRouter = createTRPCRouter({
       }
     }),
 
+  markReadyForReview: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `provider-ready:${ctx.auth.userId}:${input.pullRequestId}`,
+        10,
+        60_000,
+      );
+      if (
+        !scope.snapshot ||
+        scope.snapshot.headSha !== scope.headSha ||
+        scope.snapshot.baseSha !== scope.baseSha
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Synchronize the pull request before marking it ready for review",
+        });
+      }
+      const completion = await reviewCompletionCounts(
+        ctx.db,
+        scope.snapshot.id,
+        ctx.auth.userId,
+      );
+      if (completion.total === 0 || completion.signed < completion.total) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Complete every review unit before marking this pull request ready",
+        });
+      }
+      try {
+        const provider = await providerForConnection(ctx.db, scope.connection);
+        const remote = await provider.getPullRequest(
+          scope.repositoryExternalId,
+          scope.pullRequestNumber,
+        );
+        if (!providerRevisionIsCurrent(scope, remote)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The provider has a newer revision. Synchronize it before marking this pull request ready.",
+          });
+        }
+        if (remote.state !== "draft" && remote.state !== "open") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "This pull request is no longer open",
+          });
+        }
+        if (remote.state === "draft") {
+          await provider.markPullRequestReadyForReview({
+            repositoryExternalId: scope.repositoryExternalId,
+            pullRequestNumber: scope.pullRequestNumber,
+          });
+        }
+        await ctx.db
+          .update(pullRequests)
+          .set({ state: "open", lastSyncedAt: new Date() })
+          .where(eq(pullRequests.id, scope.pullRequestId));
+        return { ready: true };
+      } catch (cause) {
+        throw providerOperationError(scope.connection.provider, cause, "ready");
+      }
+    }),
+
   mergePullRequest: protectedProcedure
     .input(reviewWorkspaceSchema)
     .mutation(async ({ ctx, input }) => {
@@ -1122,6 +1194,7 @@ export const reviewRouter = createTRPCRouter({
         );
         return {
           current: providerRevisionIsCurrent(scope, remote),
+          snapshotId: scope.snapshot?.id ?? null,
           headSha: remote.headSha,
           baseSha: remote.baseSha,
           probedAt: new Date(),

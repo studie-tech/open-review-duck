@@ -5,6 +5,7 @@ import {
   CircleDashed,
   ExternalLink,
   GitMerge,
+  GitPullRequest,
   LoaderCircle,
   MinusCircle,
   RefreshCw,
@@ -31,6 +32,8 @@ export function ProviderLifecycle({
   loading,
   mutationPending,
   onMerge,
+  onMarkReady,
+  readyError,
   onRefresh,
   permissionDenied,
   provider,
@@ -42,6 +45,8 @@ export function ProviderLifecycle({
   loading: boolean;
   mutationPending: boolean;
   onMerge: () => void;
+  onMarkReady?: () => void;
+  readyError?: string;
   onRefresh: () => void;
   permissionDenied?: boolean;
   provider: LifecycleState["provider"];
@@ -52,6 +57,7 @@ export function ProviderLifecycle({
   const [confirming, setConfirming] = useState(false);
   const providerName = providerLabel(provider);
   const merged = state?.pullRequestState === "merged";
+  const draft = state?.pullRequestState === "draft";
   const closed = state?.pullRequestState === "closed";
   const summary = state?.summary ?? "empty";
   const optionalPending = Boolean(
@@ -177,6 +183,11 @@ export function ProviderLifecycle({
               </p>
             )}
 
+            {readyError && (
+              <p role="alert" className="text-coral mt-3 text-xs leading-5">
+                {readyError}
+              </p>
+            )}
             {actionableError && !showPermissionRecovery && (
               <p role="alert" className="text-coral mt-3 text-xs leading-5">
                 {actionableError}
@@ -224,6 +235,18 @@ export function ProviderLifecycle({
                 <p className="text-mist text-xs">
                   This pull request is closed on {providerName}.
                 </p>
+              ) : draft && onMarkReady ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={
+                    mutationPending || loading || !state.revisionCurrent
+                  }
+                  onClick={onMarkReady}
+                >
+                  <GitPullRequest className="size-3.5" />
+                  Mark ready for review
+                </Button>
               ) : (
                 <Button
                   type="button"

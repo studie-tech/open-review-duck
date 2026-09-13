@@ -49,6 +49,61 @@ const githubLifecycle: LifecycleState = {
 };
 
 describe("ProviderLifecycle", () => {
+  it("offers to publish a reviewed draft even when it cannot be merged", async () => {
+    const onMarkReady = vi.fn();
+    const props = {
+      loading: false,
+      mutationPending: false,
+      provider: "github" as const,
+      pullRequestUrl: "https://github.com/acme/review/pull/12",
+      onRefresh: vi.fn(),
+      onMerge: vi.fn(),
+      onMarkReady,
+    };
+    const state = {
+      ...githubLifecycle,
+      pullRequestState: "draft" as const,
+      canMerge: false,
+      hasMergePermission: false,
+      mergeBlockedReason: "Draft pull requests cannot be merged",
+    };
+    const { rerender } = render(<ProviderLifecycle {...props} state={state} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark ready for review" }),
+    );
+    expect(onMarkReady).toHaveBeenCalledOnce();
+    expect(props.onMerge).not.toHaveBeenCalled();
+    rerender(
+      <ProviderLifecycle
+        {...props}
+        state={{ ...state, revisionCurrent: false }}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Mark ready for review" }),
+    ).toBeDisabled();
+    rerender(
+      <ProviderLifecycle
+        {...props}
+        state={state}
+        mutationPending
+        readyError="Provider denied this action"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Mark ready for review" }),
+    ).toBeDisabled();
+    expect(screen.getByText("Provider denied this action")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+    rerender(<ProviderLifecycle {...props} state={githubLifecycle} />);
+    expect(
+      screen.queryByRole("button", { name: "Mark ready for review" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled();
+  });
+
   it("lists check status and confirms a merge of the reviewed revision", async () => {
     const onMerge = vi.fn();
     const user = userEvent.setup();

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
+import { CommentIdentity } from "./comment-identity";
 import {
   type Connection,
   credentialLabel,
@@ -184,6 +185,8 @@ export function ConnectionDetail({
           </Button>
         </div>
       </div>
+
+      <CommentIdentity connectionId={connection.id} localMode={localMode} />
 
       {connectionError && (
         <div

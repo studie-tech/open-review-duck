@@ -194,6 +194,11 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     number: number,
   ): Promise<ProviderPullRequestLifecycle>;
+  /** Publishes a draft pull request for review without merging it. */
+  markPullRequestReadyForReview(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+  }): Promise<void>;
   /** Merges or completes the pull request at the reviewed revision. */
   mergePullRequest(input: {
     repositoryExternalId: string;

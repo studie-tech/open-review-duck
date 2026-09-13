@@ -31,8 +31,27 @@ function applyTheme(theme: ThemePreference) {
   syncFavicon(theme);
 }
 
+/** Toggles and persists the color theme for both pointer and keyboard actions. */
+export function toggleColorTheme() {
+  const nextTheme = getCurrentTheme() === "dark" ? "light" : "dark";
+  applyTheme(nextTheme);
+  localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  // biome-ignore lint/suspicious/noDocumentCookie: the cookie lets the server render the selected theme before hydration
+  document.cookie = `${THEME_COOKIE_NAME}=${nextTheme}; Path=/; Max-Age=31536000; SameSite=Lax`;
+}
+
 /** Renders the theme toggle interface. */
-export function ThemeToggle({ className }: { className?: string }) {
+export function ThemeToggle({
+  className,
+  title = "Toggle color theme",
+  "aria-describedby": describedBy,
+  "aria-keyshortcuts": keyShortcuts,
+}: {
+  className?: string;
+  title?: string;
+  "aria-describedby"?: string;
+  "aria-keyshortcuts"?: string;
+}) {
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     /** Applies a system theme change when no explicit preference is stored. */
@@ -53,14 +72,10 @@ export function ThemeToggle({ className }: { className?: string }) {
     <button
       type="button"
       aria-label="Toggle color theme"
-      title="Toggle color theme"
-      onClick={() => {
-        const nextTheme = getCurrentTheme() === "dark" ? "light" : "dark";
-        applyTheme(nextTheme);
-        localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-        // biome-ignore lint/suspicious/noDocumentCookie: the cookie lets the server render the selected theme before hydration
-        document.cookie = `${THEME_COOKIE_NAME}=${nextTheme}; Path=/; Max-Age=31536000; SameSite=Lax`;
-      }}
+      aria-describedby={describedBy}
+      aria-keyshortcuts={keyShortcuts}
+      title={describedBy ? undefined : title}
+      onClick={toggleColorTheme}
       className={cn(
         "text-mist hover:text-cloud hover:bg-surface-hover grid size-10 place-items-center rounded-xl border border-line bg-surface/75 transition",
         className,
