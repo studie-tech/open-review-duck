@@ -101,7 +101,10 @@ export function ReviewToolbarTooltip({
       }}
     >
       {cloneElement(children, {
-        "aria-describedby": open && !held ? id : undefined,
+        "aria-describedby":
+          [children.props["aria-describedby"], open && !held ? id : undefined]
+            .filter(Boolean)
+            .join(" ") || undefined,
         title: undefined,
         "aria-keyshortcuts": ariaKeys,
       })}

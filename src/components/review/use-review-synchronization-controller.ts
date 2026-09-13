@@ -49,6 +49,9 @@ export function useReviewSynchronizationController({
   const autoSyncedHeadSha = useRef<string | undefined>(undefined);
   const silentSync = useRef(false);
   const retryAfter = useRef(0);
+  const failedAttempts = useRef(0);
+  const retryRevision = useRef<string | undefined>(undefined);
+  const queueInFlight = useRef(false);
   const refreshedSnapshotId = useRef<string | undefined>(undefined);
 
   const pollLatestPullRequest = api.review.poll.useMutation({
@@ -96,6 +99,8 @@ export function useReviewSynchronizationController({
           version: snapshot.version,
         });
       }
+      failedAttempts.current = 0;
+      retryAfter.current = 0;
       setUpdateAvailable(false);
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
@@ -122,7 +127,13 @@ export function useReviewSynchronizationController({
     } else if (status === "failed" || status === "cancelled") {
       if (status === "failed") {
         autoSyncedHeadSha.current = undefined;
-        retryAfter.current = Date.now() + REVIEW_REVISION_PROBE_MS;
+        failedAttempts.current += 1;
+        retryAfter.current =
+          Date.now() +
+          Math.min(
+            REVIEW_REVISION_PROBE_MS * 2 ** (failedAttempts.current - 1),
+            30_000,
+          );
       }
       setActiveSyncId(undefined);
       void utils.review.activeSyncs.invalidate();
@@ -171,7 +182,12 @@ export function useReviewSynchronizationController({
 
   /** Queues durable source synchronization. */
   async function syncExternalData(options?: { silent?: boolean }) {
-    if (syncing || activeSyncId) return false;
+    if (syncing || activeSyncId || queueInFlight.current) return false;
+    queueInFlight.current = true;
+    if (!options?.silent) {
+      failedAttempts.current = 0;
+      retryAfter.current = 0;
+    }
     silentSync.current = Boolean(options?.silent);
     sendReviewSession({ type: "SYNC_STARTED" });
     try {
@@ -196,6 +212,8 @@ export function useReviewSynchronizationController({
         },
       );
       return false;
+    } finally {
+      queueInFlight.current = false;
     }
   }
 
@@ -214,8 +232,22 @@ export function useReviewSynchronizationController({
       refreshedSnapshotId.current = probe.snapshotId;
       router.refresh();
     }
+    const revision = probe ? `${probe.headSha}:${probe.baseSha}` : undefined;
+    if (
+      revision &&
+      revision !== retryRevision.current &&
+      !syncing &&
+      !activeSyncId
+    ) {
+      retryRevision.current = revision;
+      failedAttempts.current = 0;
+      retryAfter.current = 0;
+    }
     if (
       !probe ||
+      activeSyncId ||
+      queueInFlight.current ||
+      failedAttempts.current >= 4 ||
       revisionProbe.dataUpdatedAt < retryAfter.current ||
       !shouldAutoSyncReviewRevision({
         attemptedHeadSha: autoSyncedHeadSha.current,
@@ -226,14 +258,24 @@ export function useReviewSynchronizationController({
     ) {
       return;
     }
+    autoSyncedHeadSha.current = revision;
     void (async () => {
       const queued = await syncExternalDataRef.current({ silent: true });
       autoSyncedHeadSha.current = queued
         ? `${probe.headSha}:${probe.baseSha}`
         : undefined;
-      if (!queued) retryAfter.current = Date.now() + REVIEW_REVISION_PROBE_MS;
+      if (!queued) {
+        failedAttempts.current += 1;
+        retryAfter.current =
+          Date.now() +
+          Math.min(
+            REVIEW_REVISION_PROBE_MS * 2 ** (failedAttempts.current - 1),
+            30_000,
+          );
+      }
     })();
   }, [
+    activeSyncId,
     revisionProbe.data,
     revisionProbe.dataUpdatedAt,
     syncing,

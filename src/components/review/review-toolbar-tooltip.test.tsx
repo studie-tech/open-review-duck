@@ -64,6 +64,34 @@ function Harness({
 }
 
 describe("toolbar command shortcuts", () => {
+  it("preserves an existing description through tooltip and modifier changes", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh");
+    render(
+      <ReviewToolbar>
+        <span id="existing">Original help</span>
+        <ReviewToolbarTooltip
+          label="Supplementary help"
+          shortcut={reviewShortcuts.reset}
+        >
+          <button type="button" aria-describedby="existing">
+            Reset
+          </button>
+        </ReviewToolbarTooltip>
+      </ReviewToolbar>,
+    );
+    const button = screen.getByRole("button", { name: "Reset" });
+    expect(button).toHaveAttribute("aria-describedby", "existing");
+    fireEvent.focus(button);
+    expect(button).toHaveAccessibleDescription(
+      "Original help Supplementary help (⌘⇧R)",
+    );
+    fireEvent.keyDown(window, { key: "Meta", metaKey: true });
+    expect(button).toHaveAttribute("aria-describedby", "existing");
+    fireEvent.keyUp(window, { key: "Meta" });
+    fireEvent.blur(button);
+    expect(button).toHaveAttribute("aria-describedby", "existing");
+  });
+
   it("reveals every shortcut while Command is held, then clears on release or blur", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh");
     render(<Harness onAction={vi.fn()} />);

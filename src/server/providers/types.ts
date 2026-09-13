@@ -194,7 +194,11 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     number: number,
   ): Promise<ProviderPullRequestLifecycle>;
-  /** Publishes a draft pull request for review without merging it. */
+  /**
+   * Publishes a draft for collaboration without merging or approving a revision.
+   * Callers preflight freshness; provider draft transitions do not offer an
+   * atomic expected-SHA guard (unlike merge operations).
+   */
   markPullRequestReadyForReview(input: {
     repositoryExternalId: string;
     pullRequestNumber: number;
