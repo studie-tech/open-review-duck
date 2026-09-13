@@ -313,16 +313,21 @@ export function PullRequestList({
                       title={aiReviewStatusLabel(aiRun)}
                       onClick={() => setPullRequestToReview(pullRequest)}
                       className={cn(
-                        "hover:text-violet hover:bg-violet/[.06] flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-xs transition",
+                        "hover:text-violet hover:bg-violet/[.06] relative grid size-9 shrink-0 place-items-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet",
                         aiRun ? "text-violet" : "text-mist",
+                        aiRunning && "bg-violet/10",
                       )}
                     >
-                      {aiRunning ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Sparkles className="size-4" />
+                      <Sparkles
+                        aria-hidden="true"
+                        className={aiRunning ? "size-3.5" : "size-4"}
+                      />
+                      {aiRunning && (
+                        <Loader2
+                          aria-hidden="true"
+                          className="absolute size-7 motion-safe:animate-spin"
+                        />
                       )}
-                      {aiRun && <span>{aiReviewStatusLabel(aiRun)}</span>}
                     </button>
                   )}
                   {kind === "removed" ? (

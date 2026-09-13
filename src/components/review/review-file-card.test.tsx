@@ -604,3 +604,86 @@ describe("ReviewFileUnitMarker", () => {
     ).toBeDisabled();
   });
 });
+
+describe("file contents clipboard action", () => {
+  it.each([
+    "// Whole file\r\nconst configuration = true;\r\n\r\nconst main = true;\r\n",
+    "",
+  ])(
+    "copies exact whole-file text even when the card is folded (%j)",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      const onSelect = vi.fn();
+      const onToggleExpanded = vi.fn();
+      render(
+        <ReviewFileCardHeader
+          members={units as never}
+          index={0}
+          count={1}
+          selected={false}
+          expanded={false}
+          onSelect={onSelect}
+          onToggleExpanded={onToggleExpanded}
+          fileContents={source}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Copy file contents" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "File contents copied" }),
+        ).toBeInTheDocument(),
+      );
+      expect(writeText).toHaveBeenCalledWith(source);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onToggleExpanded).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "binary"])(
+    "disables copying unavailable or binary source (%s)",
+    (kind) => {
+      render(
+        <ReviewFileCardHeader
+          members={[{ ...units[0], kind: kind ?? "constant" }] as never}
+          index={0}
+          count={1}
+          selected
+          fileContents={kind ? "binary placeholder" : undefined}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Copy file contents" }),
+      ).toBeDisabled();
+    },
+  );
+
+  it("reports clipboard failure without claiming success", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
+    render(
+      <ReviewFileCardHeader
+        members={units as never}
+        index={0}
+        count={1}
+        selected
+        fileContents="const main = true;"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy file contents" }));
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith("Could not copy the file contents"),
+    );
+    expect(
+      screen.getByRole("button", { name: "Copy file contents" }),
+    ).toBeInTheDocument();
+  });
+});

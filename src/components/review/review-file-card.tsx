@@ -188,6 +188,22 @@ export function reviewCardRanges(
  * clipboard has it and a toast is not needed to confirm the click.
  */
 export function CopyReviewPathButton({ path }: { path: string }) {
+  return <CopyReviewTextButton text={path} kind="path" />;
+}
+
+/** Copies complete file text independently of source folding and selection. */
+export function CopyReviewFileButton({ source }: { source?: string | null }) {
+  return <CopyReviewTextButton text={source} kind="contents" />;
+}
+
+/** Shares clipboard feedback for the distinct path and file-content actions. */
+function CopyReviewTextButton({
+  text,
+  kind,
+}: {
+  text?: string | null;
+  kind: "path" | "contents";
+}) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -196,31 +212,48 @@ export function CopyReviewPathButton({ path }: { path: string }) {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  /** Puts the file path on the clipboard. */
+  /** Puts the exact source text on the clipboard without affecting the card. */
   async function copy() {
+    if (text == null) return;
     try {
-      await navigator.clipboard.writeText(path);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
     } catch {
-      toast.error("Could not copy the file path");
+      toast.error(`Could not copy the file ${kind}`);
     }
   }
 
   return (
     <button
       type="button"
-      aria-label={copied ? "File path copied" : "Copy file path"}
-      title={copied ? "Copied" : "Copy file path"}
+      aria-label={copied ? `File ${kind} copied` : `Copy file ${kind}`}
+      title={
+        text == null
+          ? "Full file contents are not available"
+          : copied
+            ? "Copied"
+            : `Copy file ${kind}`
+      }
+      disabled={text == null}
       onClick={(event) => {
         event.stopPropagation();
         void copy();
       }}
-      className="text-fog hover:text-mist grid size-5 shrink-0 place-items-center rounded transition hover:bg-surface-subtle"
+      className={cn(
+        "pointer-events-auto text-fog hover:text-mist grid shrink-0 place-items-center rounded transition hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime disabled:cursor-not-allowed disabled:opacity-40",
+        kind === "path" ? "size-5" : "size-8",
+      )}
     >
       {copied ? (
-        <Check className="size-3" aria-hidden="true" />
+        <Check
+          className={kind === "path" ? "size-3" : "size-3.5 text-lime"}
+          aria-hidden="true"
+        />
       ) : (
-        <Copy className="size-3" aria-hidden="true" />
+        <Copy
+          className={kind === "path" ? "size-3" : "size-3.5"}
+          aria-hidden="true"
+        />
       )}
     </button>
   );
@@ -303,6 +336,7 @@ export function ReviewFileCardHeader({
   expanded,
   onToggleExpanded,
   sourceBytes,
+  fileContents,
   onResumeWaiting,
 }: {
   members: readonly ReviewUnit[];
@@ -315,6 +349,7 @@ export function ReviewFileCardHeader({
   expanded?: boolean;
   onToggleExpanded?: () => void;
   sourceBytes?: number;
+  fileContents?: string | null;
   onResumeWaiting?: () => void;
 }) {
   const first = members[0];
@@ -435,6 +470,9 @@ export function ReviewFileCardHeader({
                     Waiting
                   </span>
                 ))}
+              <CopyReviewFileButton
+                source={first.kind === "binary" ? undefined : fileContents}
+              />
             </>
           }
         />

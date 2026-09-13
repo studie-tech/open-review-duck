@@ -2965,6 +2965,7 @@ export function ReviewWorkspace({
             index={cardIndex}
             count={activeConceptFileCards.length}
             fileSource={fileContext?.source ?? ""}
+            sourceAvailable={fileContext !== undefined}
             previousFileSource={fileContext?.previousSource ?? ""}
             diffVisible={showDiff}
             itemLabel={itemLabel}
@@ -6683,6 +6684,12 @@ export function ReviewWorkspace({
                       itemLabel={reviewMode === "files" ? "File" : "Card"}
                       selected
                       sourceBytes={reviewSourceByteLength(activeModule)}
+                      fileContents={
+                        activeFileIsDeleted
+                          ? (activeModule?.previousSource ??
+                            activeModule?.source)
+                          : activeModule?.source
+                      }
                       onResumeWaiting={
                         fileWaitingUnitIds.length > 0
                           ? stopWaitingOnActive
