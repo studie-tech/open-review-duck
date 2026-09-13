@@ -127,6 +127,56 @@ describe("review synchronization", () => {
     expect(state.queue).toHaveBeenCalledTimes(2);
   });
 
+  it("backs off failed jobs and stops after four failures until a new revision", async () => {
+    const { rerender } = renderHook(() =>
+      useReviewSynchronizationController(input),
+    );
+    await settle();
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      state.status = { status: "failed" };
+      rerender();
+      await settle();
+      state.status = undefined;
+      state.updatedAt += Math.min(5_000 * 2 ** (attempt - 1), 30_000) - 1;
+      vi.mocked(Date.now).mockReturnValue(state.updatedAt);
+      rerender();
+      await settle();
+      expect(state.queue).toHaveBeenCalledTimes(attempt);
+      state.updatedAt += 1;
+      vi.mocked(Date.now).mockReturnValue(state.updatedAt);
+      rerender();
+      await settle();
+      expect(state.queue).toHaveBeenCalledTimes(Math.min(attempt + 1, 4));
+    }
+    state.updatedAt += 60_000;
+    rerender();
+    await settle();
+    expect(state.queue).toHaveBeenCalledTimes(4);
+    state.probe = { ...state.probe, headSha: "another-head" };
+    rerender();
+    await settle();
+    expect(state.queue).toHaveBeenCalledTimes(5);
+  });
+
+  it("bounds queue failures and permits a manual retry after the circuit opens", async () => {
+    state.queue.mockRejectedValue(new Error("Provider unavailable"));
+    const { rerender, result } = renderHook(() =>
+      useReviewSynchronizationController(input),
+    );
+    await settle();
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      state.updatedAt += 60_000;
+      vi.mocked(Date.now).mockReturnValue(state.updatedAt);
+      rerender();
+      await settle();
+    }
+    expect(state.queue).toHaveBeenCalledTimes(4);
+    await act(async () => {
+      await result.current.syncExternalData();
+    });
+    expect(state.queue).toHaveBeenCalledTimes(5);
+  });
+
   it("loads a snapshot synced elsewhere once without queuing another sync", async () => {
     state.probe = { ...state.probe, current: true, snapshotId: "external" };
     const { rerender } = renderHook(() =>

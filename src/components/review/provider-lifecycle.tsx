@@ -71,7 +71,9 @@ export function ProviderLifecycle({
     state && !merged && !closed && state.hasMergePermission === false,
   );
   const showPermissionRecovery = Boolean(
-    missingMergePermission || (error && (permissionDenied || !state)),
+    missingMergePermission ||
+      (readyError && permissionDenied) ||
+      (error && (permissionDenied || !state)),
   );
   const mergeReady = Boolean(state?.canMerge && !merged && !closed);
   const actionableError =
@@ -210,7 +212,11 @@ export function ProviderLifecycle({
             {showPermissionRecovery && (
               <ProviderPermissionRecovery
                 kind={
-                  permissionDenied || missingMergePermission ? "merge" : "sync"
+                  readyError && permissionDenied
+                    ? "ready"
+                    : permissionDenied || missingMergePermission
+                      ? "merge"
+                      : "sync"
                 }
                 provider={provider}
                 connection={state.connection}

@@ -43,7 +43,7 @@ export function toggleColorTheme() {
 /** Renders the theme toggle interface. */
 export function ThemeToggle({
   className,
-  title = "Toggle color theme",
+  title = "Switch between light and dark themes",
   "aria-describedby": describedBy,
   "aria-keyshortcuts": keyShortcuts,
 }: {

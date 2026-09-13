@@ -104,6 +104,37 @@ describe("ProviderLifecycle", () => {
     expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled();
   });
 
+  it("offers draft permission recovery even when merge permission is present", () => {
+    render(
+      <ProviderLifecycle
+        state={{
+          ...githubLifecycle,
+          pullRequestState: "draft",
+          canMerge: false,
+        }}
+        readyError="Write access denied"
+        permissionDenied
+        loading={false}
+        mutationPending={false}
+        provider="github"
+        pullRequestUrl="https://github.com/acme/review/pull/12"
+        onRefresh={vi.fn()}
+        onMerge={vi.fn()}
+        onMarkReady={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("link", { name: "Update token permissions" }),
+    ).toHaveAttribute(
+      "href",
+      "/settings/providers?connection=conn-github&repair=token",
+    );
+    expect(screen.getByText("Pull requests: Read and write")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Mark ready on GitHub" }),
+    ).toBeVisible();
+  });
+
   it("lists check status and confirms a merge of the reviewed revision", async () => {
     const onMerge = vi.fn();
     const user = userEvent.setup();

@@ -6301,6 +6301,7 @@ export function ReviewWorkspace({
                     })
                   }
                   permissionDenied={
+                    markReadyForReview.error?.data?.code === "FORBIDDEN" ||
                     mergePullRequest.error?.data?.code === "FORBIDDEN" ||
                     providerLifecycle.error?.data?.code === "FORBIDDEN"
                   }
