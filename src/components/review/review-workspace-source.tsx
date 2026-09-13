@@ -358,6 +358,7 @@ export function ReviewConceptFileCardPreview({
   index,
   count,
   fileSource,
+  sourceAvailable = true,
   previousFileSource = "",
   diffVisible = true,
   onSelect,
@@ -371,6 +372,7 @@ export function ReviewConceptFileCardPreview({
   index: number;
   count: number;
   fileSource: string;
+  sourceAvailable?: boolean;
   previousFileSource?: string;
   diffVisible?: boolean;
   onSelect: () => void;
@@ -443,6 +445,13 @@ export function ReviewConceptFileCardPreview({
         expanded={expanded}
         onToggleExpanded={() => setExpanded((open) => !open)}
         sourceBytes={fileBytes}
+        fileContents={
+          sourceAvailable
+            ? deleted
+              ? previousFileSource || fileSource
+              : fileSource
+            : undefined
+        }
       />
       {expanded ? (
         canShowDiff && first ? (
