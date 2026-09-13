@@ -368,7 +368,7 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
   ).toBe(true);
   await captureScreenshot(page, "07-mobile.png");
   // Inspect every working view at narrow phone, tablet and desktop widths.
-  for (const width of [320, 768, 1440]) {
+  for (const width of [320, 768, 1440, 2330]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect(
@@ -377,7 +377,16 @@ test("curates cases, runs both stages, compares snapshots and handles failure", 
     const heading = await page
       .getByRole("heading", { name: "Your ground truth" })
       .boundingBox();
-    expect(heading?.y).toBeLessThan(430);
+    // Shared page spacing still keeps the dataset in the initial viewport.
+    expect(heading?.y).toBeLessThan(900 * 0.65);
+    const pageWidth = await page.getByRole("main").evaluate((main) => {
+      if (!main.parentElement) throw new Error("Page container is detached");
+      return {
+        actual: main.getBoundingClientRect().width,
+        available: main.parentElement.clientWidth,
+      };
+    });
+    expect(pageWidth.actual).toBeCloseTo(pageWidth.available, 0);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,

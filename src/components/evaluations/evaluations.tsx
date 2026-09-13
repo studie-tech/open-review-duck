@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
+import { PageContainer } from "~/components/page-container";
 import { Button } from "~/components/ui/button";
 import { type EvalCase, evalCaseSchema } from "~/lib/evaluations";
 import { cn } from "~/lib/utils";
@@ -104,26 +105,25 @@ export function Evaluations({ findingId }: { findingId?: string }) {
       `${row.title} ${row.path}`.toLowerCase().includes(search.toLowerCase()),
   );
   return (
-    <main className="mx-auto min-w-0 w-full max-w-7xl space-y-4 px-4 py-5 sm:space-y-5 sm:px-6 sm:py-7 lg:px-9">
-      <header className="relative">
-        <div className="flex items-center gap-2.5">
-          <FlaskConical
-            className="text-lime size-5 shrink-0"
-            aria-hidden="true"
-          />
-          <h1 className="text-cloud text-xl font-semibold tracking-tight sm:text-2xl">
+    <PageContainer className="min-w-0 space-y-6">
+      <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-lime">
+            <FlaskConical className="size-4 shrink-0" aria-hidden="true" />
+            Evaluations
+          </div>
+          <h1 className="text-3xl font-semibold tracking-tight text-cloud sm:text-4xl">
             Reviewer lab
           </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-mist">
+            Build datasets, test prompts, compare results.
+          </p>
         </div>
-        <p className="text-mist mt-1.5 text-sm">
-          Build datasets, test prompts, compare results.
-        </p>
-        <details className="absolute right-0 top-0 text-xs text-mist">
-          <summary className="cursor-pointer py-2 text-cyan">
-            <span className="sm:hidden">Guide</span>
-            <span className="hidden sm:inline">How it works</span>
-          </summary>
-          <div className="absolute right-0 z-10 mt-1 w-72 max-w-[calc(100vw-2rem)] space-y-2 rounded-xl border border-line bg-surface p-4 leading-5 shadow-lg sm:w-80">
+        <details className="relative shrink-0 self-start text-xs text-mist">
+          <Button asChild variant="secondary" size="sm">
+            <summary className="cursor-pointer">How it works</summary>
+          </Button>
+          <div className="absolute left-0 z-10 mt-2 w-80 max-w-[calc(100vw-2.5rem)] space-y-2 rounded-xl border border-line bg-surface p-4 leading-5 shadow-lg sm:left-auto sm:right-0 sm:max-w-[calc(100vw-4rem)]">
             <p>
               <strong className="text-cloud">1. Capture & label.</strong> Save
               findings and missed bugs with frozen code.
@@ -431,7 +431,7 @@ export function Evaluations({ findingId }: { findingId?: string }) {
           )}
         </>
       )}
-    </main>
+    </PageContainer>
   );
 }
 
