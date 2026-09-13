@@ -65,6 +65,7 @@ interface GitHubInstallationRepositories {
 }
 interface GitHubPull {
   id: number;
+  node_id?: string;
   number: number;
   title: string;
   body: string | null;
@@ -602,6 +603,56 @@ export class GitHubProvider implements PullRequestProvider {
       mergeActionLabel: "Merge",
       hasMergePermission,
     });
+  }
+
+  /** Publishes a GitHub draft using its immutable GraphQL node identity. */
+  async markPullRequestReadyForReview(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+  }) {
+    const pull = await providerFetch<GitHubPull>(
+      this.name,
+      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/${input.pullRequestNumber}`,
+      { headers: this.headers },
+    );
+    if (!pull.node_id)
+      throw new ProviderError(
+        this.name,
+        "GitHub did not return the pull request identity",
+      );
+    const response = await providerFetch<{
+      data?: {
+        markPullRequestReadyForReview?: { pullRequest?: { isDraft: boolean } };
+      };
+      errors?: Array<{ message: string; type?: string }>;
+    }>(this.name, this.graphqlUrl(), {
+      method: "POST",
+      headers: { ...this.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `mutation ReviewDuckMarkReady($pullRequestId: ID!) {
+          markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+            pullRequest { isDraft }
+          }
+        }`,
+        variables: { pullRequestId: pull.node_id },
+      }),
+    });
+    const failure = response.errors?.[0];
+    if (failure)
+      throw new ProviderError(
+        this.name,
+        failure.message,
+        failure.type === "FORBIDDEN" ? 403 : undefined,
+      );
+    if (
+      response.data?.markPullRequestReadyForReview?.pullRequest?.isDraft !==
+      false
+    ) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not mark this pull request ready for review",
+      );
+    }
   }
 
   /** Merges the pull request at the exact reviewed GitHub commit. */

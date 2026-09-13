@@ -48,6 +48,8 @@ export function useReviewSynchronizationController({
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const autoSyncedHeadSha = useRef<string | undefined>(undefined);
   const silentSync = useRef(false);
+  const retryAfter = useRef(0);
+  const refreshedSnapshotId = useRef<string | undefined>(undefined);
 
   const pollLatestPullRequest = api.review.poll.useMutation({
     onSuccess: (result) => {
@@ -70,7 +72,9 @@ export function useReviewSynchronizationController({
     {
       enabled: !activeSyncId,
       refetchInterval: REVIEW_REVISION_PROBE_MS,
-      refetchOnWindowFocus: true,
+      staleTime: 0,
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: "always",
       retry: 1,
     },
   );
@@ -116,6 +120,10 @@ export function useReviewSynchronizationController({
       silentSync.current = false;
       router.refresh();
     } else if (status === "failed" || status === "cancelled") {
+      if (status === "failed") {
+        autoSyncedHeadSha.current = undefined;
+        retryAfter.current = Date.now() + REVIEW_REVISION_PROBE_MS;
+      }
       setActiveSyncId(undefined);
       void utils.review.activeSyncs.invalidate();
       sendReviewSession({ type: "SYNC_FINISHED" });
@@ -163,7 +171,7 @@ export function useReviewSynchronizationController({
 
   /** Queues durable source synchronization. */
   async function syncExternalData(options?: { silent?: boolean }) {
-    if (manualSyncPending) return false;
+    if (syncing || activeSyncId) return false;
     silentSync.current = Boolean(options?.silent);
     sendReviewSession({ type: "SYNC_STARTED" });
     try {
@@ -197,21 +205,41 @@ export function useReviewSynchronizationController({
   useEffect(() => {
     const probe = revisionProbe.data;
     if (
+      probe?.current &&
+      probe.snapshotId &&
+      probe.snapshotId !== snapshot?.id &&
+      probe.snapshotId !== refreshedSnapshotId.current &&
+      !syncing
+    ) {
+      refreshedSnapshotId.current = probe.snapshotId;
+      router.refresh();
+    }
+    if (
       !probe ||
+      revisionProbe.dataUpdatedAt < retryAfter.current ||
       !shouldAutoSyncReviewRevision({
         attemptedHeadSha: autoSyncedHeadSha.current,
         busy: syncing,
         current: probe.current,
-        remoteHeadSha: probe.headSha,
+        remoteHeadSha: `${probe.headSha}:${probe.baseSha}`,
       })
     ) {
       return;
     }
     void (async () => {
       const queued = await syncExternalDataRef.current({ silent: true });
-      autoSyncedHeadSha.current = queued ? probe.headSha : undefined;
+      autoSyncedHeadSha.current = queued
+        ? `${probe.headSha}:${probe.baseSha}`
+        : undefined;
+      if (!queued) retryAfter.current = Date.now() + REVIEW_REVISION_PROBE_MS;
     })();
-  }, [revisionProbe.data, syncing]);
+  }, [
+    revisionProbe.data,
+    revisionProbe.dataUpdatedAt,
+    syncing,
+    snapshot?.id,
+    router,
+  ]);
 
   /** Persists the exact pull-request revision currently on screen. */
   function rememberLoadedRevision() {

@@ -97,6 +97,25 @@ describe("review sync status", () => {
     ).toBe(true);
   });
 
+  it("shows a keyboard-accessible popup and dismisses it with Escape", async () => {
+    render(
+      <ReviewSyncStatusButton
+        onClick={vi.fn()}
+        provider="github"
+        status="idle"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.tab();
+    const button = screen.getByRole("button");
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("every 5 seconds");
+    expect(button).toHaveAttribute("aria-describedby", tooltip.id);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(button).toHaveFocus();
+  });
+
   it("renders an icon-only control that reports ready and busy states", async () => {
     const onClick = vi.fn();
     const { rerender } = render(

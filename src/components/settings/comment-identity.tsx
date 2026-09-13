@@ -1,6 +1,14 @@
 "use client";
 
-import { CircleAlert, Loader2, UserRound, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Loader2,
+  UserRound,
+  UsersRound,
+  X,
+} from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
@@ -11,8 +19,14 @@ import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
-/** Workspace-level choice plus per-connection personal provider identities. */
-export function CommentIdentity({ localMode }: { localMode: boolean }) {
+/** Integrates the reviewer’s posting preference into the selected connection. */
+export function CommentIdentity({
+  localMode,
+  connectionId,
+}: {
+  localMode: boolean;
+  connectionId: string;
+}) {
   const utils = api.useUtils();
   const identity = api.provider.commentIdentity.useQuery();
   const save = api.provider.saveCommentIdentity.useMutation({
@@ -34,6 +48,9 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
     },
     onError: (error) => toast.error(error.message),
   });
+  const [expanded, setExpanded] = useState(false);
+  const headingId = useId();
+  const optionsId = useId();
   const [authorizationPending, setAuthorizationPending] = useState(false);
   const [patConnectionId, setPatConnectionId] = useState<string>();
 
@@ -42,112 +59,174 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
   }
 
   const { publishAsSelf, connections } = identity.data;
-  const missing = connections.filter((connection) => !connection.identity);
+  const connection = connections.find(
+    (item) => item.connectionId === connectionId,
+  );
+  if (!connection) return null;
+  const missingOthers = connections.filter(
+    (item) => item.connectionId !== connectionId && !item.identity,
+  ).length;
+  const pending =
+    authorizationPending || disconnect.isPending || save.isPending;
+  const canReconnect = supportsManagedReauthorization(
+    localMode,
+    connection.credentialKind,
+    connection.provider,
+  );
+  const hostedProvider =
+    connection.provider === "github" || connection.provider === "gitlab"
+      ? connection.provider
+      : undefined;
+  const connected = connection.identity;
+  const needsAccount = publishAsSelf && !connected;
 
   return (
     <section
-      aria-labelledby="comment-identity-heading"
-      className="bg-surface/70 overflow-hidden rounded-2xl border border-line"
+      aria-labelledby={headingId}
+      className="overflow-hidden rounded-2xl border border-line bg-surface/70"
     >
-      <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:gap-6 sm:px-6">
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-line bg-surface-subtle text-mist">
+          {publishAsSelf ? (
+            <UserRound className="size-4" />
+          ) : (
+            <UsersRound className="size-4" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 id={headingId} className="text-sm font-medium text-cloud">
+              Posting identity
+            </h3>
             <span
-              id="comment-identity-heading"
-              className="text-cloud text-sm font-medium"
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[10px]",
+                needsAccount
+                  ? "bg-coral/10 text-coral"
+                  : "bg-surface-subtle text-mist",
+              )}
             >
-              Post comments as myself
+              {needsAccount
+                ? "Account needed"
+                : publishAsSelf
+                  ? connected?.displayLogin
+                  : "Shared connection"}
             </span>
-          </p>
-          <p className="text-mist mt-1 text-xs leading-5">
-            Comments, replies, and review decisions appear under your provider
-            account instead of ReviewDuck. Leave this off to keep posting as the
-            shared workspace connection.
+          </div>
+          <p className="mt-0.5 text-xs leading-5 text-mist">
+            {needsAccount
+              ? `Connect your ${providerLabel(connection.provider)} account to resume posting.`
+              : publishAsSelf
+                ? "Comments, replies, and review decisions are posted as you."
+                : "Comments, replies, and review decisions use the workspace connection."}
           </p>
         </div>
-        <label className="inline-flex shrink-0 items-center gap-2 sm:mt-0.5">
-          <span className="sr-only">Post comments as myself</span>
-          <span className="relative inline-flex">
-            <input
-              type="checkbox"
-              checked={publishAsSelf}
-              disabled={save.isPending}
-              onChange={(event) =>
-                save.mutate({ publishAsSelf: event.target.checked })
-              }
-              className="peer sr-only"
-            />
-            <span
-              aria-hidden="true"
-              className="bg-surface-subtle peer-checked:bg-lime peer-focus-visible:ring-lime/55 peer-disabled:opacity-45 block h-6 w-10 rounded-full border border-line transition peer-checked:border-lime peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-ink peer-disabled:cursor-not-allowed"
-            />
-            <span
-              aria-hidden="true"
-              className="bg-cloud pointer-events-none absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition peer-checked:translate-x-4 peer-checked:bg-accent-foreground peer-disabled:opacity-45"
-            />
-          </span>
-        </label>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-expanded={expanded}
+          aria-controls={optionsId}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Done" : needsAccount ? "Set up" : "Change"}
+          <ChevronDown
+            className={cn("size-3.5 transition", expanded && "rotate-180")}
+          />
+        </Button>
       </div>
-
-      <div className="divide-y divide-line border-t border-line">
-        {publishAsSelf && missing.length > 0 && (
-          <p className="text-mist flex items-start gap-2 px-5 py-3 text-xs leading-5 sm:px-6">
-            <CircleAlert className="text-coral mt-0.5 size-3.5 shrink-0" />
-            Connect your account on each provider below. Posts stay blocked
-            until that identity is connected.
-          </p>
-        )}
-        {connections.map((connection) => {
-          const pending =
-            authorizationPending || disconnect.isPending || save.isPending;
-          const canReconnect = supportsManagedReauthorization(
-            localMode,
-            connection.credentialKind,
-            connection.provider,
-          );
-          const hostedProvider =
-            connection.provider === "github" || connection.provider === "gitlab"
-              ? connection.provider
-              : undefined;
-          return (
-            <div
-              key={connection.connectionId}
-              className="flex flex-wrap items-center gap-3 px-5 py-4 sm:px-6"
-            >
-              <span className="bg-lime/10 text-lime grid size-9 place-items-center rounded-xl">
-                <UserRound className="size-4" />
-              </span>
+      {expanded && (
+        <div id={optionsId} className="border-t border-line px-4 py-4">
+          <fieldset>
+            <legend className="text-xs font-medium text-cloud">
+              Who should your posts appear as?
+            </legend>
+            <p className="mt-1 text-[11px] leading-5 text-fog">
+              Your preference applies to all connections in this workspace.
+              Other members keep their own preference.
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                {
+                  value: false,
+                  label: "Shared connection",
+                  description: "Use the workspace’s connected account.",
+                  Icon: UsersRound,
+                },
+                {
+                  value: true,
+                  label: "My account",
+                  description: "Use your own provider identity.",
+                  Icon: UserRound,
+                },
+              ].map(({ value, label, description, Icon }) => (
+                <label
+                  key={label}
+                  className={cn(
+                    "flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-lime/55",
+                    publishAsSelf === value
+                      ? "border-lime/35 bg-lime/[.045]"
+                      : "border-line hover:bg-surface-subtle",
+                    pending && "cursor-wait opacity-60",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name={headingId}
+                    value={String(value)}
+                    checked={publishAsSelf === value}
+                    disabled={pending}
+                    onChange={() => save.mutate({ publishAsSelf: value })}
+                    className="sr-only"
+                  />
+                  <Icon className="mt-0.5 size-4 shrink-0 text-mist" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-medium text-cloud">
+                      {label}
+                    </span>
+                    <span className="mt-1 block text-[11px] leading-4 text-mist">
+                      {description}
+                    </span>
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
+                      publishAsSelf === value
+                        ? "border-lime bg-lime text-accent-foreground"
+                        : "border-line-strong",
+                    )}
+                  >
+                    {publishAsSelf === value && <Check className="size-3" />}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {(publishAsSelf || connected) && (
+            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
               <div className="min-w-0 flex-1">
-                <p className="text-cloud text-sm font-medium">
-                  {providerLabel(connection.provider)} ·{" "}
-                  {connection.displayName}
+                <p className="text-xs font-medium text-cloud">
+                  {connected
+                    ? `Connected as ${connected.displayLogin}`
+                    : `Your ${providerLabel(connection.provider)} account`}
                 </p>
-                <p className="text-mist mt-0.5 text-xs">
-                  {connection.identity
-                    ? `Connected as ${connection.identity.displayLogin}`
-                    : publishAsSelf
-                      ? "Not connected — connect this account to post as yourself"
-                      : "Not connected — posts still appear as ReviewDuck"}
+                <p className="mt-1 text-[11px] leading-5 text-mist">
+                  {connected
+                    ? `Personal identity for ${connection.displayName}.`
+                    : "Posting here is paused until you connect your account."}
                 </p>
               </div>
-              {connection.identity ? (
+              {connected ? (
                 <Button
                   variant="ghost"
                   size="sm"
                   disabled={pending}
-                  onClick={() =>
-                    disconnect.mutate({
-                      connectionId: connection.connectionId,
-                    })
-                  }
+                  onClick={() => disconnect.mutate({ connectionId })}
                 >
-                  {disconnect.isPending && (
-                    <Loader2 className="size-4 animate-spin" />
-                  )}
-                  Disconnect
+                  Disconnect personal account
                 </Button>
               ) : (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {canReconnect && hostedProvider && (
                     <Button
                       size="sm"
@@ -158,10 +237,7 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
                           hostedProvider,
                           "/settings/providers",
                           undefined,
-                          {
-                            purpose: "user_identity",
-                            connectionId: connection.connectionId,
-                          },
+                          { purpose: "user_identity", connectionId },
                         ).catch((cause: unknown) => {
                           setAuthorizationPending(false);
                           toast.error(
@@ -173,27 +249,39 @@ export function CommentIdentity({ localMode }: { localMode: boolean }) {
                       }}
                     >
                       {authorizationPending && (
-                        <Loader2 className="size-4 animate-spin" />
+                        <Loader2 className="size-3.5 animate-spin" />
                       )}
-                      Connect with {providerLabel(connection.provider)}
+                      Connect my {providerLabel(connection.provider)} account
                     </Button>
                   )}
                   <Button
-                    variant={canReconnect ? "secondary" : "primary"}
+                    variant={canReconnect ? "ghost" : "secondary"}
                     size="sm"
                     disabled={pending}
-                    onClick={() => setPatConnectionId(connection.connectionId)}
+                    onClick={() => setPatConnectionId(connectionId)}
                   >
                     {canReconnect
-                      ? "Use a personal token"
-                      : "Connect with a token"}
+                      ? "Use a token instead"
+                      : "Connect my account"}
                   </Button>
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
+          )}
+          {publishAsSelf && missingOthers > 0 && (
+            <p className="mt-3 flex items-start gap-2 text-[11px] leading-5 text-fog">
+              <CircleAlert className="mt-1 size-3 shrink-0" />
+              {missingOthers} other{" "}
+              {missingOthers === 1
+                ? "connection also needs"
+                : "connections also need"}{" "}
+              your account before posting. Select{" "}
+              {missingOthers === 1 ? "it" : "them"} in the sidebar to finish
+              setup.
+            </p>
+          )}
+        </div>
+      )}
 
       {patConnectionId && (
         <PersonalTokenDialog

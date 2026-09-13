@@ -5,9 +5,14 @@ import { formatShortcut } from "~/lib/keyboard-shortcuts";
 import { providerLabel } from "~/lib/provider-labels";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
+import { ReviewToolbarTooltip } from "./review-toolbar-tooltip";
 
 /** How often the workspace asks the provider whether the pull-request head moved. */
-export const REVIEW_REVISION_PROBE_MS = 20_000;
+export const REVIEW_REVISION_PROBE_MS = 5_000;
+
+/** Shared geometry and interaction states for review header actions. */
+export const REVIEW_TOOLBAR_BUTTON_CLASS =
+  "relative grid size-9 shrink-0 place-items-center rounded-lg border border-transparent text-mist transition hover:border-line hover:bg-surface-subtle hover:text-cloud focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan disabled:cursor-not-allowed disabled:opacity-45";
 
 export type ReviewSyncStatus =
   | "error"
@@ -21,7 +26,7 @@ export type ReviewSyncStatus =
  *
  * Loading and syncing outrank a ready revision so an in-flight fetch is
  * never mistaken for a clickable "load" state. Background probes stay
- * idle: flashing a spinner every twenty seconds would be noise.
+ * idle: flashing a spinner every five seconds would be noise.
  */
 export function reviewSyncStatus(input: {
   loadingChanges: boolean;
@@ -39,8 +44,8 @@ export function reviewSyncStatus(input: {
 /**
  * Reports whether a stale probe should queue a background sync.
  *
- * One remote revision is queued at most once. A later head, or a manual
- * retry after failure, can queue again.
+ * One remote revision is queued at most once per attempt. The controller
+ * clears failed attempts after a cooldown so fresh probes can retry.
  */
 export function shouldAutoSyncReviewRevision(input: {
   attemptedHeadSha?: string;
@@ -86,7 +91,7 @@ export function reviewSyncStatusTitle(input: {
     case "error":
       return `Could not reach ${provider}. Click to try again (${refresh})`;
     case "idle":
-      return `${provider} is watched for new commits. Click to check now (${refresh})`;
+      return `${provider} is checked every 5 seconds while this page is visible. Click to check now (${refresh})`;
   }
 }
 
@@ -103,37 +108,48 @@ export function ReviewSyncStatusButton({
   const label = reviewSyncStatusLabel(status);
   const busy = status === "syncing" || status === "loading";
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      aria-busy={busy || undefined}
-      aria-label={label}
-      title={reviewSyncStatusTitle({ provider, status })}
-      className={cn(
-        "relative grid size-9 shrink-0 place-items-center rounded-full transition",
+    <ReviewToolbarTooltip
+      label={reviewSyncStatusTitle({ provider, status }).replace(
+        / \([^()]+\)$/,
+        "",
+      )}
+      shortcut={
         status === "ready"
-          ? "text-cyan hover:bg-cyan/10"
-          : status === "error"
-            ? "text-coral hover:bg-coral/10"
-            : "text-mist hover:text-cloud hover:bg-surface-subtle",
-        busy && "cursor-wait",
-      )}
+          ? reviewShortcuts.loadChanges
+          : reviewShortcuts.refresh
+      }
     >
-      {busy ? (
-        <LoaderCircle className="size-4 animate-spin" />
-      ) : (
-        <RefreshCw className="size-4" />
-      )}
-      {status === "ready" && (
-        <span
-          aria-hidden="true"
-          className="bg-cyan absolute top-1.5 right-1.5 size-1.5 rounded-full"
-        />
-      )}
-      <span className="sr-only" aria-live="polite">
-        {label}
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={busy}
+        aria-busy={busy || undefined}
+        aria-label={label}
+        className={cn(
+          REVIEW_TOOLBAR_BUTTON_CLASS,
+          status === "ready"
+            ? "text-cyan hover:bg-cyan/10"
+            : status === "error"
+              ? "text-coral hover:bg-coral/10"
+              : "text-mist hover:text-cloud hover:bg-surface-subtle",
+          busy && "cursor-wait",
+        )}
+      >
+        {busy ? (
+          <LoaderCircle className="size-4 animate-spin" />
+        ) : (
+          <RefreshCw className="size-4" />
+        )}
+        {status === "ready" && (
+          <span
+            aria-hidden="true"
+            className="bg-cyan absolute top-1.5 right-1.5 size-1.5 rounded-full"
+          />
+        )}
+        <span className="sr-only" aria-live="polite">
+          {label}
+        </span>
+      </button>
+    </ReviewToolbarTooltip>
   );
 }
