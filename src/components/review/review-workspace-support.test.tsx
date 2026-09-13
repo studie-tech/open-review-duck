@@ -128,7 +128,12 @@ describe("review shortcuts", () => {
     ]);
     expect(reviewShortcuts.nextConcept).toEqual([{ key: "ArrowRight" }]);
     expect(reviewShortcuts.previousConcept).toEqual([{ key: "ArrowLeft" }]);
-    expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[jk]"/);
+    const bareKeys = Object.values(reviewShortcuts)
+      .flat()
+      .filter((stroke) => !("mod" in stroke && stroke.mod))
+      .map((stroke) => stroke.key);
+    expect(bareKeys).not.toContain("j");
+    expect(bareKeys).not.toContain("k");
   });
 
   it("puts the concept variant of an action behind shift", () => {
