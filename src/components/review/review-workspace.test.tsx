@@ -4,12 +4,15 @@ import "@testing-library/jest-dom/vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   renderHook,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   DeepReviewFindingRow,
@@ -71,6 +74,18 @@ function finding(
   };
 }
 
+const findingPullRequest: AiFixPromptPullRequest = {
+  provider: "github",
+  repositoryOwner: "acme",
+  repositoryName: "review",
+  number: 12,
+  title: "Retry provider calls",
+  webUrl: "https://github.com/acme/review/pull/12",
+  sourceBranch: "feature/retries",
+  targetBranch: "main",
+  headSha: "abc1234",
+};
+
 /** Renders one inline finding card with only the props a case overrides. */
 function renderCard(
   props: Partial<Parameters<typeof DeepReviewInlineFinding>[0]> = {},
@@ -80,7 +95,7 @@ function renderCard(
       finding={finding()}
       variant="line"
       locationIndex={0}
-      providerName="GitHub"
+      pullRequest={findingPullRequest}
       published={false}
       publishing={false}
       onCollapse={vi.fn()}
@@ -780,6 +795,40 @@ describe("DeepReviewInlineFinding", () => {
 
     await user.click(screen.getByRole("button", { name: /Post to GitHub/ }));
     expect(onPublish).toHaveBeenCalledOnce();
+  });
+
+  it("offers a fix prompt whether or not the finding can be posted", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const rendered = renderCard({
+      finding: finding({ publishable: false, state: "unanchored" }),
+    });
+
+    expect(screen.getByText(/Not publishable/)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy AI fix prompt for this finding",
+      }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+    });
+    const prompt = writeText.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("# Fix a review finding on pull request #12");
+    expect(prompt).toContain("## Unbounded read");
+    expect(prompt).toContain("- Location: src/app.ts:12-14");
+    expect(prompt).toContain("read(body)");
+
+    rendered.unmount();
+    renderCard({
+      finding: finding({ contentAvailable: false, title: "", body: "" }),
+    });
+    expect(
+      screen.queryByRole("button", { name: /fix prompt/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("names the file when it is mounted away from the accused line", () => {

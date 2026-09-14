@@ -65,6 +65,7 @@ describe("githubMergeGate", () => {
       mergeable: true,
       canMerge: false,
       mergeBlockedReason: "Required checks or reviews are not satisfied",
+      mergeBlockedFix: "fix_checks",
     });
   });
 
@@ -95,6 +96,7 @@ describe("githubMergeGate", () => {
       mergeable: false,
       canMerge: false,
       mergeBlockedReason: "Has merge conflicts",
+      mergeBlockedFix: "resolve_conflicts",
     });
   });
 
@@ -111,6 +113,7 @@ describe("githubMergeGate", () => {
       canMerge: false,
       mergeBlockedReason:
         "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+      mergeBlockedFix: "rebase",
     });
   });
 
@@ -150,6 +153,120 @@ describe("githubMergeGate", () => {
   });
 });
 
+describe("merge block fix kinds", () => {
+  it("names the branch change behind each GitHub block a commit can lift", () => {
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "behind",
+      }).mergeBlockedFix,
+    ).toBe("update_branch");
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "blocked",
+        reviewDecision: "CHANGES_REQUESTED",
+      }).mergeBlockedFix,
+    ).toBe("address_review");
+  });
+
+  it("leaves GitHub blocks that need time or a person without a fix", () => {
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "blocked",
+        reviewDecision: "REVIEW_REQUIRED",
+      }).mergeBlockedFix,
+    ).toBeUndefined();
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "blocked",
+        reviewDecision: "APPROVED",
+        checks: [{ state: "in_progress", required: true }],
+      }).mergeBlockedFix,
+    ).toBeUndefined();
+    expect(githubMergeGate({ draft: true }).mergeBlockedFix).toBeUndefined();
+    expect(
+      githubMergeGate({ mergeable: null, mergeableState: "unknown" })
+        .mergeBlockedFix,
+    ).toBeUndefined();
+    expect(
+      githubMergeGate({
+        mergeable: true,
+        mergeableState: "clean",
+        mergeMethod: "rebase",
+        rebaseable: null,
+      }).mergeBlockedFix,
+    ).toBeUndefined();
+  });
+
+  it("maps GitLab statuses a commit can clear and nothing else", () => {
+    /** Reads the fix kind GitLab's detailed status maps onto. */
+    const fixFor = (detailedMergeStatus: string) =>
+      gitlabMergeGate({ state: "opened", detailedMergeStatus }).mergeBlockedFix;
+    expect(fixFor("discussions_not_resolved")).toBe("resolve_discussions");
+    expect(fixFor("requested_changes")).toBe("address_review");
+    expect(fixFor("need_rebase")).toBe("rebase");
+    expect(fixFor("ci_still_running")).toBeUndefined();
+    expect(fixFor("not_approved")).toBeUndefined();
+    expect(fixFor("draft_status")).toBeUndefined();
+    expect(fixFor("locked_paths")).toBeUndefined();
+    expect(fixFor("something_new")).toBeUndefined();
+  });
+
+  it("treats an unknown GitLab status with conflicts as a conflict fix", () => {
+    expect(
+      gitlabMergeGate({
+        state: "opened",
+        detailedMergeStatus: "something_new",
+        hasConflicts: true,
+      }),
+    ).toEqual({
+      mergeable: false,
+      canMerge: false,
+      mergeBlockedReason: "This merge request cannot be merged yet",
+      mergeBlockedFix: "resolve_conflicts",
+    });
+  });
+
+  it("offers a fix for a rejected Azure build policy but not a running one", () => {
+    /** Builds one blocking build policy in the given evaluation state. */
+    const policy = (status: string) => ({
+      enabled: true,
+      blocking: true,
+      status,
+      name: "Build validation",
+    });
+    expect(
+      azureMergeGate({
+        status: "active",
+        mergeStatus: "succeeded",
+        policies: [policy("rejected")],
+      }),
+    ).toEqual({
+      mergeable: true,
+      canMerge: false,
+      mergeBlockedReason: "Required checks or reviews are not satisfied",
+      mergeBlockedFix: "fix_checks",
+    });
+    expect(
+      azureMergeGate({
+        status: "active",
+        mergeStatus: "succeeded",
+        policies: [policy("running")],
+      }).mergeBlockedFix,
+    ).toBeUndefined();
+    expect(
+      azureMergeGate({
+        status: "active",
+        mergeStatus: "succeeded",
+        policies: [{ ...policy("rejected"), name: "Minimum reviewers" }],
+      }).mergeBlockedFix,
+    ).toBeUndefined();
+  });
+});
+
 describe("gitlabMergeGate", () => {
   it("allows merge when GitLab reports mergeable while optional jobs still run", () => {
     expect(
@@ -183,6 +300,7 @@ describe("gitlabMergeGate", () => {
       mergeable: null,
       canMerge: false,
       mergeBlockedReason: "Pipeline must succeed before this can be merged",
+      mergeBlockedFix: "fix_checks",
     });
   });
 
@@ -210,6 +328,7 @@ describe("gitlabMergeGate", () => {
       mergeable: false,
       canMerge: false,
       mergeBlockedReason: "Has merge conflicts",
+      mergeBlockedFix: "resolve_conflicts",
     });
   });
 
@@ -223,6 +342,7 @@ describe("gitlabMergeGate", () => {
       mergeable: false,
       canMerge: false,
       mergeBlockedReason: "Has merge conflicts",
+      mergeBlockedFix: "resolve_conflicts",
     });
   });
 });
@@ -324,6 +444,7 @@ describe("azureMergeGate", () => {
       mergeable: false,
       canMerge: false,
       mergeBlockedReason: "Has merge conflicts",
+      mergeBlockedFix: "resolve_conflicts",
     });
   });
 });

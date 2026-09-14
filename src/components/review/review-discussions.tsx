@@ -13,9 +13,14 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import {
+  type AiFixPromptPullRequest,
+  discussionFixPrompt,
+} from "~/lib/ai-fix-prompt";
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
 export type ProviderDiscussionThread = ProviderConversations["threads"][number];
@@ -54,10 +59,12 @@ function discussionTimestamp(value: string | undefined) {
 /** Renders one compact PR-wide conversation entry. */
 function DiscussionRow({
   onOpen,
+  pullRequest,
   resolved,
   thread,
 }: {
   onOpen: () => void;
+  pullRequest: AiFixPromptPullRequest;
   resolved: boolean;
   thread: ProviderDiscussionThread;
 }) {
@@ -102,6 +109,13 @@ function DiscussionRow({
             {commentBody}
           </span>
         </button>
+        {!resolved && (
+          <CopyAiFixPromptButton
+            className="size-8 rounded-lg"
+            subject={`the conversation in ${thread.path} at line ${thread.line}`}
+            prompt={() => discussionFixPrompt(pullRequest, thread)}
+          />
+        )}
         {thread.webUrl && (
           <a
             href={thread.webUrl}
@@ -160,7 +174,7 @@ export function ReviewDiscussionsPanel({
   onClose,
   onOpenThread,
   onRefresh,
-  provider,
+  pullRequest,
   threads,
 }: {
   error?: string;
@@ -168,7 +182,7 @@ export function ReviewDiscussionsPanel({
   onClose: () => void;
   onOpenThread: (thread: ProviderDiscussionThread) => void;
   onRefresh: () => void;
-  provider: ProviderConversations["provider"];
+  pullRequest: AiFixPromptPullRequest;
   threads: ProviderDiscussionThread[];
 }) {
   const [tab, setTab] = useState<DiscussionTab>("open");
@@ -181,7 +195,7 @@ export function ReviewDiscussionsPanel({
     (thread) => !isOpenProviderDiscussion(thread),
   );
   const visibleThreads = tab === "open" ? openThreads : resolvedThreads;
-  const providerName = providerLabel(provider);
+  const providerName = providerLabel(pullRequest.provider);
 
   useEffect(() => {
     const element = dialog.current;
@@ -302,6 +316,7 @@ export function ReviewDiscussionsPanel({
             {visibleThreads.map((thread) => (
               <DiscussionRow
                 key={thread.externalId}
+                pullRequest={pullRequest}
                 resolved={tab === "resolved"}
                 thread={thread}
                 onOpen={() => onOpenThread(thread)}
@@ -338,11 +353,11 @@ export function ReviewDiscussionsPanel({
 /** Summarizes active and resolved provider discussions on completion. */
 export function ReviewDiscussionSummary({
   onOpenThread,
-  provider,
+  pullRequest,
   threads,
 }: {
   onOpenThread: (thread: ProviderDiscussionThread) => void;
-  provider: ProviderConversations["provider"];
+  pullRequest: AiFixPromptPullRequest;
   threads: ProviderDiscussionThread[];
 }) {
   const ordered = useMemo(() => orderProviderDiscussions(threads), [threads]);
@@ -350,7 +365,7 @@ export function ReviewDiscussionSummary({
   const resolvedThreads = ordered.filter(
     (thread) => !isOpenProviderDiscussion(thread),
   );
-  const providerName = providerLabel(provider);
+  const providerName = providerLabel(pullRequest.provider);
 
   return (
     <section
@@ -407,6 +422,7 @@ export function ReviewDiscussionSummary({
           {openThreads.map((thread) => (
             <DiscussionRow
               key={thread.externalId}
+              pullRequest={pullRequest}
               resolved={false}
               thread={thread}
               onOpen={() => onOpenThread(thread)}
@@ -429,6 +445,7 @@ export function ReviewDiscussionSummary({
             {resolvedThreads.map((thread) => (
               <DiscussionRow
                 key={thread.externalId}
+                pullRequest={pullRequest}
                 resolved
                 thread={thread}
                 onOpen={() => onOpenThread(thread)}

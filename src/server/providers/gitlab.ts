@@ -490,6 +490,7 @@ export class GitLabProvider implements PullRequestProvider {
       mergeable: merge.mergeable,
       canMerge: merge.canMerge && hasMergePermission,
       mergeBlockedReason: merge.mergeBlockedReason,
+      mergeBlockedFix: merge.mergeBlockedFix,
       mergeActionLabel: "Merge",
       hasMergePermission,
     });

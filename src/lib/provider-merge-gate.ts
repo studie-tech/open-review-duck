@@ -3,10 +3,25 @@ import type {
   ProviderPullRequestCheck,
 } from "~/server/providers/types";
 
+/**
+ * The change to the pull request branch that would lift a merge block.
+ *
+ * Only blocks a coding agent can clear by pushing commits carry a kind; a
+ * missing approval, a draft flag, or a still-computing state has no kind.
+ */
+export type ProviderMergeBlockedFix =
+  | "resolve_conflicts"
+  | "update_branch"
+  | "rebase"
+  | "fix_checks"
+  | "address_review"
+  | "resolve_discussions";
+
 export interface ProviderMergeGate {
   mergeable: boolean | null;
   canMerge: boolean;
   mergeBlockedReason?: string;
+  mergeBlockedFix?: ProviderMergeBlockedFix;
 }
 
 export interface ProviderMergeGateCheck {
@@ -139,6 +154,7 @@ export function githubMergeGate(input: {
       mergeable: false,
       canMerge: false,
       mergeBlockedReason: "Has merge conflicts",
+      mergeBlockedFix: "resolve_conflicts",
     };
   }
   if (mergeableState === "behind") {
@@ -146,6 +162,7 @@ export function githubMergeGate(input: {
       mergeable,
       canMerge: false,
       mergeBlockedReason: "Branch is behind the target and must be updated",
+      mergeBlockedFix: "update_branch",
     };
   }
   if (mergeableState === "unknown" || mergeable === null) {
@@ -168,6 +185,7 @@ export function githubMergeGate(input: {
       canMerge: false,
       mergeBlockedReason:
         "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+      mergeBlockedFix: "rebase",
     };
   }
   if (input.mergeMethod === "rebase" && input.rebaseable === null) {
@@ -236,15 +254,29 @@ export function gitlabMergeGate(input: {
     not_open: "This merge request is no longer open",
     locked_paths: "Locked files must be unlocked",
   };
+  const fixes: Record<string, ProviderMergeBlockedFix> = {
+    conflict: "resolve_conflicts",
+    cannot_be_merged: "resolve_conflicts",
+    discussions_not_resolved: "resolve_discussions",
+    ci_must_pass: "fix_checks",
+    requested_changes: "address_review",
+    need_rebase: "rebase",
+  };
   const mergeable =
     status === "conflict" || status === "cannot_be_merged" || input.hasConflicts
       ? false
       : null;
+  const known = status === undefined ? undefined : reasons[status];
   return {
     mergeable,
     canMerge: false,
-    mergeBlockedReason:
-      (status && reasons[status]) || "This merge request cannot be merged yet",
+    mergeBlockedReason: known ?? "This merge request cannot be merged yet",
+    mergeBlockedFix:
+      status !== undefined && known
+        ? fixes[status]
+        : input.hasConflicts
+          ? "resolve_conflicts"
+          : undefined,
   };
 }
 
@@ -281,6 +313,7 @@ export function azureMergeGate(input: {
       mergeable: false,
       canMerge: false,
       mergeBlockedReason: "Has merge conflicts",
+      mergeBlockedFix: "resolve_conflicts",
     };
   }
   if (input.mergeStatus === "failure") {
@@ -302,7 +335,9 @@ export function azureMergeGate(input: {
     return {
       mergeable: input.mergeStatus === "succeeded" ? true : null,
       canMerge: false,
-      mergeBlockedReason: policyBlock ?? "Branch policies are not satisfied",
+      mergeBlockedReason:
+        policyBlock?.reason ?? "Branch policies are not satisfied",
+      mergeBlockedFix: policyBlock?.fix,
     };
   }
   if (input.mergeStatus === "succeeded") {
@@ -349,12 +384,16 @@ function githubBlockedMergeGate(
     return {
       ...blocked,
       mergeBlockedReason: "Requested changes must be addressed",
+      mergeBlockedFix: "address_review",
     };
   }
   const checks = input.checks ?? [];
   const hasRequiredInfo = checks.some((check) => check.required !== undefined);
   if (!hasRequiredInfo) return blocked;
   const requiredBlock = requiredChecksBlockReason(checks);
+  if (requiredBlock === "failing") {
+    return { ...blocked, mergeBlockedFix: "fix_checks" };
+  }
   if (requiredBlock) return blocked;
   if (mergeable !== true) return blocked;
   const optionalPending = checks.some(
@@ -369,7 +408,7 @@ function githubBlockedMergeGate(
 /** Why an enabled, blocking Azure policy currently prevents complete. */
 function azurePolicyBlockReason(
   policies: readonly AzurePolicyEvaluationGate[] | undefined,
-): string | undefined {
+): { reason: string; fix?: ProviderMergeBlockedFix } | undefined {
   if (!policies) return undefined;
   const blocking = policies.filter(
     (policy) => policy.enabled !== false && policy.blocking && !policy.deleted,
@@ -378,21 +417,32 @@ function azurePolicyBlockReason(
   const rejected = blocking.find((policy) =>
     ADO_POLICY_REJECTED.has((policy.status ?? "").toLowerCase()),
   );
-  if (rejected) return azurePolicyReason(rejected);
+  if (rejected) return azurePolicyReason(rejected, "rejected");
   const pending = blocking.find((policy) =>
     ADO_POLICY_PENDING.has((policy.status ?? "").toLowerCase()),
   );
-  if (pending) return azurePolicyReason(pending);
+  if (pending) return azurePolicyReason(pending, "pending");
   return undefined;
 }
 
 /** Names the Azure policy that is still outstanding. */
-function azurePolicyReason(policy: AzurePolicyEvaluationGate) {
+function azurePolicyReason(
+  policy: AzurePolicyEvaluationGate,
+  outcome: "rejected" | "pending",
+): { reason: string; fix?: ProviderMergeBlockedFix } {
   const name = policy.name?.toLowerCase() ?? "";
-  if (name.includes("reviewer")) return "Required approvals are missing";
-  if (name.includes("work item")) return "A linked work item is required";
-  if (name.includes("build") || name.includes("status")) {
-    return "Required checks or reviews are not satisfied";
+  if (name.includes("reviewer")) {
+    return { reason: "Required approvals are missing" };
   }
-  return "Branch policies are not satisfied";
+  if (name.includes("work item")) {
+    return { reason: "A linked work item is required" };
+  }
+  if (name.includes("build") || name.includes("status")) {
+    // A queued build needs time, not a commit; only a rejected one is a fix.
+    return {
+      reason: "Required checks or reviews are not satisfied",
+      fix: outcome === "rejected" ? "fix_checks" : undefined,
+    };
+  }
+  return { reason: "Branch policies are not satisfied" };
 }

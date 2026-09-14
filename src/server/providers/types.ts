@@ -1,3 +1,4 @@
+import type { ProviderMergeBlockedFix } from "~/lib/provider-merge-gate";
 import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import type { SourceFile } from "~/server/analysis/types";
 
@@ -132,6 +133,8 @@ export interface ProviderPullRequestLifecycle {
   mergeable: boolean | null;
   canMerge: boolean;
   mergeBlockedReason?: string;
+  /** The branch change that would lift the block, when a commit can. */
+  mergeBlockedFix?: ProviderMergeBlockedFix;
   mergeActionLabel: string;
   /** False when the connected credential cannot merge even if the PR is ready. */
   hasMergePermission: boolean;

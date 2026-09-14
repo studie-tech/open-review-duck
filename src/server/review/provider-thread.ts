@@ -350,6 +350,7 @@ export function scopedProviderLifecycle(
     mergeBlockedReason: revisionCurrent
       ? lifecycle.mergeBlockedReason
       : "The provider has a newer revision. Synchronize this pull request before merging.",
+    mergeBlockedFix: revisionCurrent ? lifecycle.mergeBlockedFix : undefined,
     connection: providerConnectionRecovery(
       isLocalDeployment(),
       scope.connection,
