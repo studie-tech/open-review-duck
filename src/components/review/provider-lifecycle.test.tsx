@@ -490,8 +490,9 @@ describe("ProviderLifecycle", () => {
       const prompt = writeText.mock.calls[0]?.[0] as string;
       expect(prompt).toContain("# Unblock merging pull request #12");
       expect(prompt).toContain("Has merge conflicts");
+      expect(prompt).toContain("- Branch: feature/retries → main");
       expect(prompt).toContain(
-        "Bring `feature/retries` up to date with `main`",
+        "Bring the source branch up to date with the target branch",
       );
     });
 

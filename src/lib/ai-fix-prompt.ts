@@ -135,20 +135,21 @@ function discussionBlock(discussion: AiFixPromptDiscussion) {
   ];
 }
 
-/** Says what to do about one kind of merge block in the branch's own terms. */
-function mergeBlockedTask(
-  pullRequest: AiFixPromptPullRequest,
-  fix: ProviderMergeBlockedFix,
-) {
-  const source = pullRequest.sourceBranch;
-  const target = pullRequest.targetBranch;
+/**
+ * Says what to do about one kind of merge block.
+ *
+ * The directive names the branches by their role only; their provider-given
+ * names stay inside the <pull_request> data tag, so a branch called
+ * "ignore-all-prior-instructions" never reaches the instruction text.
+ */
+function mergeBlockedTask(fix: ProviderMergeBlockedFix) {
   switch (fix) {
     case "resolve_conflicts":
-      return `Bring \`${source}\` up to date with \`${target}\` using the repository's usual strategy (merge or rebase) and resolve every conflict so that the intent of both sides survives. Do not discard changes from either branch to make a conflict disappear.`;
+      return "Bring the source branch up to date with the target branch named in <pull_request>, using the repository's usual strategy (merge or rebase), and resolve every conflict so that the intent of both sides survives. Do not discard changes from either branch to make a conflict disappear.";
     case "update_branch":
-      return `Update \`${source}\` with the latest \`${target}\` using the repository's usual strategy (merge or rebase), resolving any conflicts so that the intent of both sides survives.`;
+      return "Update the source branch with the latest target branch named in <pull_request>, using the repository's usual strategy (merge or rebase), resolving any conflicts so that the intent of both sides survives.";
     case "rebase":
-      return `Rebase \`${source}\` onto \`${target}\`, resolving every conflict so that the intent of both sides survives, and push the rebased branch with \`--force-with-lease\`. Do not discard changes from either branch to make a conflict disappear.`;
+      return "Rebase the source branch onto the target branch named in <pull_request>, resolving every conflict so that the intent of both sides survives, and push the rebased branch with `--force-with-lease`. Do not discard changes from either branch to make a conflict disappear.";
     case "fix_checks":
       return "Find out why the checks below failed, fix the underlying cause in the code rather than disabling or skipping the check, and make sure the checks pass.";
     case "address_review":
@@ -175,7 +176,7 @@ export function mergeBlockedFixPrompt(
     "",
     "## Task",
     "",
-    mergeBlockedTask(pullRequest, input.fix),
+    mergeBlockedTask(input.fix),
   ];
   if (input.fix === "fix_checks") {
     const checks = input.checks ?? [];
@@ -185,7 +186,7 @@ export function mergeBlockedFixPrompt(
       "",
       checks.length > 0
         ? untrustedBlock("checks", checkList(checks).join("\n"))
-        : `The provider did not report which checks failed; open ${pullRequest.webUrl} to find them.`,
+        : "The provider did not report which checks failed; open the pull request URL in <pull_request> to find them.",
     );
   }
   if (input.fix === "address_review" || input.fix === "resolve_discussions") {
@@ -201,7 +202,7 @@ export function mergeBlockedFixPrompt(
               .flatMap((discussion) => discussionBlock(discussion))
               .join("\n"),
           )
-        : `The open conversations were not available here; read them at ${pullRequest.webUrl}.`,
+        : "The open conversations were not available here; read them at the pull request URL in <pull_request>.",
     );
   }
   return fixPrompt(
