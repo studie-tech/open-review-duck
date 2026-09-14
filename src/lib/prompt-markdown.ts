@@ -22,3 +22,19 @@ export function escapeMarkdownText(value: string) {
     .replaceAll("---", "\\-\\-\\-")
     .replaceAll("`", "\\`");
 }
+
+/**
+ * Wraps text another party authored in a named data tag.
+ *
+ * The tag is the boundary an agent is told to respect, so the text must not
+ * be able to end it early: any attempt to open or close the same tag inside
+ * the body loses its angle bracket. Markdown escaping is applied by callers
+ * where the text is prose; this only guards the boundary itself.
+ */
+export function untrustedBlock(tag: string, body: string) {
+  const escaped = body.replace(
+    new RegExp(`<(/?)\\s*${tag}\\b`, "gi"),
+    (_match, slash: string) => `&lt;${slash}${tag}`,
+  );
+  return `<${tag}>\n${escaped}\n</${tag}>`;
+}
