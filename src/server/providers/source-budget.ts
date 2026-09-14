@@ -24,6 +24,14 @@ interface RetainedProviderSource {
   skippedFile: SourceFile;
 }
 
+/** Breaks equal-size ties by original position so completion order is irrelevant. */
+function compareRetainedSource(
+  a: RetainedProviderSource,
+  b: RetainedProviderSource,
+) {
+  return a.bytes - b.bytes || a.index - b.index;
+}
+
 /** Adds one retained source to a max-heap ordered by combined source bytes. */
 function retainProviderSource(
   heap: RetainedProviderSource[],
@@ -34,7 +42,8 @@ function retainProviderSource(
   while (index > 0) {
     const parent = Math.floor((index - 1) / 2);
     const parentSource = heap[parent];
-    if (!parentSource || parentSource.bytes >= source.bytes) break;
+    if (!parentSource || compareRetainedSource(parentSource, source) >= 0)
+      break;
     heap[index] = parentSource;
     index = parent;
   }
@@ -55,9 +64,11 @@ function removeLargestProviderSource(heap: RetainedProviderSource[]) {
     const rightSource = heap[right];
     if (!leftSource) break;
     const child =
-      rightSource && rightSource.bytes > leftSource.bytes ? right : left;
+      rightSource && compareRetainedSource(rightSource, leftSource) > 0
+        ? right
+        : left;
     const childSource = heap[child];
-    if (!childSource || childSource.bytes <= last.bytes) break;
+    if (!childSource || compareRetainedSource(childSource, last) <= 0) break;
     heap[index] = childSource;
     index = child;
   }
@@ -130,70 +141,66 @@ export async function collectProviderSourceFiles<T>(
   maximumSourceBytes: number | undefined,
   load: (value: T) => Promise<ProviderSourceCandidate>,
 ) {
-  const files: SourceFile[] = [];
+  const files = new Array<SourceFile>(values.length);
   const retainedSources: RetainedProviderSource[] = [];
   let usedSourceBytes = 0;
   const normalizedMaximum =
     maximumSourceBytes === undefined
       ? undefined
       : Math.max(0, maximumSourceBytes);
-  // Loads run in a sliding window rather than a full prefetch: the accounting
-  // below only bounds memory once a candidate has been consumed, so at most
-  // PROVIDER_SOURCE_CONCURRENCY files sit outside the budget at any moment.
-  const remaining = values[Symbol.iterator]();
-  const pending: Promise<ProviderSourceCandidate>[] = [];
-  /** Starts one more load so the window stays full while results are consumed. */
-  const startNextLoad = () => {
-    const next = remaining.next();
-    if (next.done) return;
-    const started = load(next.value);
-    // Candidates are awaited in order, so a later one rejecting first would
-    // otherwise surface as an unhandled rejection.
-    started.catch(() => undefined);
-    pending.push(started);
-  };
-  for (let slot = 0; slot < PROVIDER_SOURCE_CONCURRENCY; slot++) {
-    startNextLoad();
-  }
-  while (true) {
-    const next = pending.shift();
-    if (!next) break;
-    const candidate = await next;
-    startNextLoad();
-    const file = candidate.file;
-    if (file.isBinary || file.skipReason) {
-      files.push(file);
-      continue;
-    }
-    const sourceBytes =
-      Buffer.byteLength(file.content) +
-      Buffer.byteLength(file.previousContent ?? "");
-    const index = files.push(file) - 1;
-    usedSourceBytes += sourceBytes;
-    retainProviderSource(retainedSources, {
-      index,
-      bytes: sourceBytes,
-      skippedFile: {
-        ...file,
-        content: "",
-        previousContent: undefined,
-        skipReason: "too_large",
-        isBinary: false,
-        binaryHash:
-          candidate.oversizedHash ??
-          file.binaryHash ??
-          `${file.path}:${file.changeType ?? "modified"}`,
+  let cursor = 0;
+  let stopped = false;
+  // Consume each result as soon as it finishes. Slow files no longer leave
+  // the other seven slots idle, and completed source is budgeted immediately.
+  await Promise.all(
+    Array.from(
+      { length: Math.min(PROVIDER_SOURCE_CONCURRENCY, values.length) },
+      async () => {
+        while (!stopped && cursor < values.length) {
+          const index = cursor++;
+          try {
+            const candidate = await load(values[index] as T);
+            const file = candidate.file;
+            if (file.isBinary || file.skipReason) {
+              files[index] = file;
+              continue;
+            }
+            const sourceBytes =
+              Buffer.byteLength(file.content) +
+              Buffer.byteLength(file.previousContent ?? "");
+            files[index] = file;
+            usedSourceBytes += sourceBytes;
+            retainProviderSource(retainedSources, {
+              index,
+              bytes: sourceBytes,
+              skippedFile: {
+                ...file,
+                content: "",
+                previousContent: undefined,
+                skipReason: "too_large",
+                isBinary: false,
+                binaryHash:
+                  candidate.oversizedHash ??
+                  file.binaryHash ??
+                  `${file.path}:${file.changeType ?? "modified"}`,
+              },
+            });
+            while (
+              normalizedMaximum !== undefined &&
+              usedSourceBytes > normalizedMaximum
+            ) {
+              const removed = removeLargestProviderSource(retainedSources);
+              if (!removed) break;
+              files[removed.index] = removed.skippedFile;
+              usedSourceBytes -= removed.bytes;
+            }
+          } catch (cause) {
+            stopped = true;
+            throw cause;
+          }
+        }
       },
-    });
-    while (
-      normalizedMaximum !== undefined &&
-      usedSourceBytes > normalizedMaximum
-    ) {
-      const removed = removeLargestProviderSource(retainedSources);
-      if (!removed) break;
-      files[removed.index] = removed.skippedFile;
-      usedSourceBytes -= removed.bytes;
-    }
-  }
+    ),
+  );
   return files;
 }

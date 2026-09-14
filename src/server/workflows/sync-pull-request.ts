@@ -6,7 +6,10 @@ import { db } from "~/server/db";
 import { ProviderError } from "~/server/providers/types";
 import { assignPullRequestToQueue } from "~/server/review/queue";
 import { reviewSyncFailureDetails } from "~/server/sync/error";
-import { syncPullRequest } from "~/server/sync/service";
+import {
+  cleanupPullRequestSources,
+  syncPullRequest,
+} from "~/server/sync/service";
 import { ensureWorkflowRunLink } from "./run-link";
 
 /**
@@ -109,6 +112,7 @@ async function executeSynchronization(
       sync.repositoryId,
       sync.pullRequestNumber,
       {
+        deferRetention: true,
         onProgress: async (progress) => {
           await db
             .update(syncRuns)
@@ -145,6 +149,8 @@ async function executeSynchronization(
       .update(workflowRuns)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(workflowRuns.id, workflow.id));
+    // Source is ready now: let the UI load it before retention maintenance.
+    await cleanupPullRequestSources(db, sync.repositoryId);
     await continueAutomaticIntake(sync);
     return {
       snapshotCreated: result.snapshotCreated,

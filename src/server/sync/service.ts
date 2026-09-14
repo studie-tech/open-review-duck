@@ -48,7 +48,10 @@ export async function syncPullRequest(
   db: Database,
   repositoryId: string,
   number: number,
-  options?: { onProgress?: (progress: number) => Promise<void> },
+  options?: {
+    onProgress?: (progress: number) => Promise<void>;
+    deferRetention?: boolean;
+  },
 ) {
   const repository = await db.query.repositories.findFirst({
     where: eq(repositories.id, repositoryId),
@@ -485,6 +488,17 @@ export async function syncPullRequest(
       snapshotCreated: true,
     };
   });
+  if (!options?.deferRetention) {
+    await cleanupPullRequestSources(db, repositoryId);
+  }
+  return result;
+}
+
+/** Runs best-effort retention after a workflow has made its result available. */
+export async function cleanupPullRequestSources(
+  db: Database,
+  repositoryId: string,
+) {
   try {
     await pruneExpiredReviewSnapshots(db, repositoryId);
   } catch (cause) {
@@ -496,5 +510,4 @@ export async function syncPullRequest(
           : undefined,
     });
   }
-  return result;
 }

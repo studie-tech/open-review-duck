@@ -72,6 +72,32 @@ afterEach(() => {
 });
 
 describe("usePrivateWorkspaceSourceHydration", () => {
+  it("keeps verified unit and context identities stable across unrelated renders and other file loads", async () => {
+    hydrate.mockImplementation(async (sources: Unit[]) => ({
+      failures: [],
+      successfulIndexes: sources.map((_source, index) => index),
+      units: sources.map((source) => ({ ...source, source: "verified" })),
+    }));
+    const data = workspace(10);
+    const { result, rerender } = renderHook(() =>
+      usePrivateWorkspaceSourceHydration(data, 0, "files"),
+    );
+    await waitFor(() =>
+      expect(result.current.sourceStatus("src/02.ts")).toBe("ready"),
+    );
+    const units = result.current.units;
+    const contexts = result.current.fileContexts;
+    rerender();
+    expect(result.current.units).toBe(units);
+    expect(result.current.fileContexts).toBe(contexts);
+    await act(async () => {
+      await result.current.prepareSourcePath("src/09.ts", "preview");
+    });
+    expect(result.current.units[0]).toBe(units[0]);
+    expect(result.current.fileContexts[0]).toBe(contexts[0]);
+    expect(result.current.units[9]?.source).toBe("verified");
+  });
+
   it("replaces the ledger and cache when navigation changes snapshots", async () => {
     hydrate.mockImplementation(async (sources: Unit[], snapshotId: string) => ({
       failures: [],
@@ -157,13 +183,13 @@ describe("usePrivateWorkspaceSourceHydration", () => {
       usePrivateWorkspaceSourceHydration(data, 25, "files"),
     );
 
-    await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(46));
+    await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(10));
 
     expect(result.current.sourceStatus("src/25.ts")).toBe("ready");
     expect(result.current.units[25]?.source).toBe("ready:src/25.ts");
-    // Twenty-three file tasks (active plus the hydrated neighbor window), each
+    // Five file tasks (active plus two neighbors on each side), each
     // with one context stage and one unit-derivation stage—not all fifty files.
-    expect(hydrate).toHaveBeenCalledTimes(46);
+    expect(hydrate).toHaveBeenCalledTimes(10);
     expect(result.current.sourceStatus("src/00.ts")).toBe("idle");
     expect(result.current.sourceStatus("src/49.ts")).toBe("idle");
   });
