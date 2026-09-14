@@ -489,7 +489,11 @@ export function ReviewConceptFileCardPreview({
         {expanded && !nearViewport ? (
           <div
             aria-hidden="true"
-            style={{ height: Math.min(600, Math.max(84, lineCount * 21)) }}
+            style={{
+              height:
+                placeholderHeight.current ??
+                Math.min(600, Math.max(84, lineCount * 21)),
+            }}
           />
         ) : expanded &&
           onSourceNeeded &&

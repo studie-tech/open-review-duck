@@ -7,6 +7,7 @@ type Transaction = Parameters<typeof persistSignOffs>[0];
 /** Executes the real query builders against scripted database responses. */
 async function signOffFixture(options: {
   authorized?: boolean;
+  waiting?: boolean;
   latest?: { id: string; hash: string; requiresReReview?: boolean };
 }) {
   const queries: Array<{ sql: string; params: unknown[] }> = [];
@@ -52,6 +53,12 @@ async function signOffFixture(options: {
               ],
       };
     }
+    if (
+      sql.startsWith("select") &&
+      sql.includes('"open_review_duck_review_wait"')
+    ) {
+      return { rows: options.waiting ? [["new-unit"]] : [] };
+    }
     if (sql.startsWith("insert")) {
       // The generated insert supplies defaults for id and signedOffAt.
       written.push(params);
@@ -79,6 +86,15 @@ async function signOffFixture(options: {
 }
 
 describe("sign-off across revisions", () => {
+  it("rejects a historical sign-off when its unchanged successor is waiting", async () => {
+    await expect(
+      signOffFixture({
+        latest: { id: "new-unit", hash: "reviewed-hash" },
+        waiting: true,
+      }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+
   it("records the reviewed snapshot while a newer head is still preparing", async () => {
     const { outcome, queries } = await signOffFixture({});
     expect(outcome).toMatchObject({
