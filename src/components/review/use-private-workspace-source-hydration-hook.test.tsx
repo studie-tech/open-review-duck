@@ -166,10 +166,12 @@ describe("usePrivateWorkspaceSourceHydration", () => {
     );
     const firstCall = hydrate.mock.calls[0]?.[0] as Unit[] | undefined;
     expect(firstCall?.[0]?.path).toBe("src/40.ts");
-    expect(result.current.sourceStatus("src/00.ts")).toBe("idle");
+    expect(
+      (hydrate.mock.calls[1]?.[0] as Unit[] | undefined)?.[0]?.path,
+    ).not.toBe("src/00.ts");
   });
 
-  it("loads only the active File-mode working set on a large review", async () => {
+  it("warms a bounded buffer after the active File-mode working set", async () => {
     hydrate.mockImplementation(async (sources: Unit[]) => ({
       failures: [],
       successfulIndexes: sources.map((_source, index) => index),
@@ -183,13 +185,12 @@ describe("usePrivateWorkspaceSourceHydration", () => {
       usePrivateWorkspaceSourceHydration(data, 25, "files"),
     );
 
-    await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(10));
+    await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(48));
 
     expect(result.current.sourceStatus("src/25.ts")).toBe("ready");
     expect(result.current.units[25]?.source).toBe("ready:src/25.ts");
-    // Five file tasks (active plus two neighbors on each side), each
-    // with one context stage and one unit-derivation stage—not all fifty files.
-    expect(hydrate).toHaveBeenCalledTimes(10);
+    // The five nearby files load first, followed by a bounded 24-file buffer.
+    expect(hydrate).toHaveBeenCalledTimes(48);
     expect(result.current.sourceStatus("src/00.ts")).toBe("idle");
     expect(result.current.sourceStatus("src/49.ts")).toBe("idle");
   });

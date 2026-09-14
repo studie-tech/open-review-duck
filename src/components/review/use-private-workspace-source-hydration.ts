@@ -269,14 +269,37 @@ export function usePrivateWorkspaceSourceHydration(
 
   useEffect(() => {
     if (!store || !intentReady) return;
+    store.protect([
+      ...(plan.activePath ? [plan.activePath] : []),
+      ...plan.nextPaths,
+      ...plan.previewPaths,
+    ]);
+    let cancelled = false;
+    const immediate: Promise<unknown>[] = [];
     /** Schedules intent without turning a prefetch failure into an unhandled rejection. */
     const request = (path: string, priority: WorkspaceSourcePriority) => {
-      void store.request(path, priority).catch(() => undefined);
+      immediate.push(store.request(path, priority).catch(() => undefined));
     };
     if (plan.activePath) request(plan.activePath, "active");
     for (const path of plan.nextPaths) request(path, "next");
     for (const path of plan.previewPaths) request(path, "preview");
-  }, [intentReady, plan, store]);
+    if (reviewMode === "files") {
+      const paths = reviewFileCardsInTreeOrder(
+        reviewFileEntries(initialData.files, reviewUnits),
+      ).map(({ path }) => path);
+      const index = paths.indexOf(plan.activePath ?? "");
+      const ahead = [
+        ...paths.slice(index + 1),
+        ...paths.slice(0, Math.max(0, index)),
+      ];
+      void Promise.all(immediate).then(() =>
+        store.prefetch(ahead, () => cancelled),
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [initialData.files, intentReady, plan, reviewMode, reviewUnits, store]);
 
   // Reading the external revision makes every store transition materialize a
   // fresh view below without coupling source ownership to React state.
