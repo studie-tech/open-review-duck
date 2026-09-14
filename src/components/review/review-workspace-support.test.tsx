@@ -489,7 +489,9 @@ describe("same-file concept cards", () => {
         disconnect() {}
       },
     );
-    onTestFinished(() => vi.unstubAllGlobals());
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const onSourceNeeded = vi.fn().mockResolvedValue(undefined);
     render(
       <ReviewConceptFileCardPreview
