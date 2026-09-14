@@ -367,6 +367,7 @@ export function ReviewConceptFileCardPreview({
   commentThreads,
   itemLabel = "Card",
   sourceBytes,
+  onSourceNeeded,
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -381,8 +382,38 @@ export function ReviewConceptFileCardPreview({
   commentThreads?: Parameters<typeof reviewLineCommentMarkersBySide>[0];
   itemLabel?: "Card" | "File";
   sourceBytes?: number;
+  onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
 }) {
   const first = members[0];
+  const articleRef = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const placeholderHeight = useRef<number | undefined>(undefined);
+  const [nearViewport, setNearViewport] = useState(!onSourceNeeded);
+  useEffect(() => {
+    const element = articleRef.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setNearViewport(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting && bodyRef.current) {
+          placeholderHeight.current =
+            bodyRef.current.getBoundingClientRect().height;
+        }
+        setNearViewport(Boolean(entry?.isIntersecting));
+      },
+      { root: element.closest("[data-code-scroll-pane]"), rootMargin: "600px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (nearViewport && first?.path) {
+      void onSourceNeeded?.(first.path, "preview").catch(() => undefined);
+    }
+  }, [first?.path, nearViewport, onSourceNeeded]);
   const lineCommentMarkers = useMemo(
     () => reviewLineCommentMarkersBySide(commentThreads ?? []),
     [commentThreads],
@@ -426,6 +457,7 @@ export function ReviewConceptFileCardPreview({
   const allDeleted = members.every((member) => member.changeType === "deleted");
   return (
     <article
+      ref={articleRef}
       className={cn(
         "mx-4 overflow-hidden rounded-xl border",
         deleted
@@ -453,59 +485,74 @@ export function ReviewConceptFileCardPreview({
             : undefined
         }
       />
-      {expanded ? (
-        canShowDiff && first ? (
-          <SideBySideUnitDiff
-            previousSource={previousFileSource}
-            currentSource={fileSource}
-            language={first.language ?? "text"}
-            previousStartLine={1}
-            currentStartLine={1}
-            previousFocusRanges={previousRanges}
-            currentFocusRanges={currentRanges}
-            previousFocusStartLine={
-              allAdded ? null : previousRanges.at(0)?.startLine
-            }
-            previousFocusEndLine={
-              allAdded ? null : previousRanges.at(-1)?.endLine
-            }
-            currentFocusStartLine={
-              allDeleted ? null : currentRanges.at(0)?.startLine
-            }
-            currentFocusEndLine={
-              allDeleted ? null : currentRanges.at(-1)?.endLine
-            }
-            onSelectReviewLine={(line) => {
-              const owner = reviewCardMemberForLine(members, line);
-              if (owner) onCommentLine?.(owner.id, line);
-            }}
-            leftLineCommentMarkers={lineCommentMarkers.left}
-            rightLineCommentMarkers={lineCommentMarkers.right}
-            onOpenLineComment={onOpenLineComment}
-            emitReviewLineAnchors={false}
-            className="rounded-none border-0"
+      <div ref={bodyRef}>
+        {expanded && !nearViewport ? (
+          <div
+            aria-hidden="true"
+            style={{ height: Math.min(600, Math.max(84, lineCount * 21)) }}
           />
+        ) : expanded &&
+          onSourceNeeded &&
+          first?.kind !== "binary" &&
+          !fileSource &&
+          !previousFileSource ? (
+          <div className="px-4 py-5 text-fog" role="status">
+            Loading source…
+          </div>
+        ) : expanded ? (
+          canShowDiff && first ? (
+            <SideBySideUnitDiff
+              previousSource={previousFileSource}
+              currentSource={fileSource}
+              language={first.language ?? "text"}
+              previousStartLine={1}
+              currentStartLine={1}
+              previousFocusRanges={previousRanges}
+              currentFocusRanges={currentRanges}
+              previousFocusStartLine={
+                allAdded ? null : previousRanges.at(0)?.startLine
+              }
+              previousFocusEndLine={
+                allAdded ? null : previousRanges.at(-1)?.endLine
+              }
+              currentFocusStartLine={
+                allDeleted ? null : currentRanges.at(0)?.startLine
+              }
+              currentFocusEndLine={
+                allDeleted ? null : currentRanges.at(-1)?.endLine
+              }
+              onSelectReviewLine={(line) => {
+                const owner = reviewCardMemberForLine(members, line);
+                if (owner) onCommentLine?.(owner.id, line);
+              }}
+              leftLineCommentMarkers={lineCommentMarkers.left}
+              rightLineCommentMarkers={lineCommentMarkers.right}
+              onOpenLineComment={onOpenLineComment}
+              emitReviewLineAnchors={false}
+              className="rounded-none border-0"
+            />
+          ) : (
+            <ReviewConceptFileCardSource
+              fileSource={fileSource}
+              members={members}
+              onCommentLine={onCommentLine}
+              onOpenLineComment={onOpenLineComment}
+              rightLineCommentMarkers={lineCommentMarkers.right}
+            />
+          )
         ) : (
-          <ReviewConceptFileCardSource
-            fileSource={fileSource}
-            members={members}
-            onCommentLine={onCommentLine}
-            onOpenLineComment={onOpenLineComment}
-            rightLineCommentMarkers={lineCommentMarkers.right}
+          <ReviewFileCardSourcePlaceholder
+            deleted={deleted}
+            itemLabel={itemLabel === "File" ? "file" : "card"}
+            language={first?.language}
+            lineCount={lineCount}
+            onShow={() => setExpanded(true)}
+            path={first?.path}
+            reviewed={reviewed}
+            sourceBytes={fileBytes}
           />
-        )
-      ) : (
-        <ReviewFileCardSourcePlaceholder
-          deleted={deleted}
-          itemLabel={itemLabel === "File" ? "file" : "card"}
-          language={first?.language}
-          lineCount={lineCount}
-          onShow={() => setExpanded(true)}
-          path={first?.path}
-          reviewed={reviewed}
-          sourceBytes={fileBytes}
-        />
-      )}
+        )}
+      </div>
     </article>
   );
 }

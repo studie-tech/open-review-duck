@@ -3001,6 +3001,7 @@ export function ReviewWorkspace({
             onOpenLineComment={openLineCommentThread}
             commentThreads={commentThreadsByPath.get(card.path)}
             sourceBytes={sourceBytes}
+            onSourceNeeded={prepareSourcePath}
           />
         );
       }),
@@ -3011,6 +3012,7 @@ export function ReviewWorkspace({
       fileContexts,
       inspectReviewFile,
       openLineCommentThread,
+      prepareSourcePath,
       reviewMode,
       selectUnit,
       showDiff,

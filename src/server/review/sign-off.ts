@@ -39,6 +39,7 @@ export async function currentSnapshotFileForMember(
   tx: ReviewTransaction,
   userId: string,
   snapshotFileId: string,
+  options?: { allowHistorical?: boolean },
 ) {
   const [file] = await tx
     .select({
@@ -60,8 +61,12 @@ export async function currentSnapshotFileForMember(
     .where(
       and(
         eq(snapshotFiles.id, snapshotFileId),
-        eq(reviewSnapshots.headSha, pullRequests.headSha),
-        eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+        options?.allowHistorical
+          ? undefined
+          : eq(reviewSnapshots.headSha, pullRequests.headSha),
+        options?.allowHistorical
+          ? undefined
+          : eq(reviewSnapshots.baseSha, pullRequests.baseSha),
         eq(workspaceMembers.userId, userId),
       ),
     )
@@ -154,6 +159,7 @@ export async function conceptMembersForMutation(
   tx: ReviewTransaction,
   userId: string,
   input: { conceptId: string; layoutId: string; layoutVersion: number },
+  options?: { allowHistorical?: boolean },
 ) {
   const [candidate] = await tx
     .select({
@@ -187,8 +193,12 @@ export async function conceptMembersForMutation(
         eq(reviewConcepts.id, input.conceptId),
         eq(reviewConceptLayouts.id, input.layoutId),
         eq(workspaceMembers.userId, userId),
-        eq(reviewSnapshots.headSha, pullRequests.headSha),
-        eq(reviewSnapshots.baseSha, pullRequests.baseSha),
+        options?.allowHistorical
+          ? undefined
+          : eq(reviewSnapshots.headSha, pullRequests.headSha),
+        options?.allowHistorical
+          ? undefined
+          : eq(reviewSnapshots.baseSha, pullRequests.baseSha),
       ),
     )
     .limit(1);
@@ -407,8 +417,10 @@ export async function persistSignOffs(
       stableKey: reviewUnits.stableKey,
       semanticHash: reviewUnits.semanticHash,
       pullRequestId: pullRequests.id,
-      currentHeadSha: pullRequests.headSha,
-      currentBaseSha: pullRequests.baseSha,
+      complexity: reviewUnits.complexity,
+      snapshotId: reviewUnits.snapshotId,
+      repositoryId: pullRequests.repositoryId,
+      number: pullRequests.number,
     })
     .from(reviewUnits)
     .innerJoin(reviewSnapshots, eq(reviewUnits.snapshotId, reviewSnapshots.id))
@@ -428,18 +440,11 @@ export async function persistSignOffs(
     );
   const requestedById = new Map(requestedUnits.map((unit) => [unit.id, unit]));
 
-  const revisionScopes = new Map<
-    string,
-    { headSha: string; baseSha: string; stableKeys: Set<string> }
-  >();
+  const revisionScopes = new Map<string, Set<string>>();
   for (const unit of requestedUnits) {
-    const scope = revisionScopes.get(unit.pullRequestId) ?? {
-      headSha: unit.currentHeadSha,
-      baseSha: unit.currentBaseSha,
-      stableKeys: new Set<string>(),
-    };
-    scope.stableKeys.add(unit.stableKey);
-    revisionScopes.set(unit.pullRequestId, scope);
+    const keys = revisionScopes.get(unit.pullRequestId) ?? new Set<string>();
+    keys.add(unit.stableKey);
+    revisionScopes.set(unit.pullRequestId, keys);
   }
   // Serialize this reviewer's sign-off writes per pull request. Sorting the
   // keys gives every caller the same acquisition order, so two batches that
@@ -450,16 +455,38 @@ export async function persistSignOffs(
     );
   }
 
-  const revisionFilters = [...revisionScopes].map(([pullRequestId, scope]) =>
-    and(
-      eq(reviewSnapshots.pullRequestId, pullRequestId),
-      eq(reviewSnapshots.headSha, scope.headSha),
-      eq(reviewSnapshots.baseSha, scope.baseSha),
-      inArray(reviewUnits.stableKey, [...scope.stableKeys]),
+  // Coordinate with snapshot publication, not its downloads/analysis. A sync
+  // must either carry this sign-off or finish before we resolve its successor.
+  const syncKeys = [
+    ...new Set(
+      requestedUnits.map((unit) => `${unit.repositoryId}:${unit.number}`),
     ),
+  ].sort();
+  for (const key of syncKeys) {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock_shared(hashtext(${key}))`,
+    );
+  }
+
+  const revisionFilters = [...revisionScopes].map(
+    ([pullRequestId, stableKeys]) =>
+      and(
+        eq(reviewSnapshots.pullRequestId, pullRequestId),
+        eq(
+          reviewSnapshots.id,
+          tx
+            .select({ id: reviewSnapshots.id })
+            .from(reviewSnapshots)
+            .where(eq(reviewSnapshots.pullRequestId, pullRequestId))
+            .orderBy(desc(reviewSnapshots.version))
+            .limit(1),
+        ),
+        inArray(reviewUnits.stableKey, [...stableKeys]),
+      ),
   );
-  // Only the highest snapshot version still describing the pull request's
-  // current revision may receive a sign-off.
+  // Resolve against the latest published snapshot, even while a newer head
+  // is preparing. Restrict the snapshot before looking up stable keys so a
+  // removed unit cannot resolve to an arbitrary intermediate revision.
   const latestRevisions = revisionFilters.length
     ? await tx
         .selectDistinctOn(
@@ -469,6 +496,7 @@ export async function persistSignOffs(
             stableKey: reviewUnits.stableKey,
             semanticHash: reviewUnits.semanticHash,
             complexity: reviewUnits.complexity,
+            requiresReReview: reviewUnits.requiresReReview,
             snapshotId: reviewUnits.snapshotId,
             pullRequestId: reviewSnapshots.pullRequestId,
           },
@@ -495,7 +523,10 @@ export async function persistSignOffs(
   interface ResolvedSignOff {
     input: SignOffInput;
     pullRequestId: string;
-    unit: (typeof latestRevisions)[number];
+    unit: Pick<
+      (typeof latestRevisions)[number],
+      "id" | "semanticHash" | "complexity" | "snapshotId"
+    >;
   }
   const resolved: ResolvedSignOff[] = [];
   for (const input of inputs) {
@@ -504,17 +535,16 @@ export async function persistSignOffs(
       outcomes.set(input.unitId, { code: "NOT_FOUND", ok: false });
       continue;
     }
-    const unit = latestByStableKey.get(
+    const latest = latestByStableKey.get(
       revisionKey(requested.pullRequestId, requested.stableKey),
     );
-    if (!unit || unit.semanticHash !== requested.semanticHash) {
-      outcomes.set(input.unitId, {
-        code: "CONFLICT",
-        message: "This review unit changed in the latest revision",
-        ok: false,
-      });
-      continue;
-    }
+    // Save the version actually reviewed. Only an unchanged successor can
+    // inherit approval; changed or removed code stays pending in the new view.
+    const unit =
+      latest?.semanticHash === requested.semanticHash &&
+      (latest.id === requested.id || !latest.requiresReReview)
+        ? latest
+        : requested;
     resolved.push({ input, pullRequestId: requested.pullRequestId, unit });
   }
   if (resolved.length === 0) return outcomes;

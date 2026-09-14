@@ -14,11 +14,11 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import { sortByReviewFileTreeOrder } from "~/lib/review-files";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
-import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   AI_QUICK_QUESTIONS,
@@ -474,12 +474,78 @@ describe("same-file concept cards", () => {
     expect(onOpenLineComment).toHaveBeenCalledWith("thread-ada");
   });
 
+  it("requests and mounts a file preview only when it approaches the viewport", () => {
+    let report: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        /** Captures visibility transitions for this preview. */
+        constructor(callback: IntersectionObserverCallback) {
+          report = callback;
+        }
+        /** Waits for the test to report visibility. */
+        observe() {}
+        /** Releases the observer at unmount. */
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => vi.unstubAllGlobals());
+    const onSourceNeeded = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ReviewConceptFileCardPreview
+        members={[{ ...units[0], startLine: 1, endLine: 1 }] as never}
+        index={0}
+        count={1}
+        diffVisible={false}
+        fileSource="const visiblePreview = true;"
+        onSelect={vi.fn()}
+        onSourceNeeded={onSourceNeeded}
+      />,
+    );
+    expect(onSourceNeeded).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("const visiblePreview = true;"),
+    ).not.toBeInTheDocument();
+    act(() =>
+      report?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    );
+    expect(onSourceNeeded).toHaveBeenCalledWith(units[0]?.path, "preview");
+    expect(
+      screen.getByText("const visiblePreview = true;"),
+    ).toBeInTheDocument();
+    act(() =>
+      report?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    );
+    expect(
+      screen.queryByText("const visiblePreview = true;"),
+    ).not.toBeInTheDocument();
+  });
+
   it("mounts only the leading rows of a file card longer than a window", () => {
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        /** Ignores the block: this case only reads the first paint. */
-        observe() {}
+        /** Retains the observer callback for the article entering the viewport. */
+        constructor(private callback: IntersectionObserverCallback) {}
+        /** Exposes the card while leaving its later row windows unmounted. */
+        observe(element: Element) {
+          if (element.tagName === "ARTICLE")
+            this.callback(
+              [
+                {
+                  isIntersecting: true,
+                  target: element,
+                } as IntersectionObserverEntry,
+              ],
+              this as unknown as IntersectionObserver,
+            );
+        }
 
         /** Ignores teardown: nothing was ever reported. */
         disconnect() {}

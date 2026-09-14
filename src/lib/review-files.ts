@@ -189,7 +189,7 @@ export const FILES_VIEWER_PAGE_SIZE = 40;
  * How many neighboring cards to hydrate so their diffs can paint while
  * scrolling. Kept inside the private source store's ready-file budget.
  */
-export const FILES_VIEWER_PREVIEW_RADIUS = 11;
+export const FILES_VIEWER_PREVIEW_RADIUS = 2;
 /** Extra tree neighbors to hydrate and syntax-preload beyond the visible window. */
 export const FILES_VIEWER_PREFETCH_RADIUS = 4;
 

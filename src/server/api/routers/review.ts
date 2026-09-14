@@ -3007,15 +3007,11 @@ export const reviewRouter = createTRPCRouter({
       ctx.db.transaction(async (tx) => {
         const snapshotId = await conceptLayoutSnapshotId(tx, input.layoutId);
         await lockConceptLayoutScope(tx, ctx.auth.userId, snapshotId);
-        await assertSnapshotIsCurrent(
-          tx,
-          snapshotId,
-          "Synchronize the pull request before signing off this concept",
-        );
         const concept = await conceptMembersForMutation(
           tx,
           ctx.auth.userId,
           input,
+          { allowHistorical: true },
         );
         const waiting = await tx
           .select({ unitId: reviewWaits.unitId })
@@ -3172,6 +3168,7 @@ export const reviewRouter = createTRPCRouter({
           tx,
           ctx.auth.userId,
           input.snapshotFileId,
+          { allowHistorical: true },
         );
         if (!file) throw new TRPCError({ code: "NOT_FOUND" });
         const members = await tx.query.reviewUnits.findMany({
