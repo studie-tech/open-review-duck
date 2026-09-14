@@ -3164,7 +3164,7 @@ export function ReviewWorkspace({
         finding={finding}
         variant="line"
         locationIndex={activeFindingLocationIndex}
-        providerName={providerLabel(initialData.pullRequest.provider)}
+        pullRequest={initialData.pullRequest}
         published={findingPublished(finding)}
         onOpenLocation={(index) => openFinding(finding, index)}
         onCollapse={() => collapseFinding(finding.id)}
@@ -3237,7 +3237,7 @@ export function ReviewWorkspace({
           finding={activeFinding}
           variant="detached"
           locationIndex={activeFindingLocationIndex}
-          providerName={providerLabel(initialData.pullRequest.provider)}
+          pullRequest={initialData.pullRequest}
           published={findingPublished(activeFinding)}
           onOpenLocation={(index) => openFinding(activeFinding, index)}
           onCollapse={() => collapseFinding(activeFinding.id)}
@@ -3413,7 +3413,7 @@ export function ReviewWorkspace({
       <ProviderConversation
         key={thread.externalId}
         onUploadImage={(file) => uploadCommentImage(thread.unitId, file)}
-        provider={initialData.pullRequest.provider}
+        pullRequest={initialData.pullRequest}
         revealed={focusedProviderThreadId === thread.externalId}
         thread={thread}
         newSince={
@@ -5793,10 +5793,7 @@ export function ReviewWorkspace({
         <ReviewDiscussionsPanel
           error={providerConversations.error?.message}
           loading={providerConversations.isFetching}
-          provider={
-            providerConversations.data?.provider ??
-            initialData.pullRequest.provider
-          }
+          pullRequest={initialData.pullRequest}
           threads={providerDiscussionThreads}
           onClose={() => setDiscussionsOpen(false)}
           onOpenThread={openProviderDiscussion}
@@ -6275,10 +6272,7 @@ export function ReviewWorkspace({
               nextReviewShortcut={reviewShortcuts.nextReview}
               discussionStatus={
                 <ReviewDiscussionSummary
-                  provider={
-                    providerConversations.data?.provider ??
-                    initialData.pullRequest.provider
-                  }
+                  pullRequest={initialData.pullRequest}
                   threads={providerDiscussionThreads}
                   onOpenThread={openProviderDiscussion}
                 />
@@ -6305,8 +6299,10 @@ export function ReviewWorkspace({
                     mergePullRequest.error?.data?.code === "FORBIDDEN" ||
                     providerLifecycle.error?.data?.code === "FORBIDDEN"
                   }
-                  provider={initialData.pullRequest.provider}
-                  pullRequestUrl={initialData.pullRequest.webUrl}
+                  pullRequest={initialData.pullRequest}
+                  discussions={providerDiscussionThreads.filter(
+                    isOpenProviderDiscussion,
+                  )}
                   reviewPath={`/review/${initialData.pullRequest.id}`}
                   onRefresh={() => {
                     void providerLifecycle.refetch().then((result) => {

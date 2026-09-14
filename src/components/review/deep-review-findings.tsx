@@ -13,10 +13,16 @@ import Link from "next/link";
 import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import {
+  type AiFixPromptPullRequest,
+  findingFixPrompt,
+} from "~/lib/ai-fix-prompt";
+import { providerLabel } from "~/lib/provider-labels";
 import { unpublishableFindingReason } from "~/lib/review-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
@@ -368,7 +374,7 @@ export function DeepReviewInlineFinding({
   onOpenLocation,
   onPublish,
   onShowInCode,
-  providerName,
+  pullRequest,
   published,
   publishing,
   variant,
@@ -381,11 +387,12 @@ export function DeepReviewInlineFinding({
   onOpenLocation: (index: number) => void;
   onPublish?: () => void;
   onShowInCode?: () => void;
-  providerName: string;
+  pullRequest: AiFixPromptPullRequest;
   published: boolean;
   publishing: boolean;
   variant: "line" | "detached";
 }) {
+  const providerName = providerLabel(pullRequest.provider);
   // The read path already decides publishability against the same predicate
   // the publish mutation enforces; restating it here would let the button and
   // the server disagree.
@@ -592,6 +599,15 @@ export function DeepReviewInlineFinding({
             <FileCode2 className="size-3" />
             Show me the file
           </Button>
+        )}
+        {/* Whether or not the finding can be posted, the branch may still
+            need the change; a withheld finding is still a fix request. */}
+        {finding.contentAvailable && (
+          <CopyAiFixPromptButton
+            variant="button"
+            subject="this finding"
+            prompt={() => findingFixPrompt(pullRequest, finding)}
+          />
         )}
         <Button
           size="sm"

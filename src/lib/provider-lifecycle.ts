@@ -26,6 +26,7 @@ export function buildProviderLifecycle(input: {
   mergeable: boolean | null;
   canMerge: boolean;
   mergeBlockedReason?: string;
+  mergeBlockedFix?: ProviderPullRequestLifecycle["mergeBlockedFix"];
   mergeActionLabel: string;
   hasMergePermission?: boolean;
 }): ProviderPullRequestLifecycle {

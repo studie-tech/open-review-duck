@@ -494,6 +494,7 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       mergeable: merge.mergeable,
       canMerge: merge.canMerge,
       mergeBlockedReason: merge.mergeBlockedReason,
+      mergeBlockedFix: merge.mergeBlockedFix,
       mergeActionLabel: "Complete",
     });
   }

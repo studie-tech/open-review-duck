@@ -15,6 +15,12 @@ import { useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import {
+  type AiFixPromptDiscussion,
+  type AiFixPromptPullRequest,
+  failingCheckFixPrompt,
+  mergeBlockedFixPrompt,
+} from "~/lib/ai-fix-prompt";
 import { providerLabel } from "~/lib/provider-labels";
 import {
   providerCheckStateLabel,
@@ -22,12 +28,14 @@ import {
 } from "~/lib/provider-lifecycle";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 import { ProviderPermissionRecovery } from "./provider-permission-recovery";
 
 type LifecycleState = RouterOutputs["review"]["providerLifecycle"];
 
 /** Renders live CI checks and the provider merge action after a review. */
 export function ProviderLifecycle({
+  discussions,
   error,
   loading,
   mutationPending,
@@ -36,11 +44,12 @@ export function ProviderLifecycle({
   readyError,
   onRefresh,
   permissionDenied,
-  provider,
-  pullRequestUrl,
+  pullRequest,
   reviewPath,
   state,
 }: {
+  /** Open review conversations, quoted when they are what blocks merging. */
+  discussions?: readonly AiFixPromptDiscussion[];
   error?: string;
   loading: boolean;
   mutationPending: boolean;
@@ -49,12 +58,13 @@ export function ProviderLifecycle({
   readyError?: string;
   onRefresh: () => void;
   permissionDenied?: boolean;
-  provider: LifecycleState["provider"];
-  pullRequestUrl: string;
+  pullRequest: AiFixPromptPullRequest;
   reviewPath?: string;
   state?: LifecycleState;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const provider = pullRequest.provider;
+  const pullRequestUrl = pullRequest.webUrl;
   const providerName = providerLabel(provider);
   const merged = state?.pullRequestState === "merged";
   const draft = state?.pullRequestState === "draft";
@@ -86,6 +96,22 @@ export function ProviderLifecycle({
     { canMerge: state?.canMerge, optionalPending },
   );
   const mergeLabel = state?.mergeActionLabel ?? "Merge";
+  const mergeBlockedFix =
+    state?.mergeBlockedReason && state.mergeBlockedFix
+      ? {
+          reason: state.mergeBlockedReason,
+          fix: state.mergeBlockedFix,
+        }
+      : undefined;
+  /** Assembles the merge-block prompt from the state shown at that moment. */
+  const mergeBlockedPrompt = () =>
+    mergeBlockedFix
+      ? mergeBlockedFixPrompt(pullRequest, {
+          ...mergeBlockedFix,
+          checks: state?.checks.filter((check) => check.state === "failure"),
+          discussions,
+        })
+      : "";
   const badgeReady =
     merged || (summary !== "failing" && (summary === "passing" || mergeReady));
 
@@ -174,7 +200,7 @@ export function ProviderLifecycle({
               <ul className="max-h-52 max-w-2xl space-y-1 overflow-y-auto pr-1">
                 {state.checks.map((check) => (
                   <li key={check.id}>
-                    <CheckRow check={check} />
+                    <CheckRow check={check} pullRequest={pullRequest} />
                   </li>
                 ))}
               </ul>
@@ -198,15 +224,25 @@ export function ProviderLifecycle({
             {state.mergeBlockedReason && !merged && !missingMergePermission && (
               <div className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
                 <p>{state.mergeBlockedReason}</p>
-                <a
-                  href={pullRequestUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-cyan mt-1.5 inline-flex items-center gap-1 hover:underline"
-                >
-                  Open on {providerName}
-                  <ExternalLink className="size-3" />
-                </a>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <a
+                    href={pullRequestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-cyan inline-flex items-center gap-1 hover:underline"
+                  >
+                    Open on {providerName}
+                    <ExternalLink className="size-3" />
+                  </a>
+                  {mergeBlockedFix && (
+                    <CopyAiFixPromptButton
+                      variant="inline"
+                      className="-mx-1"
+                      subject="the merge block"
+                      prompt={mergeBlockedPrompt}
+                    />
+                  )}
+                </div>
               </div>
             )}
             {showPermissionRecovery && (
@@ -308,15 +344,25 @@ export function ProviderLifecycle({
                   className="text-coral mt-3 rounded-xl border border-coral/25 bg-coral/10 px-3 py-2 text-xs leading-5"
                 >
                   <p>{state.mergeBlockedReason}</p>
-                  <a
-                    href={pullRequestUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-flex items-center gap-1 font-medium hover:underline"
-                  >
-                    Open on {providerName}
-                    <ExternalLink className="size-3" />
-                  </a>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <a
+                      href={pullRequestUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 font-medium hover:underline"
+                    >
+                      Open on {providerName}
+                      <ExternalLink className="size-3" />
+                    </a>
+                    {mergeBlockedFix && (
+                      <CopyAiFixPromptButton
+                        variant="inline"
+                        className="-mx-1 font-medium"
+                        subject="the merge block"
+                        prompt={mergeBlockedPrompt}
+                      />
+                    )}
+                  </div>
                 </div>
               )}
             </>
@@ -340,11 +386,31 @@ export function ProviderLifecycle({
   );
 }
 
-/** Renders one check, pipeline, or status with its live state. */
-function CheckRow({ check }: { check: LifecycleState["checks"][number] }) {
+/**
+ * Renders one check, pipeline, or status with its live state.
+ *
+ * A failed check is something the branch still has to fix, so its row also
+ * offers the fix prompt; the control sits beside the link rather than inside
+ * it because an anchor cannot contain a button.
+ */
+function CheckRow({
+  check,
+  pullRequest,
+}: {
+  check: LifecycleState["checks"][number];
+  pullRequest: AiFixPromptPullRequest;
+}) {
   const label = providerCheckStateLabel(check.state);
+  const fixPrompt =
+    check.state === "failure" ? (
+      <CopyAiFixPromptButton
+        className="mt-1"
+        subject={`the failing check ${check.name}`}
+        prompt={() => failingCheckFixPrompt(pullRequest, check)}
+      />
+    ) : null;
   const content = (
-    <span className="flex min-w-0 items-start gap-2.5 px-1 py-1.5">
+    <span className="flex min-w-0 flex-1 items-start gap-2.5 px-1 py-1.5">
       <CheckStateIcon state={check.state} />
       <span className="min-w-0">
         <span className="flex min-w-0 items-center gap-1.5">
@@ -363,19 +429,22 @@ function CheckRow({ check }: { check: LifecycleState["checks"][number] }) {
     </span>
   );
 
-  if (!check.webUrl) {
-    return content;
-  }
-
   return (
-    <a
-      href={check.webUrl}
-      target="_blank"
-      rel="noreferrer"
-      className="hover:bg-surface-hover/60 -mx-1 block rounded-xl transition"
-    >
-      {content}
-    </a>
+    <div className="-mx-1 flex items-start">
+      {check.webUrl ? (
+        <a
+          href={check.webUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="hover:bg-surface-hover/60 flex min-w-0 flex-1 rounded-xl transition"
+        >
+          {content}
+        </a>
+      ) : (
+        content
+      )}
+      {fixPrompt}
+    </div>
   );
 }
 

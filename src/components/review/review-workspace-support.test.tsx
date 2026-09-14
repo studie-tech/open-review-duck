@@ -18,6 +18,7 @@ import { sortByReviewFileTreeOrder } from "~/lib/review-files";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   AI_QUICK_QUESTIONS,
@@ -1918,6 +1919,18 @@ function conversationActions(
   };
 }
 
+const conversationPullRequest: AiFixPromptPullRequest = {
+  provider: "github",
+  repositoryOwner: "acme",
+  repositoryName: "review",
+  number: 12,
+  title: "Retry provider calls",
+  webUrl: "https://github.com/acme/review/pull/12",
+  sourceBranch: "feature/retries",
+  targetBranch: "main",
+  headSha: "abc1234",
+};
+
 describe("ProviderConversation", () => {
   it("keeps edit and reply submission blocked until both image uploads finish", async () => {
     const completions: Array<(value: string) => void> = [];
@@ -1928,7 +1941,7 @@ describe("ProviderConversation", () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "906",
           path: "src/retry.ts",
@@ -1988,10 +2001,70 @@ describe("ProviderConversation", () => {
     expect(screen.getByRole("button", { name: "Reply" })).toBeEnabled();
   });
 
+  it("offers a fix prompt for an open conversation and not a resolved one", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const thread = {
+      externalId: "906",
+      path: "src/retry.ts",
+      line: 17,
+      side: "right" as const,
+      status: "open" as const,
+      comments: [
+        {
+          externalId: "906",
+          author: "reviewer",
+          body: "Cap the delay.",
+          createdAt: "2026-07-20T10:00:00Z",
+          publishedByAnotherReviewer: false,
+        },
+      ],
+      unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+    };
+    const view = render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={thread}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy AI fix prompt for this conversation",
+      }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+    });
+    const prompt = writeText.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("### src/retry.ts line 17");
+    expect(prompt).toContain("**reviewer** (2026-07-20T10:00:00Z):");
+    expect(prompt).toContain("Cap the delay.");
+
+    view.rerender(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{ ...thread, status: "resolved" }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /fix prompt/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens a resolved conversation selected from the PR-wide list", () => {
     const { rerender } = render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "900",
           path: "src/retry.ts",
@@ -2020,7 +2093,7 @@ describe("ProviderConversation", () => {
     ).not.toBeInTheDocument();
     rerender(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         revealed
         thread={{
           externalId: "900",
@@ -2057,7 +2130,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "901",
           path: "src/retry.ts",
@@ -2115,7 +2188,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "901b",
           path: "src/retry.ts",
@@ -2165,7 +2238,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "901c",
           path: "src/retry.ts",
@@ -2209,7 +2282,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "901d",
           path: "src/retry.ts",
@@ -2250,7 +2323,7 @@ describe("ProviderConversation", () => {
   it("keeps unresolved conversations open when the page loads", () => {
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "902",
           path: "src/retry.ts",
@@ -2304,7 +2377,7 @@ describe("ProviderConversation", () => {
     };
     const { rerender } = render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={thread}
         publishedByReviewDuck={false}
         replying={false}
@@ -2319,7 +2392,7 @@ describe("ProviderConversation", () => {
 
     rerender(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{ ...thread, status: "resolved" }}
         publishedByReviewDuck={false}
         replying={false}
@@ -2338,7 +2411,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "904",
           path: "src/retry.ts",
@@ -2390,7 +2463,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "906",
           path: "src/retry.ts",
@@ -2432,7 +2505,7 @@ describe("ProviderConversation", () => {
     // member, so only ReviewDuck knows whose words these are.
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "920",
           path: "src/retry.ts",
@@ -2478,7 +2551,7 @@ describe("ProviderConversation", () => {
     // Deleting a conversation takes every comment in it.
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "922",
           path: "src/retry.ts",
@@ -2524,7 +2597,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "909",
           path: "src/retry.ts",
@@ -2567,7 +2640,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "910",
           path: "src/retry.ts",
@@ -2615,7 +2688,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "911",
           path: "src/retry.ts",
@@ -2659,7 +2732,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "907",
           path: "src/retry.ts",

@@ -1,15 +1,41 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import type { RouterOutputs } from "~/trpc/react";
 import { ProviderLifecycle } from "./provider-lifecycle";
 
 type LifecycleState = RouterOutputs["review"]["providerLifecycle"];
 
 afterEach(cleanup);
+
+const githubPullRequest: AiFixPromptPullRequest = {
+  provider: "github",
+  repositoryOwner: "acme",
+  repositoryName: "review",
+  number: 12,
+  title: "Retry provider calls",
+  webUrl: "https://github.com/acme/review/pull/12",
+  sourceBranch: "feature/retries",
+  targetBranch: "main",
+  headSha: "abc1234",
+};
+
+const azurePullRequest: AiFixPromptPullRequest = {
+  ...githubPullRequest,
+  provider: "azure_devops",
+  webUrl: "https://dev.azure.com/acme/review/_git/review/pullrequest/12",
+};
 
 const githubConnection = {
   canReconnect: false,
@@ -41,6 +67,7 @@ const githubLifecycle: LifecycleState = {
   mergeActionLabel: "Merge",
   mergeable: true,
   mergeBlockedReason: undefined,
+  mergeBlockedFix: undefined,
   provider: "github",
   pullRequestState: "open",
   revisionCurrent: true,
@@ -54,8 +81,7 @@ describe("ProviderLifecycle", () => {
     const props = {
       loading: false,
       mutationPending: false,
-      provider: "github" as const,
-      pullRequestUrl: "https://github.com/acme/review/pull/12",
+      pullRequest: githubPullRequest,
       onRefresh: vi.fn(),
       onMerge: vi.fn(),
       onMarkReady,
@@ -116,8 +142,7 @@ describe("ProviderLifecycle", () => {
         permissionDenied
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
         onMarkReady={vi.fn()}
@@ -143,8 +168,7 @@ describe("ProviderLifecycle", () => {
         state={githubLifecycle}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={onMerge}
       />,
@@ -199,8 +223,7 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -231,8 +254,7 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -256,8 +278,7 @@ describe("ProviderLifecycle", () => {
         error={undefined}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -270,8 +291,7 @@ describe("ProviderLifecycle", () => {
         error="GitHub could not merge this pull request"
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -289,8 +309,7 @@ describe("ProviderLifecycle", () => {
         state={githubLifecycle}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -309,8 +328,7 @@ describe("ProviderLifecycle", () => {
         error="GitHub could not merge this pull request"
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -354,8 +372,7 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
-        provider="azure_devops"
-        pullRequestUrl="https://dev.azure.com/acme/review/_git/review/pullrequest/12"
+        pullRequest={azurePullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -380,8 +397,7 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -416,8 +432,7 @@ describe("ProviderLifecycle", () => {
         }}
         loading={false}
         mutationPending={false}
-        provider="github"
-        pullRequestUrl="https://github.com/acme/review/pull/12"
+        pullRequest={githubPullRequest}
         onRefresh={vi.fn()}
         onMerge={vi.fn()}
       />,
@@ -428,5 +443,194 @@ describe("ProviderLifecycle", () => {
       screen.getByRole("button", { name: /Reconnect GitHub/i }),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+  });
+
+  describe("AI fix prompts", () => {
+    /** Installs a clipboard the jsdom navigator does not expose. */
+    function mockClipboard() {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      return writeText;
+    }
+    const props = {
+      loading: false,
+      mutationPending: false,
+      pullRequest: githubPullRequest,
+      onRefresh: vi.fn(),
+      onMerge: vi.fn(),
+    };
+
+    it("offers a fix prompt for a block a commit can lift", async () => {
+      const writeText = mockClipboard();
+      render(
+        <ProviderLifecycle
+          {...props}
+          state={{
+            ...githubLifecycle,
+            canMerge: false,
+            mergeable: false,
+            mergeBlockedReason: "Has merge conflicts",
+            mergeBlockedFix: "resolve_conflicts",
+          }}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Copy AI fix prompt for the merge block",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledOnce();
+      });
+      const prompt = writeText.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain("# Unblock merging pull request #12");
+      expect(prompt).toContain("Has merge conflicts");
+      expect(prompt).toContain(
+        "Bring `feature/retries` up to date with `main`",
+      );
+    });
+
+    it("quotes failing checks and open conversations in the block prompt", async () => {
+      const writeText = mockClipboard();
+      const { rerender } = render(
+        <ProviderLifecycle
+          {...props}
+          state={{
+            ...githubLifecycle,
+            canMerge: false,
+            mergeBlockedReason: "Required checks or reviews are not satisfied",
+            mergeBlockedFix: "fix_checks",
+          }}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Copy AI fix prompt for the merge block",
+        }),
+      );
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledOnce();
+      });
+      expect(writeText.mock.calls[0]?.[0]).toContain(
+        "- lint — Process completed with exit code 1",
+      );
+      expect(writeText.mock.calls[0]?.[0]).not.toContain("ci / test");
+
+      rerender(
+        <ProviderLifecycle
+          {...props}
+          discussions={[
+            {
+              path: "src/retry.ts",
+              line: 17,
+              comments: [
+                {
+                  author: "Maya",
+                  createdAt: "2026-07-20T10:00:00Z",
+                  body: "Cap the delay.",
+                },
+              ],
+            },
+          ]}
+          state={{
+            ...githubLifecycle,
+            canMerge: false,
+            mergeBlockedReason: "Requested changes must be addressed",
+            mergeBlockedFix: "address_review",
+          }}
+        />,
+      );
+      // The copied state from the first click is still showing.
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "AI fix prompt for the merge block copied",
+        }),
+      );
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledTimes(2);
+      });
+      expect(writeText.mock.calls[1]?.[0]).toContain(
+        "### src/retry.ts line 17",
+      );
+      expect(writeText.mock.calls[1]?.[0]).toContain("Cap the delay.");
+    });
+
+    it("offers nothing for a block only a person or time can lift", () => {
+      render(
+        <ProviderLifecycle
+          {...props}
+          state={{
+            ...githubLifecycle,
+            checks: [],
+            summary: "empty",
+            canMerge: false,
+            mergeBlockedReason: "Required approvals are missing",
+            mergeBlockedFix: undefined,
+          }}
+        />,
+      );
+      expect(screen.getByText("Required approvals are missing")).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: /Copy AI fix prompt/ }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("offers a fix prompt on each failed check but no other row", async () => {
+      const writeText = mockClipboard();
+      render(<ProviderLifecycle {...props} state={githubLifecycle} />);
+
+      const buttons = screen.getAllByRole("button", {
+        name: /Copy AI fix prompt for the failing check/,
+      });
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]).toHaveAccessibleName(
+        "Copy AI fix prompt for the failing check lint",
+      );
+      expect(screen.getByRole("link", { name: /ci \/ test/ })).toHaveAttribute(
+        "href",
+        "https://github.com/acme/review/actions/1",
+      );
+
+      fireEvent.click(buttons[0] as HTMLElement);
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledOnce();
+      });
+      const prompt = writeText.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain("# Fix the failing check on pull request #12");
+      expect(prompt).toContain("- lint — Process completed with exit code 1");
+    });
+
+    it("repeats the fix prompt inside the blocked-merge dialog", async () => {
+      mockClipboard();
+      const user = userEvent.setup();
+      const view = render(
+        <ProviderLifecycle {...props} state={githubLifecycle} />,
+      );
+      await user.click(screen.getByRole("button", { name: "Merge" }));
+      view.rerender(
+        <ProviderLifecycle
+          {...props}
+          state={{
+            ...githubLifecycle,
+            canMerge: false,
+            mergeable: false,
+            mergeBlockedReason: "Has merge conflicts",
+            mergeBlockedFix: "resolve_conflicts",
+          }}
+        />,
+      );
+
+      const dialog = screen.getByRole("dialog");
+      expect(
+        within(dialog).getByRole("button", {
+          name: "Copy AI fix prompt for the merge block",
+        }),
+      ).toBeVisible();
+    });
   });
 });

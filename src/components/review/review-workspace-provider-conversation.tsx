@@ -19,6 +19,10 @@ import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import {
+  type AiFixPromptPullRequest,
+  discussionFixPrompt,
+} from "~/lib/ai-fix-prompt";
 import { providerLabel } from "~/lib/provider-labels";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
@@ -27,9 +31,9 @@ import {
   CommentImageTextarea,
   type UploadCommentImage,
 } from "./comment-image-textarea";
+import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 import { ProviderCommentBody } from "./review-workspace-markdown";
 
-type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ProviderConversationThread =
   RouterOutputs["review"]["providerConversations"]["threads"][number];
 
@@ -134,7 +138,7 @@ export function ProviderConversation({
   onReply,
   onUploadImage,
   onResolve,
-  provider,
+  pullRequest,
   revealed = false,
   replying,
   thread,
@@ -145,13 +149,14 @@ export function ProviderConversation({
   managing?: boolean;
   /** Marks comments after this moment as the activity a wait was paused for. */
   newSince?: Date | null;
-  provider: WorkspaceData["pullRequest"]["provider"];
+  pullRequest: AiFixPromptPullRequest;
   /** Opens and highlights a conversation selected from PR-wide discussions. */
   revealed?: boolean;
   replying: boolean;
   thread: ProviderConversationThread;
   publishedByReviewDuck: boolean;
 }) {
+  const provider = pullRequest.provider;
   /** Reports whether one comment arrived after the reviewer began waiting. */
   const isNewComment = (createdAt: string) =>
     Boolean(newSince && new Date(createdAt) > newSince);
@@ -366,6 +371,12 @@ export function ProviderConversation({
                   : "Resolve"}
             </span>
           </button>
+          {!resolved && (
+            <CopyAiFixPromptButton
+              subject="this conversation"
+              prompt={() => discussionFixPrompt(pullRequest, thread)}
+            />
+          )}
           <button
             type="button"
             disabled={uploading || managing || holdsAnotherReviewersComment}

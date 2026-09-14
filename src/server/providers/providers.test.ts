@@ -2596,6 +2596,7 @@ describe("provider normalization", () => {
       mergeable: null,
       canMerge: false,
       mergeBlockedReason: "Pipeline must succeed before this can be merged",
+      mergeBlockedFix: "fix_checks",
       mergeActionLabel: "Merge",
       hasMergePermission: true,
     });
