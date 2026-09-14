@@ -558,6 +558,30 @@ export async function persistSignOffs(
       sql`, `,
     )}]::text[]) as locks(key)`,
   );
+  // Historical callers checked waits on their displayed IDs. Revalidate any
+  // carried targets under the same locks before writing to a newer snapshot.
+  const successorIds = resolved
+    .filter(({ input, unit }) => input.unitId !== unit.id)
+    .map(({ unit }) => unit.id);
+  if (successorIds.length > 0) {
+    const waiting = await tx
+      .select({ unitId: reviewWaits.unitId })
+      .from(reviewWaits)
+      .where(
+        and(
+          eq(reviewWaits.userId, userId),
+          inArray(reviewWaits.unitId, successorIds),
+        ),
+      )
+      .limit(1);
+    if (waiting.length > 0) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "The latest review unit is waiting for a provider response and cannot be signed off yet.",
+      });
+    }
+  }
   const activeSignOffs = await tx
     .select()
     .from(signOffs)

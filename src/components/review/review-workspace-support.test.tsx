@@ -518,6 +518,9 @@ describe("same-file concept cards", () => {
     expect(
       screen.getByText("const visiblePreview = true;"),
     ).toBeInTheDocument();
+    const height = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ height: 1200 } as DOMRect);
     act(() =>
       report?.(
         [{ isIntersecting: false } as IntersectionObserverEntry],
@@ -527,6 +530,10 @@ describe("same-file concept cards", () => {
     expect(
       screen.queryByText("const visiblePreview = true;"),
     ).not.toBeInTheDocument();
+    expect(
+      document.querySelector('[aria-hidden="true"][style*="1200px"]'),
+    ).not.toBeNull();
+    height.mockRestore();
   });
 
   it("mounts only the leading rows of a file card longer than a window", () => {
