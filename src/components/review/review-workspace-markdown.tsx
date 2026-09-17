@@ -14,3 +14,23 @@ export const ProviderCommentBody = dynamic(() =>
     (module) => module.ProviderCommentBody,
   ),
 );
+
+/**
+ * Loads the Markdown document preview only when a reviewer opens an .md file.
+ *
+ * The switch itself stays eager; this payload is the remark/rehype document
+ * renderer that Focus/Diff never need.
+ */
+export const ReviewMarkdownPreview = dynamic(
+  () =>
+    import("./review-markdown-preview").then(
+      (module) => module.ReviewMarkdownPreview,
+    ),
+  {
+    loading: () => (
+      <div className="text-fog px-6 py-10 text-center text-xs" role="status">
+        Rendering Markdown…
+      </div>
+    ),
+  },
+);

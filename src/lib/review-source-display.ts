@@ -24,11 +24,32 @@ export const HEAVY_DATA_CHANGE_LINES = 30;
 /** Byte size that hides a data document even when it is mostly one line. */
 export const HEAVY_DATA_SOURCE_BYTES = 16 * 1024;
 
+/** Languages whose review payload is authored Markdown, not executable source. */
+const MARKDOWN_REVIEW_LANGUAGES = new Set(["markdown", "mdx"]);
+
+/** Extensions that should open the Markdown preview instead of raw source. */
+const MARKDOWN_REVIEW_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
+
 /** Returns the lowercase file extension of a repository path. */
 export function reviewPathExtension(path: string) {
   const name = path.split("/").pop() ?? "";
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+/**
+ * Reports whether a review file is Markdown the reviewer can read rendered.
+ *
+ * Language wins when analysis stored `markdown` or `mdx`. Otherwise the
+ * path extension covers files that arrived as plain text.
+ */
+export function isReviewMarkdownFile(input: {
+  language?: string;
+  path?: string;
+}) {
+  const language = (input.language ?? "").trim().toLowerCase();
+  if (MARKDOWN_REVIEW_LANGUAGES.has(language)) return true;
+  return MARKDOWN_REVIEW_EXTENSIONS.has(reviewPathExtension(input.path ?? ""));
 }
 
 /**
