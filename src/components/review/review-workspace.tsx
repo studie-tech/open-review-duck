@@ -4402,6 +4402,7 @@ export function ReviewWorkspace({
   /** Opens an inline question at the visible in-scope line nearest the reader. */
   function openAiQuestion() {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     openAiQuestionAt(centredReviewLine());
   }
 
@@ -4443,6 +4444,7 @@ export function ReviewWorkspace({
   /** Opens the provider comment composer on the line the reviewer is reading. */
   function openCentredInlineComment() {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     commentOnCardLine(
       closestReviewLine(
         centredReviewLine(),
@@ -4900,6 +4902,7 @@ export function ReviewWorkspace({
   /** Opens inline commenting at the first eligible source line. */
   function beginKeyboardComment() {
     if (!activeUnit) return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     const firstChangedLine = [...changedCurrentLines]
       .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];
@@ -6900,6 +6903,7 @@ export function ReviewWorkspace({
                     activeFileCardSourceAvailable &&
                     activeUnit && (
                       <ReviewMarkdownPreview
+                        key={activeUnit.path}
                         path={activeUnit.path}
                         currentSource={
                           activeModule?.source ?? activeUnit.source
