@@ -105,6 +105,21 @@ const markdownComponents: Options["components"] = {
   ),
 };
 
+const documentMarkdownComponents: Options["components"] = {
+  ...markdownComponents,
+  h1: ({ children }) => (
+    <h1 className="text-cloud mt-6 mb-3 text-xl font-semibold first:mt-0">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-cloud mt-5 mb-2 text-lg font-semibold">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-cloud mt-4 mb-2 text-base font-semibold">{children}</h3>
+  ),
+};
+
 /**
  * Renders untrusted provider Markdown and HTML through a strict allowlist.
  *
@@ -119,21 +134,30 @@ const markdownComponents: Options["components"] = {
 export const ProviderCommentBody = memo(function ProviderCommentBody({
   body,
   className,
+  variant = "comment",
 }: {
   body: string;
   className?: string;
+  variant?: "comment" | "document";
 }) {
   return (
     <div
       className={cn(
-        "text-mist mt-3 min-w-0 max-w-[96ch] text-[13px] leading-6 wrap-break-word",
+        "text-mist min-w-0 wrap-break-word",
+        variant === "document"
+          ? "max-w-[72ch] text-[14px] leading-7"
+          : "mt-3 max-w-[96ch] text-[13px] leading-6",
         className,
       )}
     >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
-        components={markdownComponents}
+        components={
+          variant === "document"
+            ? documentMarkdownComponents
+            : markdownComponents
+        }
       >
         {body}
       </ReactMarkdown>

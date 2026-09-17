@@ -5,15 +5,36 @@ import {
   HEAVY_DATA_SOURCE_BYTES,
   isDataOrGeneratedReviewPath,
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
-  selectedReviewFileCardExpanded,
   reviewPathExtension,
   reviewSourceByteLength,
   reviewSourceKindLabel,
   reviewSourceLineCount,
+  selectedReviewFileCardExpanded,
 } from "./review-source-display";
 
 describe("review source display", () => {
+  it("recognizes Markdown from the stored language or the path", () => {
+    expect(
+      isReviewMarkdownFile({ path: "README.md", language: "markdown" }),
+    ).toBe(true);
+    expect(
+      isReviewMarkdownFile({ path: "docs/guide.mdx", language: "mdx" }),
+    ).toBe(true);
+    expect(isReviewMarkdownFile({ path: "CHANGELOG.markdown" })).toBe(true);
+    expect(isReviewMarkdownFile({ path: "notes.MD" })).toBe(true);
+    expect(
+      isReviewMarkdownFile({
+        path: "src/review-workspace.tsx",
+        language: "tsx",
+      }),
+    ).toBe(false);
+    expect(isReviewMarkdownFile({ path: "README", language: "text" })).toBe(
+      false,
+    );
+  });
+
   it("recognizes serialized data paths without treating code as data", () => {
     expect(
       isDataOrGeneratedReviewPath(

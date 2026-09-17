@@ -848,6 +848,95 @@ describe("same-file concept cards", () => {
     expect(highlight).not.toHaveBeenCalled();
   });
 
+  it("renders Markdown neighbor cards as a document until Raw is chosen", async () => {
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "readme",
+              path: "README.md",
+              name: "README.md",
+              changedLineCount: 2,
+              changeType: "modified",
+              previousSource: ["# Old pond", "", "Ducks."].join("\n"),
+              source: ["# ReviewDuck", "", "Read the **docs**."].join("\n"),
+              startLine: 1,
+              endLine: 3,
+              language: "markdown",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={["# Old pond", "", "Ducks."].join("\n")}
+        fileSource={["# ReviewDuck", "", "Read the **docs**."].join("\n")}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Rendered Markdown. Switch to Raw to comment on lines or read the diff.",
+        ),
+      ).toBeVisible();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("heading", { name: "ReviewDuck" }),
+      ).not.toHaveLength(0);
+    });
+    expect(highlight).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("region", { name: "Side-by-side code diff" }),
+    ).not.toBeInTheDocument();
+
+    cleanup();
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "readme",
+              path: "README.md",
+              name: "README.md",
+              changedLineCount: 2,
+              changeType: "modified",
+              previousSource: ["# Old pond", "", "Ducks."].join("\n"),
+              source: ["# ReviewDuck", "", "Read the **docs**."].join("\n"),
+              startLine: 1,
+              endLine: 3,
+              language: "markdown",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={["# Old pond", "", "Ducks."].join("\n")}
+        fileSource={["# ReviewDuck", "", "Read the **docs**."].join("\n")}
+        markdownView="raw"
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Side-by-side code diff" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "ReviewDuck" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("lets the reviewer fold a file card back up after opening it", async () => {
     render(
       <ReviewConceptFileCardPreview

@@ -19,9 +19,11 @@ import {
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
+import type { MarkdownReviewView } from "~/lib/review-files";
 import {
   formatReviewSourceBytes,
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceKindLabel,
@@ -42,6 +44,7 @@ import {
   ReviewLineCommentMarkers,
   reviewLineCommentMarkersBySide,
 } from "./review-line-comment-markers";
+import { ReviewMarkdownPreview } from "./review-workspace-markdown";
 import { SideBySideUnitDiff } from "./review-workspace-diff";
 import {
   SourceLineWindow,
@@ -367,6 +370,7 @@ export function ReviewConceptFileCardPreview({
   commentThreads,
   itemLabel = "Card",
   sourceBytes,
+  markdownView = "preview",
   onSourceNeeded,
 }: {
   members: readonly ReviewUnit[];
@@ -382,6 +386,7 @@ export function ReviewConceptFileCardPreview({
   commentThreads?: Parameters<typeof reviewLineCommentMarkersBySide>[0];
   itemLabel?: "Card" | "File";
   sourceBytes?: number;
+  markdownView?: MarkdownReviewView;
   onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
 }) {
   const first = members[0];
@@ -449,7 +454,13 @@ export function ReviewConceptFileCardPreview({
   }
   const fileBytes =
     sourceBytes ?? reviewSourceByteLength({ source: fileSource });
+  const markdownFile =
+    first !== undefined &&
+    first.kind !== "binary" &&
+    isReviewMarkdownFile({ language: first.language, path: first.path });
+  const showMarkdownPreview = markdownFile && markdownView === "preview";
   const canShowDiff =
+    !showMarkdownPreview &&
     diffVisible &&
     first?.kind !== "binary" &&
     Boolean(fileSource || previousFileSource);
@@ -503,6 +514,21 @@ export function ReviewConceptFileCardPreview({
           <div className="px-4 py-5 text-fog" role="status">
             Loading source…
           </div>
+        ) : expanded && showMarkdownPreview && first ? (
+          <ReviewMarkdownPreview
+            path={first.path}
+            currentSource={
+              fileSource || members.map((member) => member.source).join("\n\n")
+            }
+            previousSource={
+              previousFileSource ||
+              members
+                .flatMap((member) =>
+                  member.previousSource ? [member.previousSource] : [],
+                )
+                .join("\n\n")
+            }
+          />
         ) : expanded ? (
           canShowDiff && first ? (
             <SideBySideUnitDiff

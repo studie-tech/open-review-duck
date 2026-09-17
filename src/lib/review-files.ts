@@ -1,5 +1,8 @@
 export type ReviewMode = "path" | "files";
 
+/** How a Markdown review file is presented: rendered document or source. */
+export type MarkdownReviewView = "preview" | "raw";
+
 export type ReviewFileFilter =
   | "all"
   | "needs_review"
@@ -401,6 +404,7 @@ export function buildReviewFileTree(
 }
 
 const REVIEW_MODE_STORAGE_KEY = "reviewduck:review-mode";
+const MARKDOWN_REVIEW_VIEW_STORAGE_KEY = "reviewduck:markdown-view";
 
 /** Reads the reviewer's preferred navigation projection, defaulting to Files. */
 export function storedReviewMode(storage: Pick<Storage, "getItem">) {
@@ -420,6 +424,29 @@ export function rememberReviewMode(
 ) {
   try {
     storage.setItem(REVIEW_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Browser privacy settings can make local storage unavailable.
+  }
+}
+
+/** Reads whether Markdown files open rendered or as source, defaulting to preview. */
+export function storedMarkdownReviewView(storage: Pick<Storage, "getItem">) {
+  try {
+    return storage.getItem(MARKDOWN_REVIEW_VIEW_STORAGE_KEY) === "raw"
+      ? ("raw" as const)
+      : ("preview" as const);
+  } catch {
+    return "preview" as const;
+  }
+}
+
+/** Remembers whether Markdown files should open rendered or as source. */
+export function rememberMarkdownReviewView(
+  storage: Pick<Storage, "setItem">,
+  view: MarkdownReviewView,
+) {
+  try {
+    storage.setItem(MARKDOWN_REVIEW_VIEW_STORAGE_KEY, view);
   } catch {
     // Browser privacy settings can make local storage unavailable.
   }

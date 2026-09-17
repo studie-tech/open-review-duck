@@ -83,14 +83,17 @@ import {
   FILES_VIEWER_PREFETCH_RADIUS,
   FILES_VIEWER_PREVIEW_RADIUS,
   firstReviewFileUnitIndex,
+  type MarkdownReviewView,
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
   type ReviewFileEntry,
   type ReviewMode,
+  rememberMarkdownReviewView,
   rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
+  storedMarkdownReviewView,
   storedReviewMode,
   waitingReviewFileUnits,
   windowReviewFileCards,
@@ -121,6 +124,7 @@ import {
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceLineCount,
@@ -199,6 +203,7 @@ import {
   reviewLineCommentMarkersBySide,
   reviewLineCommentMarkersForLine,
 } from "./review-line-comment-markers";
+import { ReviewMarkdownViewSwitch } from "./review-markdown-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   REVIEW_INSIGHTS_PANEL_WIDTHS,
@@ -261,7 +266,10 @@ import {
   useReviewFileAdvance,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
-import { ProviderCommentBody } from "./review-workspace-markdown";
+import {
+  ProviderCommentBody,
+  ReviewMarkdownPreview,
+} from "./review-workspace-markdown";
 import {
   CopyRepositoryUrlButton,
   ProviderConversation,
@@ -443,6 +451,7 @@ export function ReviewWorkspace({
     );
     const mode = storedReviewMode(window.localStorage);
     setReviewMode(mode);
+    setMarkdownView(storedMarkdownReviewView(window.localStorage));
     setActiveIndex(
       rememberedIndex >= 0
         ? rememberedIndex
@@ -498,6 +507,13 @@ export function ReviewWorkspace({
   );
   const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
+  const [markdownView, setMarkdownView] =
+    useState<MarkdownReviewView>("preview");
+  /** Changes only the Markdown presentation and remembers it for later reviews. */
+  const changeMarkdownView = useCallback((view: MarkdownReviewView) => {
+    setMarkdownView(view);
+    rememberMarkdownReviewView(window.localStorage, view);
+  }, []);
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
   );
@@ -1250,6 +1266,18 @@ export function ReviewWorkspace({
         Boolean(activeModule?.previousSource)),
   );
   const sideBySideVisible = showDiff && diffAvailable;
+  const activeFileIsMarkdown = Boolean(
+    activeUnit &&
+      isReviewMarkdownFile({
+        language: activeUnit.language,
+        path: activeUnit.path,
+      }),
+  );
+  const markdownPreviewVisible = Boolean(
+    activeFileIsMarkdown &&
+      markdownView === "preview" &&
+      activeUnit?.kind !== "binary",
+  );
   const importsVisible = activeUnit
     ? importContextUnitIds.has(activeUnit.id)
     : false;
@@ -3001,6 +3029,7 @@ export function ReviewWorkspace({
             onOpenLineComment={openLineCommentThread}
             commentThreads={commentThreadsByPath.get(card.path)}
             sourceBytes={sourceBytes}
+            markdownView={markdownView}
             onSourceNeeded={prepareSourcePath}
           />
         );
@@ -3011,6 +3040,7 @@ export function ReviewWorkspace({
       commentThreadsByPath,
       fileContexts,
       inspectReviewFile,
+      markdownView,
       openLineCommentThread,
       prepareSourcePath,
       reviewMode,
@@ -6582,7 +6612,13 @@ export function ReviewWorkspace({
                   >
                     <GitBranch className="size-3.5" />
                   </button>
-                  {diffAvailable && (
+                  {activeFileIsMarkdown && (
+                    <ReviewMarkdownViewSwitch
+                      view={markdownView}
+                      onChange={changeMarkdownView}
+                    />
+                  )}
+                  {diffAvailable && !markdownPreviewVisible && (
                     <ReviewCodeViewSwitch
                       diffVisible={sideBySideVisible}
                       onChange={(diffVisible) => {
@@ -6785,7 +6821,8 @@ export function ReviewWorkspace({
                       }}
                       actions={
                         selectedFileSourceExpanded &&
-                        activeUnit.kind !== "binary" ? (
+                        activeUnit.kind !== "binary" &&
+                        !markdownPreviewVisible ? (
                           <ReviewUnitViewOptions
                             importsVisible={importsVisible}
                             fullFileVisible={fullFileVisible}
@@ -6813,20 +6850,22 @@ export function ReviewWorkspace({
                         ) : undefined
                       }
                     />
-                    <ReviewScrollOverviewStrip
-                      className="px-3 py-2 sm:px-3 lg:px-3"
-                      label={
-                        activeUnit
-                          ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
-                          : undefined
-                      }
-                      marks={overviewMarks}
-                      rows={overviewRows}
-                      revealWholeFile={fullFileVisible}
-                      unitRange={overviewUnitRange}
-                      viewport={overviewViewport}
-                      onSeek={seekCodeOverview}
-                    />
+                    {!markdownPreviewVisible && (
+                      <ReviewScrollOverviewStrip
+                        className="px-3 py-2 sm:px-3 lg:px-3"
+                        label={
+                          activeUnit
+                            ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
+                            : undefined
+                        }
+                        marks={overviewMarks}
+                        rows={overviewRows}
+                        revealWholeFile={fullFileVisible}
+                        unitRange={overviewUnitRange}
+                        viewport={overviewViewport}
+                        onSeek={seekCodeOverview}
+                      />
+                    )}
                   </div>
                 </div>
                 <div
@@ -6856,56 +6895,76 @@ export function ReviewWorkspace({
                       sourceBytes={reviewSourceByteLength(activeModule)}
                     />
                   ) : null}
-                  {selectedFileSourceExpanded && sideBySideVisible && (
-                    <SideBySideUnitDiff
-                      key={activeUnit.id}
-                      ref={diffContextRef}
-                      className="rounded-none border-0"
-                      previousSource={diffPreviousSource}
-                      currentSource={diffCurrentSource}
-                      language={activeUnit.language}
-                      previousStartLine={1}
-                      currentStartLine={1}
-                      previousFocusRanges={previousCardRanges}
-                      currentFocusRanges={currentCardRanges}
-                      previousFocusStartLine={
-                        activeUnit.changeType === "added"
-                          ? null
-                          : (previousCardRanges.at(0)?.startLine ??
-                            previousUnitStartLine)
-                      }
-                      previousFocusEndLine={
-                        activeUnit.changeType === "added"
-                          ? null
-                          : (previousCardRanges.at(-1)?.endLine ??
-                            previousUnitEndLine)
-                      }
-                      currentFocusStartLine={
-                        activeUnit.changeType === "deleted"
-                          ? null
-                          : (cardStartLine ?? activeUnit.startLine)
-                      }
-                      currentFocusEndLine={
-                        activeUnit.changeType === "deleted"
-                          ? null
-                          : (cardEndLine ?? activeUnit.endLine)
-                      }
-                      selectedLine={selectedLine}
-                      keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
-                      findingLine={findingLine}
-                      expanded={fullFileVisible}
-                      isReviewLineCollapsed={isFileUnitLineCollapsed}
-                      onSelectReviewLine={commentOnCardLine}
-                      leftLineCommentMarkers={visibleLineCommentMarkers.left}
-                      rightLineCommentMarkers={visibleLineCommentMarkers.right}
-                      onOpenLineComment={openLineCommentThread}
-                      renderBeforeLine={renderFileUnitMarkers}
-                      renderLineDetails={renderReviewLineDetails}
-                      renderPreviousLineDetails={
-                        renderPreviousSideConversations
-                      }
-                    />
-                  )}
+                  {selectedFileSourceExpanded &&
+                    markdownPreviewVisible &&
+                    activeFileCardSourceAvailable &&
+                    activeUnit && (
+                      <ReviewMarkdownPreview
+                        path={activeUnit.path}
+                        currentSource={
+                          activeModule?.source ?? activeUnit.source
+                        }
+                        previousSource={
+                          activeModule?.previousSource ??
+                          activeUnit.previousSource ??
+                          ""
+                        }
+                      />
+                    )}
+                  {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
+                    sideBySideVisible && (
+                      <SideBySideUnitDiff
+                        key={activeUnit.id}
+                        ref={diffContextRef}
+                        className="rounded-none border-0"
+                        previousSource={diffPreviousSource}
+                        currentSource={diffCurrentSource}
+                        language={activeUnit.language}
+                        previousStartLine={1}
+                        currentStartLine={1}
+                        previousFocusRanges={previousCardRanges}
+                        currentFocusRanges={currentCardRanges}
+                        previousFocusStartLine={
+                          activeUnit.changeType === "added"
+                            ? null
+                            : (previousCardRanges.at(0)?.startLine ??
+                              previousUnitStartLine)
+                        }
+                        previousFocusEndLine={
+                          activeUnit.changeType === "added"
+                            ? null
+                            : (previousCardRanges.at(-1)?.endLine ??
+                              previousUnitEndLine)
+                        }
+                        currentFocusStartLine={
+                          activeUnit.changeType === "deleted"
+                            ? null
+                            : (cardStartLine ?? activeUnit.startLine)
+                        }
+                        currentFocusEndLine={
+                          activeUnit.changeType === "deleted"
+                            ? null
+                            : (cardEndLine ?? activeUnit.endLine)
+                        }
+                        selectedLine={selectedLine}
+                        keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
+                        findingLine={findingLine}
+                        expanded={fullFileVisible}
+                        isReviewLineCollapsed={isFileUnitLineCollapsed}
+                        onSelectReviewLine={commentOnCardLine}
+                        leftLineCommentMarkers={visibleLineCommentMarkers.left}
+                        rightLineCommentMarkers={
+                          visibleLineCommentMarkers.right
+                        }
+                        onOpenLineComment={openLineCommentThread}
+                        renderBeforeLine={renderFileUnitMarkers}
+                        renderLineDetails={renderReviewLineDetails}
+                        renderPreviousLineDetails={
+                          renderPreviousSideConversations
+                        }
+                      />
+                    )}
                   {activeFileCardHydrationPending &&
                     !activeFileCardSourceAvailable && (
                       <div
@@ -6960,6 +7019,7 @@ export function ReviewWorkspace({
                     )}
                   {selectedFileSourceExpanded &&
                     importsVisible &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeModule && (
@@ -6981,6 +7041,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     contextAvailable &&
@@ -7003,6 +7064,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeUnit.kind !== "binary" && (
@@ -7244,6 +7306,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     contextAvailable &&
                     !fullFileVisible && (

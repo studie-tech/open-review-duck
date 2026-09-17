@@ -7,11 +7,13 @@ import {
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
+  rememberMarkdownReviewView,
   rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
   reviewFileTreeDirectoryPaths,
   sortByReviewFileTreeOrder,
+  storedMarkdownReviewView,
   storedReviewMode,
   visibleReviewFileTreeItems,
   waitingReviewFileUnits,
@@ -437,5 +439,43 @@ describe("storedReviewMode", () => {
     expect(storedReviewMode({ getItem: (key) => store.get(key) ?? null })).toBe(
       "files",
     );
+  });
+});
+
+describe("storedMarkdownReviewView", () => {
+  it("defaults to preview when no preference is saved", () => {
+    expect(storedMarkdownReviewView({ getItem: () => null })).toBe("preview");
+  });
+
+  it("keeps a saved raw preference", () => {
+    expect(storedMarkdownReviewView({ getItem: () => "raw" })).toBe("raw");
+  });
+
+  it("defaults to preview when storage is unavailable", () => {
+    expect(
+      storedMarkdownReviewView({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBe("preview");
+  });
+
+  it("round-trips the reviewer's last chosen Markdown presentation", () => {
+    const store = new Map<string, string>();
+    rememberMarkdownReviewView(
+      { setItem: (key, value) => store.set(key, value) },
+      "raw",
+    );
+    expect(
+      storedMarkdownReviewView({ getItem: (key) => store.get(key) ?? null }),
+    ).toBe("raw");
+    rememberMarkdownReviewView(
+      { setItem: (key, value) => store.set(key, value) },
+      "preview",
+    );
+    expect(
+      storedMarkdownReviewView({ getItem: (key) => store.get(key) ?? null }),
+    ).toBe("preview");
   });
 });
