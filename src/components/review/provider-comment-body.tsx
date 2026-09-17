@@ -1,12 +1,20 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import { type ComponentPropsWithoutRef, memo } from "react";
+import {
+  Children,
+  type ComponentPropsWithoutRef,
+  isValidElement,
+  memo,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { isMermaidSource } from "~/lib/review-mermaid";
 import { cn } from "~/lib/utils";
+import { ReviewMermaidDiagram } from "./review-mermaid-diagram";
 
 const providerCommentSchema = {
   ...defaultSchema,
@@ -70,11 +78,7 @@ const markdownComponents: Options["components"] = {
     <ol className="my-2 list-decimal space-y-1">{children}</ol>
   ),
   p: ({ children }) => <p className="my-2 first:mt-0">{children}</p>,
-  pre: ({ children }) => (
-    <pre className="border-line bg-code my-3 overflow-x-auto rounded-lg border p-3 text-[11px] leading-5 text-cloud [&>code]:bg-transparent [&>code]:p-0">
-      {children}
-    </pre>
-  ),
+  pre: MarkdownPre,
   strong: ({ children }) => (
     <strong className="font-semibold text-cloud">{children}</strong>
   ),
@@ -164,6 +168,41 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
     </div>
   );
 });
+
+/** Collects text from a Markdown code node so Mermaid can parse the fence. */
+function markdownText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(markdownText).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return markdownText(node.props.children);
+  }
+  return "";
+}
+
+/**
+ * Draws Mermaid and UML fences instead of leaving them as a source listing.
+ *
+ * react-markdown has already turned the fence into a `pre > code` tree by
+ * the time this runs, so the language class and the body both have to be
+ * read off that child.
+ */
+function MarkdownPre({ children }: { children?: ReactNode }) {
+  const code = Children.toArray(children).find((child) =>
+    isValidElement<{ className?: string; children?: ReactNode }>(child),
+  );
+  if (isValidElement<{ className?: string; children?: ReactNode }>(code)) {
+    const language = /language-([^\s]+)/.exec(code.props.className ?? "")?.[1];
+    const source = markdownText(code.props.children);
+    if (isMermaidSource(language, source)) {
+      return <ReviewMermaidDiagram chart={source} />;
+    }
+  }
+  return (
+    <pre className="border-line bg-code my-3 overflow-x-auto rounded-lg border p-3 text-[11px] leading-5 text-cloud [&>code]:bg-transparent [&>code]:p-0">
+      {children}
+    </pre>
+  );
+}
 
 /** Keeps provider links inert unless sanitization retained a safe URL. */
 function SafeProviderLink({ children, href }: ComponentPropsWithoutRef<"a">) {
