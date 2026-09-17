@@ -882,10 +882,8 @@ describe("same-file concept cards", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(
-          "Rendered Markdown. Switch to Raw to comment on lines or read the diff.",
-        ),
-      ).toBeVisible();
+        screen.getByRole("button", { name: "Compare Markdown" }),
+      ).toHaveAttribute("aria-pressed", "true");
     });
     await waitFor(() => {
       expect(
