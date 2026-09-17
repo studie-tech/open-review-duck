@@ -2,6 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import mermaid from "mermaid";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderCommentBody } from "./provider-comment-body";
 
@@ -77,6 +78,26 @@ describe("ProviderCommentBody", () => {
       await screen.findByRole("img", { name: "Mermaid diagram" }),
     ).toBeVisible();
     expect(screen.queryByText("flowchart LR", { selector: "code" })).toBeNull();
+  });
+
+  it("keeps the Mermaid source visible when drawing fails", async () => {
+    vi.mocked(mermaid.parse).mockRejectedValueOnce(
+      new Error("Parse error on line 1"),
+    );
+
+    render(
+      <ProviderCommentBody
+        variant="document"
+        body={["```mermaid", "flowchart LR", "A --> B", "```"].join("\n")}
+      />,
+    );
+
+    expect(await screen.findByText("Parse error on line 1")).toBeVisible();
+    expect(screen.getByText(/flowchart LR/)).toBeVisible();
+    expect(screen.getByText(/A --> B/)).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: "Mermaid diagram" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders remote priority images as local badges", () => {
