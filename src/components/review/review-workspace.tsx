@@ -1265,7 +1265,6 @@ export function ReviewWorkspace({
         activeUnit.changeType === "added" ||
         Boolean(activeModule?.previousSource)),
   );
-  const sideBySideVisible = showDiff && diffAvailable;
   const activeFileIsMarkdown = Boolean(
     activeUnit &&
       isReviewMarkdownFile({
@@ -1278,6 +1277,8 @@ export function ReviewWorkspace({
       markdownView === "preview" &&
       activeUnit?.kind !== "binary",
   );
+  const sideBySideVisible =
+    !markdownPreviewVisible && showDiff && diffAvailable;
   const importsVisible = activeUnit
     ? importContextUnitIds.has(activeUnit.id)
     : false;
@@ -1614,16 +1615,20 @@ export function ReviewWorkspace({
     );
   }, []);
   /** Scrolls the source to one AI walkthrough note, mounting its block first. */
-  const revealExplanation = useCallback((endLine: number, index: number) => {
-    setExplanationLine(endLine);
-    window.requestAnimationFrame(() =>
+  const revealExplanation = useCallback(
+    (endLine: number, index: number) => {
+      changeMarkdownView("raw");
+      setExplanationLine(endLine);
       window.requestAnimationFrame(() =>
-        document
-          .getElementById(`ai-explanation-${index}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-      ),
-    );
-  }, []);
+        window.requestAnimationFrame(() =>
+          document
+            .getElementById(`ai-explanation-${index}`)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        ),
+      );
+    },
+    [changeMarkdownView],
+  );
   /** Commits a prepared review-unit selection without exposing an empty card. */
   const commitUnitSelection = useCallback(
     (
@@ -2954,6 +2959,14 @@ export function ReviewWorkspace({
         return next;
       });
       if (thread.side === "left") setShowDiff(true);
+      if (
+        isReviewMarkdownFile({
+          language: targetUnit.language,
+          path: targetUnit.path,
+        })
+      ) {
+        changeMarkdownView("raw");
+      }
       setPendingProviderThread({
         externalId: thread.externalId,
         line: thread.line,
@@ -2962,7 +2975,7 @@ export function ReviewWorkspace({
       selectUnit(index);
       setFocusedProviderThreadId(thread.externalId);
     },
-    [selectUnit, unitIndexById, units],
+    [changeMarkdownView, selectUnit, unitIndexById, units],
   );
   const commentThreadsByPath = useMemo(() => {
     const byPath = new Map<string, ProviderDiscussionThread[]>();
