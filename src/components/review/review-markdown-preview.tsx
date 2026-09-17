@@ -117,6 +117,13 @@ export function ReviewMarkdownPreview({
   const [version, setVersion] = useState<MarkdownPreviewVersion>(() =>
     defaultMarkdownPreviewVersion({ currentSource, previousSource }),
   );
+  const [versionPath, setVersionPath] = useState(path);
+  if (versionPath !== path) {
+    setVersionPath(path);
+    setVersion(
+      defaultMarkdownPreviewVersion({ currentSource, previousSource }),
+    );
+  }
   const name = path.split("/").at(-1) ?? path;
   const showVersionSwitch = hasCurrent || hasPrevious;
   const resolvedVersion =

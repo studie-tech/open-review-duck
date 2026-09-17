@@ -101,6 +101,35 @@ describe("ReviewMarkdownPreview", () => {
     expect(screen.getByText("Welcome.")).toBeVisible();
   });
 
+  it("resets the revision choice when the file path changes", async () => {
+    const { rerender } = render(
+      <ReviewMarkdownPreview
+        path="README.md"
+        previousSource="# Old"
+        currentSource="# New"
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Current Markdown" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Current Markdown" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    rerender(
+      <ReviewMarkdownPreview
+        path="docs/guide.md"
+        previousSource="# Then"
+        currentSource="# Now"
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Compare Markdown" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("explains an empty current document", () => {
     render(
       <ReviewMarkdownPreview
