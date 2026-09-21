@@ -102,6 +102,7 @@ export function changedFileLineCounts(
   >,
 ) {
   if (file.isBinary || file.skipReason) return { additions: 0, deletions: 0 };
+  /** Lines in one side of the file, counting a trailing newline's empty line. */
   const lineCount = (source: string) => source.split("\n").length;
   if (file.changeType === "deleted") {
     return { additions: 0, deletions: lineCount(file.content) };

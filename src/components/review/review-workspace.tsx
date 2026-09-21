@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  CornerDownRight,
   CornerUpLeft,
   ExternalLink,
   FileCode2,
@@ -179,6 +180,7 @@ import {
 import { HighlightedTokens } from "./highlighted-tokens";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
+import { ReviewChangeComposition } from "./review-change-composition";
 import { findNextReview, ReviewCompletion } from "./review-completion";
 import {
   isOpenProviderDiscussion,
@@ -1042,6 +1044,13 @@ export function ReviewWorkspace({
   const activeReviewFile = activeUnit
     ? reviewFiles.find(({ path }) => path === activeUnit.path)
     : undefined;
+  /** Where the open file lived before this revision moved it, if it moved. */
+  const activeFileMovedFrom =
+    activeReviewFile?.changeType === "renamed" &&
+    activeReviewFile.previousPath &&
+    activeReviewFile.previousPath !== activeReviewFile.path
+      ? activeReviewFile.previousPath
+      : undefined;
   const activeFileOutstandingUnits = activeReviewFile
     ? activeReviewFile.totalUnits -
       activeReviewFile.reviewedUnits -
@@ -5951,6 +5960,9 @@ export function ReviewWorkspace({
                 style={{ width: `${progress}%` }}
               />
             </div>
+            {reviewMode === "files" && (
+              <ReviewChangeComposition files={reviewFiles} className="mt-3" />
+            )}
             <div className="relative mt-3">
               <input
                 ref={pathSearchRef}
@@ -6504,6 +6516,18 @@ export function ReviewWorkspace({
                         <FileX2 className="size-3" aria-hidden />
                         File deleted
                       </Badge>
+                    ) : activeFileMovedFrom ? (
+                      <Badge
+                        title={`Moved from ${activeFileMovedFrom}. The diff compares the file with its previous path, so only the edits inside the move show.`}
+                      >
+                        <CornerDownRight className="size-3" aria-hidden />
+                        {activeReviewFile &&
+                        activeReviewFile.additions +
+                          activeReviewFile.deletions >
+                          0
+                          ? "Moved + edited"
+                          : "Moved"}
+                      </Badge>
                     ) : (
                       activeUnit.changeType !== "modified" && (
                         <Badge className="capitalize">
@@ -6523,6 +6547,24 @@ export function ReviewWorkspace({
                     >
                       {activeUnit.path}
                     </span>
+                    {activeFileMovedFrom && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="flex min-w-0 shrink items-center gap-1"
+                          title={`Moved from ${activeFileMovedFrom}`}
+                        >
+                          <CornerDownRight
+                            className="size-3 shrink-0"
+                            aria-hidden
+                          />
+                          <span className="sr-only">Moved from </span>
+                          <span className="truncate font-mono">
+                            {activeFileMovedFrom}
+                          </span>
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     <span className="shrink-0">
                       {reviewMode === "files"
