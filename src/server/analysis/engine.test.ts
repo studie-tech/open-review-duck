@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { analyzeFiles, reconcileSignOffs } from "./engine";
+import {
+  analyzeFiles,
+  changedFileLineCounts,
+  reconcileSignOffs,
+} from "./engine";
 import { applySourceBudget } from "./types";
 
 describe("review analysis engine", () => {
@@ -1004,6 +1008,103 @@ export const quickTravelSchema = z.object({ sector: z.number() });`;
       });
     },
   );
+
+  it("asks for no sign-off when a file only moved", () => {
+    const content = [
+      'import type { Metadata } from "next";',
+      "",
+      'export const metadata: Metadata = { title: "Academy" };',
+      "",
+      "export default function Layout({ children }: { children: React.ReactNode }) {",
+      "  return children;",
+      "}",
+    ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "app/src/app/[shell]/academy/layout.tsx",
+        previousPath: "app/src/app/academy/layout.tsx",
+        content,
+        previousContent: content,
+        changeType: "renamed",
+      },
+    ]);
+
+    expect(result.units.filter(({ kind }) => kind !== "file")).toEqual([]);
+    expect(result.units.find(({ kind }) => kind === "file")).toMatchObject({
+      path: "app/src/app/[shell]/academy/layout.tsx",
+      changeType: "renamed",
+      changedLineCount: 0,
+    });
+  });
+
+  it("reviews only the edits inside a moved file", () => {
+    const previous = [
+      'import { Board } from "@/components/Board";',
+      "",
+      'export const metadata = { title: "Admin" };',
+      "",
+      "export default function AdminBuilding() {",
+      '  return <Board title="Admin Building" />;',
+      "}",
+    ].join("\n");
+    const current = previous.replace(
+      '"@/components/Board"',
+      '"@/app/[shell]/_components/Board"',
+    );
+    const result = analyzeFiles([
+      {
+        path: "app/src/app/[shell]/adminbuilding/page.tsx",
+        previousPath: "app/src/app/adminbuilding/page.tsx",
+        content: current,
+        previousContent: previous,
+        changeType: "renamed",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toHaveLength(1);
+    expect(reviewable[0]).toMatchObject({
+      changeType: "modified",
+      startLine: 1,
+      endLine: 1,
+      changedLineCount: 2,
+    });
+    expect(reviewable[0]?.source).toContain("_components/Board");
+    expect(reviewable[0]?.previousSource).toContain("@/components/Board");
+  });
+
+  it("counts the lines a revision changed in one file", () => {
+    const previous = ["one", "two", "three"].join("\n");
+
+    expect(
+      changedFileLineCounts({
+        changeType: "renamed",
+        content: previous,
+        previousContent: previous,
+      }),
+    ).toEqual({ additions: 0, deletions: 0 });
+    expect(
+      changedFileLineCounts({
+        changeType: "modified",
+        content: ["one", "2", "three", "four"].join("\n"),
+        previousContent: previous,
+      }),
+    ).toEqual({ additions: 2, deletions: 1 });
+    expect(
+      changedFileLineCounts({ changeType: "added", content: previous }),
+    ).toEqual({ additions: 3, deletions: 0 });
+    expect(
+      changedFileLineCounts({ changeType: "deleted", content: previous }),
+    ).toEqual({ additions: 0, deletions: 3 });
+    expect(
+      changedFileLineCounts({
+        changeType: "modified",
+        content: "",
+        previousContent: previous,
+        skipReason: "too_large",
+      }),
+    ).toEqual({ additions: 0, deletions: 0 });
+  });
 
   it("keeps generic TypeScript arrow declarations isolated around an insertion", () => {
     const random =
