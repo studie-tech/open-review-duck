@@ -26,6 +26,18 @@ describe("changedFileLineCounts", () => {
       changedFileLineCounts({ changeType: "deleted", content: previous }),
     ).toEqual({ additions: 0, deletions: 3 });
     expect(
+      changedFileLineCounts({ changeType: "added", content: `${previous}\n` }),
+    ).toEqual({ additions: 3, deletions: 0 });
+    expect(
+      changedFileLineCounts({
+        changeType: "deleted",
+        content: `${previous}\n`,
+      }),
+    ).toEqual({ additions: 0, deletions: 3 });
+    expect(changedFileLineCounts({ changeType: "added", content: "" })).toEqual(
+      { additions: 0, deletions: 0 },
+    );
+    expect(
       changedFileLineCounts({
         changeType: "modified",
         content: "",
