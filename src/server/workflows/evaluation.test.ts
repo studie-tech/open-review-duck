@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   failEvaluationRun: vi.fn(),
 }));
 vi.mock("~/server/evaluations/execute", () => mocks);
+
 import { evaluationWorkflow } from "./evaluation";
 
 beforeEach(() => vi.resetAllMocks());

@@ -705,6 +705,68 @@ describe("provider normalization", () => {
     ).toBe(true);
   });
 
+  it("records where a renamed GitHub file came from", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
+      if (url.includes("/files?")) {
+        return jsonResponse([
+          {
+            filename: "app/[shell]/academy/layout.tsx",
+            previous_filename: "app/academy/layout.tsx",
+            status: "renamed",
+          },
+          {
+            filename: "app/academy/page.tsx",
+            previous_filename: "app/academy/page.tsx",
+            status: "modified",
+          },
+        ]);
+      }
+      if (url.includes("/contents/")) {
+        return new Response("export default function Layout() {}");
+      }
+      return jsonResponse({
+        id: 12,
+        number: 8,
+        title: "Move the academy under the shell",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/8",
+        user: { login: "reviewer", avatar_url: "" },
+        head: { ref: "shell", sha: "head-sha" },
+        base: { ref: "main", sha: "target-sha" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitHubProvider("token").getChangedFiles("42", 8);
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "app/[shell]/academy/layout.tsx",
+        previousPath: "app/academy/layout.tsx",
+        changeType: "renamed",
+        content: "export default function Layout() {}",
+        previousContent: "export default function Layout() {}",
+      }),
+      expect.objectContaining({
+        path: "app/academy/page.tsx",
+        changeType: "modified",
+      }),
+    ]);
+    expect(files[1]).not.toHaveProperty("previousPath", expect.any(String));
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) =>
+          requestUrl(url).includes("/contents/app/academy/layout.tsx") &&
+          requestUrl(url).includes("ref=base-sha"),
+      ),
+    ).toBe(true);
+  });
+
   it("loads a repository file at an exact provider revision", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response("export const review = true;", {
@@ -1204,6 +1266,7 @@ describe("provider normalization", () => {
     expect(files).toEqual([
       expect.objectContaining({
         path: "src/new.ts",
+        previousPath: "src/old.ts",
         content: "after",
         previousContent: "before",
         changeType: "renamed",
@@ -1572,6 +1635,7 @@ describe("provider normalization", () => {
     ).resolves.toEqual([
       expect.objectContaining({
         path: "shared/worker/worker-messages.ts",
+        previousPath: "app/_shared/utils/worker/worker-messages.ts",
         content: "afterRename()",
         previousContent: "beforeRename()",
         changeType: "renamed",

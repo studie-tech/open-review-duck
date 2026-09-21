@@ -19,6 +19,7 @@ import { REPOSITORY_SYNC_PROGRESS } from "~/lib/repository-sync-progress";
 import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
+  changedFileLineCounts,
   reconcileSignOffs,
 } from "~/server/analysis/engine";
 import { sha256 } from "~/server/analysis/hash";
@@ -706,22 +707,7 @@ export async function syncRepositoryBranch(
           changeType: file.changeType ?? "modified",
           currentBlobId: currentBlob?.id,
           previousBlobId: previousBlob?.id,
-          additions:
-            file.changeType === "deleted"
-              ? 0
-              : Math.max(
-                  0,
-                  countLines(file.content) -
-                    countLines(file.previousContent ?? ""),
-                ),
-          deletions:
-            file.changeType === "deleted"
-              ? countLines(file.content)
-              : Math.max(
-                  0,
-                  countLines(file.previousContent ?? "") -
-                    countLines(file.content),
-                ),
+          ...changedFileLineCounts(file),
           isBinary: Boolean(file.isBinary),
           skipReason: file.skipReason,
         };

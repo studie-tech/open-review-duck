@@ -7,6 +7,8 @@ export interface ProviderSourceCandidate {
 
 export interface ChangedSourceLoad {
   path: string;
+  /** The repository path the file had on the base side, when it moved. */
+  previousPath?: string;
   fetchPath?: string;
   previousFetchPath?: string;
   ref: string;
@@ -84,8 +86,15 @@ export async function loadChangedSource(
 ): Promise<ProviderSourceCandidate> {
   const fetchPath = request.fetchPath ?? request.path;
   const previousFetchPath = request.previousFetchPath ?? request.path;
+  // A path only counts as previous when the file actually moved; a provider
+  // that reports the same path on both sides is not describing a rename.
+  const previousPath =
+    request.previousPath !== undefined && request.previousPath !== request.path
+      ? request.previousPath
+      : undefined;
   const skippedFile: SourceFile = {
     path: request.path,
+    previousPath,
     content: "",
     skipReason: "too_large",
     isBinary: false,
@@ -96,6 +105,7 @@ export async function loadChangedSource(
     return {
       file: {
         path: request.path,
+        previousPath,
         content: "",
         isBinary: true,
         binaryHash: request.oversizedHash,
@@ -109,6 +119,7 @@ export async function loadChangedSource(
     return {
       file: {
         path: request.path,
+        previousPath,
         content: "",
         isBinary: true,
         binaryHash:
@@ -126,6 +137,7 @@ export async function loadChangedSource(
   return {
     file: {
       path: request.path,
+      previousPath,
       content,
       previousContent,
       isBinary: false,
