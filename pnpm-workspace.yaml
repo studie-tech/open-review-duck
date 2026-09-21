@@ -7,6 +7,7 @@ injectWorkspacePackages: true
 overrides:
   "@xmldom/xmldom": 0.9.12
   brace-expansion: 5.0.9
+  devalue: 5.9.1
   effect: 3.20.0
   esbuild: 0.25.0
   fast-uri: 3.1.6
