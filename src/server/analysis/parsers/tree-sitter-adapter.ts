@@ -687,7 +687,26 @@ function isDecoratorNode(shape: LanguageShape, node: SyntaxNode) {
   );
 }
 
-/** Includes contiguous documentation syntax preceding a declaration. */
+/**
+ * Reports whether two spans meet with at most one line break between them.
+ *
+ * A comment in that position introduces the declaration underneath it. A blank
+ * line keeps the comment with the declaration above.
+ */
+function directlyPrecedes(source: string, from: number, to: number) {
+  const gap = source.slice(from, to);
+  return gap.trim() === "" && !/\n[^\S\n]*\n/.test(gap);
+}
+
+/**
+ * Includes the documentation written above a declaration in that declaration.
+ *
+ * Formal documentation may sit a blank line above the declaration it describes.
+ * An ordinary line comment belongs to the declaration when it sits against it,
+ * so the review unit opens on the comment and the banner names the declaration
+ * that comment explains. A blank line leaves the comment with the declaration
+ * it follows, and a plain block comment stays module commentary.
+ */
 function leadingDocumentationStart(
   source: string,
   node: SyntaxNode,
@@ -703,7 +722,7 @@ function leadingDocumentationStart(
     source.slice(sibling.endIndex, start).trim() === ""
   ) {
     const text = nodeText(source, sibling).trim();
-    const documentation =
+    const formalDocumentation =
       isDecoratorNode(shape, sibling) ||
       language === "clojure" ||
       language === "go" ||
@@ -716,7 +735,10 @@ function leadingDocumentationStart(
       text.startsWith("///") ||
       text.startsWith("//!") ||
       text.startsWith("##");
-    if (!documentation) break;
+    const ordinaryComment =
+      directlyPrecedes(source, sibling.endIndex, start) &&
+      (text.startsWith("//") || text.startsWith("#"));
+    if (!formalDocumentation && !ordinaryComment) break;
     start = sibling.startIndex;
     sibling = sibling.previousNamedSibling;
   }
@@ -1375,16 +1397,26 @@ function isPhpImportNode(node: SyntaxNode) {
   );
 }
 
-/** Includes a directly preceding comment in a focused nested unit. */
+/**
+ * Includes the comments written directly above a focused nested unit.
+ *
+ * Each line of a run belongs to the member it introduces. A blank line keeps a
+ * note about the previous member on that member.
+ */
 function precedingCommentStart(source: string, node: SyntaxNode) {
   const statement =
     node.parent?.type === "expression_statement" ? node.parent : node;
-  const sibling = statement.previousNamedSibling;
-  return sibling &&
+  let start = statement.startIndex;
+  let sibling = statement.previousNamedSibling;
+  while (
+    sibling &&
     sibling.type === "comment" &&
-    source.slice(sibling.endIndex, statement.startIndex).trim() === ""
-    ? sibling.startIndex
-    : statement.startIndex;
+    directlyPrecedes(source, sibling.endIndex, start)
+  ) {
+    start = sibling.startIndex;
+    sibling = sibling.previousNamedSibling;
+  }
+  return start;
 }
 
 /** Node types that hold code to run rather than a value to read. */

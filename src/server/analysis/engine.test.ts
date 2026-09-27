@@ -1295,6 +1295,84 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     expect(reviewable).toMatchObject([{ name: "TestAdd", reviewOrder: 0 }]);
   });
 
+  it("reviews an ordinary comment with the declaration it introduces", () => {
+    const content = [
+      "// Group up to four prepared source slides per outline request.",
+      "// Larger groups risk split retries.",
+      "const PREPARED_OUTLINE_BATCH_SIZE = 4;",
+      "// Run at most two outline groups concurrently.",
+      "const PREPARED_OUTLINE_CONCURRENCY = 2;",
+      "// Cap output tokens for each outline group.",
+      "const PREPARED_OUTLINE_MAX_OUTPUT_TOKENS = 800;",
+      "",
+      "// These knobs are independent of the batch size.",
+      "",
+      "const PREPARED_SLIDE_CONCURRENCY = 3;",
+      "",
+    ].join("\n");
+    const units = analyzeFiles([
+      { path: "outline.ts", content, changeType: "added" },
+    ]).units.filter(({ kind }) => kind !== "file");
+    const byName = new Map(units.map((unit) => [unit.name, unit]));
+    const batch = byName.get("PREPARED_OUTLINE_BATCH_SIZE");
+    const outline = byName.get("PREPARED_OUTLINE_CONCURRENCY");
+    const tokens = byName.get("PREPARED_OUTLINE_MAX_OUTPUT_TOKENS");
+    const slides = byName.get("PREPARED_SLIDE_CONCURRENCY");
+
+    // The banner opens where the unit starts, so a comment left above that
+    // line is read as part of the previous unit.
+    expect(batch).toMatchObject({ startLine: 1 });
+    expect(batch?.source).toContain("Larger groups risk split retries.");
+    expect(batch?.source).not.toContain("Run at most two");
+    expect(outline).toMatchObject({ startLine: 4 });
+    expect(outline?.source).toContain(
+      "Run at most two outline groups concurrently.",
+    );
+    expect(outline?.source).not.toContain("Group up to four");
+    expect(outline?.source).not.toContain("Cap output tokens");
+    expect(tokens?.source).toContain(
+      "Cap output tokens for each outline group.",
+    );
+    expect(tokens?.source).not.toContain("Run at most two");
+    expect(slides?.source).toContain("PREPARED_SLIDE_CONCURRENCY");
+    expect(slides?.source).not.toContain("independent of the batch");
+  });
+
+  it("keeps a rewritten line comment on the constant it documents", () => {
+    /** Builds the same constants with one note above each. */
+    const source = (batchNote: string, concurrencyNote: string) =>
+      [
+        `// ${batchNote}`,
+        "const PREPARED_OUTLINE_BATCH_SIZE = 4;",
+        `// ${concurrencyNote}`,
+        "const PREPARED_OUTLINE_CONCURRENCY = 2;",
+        "",
+      ].join("\n");
+    const units = analyzeFiles([
+      {
+        path: "outline.ts",
+        content: source(
+          "Group up to four prepared source slides.",
+          "Run at most two outline groups.",
+        ),
+        previousContent: source("Old batch note.", "Old concurrency note."),
+        changeType: "modified",
+      },
+    ]).units.filter(({ kind }) => kind !== "file");
+
+    expect(units.map(({ name }) => name).sort()).toEqual([
+      "PREPARED_OUTLINE_BATCH_SIZE",
+      "PREPARED_OUTLINE_CONCURRENCY",
+    ]);
+    const batch = units.find(
+      (unit) => unit.name === "PREPARED_OUTLINE_BATCH_SIZE",
+    );
+    expect(batch?.source).toContain("Group up to four prepared source slides.");
+    expect(batch?.source).not.toContain("Run at most two");
+    expect(batch?.previousSource).toContain("Old batch note.");
+    expect(batch?.previousSource).not.toContain("Old concurrency note.");
+  });
+
   it("titles a mixed terminator hunk by the statement it changed", () => {
     /** Builds a spec whose terminator and trailing statement change together. */
     const spec = (semicolon: boolean, expected: number, format: string) =>
