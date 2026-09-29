@@ -8,6 +8,7 @@ import {
 } from "../tree-sitter";
 import {
   type LanguageAdapter,
+  lexicalSyntaxFor,
   type RawUnit,
   type SourceFile,
   supportedExtensions,
@@ -699,13 +700,68 @@ function directlyPrecedes(source: string, from: number, to: number) {
 }
 
 /**
+ * Reports whether a comment written against a declaration belongs to it.
+ *
+ * The spelling follows the language, so `//`, `#`, `--`, `;`, `%`, `!`, and a
+ * block comment such as `(* *)` all introduce the declaration they touch.
+ * JavaScript and TypeScript keep a plain block comment as module commentary,
+ * and a shebang names the program that runs the file.
+ */
+function commentIntroducesDeclaration(
+  language: TreeSitterLanguage | undefined,
+  text: string,
+) {
+  if (text.startsWith("#!")) return false;
+  return !(
+    (language === "javascript" || language === "typescript") &&
+    text.startsWith("/*") &&
+    !text.startsWith("/**")
+  );
+}
+
+/**
+ * Finds the node whose previous sibling can introduce this declaration.
+ *
+ * Some grammars wrap a declaration in a node that starts on the same character,
+ * such as a SQL statement or a Haskell declarations list. The comment is the
+ * wrapper's sibling, and it still introduces the declaration inside.
+ */
+function leadingCommentAnchor(node: SyntaxNode) {
+  let current = declarationWrapper(node);
+  const seen = new Set<SyntaxNode>();
+  while (
+    seen.size < 8 &&
+    current.parent &&
+    current.parent.startIndex === current.startIndex
+  ) {
+    if (current.parent === current || seen.has(current)) break;
+    seen.add(current);
+    const firstNamed = current.parent.namedChildren.find(
+      (child): child is SyntaxNode => child !== null,
+    );
+    // Tree-sitter hands back a fresh wrapper on each lookup, so identity
+    // cannot tell that this declaration is the wrapper's first child.
+    if (
+      !firstNamed ||
+      firstNamed.type !== current.type ||
+      firstNamed.startIndex !== current.startIndex ||
+      firstNamed.endIndex !== current.endIndex
+    ) {
+      break;
+    }
+    current = current.parent;
+  }
+  return current;
+}
+
+/**
  * Includes the documentation written above a declaration in that declaration.
  *
  * Formal documentation may sit a blank line above the declaration it describes.
- * An ordinary line comment belongs to the declaration when it sits against it,
- * so the review unit opens on the comment and the banner names the declaration
- * that comment explains. A blank line leaves the comment with the declaration
- * it follows, and a plain block comment stays module commentary.
+ * Any other comment belongs to the declaration when it sits against it, so the
+ * review unit opens on the comment and the banner names the declaration that
+ * comment explains. A blank line leaves the comment with the declaration it
+ * follows.
  */
 function leadingDocumentationStart(
   source: string,
@@ -713,9 +769,9 @@ function leadingDocumentationStart(
   shape: LanguageShape,
   language?: TreeSitterLanguage,
 ) {
-  const wrapper = declarationWrapper(node);
-  let start = wrapper.startIndex;
-  let sibling = wrapper.previousNamedSibling;
+  const anchor = leadingCommentAnchor(node);
+  let start = anchor.startIndex;
+  let sibling = anchor.previousNamedSibling;
   while (
     sibling &&
     (shape.comments.has(sibling.type) || isDecoratorNode(shape, sibling)) &&
@@ -724,21 +780,15 @@ function leadingDocumentationStart(
     const text = nodeText(source, sibling).trim();
     const formalDocumentation =
       isDecoratorNode(shape, sibling) ||
-      language === "clojure" ||
-      language === "go" ||
-      language === "hcl" ||
-      language === "lua" ||
-      language === "makefile" ||
-      language === "ruby" ||
-      language === "python" ||
       text.startsWith("/**") ||
       text.startsWith("///") ||
       text.startsWith("//!") ||
       text.startsWith("##");
-    const ordinaryComment =
+    const adjacentComment =
       directlyPrecedes(source, sibling.endIndex, start) &&
-      (text.startsWith("//") || text.startsWith("#"));
-    if (!formalDocumentation && !ordinaryComment) break;
+      commentIntroducesDeclaration(language, text);
+    if (!formalDocumentation && !adjacentComment) break;
+    if (sibling.startIndex >= start) break;
     start = sibling.startIndex;
     sibling = sibling.previousNamedSibling;
   }
@@ -758,7 +808,113 @@ function leadingDocumentationStart(
       start = comment.startIndex;
     }
   }
+  // Some grammars keep comments out of the named tree. The line above a
+  // declaration is still its introduction when it is written as a comment.
+  // Others swallow a comment and the blank line under it into the declaration
+  // itself; that note stays with the declaration above.
+  return commentSeparatedByBlankLine(
+    source,
+    precedingLineCommentStart(source, start, language),
+    language,
+  );
+}
+
+/**
+ * Drops a leading comment that a blank line separates from the declaration.
+ *
+ * Formal documentation may keep that blank line. An ordinary note does not,
+ * even when the grammar stored the blank line inside the comment node.
+ */
+function commentSeparatedByBlankLine(
+  source: string,
+  start: number,
+  language: TreeSitterLanguage | undefined,
+) {
+  const syntax = language ? lexicalSyntaxFor(language) : undefined;
+  if (!syntax) return start;
+  const lineMarkers = [...syntax.lineComments].sort(
+    (left, right) => right.length - left.length,
+  );
+  let cursor = start;
+  let ordinaryComment = false;
+  let formalComment = false;
+  while (cursor < source.length) {
+    const lineBreak = source.indexOf("\n", cursor);
+    const lineEnd = lineBreak < 0 ? source.length : lineBreak;
+    const line = source.slice(cursor, lineEnd).trim();
+    if (line === "") {
+      if (!ordinaryComment || formalComment || lineBreak < 0) return start;
+      let next = lineBreak + 1;
+      while (
+        next < source.length &&
+        (source[next] === " " || source[next] === "\t" || source[next] === "\n")
+      ) {
+        next += 1;
+      }
+      if (next >= source.length) return start;
+      return source.lastIndexOf("\n", next - 1) + 1;
+    }
+    const lineComment = lineMarkers.some((marker) => line.startsWith(marker));
+    const blockComment = syntax.blockComments.some(
+      ([open, close]) => line.startsWith(open) && line.endsWith(close),
+    );
+    if (!lineComment && !blockComment) return start;
+    if (
+      line.startsWith("/**") ||
+      line.startsWith("///") ||
+      line.startsWith("//!") ||
+      line.startsWith("##")
+    ) {
+      formalComment = true;
+    } else {
+      ordinaryComment = true;
+    }
+    if (lineBreak < 0) return start;
+    cursor = lineBreak + 1;
+  }
   return start;
+}
+
+/**
+ * Includes comment lines that sit against a declaration even when the grammar
+ * does not expose them as syntax nodes.
+ */
+function precedingLineCommentStart(
+  source: string,
+  start: number,
+  language: TreeSitterLanguage | undefined,
+) {
+  const markers = [
+    ...(language ? (lexicalSyntaxFor(language)?.lineComments ?? []) : []),
+  ].sort((left, right) => right.length - left.length);
+  if (markers.length === 0) return start;
+  let declaration = start;
+  while (
+    declaration < source.length &&
+    (source[declaration] === " " || source[declaration] === "\t")
+  ) {
+    declaration += 1;
+  }
+  if (source[declaration] === "\n") declaration += 1;
+  const lineStart = source.lastIndexOf("\n", Math.max(0, declaration - 1)) + 1;
+  // A comment above a declaration that shares its line with other code belongs
+  // to the declaration that opens the line.
+  if (source.slice(lineStart, declaration).trim() !== "") return start;
+  const prefix = source.slice(0, lineStart).replace(/\n$/, "");
+  if (prefix.trim() === "") return start;
+  const lines = prefix.split("\n");
+  let firstComment = lines.length;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (line === "") break;
+    const marker = markers.find((candidate) => line.startsWith(candidate));
+    if (!marker || !commentIntroducesDeclaration(language, line)) break;
+    firstComment = index;
+  }
+  if (firstComment === lines.length) return start;
+  return (
+    lines.slice(0, firstComment).join("\n").length + (firstComment > 0 ? 1 : 0)
+  );
 }
 
 /** Locates the body node for a declaration shape. */
@@ -1411,7 +1567,10 @@ function precedingCommentStart(source: string, node: SyntaxNode) {
   while (
     sibling &&
     sibling.type === "comment" &&
-    directlyPrecedes(source, sibling.endIndex, start)
+    directlyPrecedes(source, sibling.endIndex, start) &&
+    // Nested members are JavaScript or TypeScript, which keep a plain block
+    // comment as module commentary rather than a member's introduction.
+    commentIntroducesDeclaration("typescript", nodeText(source, sibling).trim())
   ) {
     start = sibling.startIndex;
     sibling = sibling.previousNamedSibling;

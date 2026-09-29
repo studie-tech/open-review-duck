@@ -809,7 +809,16 @@ export function createDeclarativeCandidateStrategies(
         elixirAnnotationAttributes.has(
           /^@(\w+)/.exec(nodeText(source, sibling))?.[1] ?? "",
         );
-      if (!annotation && !shapes.elixir.comments.has(sibling.type)) break;
+      const comment = shapes.elixir.comments.has(sibling.type);
+      if (!annotation && !comment) break;
+      // A blank line keeps a note with the definition above it. An attribute
+      // such as `@doc` still belongs to the definition it annotates.
+      if (
+        comment &&
+        /\n[^\S\n]*\n/.test(source.slice(sibling.endIndex, start))
+      ) {
+        break;
+      }
       start = sibling.startIndex;
     }
     return start;
