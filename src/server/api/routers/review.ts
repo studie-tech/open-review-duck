@@ -128,6 +128,7 @@ import {
   uploadCommentImage,
   uploadCommentImageSchema,
 } from "~/server/review/upload-comment-image";
+import { withViewerInvolvement } from "~/server/review/viewer-involvement";
 import {
   assignProviderThreadsToUnits,
   hasNewProviderActivity,
@@ -180,6 +181,12 @@ export const reviewRouter = createTRPCRouter({
         title: pullRequests.title,
         authorLogin: pullRequests.authorLogin,
         authorAvatarUrl: pullRequests.authorAvatarUrl,
+        authorExternalId: pullRequests.authorExternalId,
+        reviewerExternalIds: pullRequests.reviewerExternalIds,
+        assigneeExternalIds: pullRequests.assigneeExternalIds,
+        connectionId: providerConnections.id,
+        connectionAccountId: providerConnections.externalAccountId,
+        connectionDisplayName: providerConnections.displayName,
         state: pullRequests.state,
         webUrl: pullRequests.webUrl,
         updatedAt: pullRequests.updatedAt,
@@ -226,13 +233,17 @@ export const reviewRouter = createTRPCRouter({
         ),
       )
       .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
-    if (snapshots.length === 0) {
-      return rows.map((row) => ({
-        ...row,
-        totalUnits: 0,
-        signedUnits: 0,
-        carriedSignOffs: 0,
-      }));
+    const listed =
+      snapshots.length === 0
+        ? rows.map((row) => ({
+            ...row,
+            totalUnits: 0,
+            signedUnits: 0,
+            carriedSignOffs: 0,
+          }))
+        : null;
+    if (listed) {
+      return withViewerInvolvement(ctx.db, ctx.auth.userId, listed);
     }
     const progress = await ctx.db
       .select({
@@ -266,17 +277,21 @@ export const reviewRouter = createTRPCRouter({
     const snapshotByPullRequest = new Map(
       snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot.id]),
     );
-    return rows.map((row) => {
-      const counts = progressBySnapshot.get(
-        snapshotByPullRequest.get(row.id) ?? "",
-      );
-      return {
-        ...row,
-        totalUnits: Number(counts?.totalUnits ?? 0),
-        signedUnits: Number(counts?.signedUnits ?? 0),
-        carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
-      };
-    });
+    return withViewerInvolvement(
+      ctx.db,
+      ctx.auth.userId,
+      rows.map((row) => {
+        const counts = progressBySnapshot.get(
+          snapshotByPullRequest.get(row.id) ?? "",
+        );
+        return {
+          ...row,
+          totalUnits: Number(counts?.totalUnits ?? 0),
+          signedUnits: Number(counts?.signedUnits ?? 0),
+          carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
+        };
+      }),
+    );
   }),
 
   removeFromQueue: protectedProcedure

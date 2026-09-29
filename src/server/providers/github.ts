@@ -6,6 +6,7 @@ import {
   githubMergeGate,
 } from "~/lib/provider-merge-gate";
 import { githubViewerCanMerge } from "~/lib/provider-permission-recovery";
+import { providerAccountIds } from "~/lib/pull-request-involvement";
 import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
@@ -430,6 +431,9 @@ export class GitHubProvider implements PullRequestProvider {
       description: pull.body ?? undefined,
       authorLogin: pull.user.login,
       authorAvatarUrl: pull.user.avatar_url,
+      authorExternalId: pull.user.id == null ? undefined : String(pull.user.id),
+      reviewerExternalIds: providerAccountIds(pull.requested_reviewers),
+      assigneeExternalIds: providerAccountIds(pull.assignees),
       sourceBranch: pull.head.ref,
       targetBranch: pull.base.ref,
       headSha: pull.head.sha,

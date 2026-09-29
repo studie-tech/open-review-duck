@@ -27,6 +27,9 @@ export interface PullRequestSummary {
   description?: string;
   authorLogin: string;
   authorAvatarUrl?: string;
+  authorExternalId?: string;
+  reviewerExternalIds?: string[];
+  assigneeExternalIds?: string[];
   sourceBranch: string;
   targetBranch: string;
   headSha: string;

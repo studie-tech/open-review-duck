@@ -47,6 +47,8 @@ describe("DashboardOverview", () => {
         repositoryOwner: "acme",
         repositoryName: "web",
         provider: "github",
+        assignedToViewer: false,
+        authoredByViewer: false,
         queueState: "active",
         queueSource: "manual",
         removedAt: null,

@@ -10,10 +10,12 @@ import {
   pullRequests,
   repositories,
   reviewQueueItems,
+  userProviderCredentials,
   workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
+import { viewerOwnsPullRequest } from "~/lib/pull-request-involvement";
 import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import {
   excludeImportedPullRequests,
@@ -906,6 +908,28 @@ export const providerRouter = createTRPCRouter({
     const connectionById = new Map(
       connections.map((connection) => [connection.id, connection]),
     );
+    const personalCredentials =
+      connectionIds.length === 0
+        ? []
+        : await ctx.db
+            .select({
+              connectionId: userProviderCredentials.connectionId,
+              displayLogin: userProviderCredentials.displayLogin,
+              externalAccountId: userProviderCredentials.externalAccountId,
+            })
+            .from(userProviderCredentials)
+            .where(
+              and(
+                eq(userProviderCredentials.userId, ctx.auth.userId),
+                inArray(userProviderCredentials.connectionId, connectionIds),
+              ),
+            );
+    const credentialByConnection = new Map(
+      personalCredentials.map((credential) => [
+        credential.connectionId,
+        credential,
+      ]),
+    );
     const grouped = new Map<string, typeof manualRepositories>();
     for (const repository of manualRepositories) {
       if (!repository.connectionId) continue;
@@ -915,8 +939,10 @@ export const providerRouter = createTRPCRouter({
     }
     const collected: Array<{
       additions: number;
+      assignedToViewer: boolean;
       authorAvatarUrl: string | null;
       authorLogin: string;
+      authoredByViewer: boolean;
       deletions: number;
       externalId: string;
       labels: PullRequestLabel[];
@@ -952,10 +978,29 @@ export const providerRouter = createTRPCRouter({
                     importedByRepository.get(repository.id) ?? new Set(),
                   );
                   for (const pullRequest of open) {
+                    const credential = credentialByConnection.get(
+                      connection.id,
+                    );
+                    const involvement = viewerOwnsPullRequest({
+                      accountIds: [
+                        connection.externalAccountId,
+                        credential?.externalAccountId,
+                      ],
+                      assigneeExternalIds: pullRequest.assigneeExternalIds,
+                      authorExternalId: pullRequest.authorExternalId,
+                      authorLogin: pullRequest.authorLogin,
+                      logins: [
+                        connection.displayName,
+                        credential?.displayLogin,
+                      ],
+                      reviewerExternalIds: pullRequest.reviewerExternalIds,
+                    });
                     collected.push({
                       additions: pullRequest.additions,
+                      assignedToViewer: involvement.assignedToViewer,
                       authorAvatarUrl: pullRequest.authorAvatarUrl ?? null,
                       authorLogin: pullRequest.authorLogin,
+                      authoredByViewer: involvement.authoredByViewer,
                       deletions: pullRequest.deletions,
                       externalId: pullRequest.externalId,
                       labels: pullRequest.labels,

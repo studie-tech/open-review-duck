@@ -236,6 +236,11 @@ describe("provider normalization", () => {
     });
 
     expect(pulls.map((pull) => pull.number)).toEqual([7]);
+    expect(pulls[0]).toMatchObject({
+      authorExternalId: "1",
+      reviewerExternalIds: ["42"],
+      assigneeExternalIds: [],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
