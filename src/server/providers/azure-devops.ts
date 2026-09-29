@@ -4,6 +4,7 @@ import {
   azureMergeGate,
   azurePolicyCheckState,
 } from "~/lib/provider-merge-gate";
+import { providerAccountIds } from "~/lib/pull-request-involvement";
 import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
@@ -63,6 +64,7 @@ interface AzurePull {
     uniqueName?: string;
     imageUrl?: string;
   };
+  reviewers?: Array<{ id?: string | null }>;
   labels?: Array<{
     id?: string;
     name?: string;
@@ -1004,6 +1006,9 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       description: item.description,
       authorLogin: item.createdBy.uniqueName ?? item.createdBy.displayName,
       authorAvatarUrl: item.createdBy.imageUrl,
+      authorExternalId: item.createdBy.id || undefined,
+      reviewerExternalIds: providerAccountIds(item.reviewers),
+      assigneeExternalIds: [],
       sourceBranch: item.sourceRefName.replace("refs/heads/", ""),
       targetBranch: item.targetRefName.replace("refs/heads/", ""),
       headSha: item.lastMergeSourceCommit.commitId,

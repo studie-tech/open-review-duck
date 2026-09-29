@@ -1,5 +1,6 @@
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { gitlabMergeGate } from "~/lib/provider-merge-gate";
+import { providerAccountIds } from "~/lib/pull-request-involvement";
 import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
@@ -49,7 +50,9 @@ interface GitLabMergeRequest {
   target_branch: string;
   sha: string;
   diff_refs: { base_sha: string; head_sha: string };
-  author: { id: number; username: string; avatar_url: string | null };
+  assignees?: Array<{ id?: number | null }>;
+  author: { id?: number | null; username: string; avatar_url: string | null };
+  reviewers?: Array<{ id?: number | null }>;
   labels?: Array<
     | string
     | {
@@ -867,6 +870,10 @@ export class GitLabProvider implements PullRequestProvider {
       description: item.description ?? undefined,
       authorLogin: item.author.username,
       authorAvatarUrl: item.author.avatar_url ?? undefined,
+      authorExternalId:
+        item.author.id == null ? undefined : String(item.author.id),
+      reviewerExternalIds: providerAccountIds(item.reviewers),
+      assigneeExternalIds: providerAccountIds(item.assignees),
       sourceBranch: item.source_branch,
       targetBranch: item.target_branch,
       headSha: item.diff_refs?.head_sha ?? item.sha,

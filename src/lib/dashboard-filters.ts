@@ -1,10 +1,15 @@
 import type { PriorityInboxItem } from "~/lib/priority-inbox";
+import {
+  type InboxInvolvement,
+  isInboxInvolvement,
+} from "~/lib/pull-request-involvement";
 
 export const DASHBOARD_FILTERS_STORAGE_KEY = "reviewduck:dashboard-filters";
 
 export type DashboardProviderFilter = "all" | PriorityInboxItem["provider"];
 
 export interface DashboardFilters {
+  involvement: InboxInvolvement;
   provider: DashboardProviderFilter;
   repositories: string[];
   search: string;
@@ -19,6 +24,7 @@ const providers = new Set<DashboardProviderFilter>([
 ]);
 
 export const defaultDashboardFilters: DashboardFilters = {
+  involvement: "all",
   provider: "all",
   repositories: [],
   search: "",
@@ -59,6 +65,9 @@ export function dashboardFilters(storage: Pick<Storage, "getItem">) {
       repository?: unknown;
     };
     return {
+      involvement: isInboxInvolvement(parsed.involvement)
+        ? parsed.involvement
+        : "all",
       provider: isProviderFilter(parsed.provider) ? parsed.provider : "all",
       repositories: normalizeRepositoryFilter(
         parsed.repositories ?? parsed.repository,

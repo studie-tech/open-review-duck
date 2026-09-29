@@ -133,6 +133,32 @@ describe("priority inbox", () => {
     ).toEqual([draft, open]);
   });
 
+  it("keeps pull requests that match the reviewer's involvement", () => {
+    const rows = [
+      item({ id: "both", assignedToViewer: true, authoredByViewer: true }),
+      item({ id: "assigned", assignedToViewer: true }),
+      item({ id: "created", authoredByViewer: true }),
+      item({ id: "other" }),
+    ];
+    const filters = {
+      view: "all" as const,
+      provider: "all" as const,
+      repositories: [],
+      search: "",
+    };
+
+    expect(
+      filterPriorityInbox(rows, { ...filters, involvement: "created" }).map(
+        ({ id }) => id,
+      ),
+    ).toEqual(["both", "created"]);
+    expect(
+      filterPriorityInbox(rows, { ...filters, involvement: "both" }).map(
+        ({ id }) => id,
+      ),
+    ).toEqual(["both"]);
+  });
+
   it("keeps same-named repositories distinct across providers", () => {
     const github = item({ id: "github" });
     const gitlab = item({ id: "gitlab", provider: "gitlab" });
