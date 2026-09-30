@@ -1,5 +1,8 @@
 import { mapWithLimit } from "~/lib/concurrency";
-import { pullRequestFileCommitShas } from "~/lib/line-commit-history";
+import {
+  oldestFirstByParent,
+  pullRequestFileCommitShas,
+} from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   applyCheckRequiredFlags,
@@ -1562,8 +1565,14 @@ export class GitHubProvider implements PullRequestProvider {
         `${root}/commits?sha=${encodeURIComponent(input.headSha)}&path=${encodeURIComponent(input.path)}&per_page=100`,
       ),
     ]);
+    const orderedPull = oldestFirstByParent(
+      pullCommits.map((commit) => ({
+        sha: commit.sha,
+        parents: (commit.parents ?? []).map((parent) => parent.sha),
+      })),
+    );
     const chosen = pullRequestFileCommitShas(
-      pullCommits.map((commit) => commit.sha),
+      orderedPull.map((commit) => commit.sha),
       new Set(pathCommits.map((commit) => commit.sha)),
     );
     const bySha = new Map(

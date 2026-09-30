@@ -1,5 +1,6 @@
 import { mapWithLimit } from "~/lib/concurrency";
 import {
+  oldestFirstByParent,
   pullRequestFileCommitShas,
   unifiedPatch,
 } from "~/lib/line-commit-history";
@@ -1017,8 +1018,14 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         `${root}/commits?searchCriteria.itemPath=${encodeURIComponent(itemPath)}&searchCriteria.itemVersion.version=${encodeURIComponent(input.headSha)}&searchCriteria.itemVersion.versionType=commit&api-version=7.1`,
       ),
     ]);
+    const orderedPull = oldestFirstByParent(
+      pullCommits.map((commit) => ({
+        sha: commit.commitId,
+        parents: commit.parents ?? [],
+      })),
+    );
     const chosen = pullRequestFileCommitShas(
-      pullCommits.map((commit) => commit.commitId),
+      orderedPull.map((commit) => commit.sha),
       new Set(pathCommits.map((commit) => commit.commitId)),
     );
     const bySha = new Map(

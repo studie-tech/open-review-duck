@@ -4,6 +4,7 @@ import {
   commitEffectLabels,
   commitsForSelection,
   type FileCommitPatch,
+  oldestFirstByParent,
   parseUnifiedHunks,
   unifiedPatch,
 } from "./line-commit-history";
@@ -100,6 +101,47 @@ describe("attributeFileCommits", () => {
     expect(history.unmapped).toBe(true);
     expect(history.commits.every((entry) => entry.mapped === false)).toBe(true);
     expect(history.commits).toHaveLength(2);
+  });
+
+  it("applies a later hunk after an earlier hunk in the same commit adds lines", () => {
+    const history = attributeFileCommits({
+      truncated: false,
+      commits: [
+        commit(
+          "ffffffff",
+          "@@ -1,1 +1,3 @@\n-a\n+a\n+x\n+y\n@@ -4,1 +6,1 @@\n-d\n+D\n",
+          "2026-09-08T00:00:00Z",
+        ),
+      ],
+    });
+
+    expect(history.commits[0]).toMatchObject({
+      baseLines: [1, 4],
+      headLines: [1, 2, 3, 6],
+    });
+  });
+
+  it("applies provider order when author dates run backwards", () => {
+    const history = attributeFileCommits({
+      truncated: false,
+      commits: [
+        commit("aaaaaaaa", "@@ -1,0 +1,1 @@\n+new\n", "2026-09-09T00:00:00Z"),
+        commit("bbbbbbbb", "@@ -2,1 +2,1 @@\n-a\n+A\n", "2026-09-01T00:00:00Z"),
+      ],
+    });
+
+    expect(
+      history.commits.find((entry) => entry.sha === "bbbbbbbb"),
+    ).toMatchObject({ baseLines: [1], headLines: [2] });
+  });
+
+  it("orders a newest-first parent chain from the oldest root", () => {
+    expect(
+      oldestFirstByParent([
+        { sha: "child", parents: ["root"] },
+        { sha: "root", parents: ["outside"] },
+      ]).map((commit) => commit.sha),
+    ).toEqual(["root", "child"]);
   });
 
   it("drops merge commits and reports a truncated history as unmapped", () => {

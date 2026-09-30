@@ -1258,7 +1258,6 @@ export const SideBySideUnitDiff = forwardRef<
       pointerId: event.pointerId,
       moved: false,
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
   };
   /** Extends the dragged line range as the pointer crosses gutters. */
   const moveHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
@@ -1266,6 +1265,7 @@ export const SideBySideUnitDiff = forwardRef<
     if (!drag || drag.pointerId !== event.pointerId) return;
     const row = historyRowAt(event.clientX, event.clientY);
     if (row === undefined || row === drag.start) return;
+    if (!drag.moved) event.currentTarget.setPointerCapture(event.pointerId);
     drag.moved = true;
     historyAnchorRef.current = drag.start;
     setHistoryRange({ start: drag.start, end: row });
@@ -1275,7 +1275,11 @@ export const SideBySideUnitDiff = forwardRef<
     const drag = historyDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     historyDragRef.current = null;
-    if (drag.moved) suppressHistoryClick.current = true;
+    if (!drag.moved) return;
+    suppressHistoryClick.current = true;
+    window.setTimeout(() => {
+      suppressHistoryClick.current = false;
+    }, 0);
   };
 
   const historySelection = useMemo(() => {
