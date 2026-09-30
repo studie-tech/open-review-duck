@@ -7,6 +7,44 @@ import {
 export const FILE_COMMIT_MAP_LIMIT = 40;
 
 /**
+ * Orders commits from parent links so a replay follows history, not response order.
+ *
+ * A commit whose parent is outside the set is a root. Children follow that parent.
+ * Commits the links cannot place keep their original relative order.
+ */
+export function oldestFirstByParent<
+  T extends { sha: string; parents: readonly string[] },
+>(commits: readonly T[]) {
+  const bySha = new Map(commits.map((commit) => [commit.sha, commit]));
+  const children = new Map<string, T[]>();
+  const roots: T[] = [];
+  for (const commit of commits) {
+    const parent = commit.parents.find((sha) => bySha.has(sha));
+    if (!parent) {
+      roots.push(commit);
+      continue;
+    }
+    const list = children.get(parent) ?? [];
+    list.push(commit);
+    children.set(parent, list);
+  }
+  const ordered: T[] = [];
+  const pending = [...roots];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const commit = pending.shift();
+    if (!commit || seen.has(commit.sha)) continue;
+    seen.add(commit.sha);
+    ordered.push(commit);
+    for (const child of children.get(commit.sha) ?? []) pending.push(child);
+  }
+  for (const commit of commits) {
+    if (!seen.has(commit.sha)) ordered.push(commit);
+  }
+  return ordered;
+}
+
+/**
  * Keeps pull-request commits that touched a file, in pull-request order.
  *
  * Callers fetch patches only for the returned shas. A longer history is
@@ -241,7 +279,8 @@ function applyHunk(
 /**
  * Maps pull-request commits onto the base and head lines of the reviewed file.
  *
- * Commits are applied oldest first. The returned list is newest first.
+ * Commits are applied in the order given, which callers make oldest first.
+ * The returned list is newest first.
  * Merge commits are omitted. A missing patch, or a file with more commits
  * than can be replayed, is reported as unmapped and matches every selection.
  */
@@ -249,16 +288,7 @@ export function attributeFileCommits(input: {
   commits: readonly FileCommitPatch[];
   truncated: boolean;
 }): LineHistory {
-  const ordered = input.commits
-    .filter((commit) => !commit.merge)
-    .map((commit, index) => ({ commit, index }))
-    .sort((left, right) => {
-      const byTime = left.commit.authoredAt.localeCompare(
-        right.commit.authoredAt,
-      );
-      return byTime === 0 ? left.index - right.index : byTime;
-    })
-    .map(({ commit }) => commit);
+  const ordered = input.commits.filter((commit) => !commit.merge);
   const unmapped =
     input.truncated || ordered.some((commit) => commit.patch === null);
   const lines: TrackedLine[] = [];
@@ -266,8 +296,19 @@ export function attributeFileCommits(input: {
   const baseTouches = new Map<number, string[]>();
   if (!unmapped) {
     for (const commit of ordered) {
+      let offset = 0;
       for (const hunk of parseUnifiedHunks(commit.patch ?? "")) {
-        applyHunk(lines, hunk, commit.sha, nextBaseLine, baseTouches);
+        const oldStart =
+          hunk.oldStart <= 0 ? hunk.oldStart : hunk.oldStart + offset;
+        applyHunk(
+          lines,
+          { ...hunk, oldStart },
+          commit.sha,
+          nextBaseLine,
+          baseTouches,
+        );
+        const newCount = hunk.lines.filter((line) => line !== "-").length;
+        offset += newCount - hunk.oldCount;
       }
     }
     for (const line of lines) {

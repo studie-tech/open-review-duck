@@ -1,5 +1,8 @@
 import { mapWithLimit } from "~/lib/concurrency";
-import { pullRequestFileCommitShas } from "~/lib/line-commit-history";
+import {
+  oldestFirstByParent,
+  pullRequestFileCommitShas,
+} from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { gitlabMergeGate } from "~/lib/provider-merge-gate";
 import { providerAccountIds } from "~/lib/pull-request-involvement";
@@ -837,8 +840,14 @@ export class GitLabProvider implements PullRequestProvider {
         `${root}/repository/commits?ref_name=${encodeURIComponent(input.headSha)}&path=${encodeURIComponent(input.path)}&per_page=100`,
       ),
     ]);
+    const orderedPull = oldestFirstByParent(
+      pullCommits.map((commit) => ({
+        sha: commit.id,
+        parents: commit.parent_ids ?? [],
+      })),
+    );
     const chosen = pullRequestFileCommitShas(
-      pullCommits.map((commit) => commit.id),
+      orderedPull.map((commit) => commit.sha),
       new Set(pathCommits.map((commit) => commit.id)),
     );
     const bySha = new Map(
