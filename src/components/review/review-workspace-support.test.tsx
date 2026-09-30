@@ -3466,6 +3466,65 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenCalledWith(8);
   });
 
+  it("shows pull-request commits for a shift-clicked line range", async () => {
+    const selectLine = vi.fn();
+    const onRequest = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const removed = true;\nconst retained = true;"}
+        currentSource={"const retained = true;"}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={1}
+        previousFocusEndLine={1}
+        currentFocusStartLine={null}
+        currentFocusEndLine={null}
+        onSelectReviewLine={selectLine}
+        lineHistory={{
+          status: "ready",
+          truncated: false,
+          unmapped: false,
+          onRequest,
+          commits: [
+            {
+              sha: "c4e91a2abcdef",
+              shortSha: "c4e91a2",
+              author: "reviewer",
+              authoredAt: "2026-09-30T12:00:00.000Z",
+              subject: "Stop writing tutorial flags during sign-in",
+              body: "The tutorial service already covers this.",
+              baseLines: [1],
+              headLines: [],
+              mapped: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const deletedLine = screen.getAllByRole("button", {
+      name: "Open actions for deleted line 1",
+    })[0];
+    if (!deletedLine) throw new Error("Expected a deleted-line action");
+    fireEvent.click(deletedLine, { shiftKey: true });
+
+    expect(selectLine).not.toHaveBeenCalled();
+    await waitFor(() => expect(onRequest).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "Show 1 commit" }));
+    expect(
+      screen.getByText("Stop writing tutorial flags during sign-in"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The tutorial service already covers this."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed lines 1")).toBeInTheDocument();
+
+    fireEvent.click(deletedLine);
+    expect(selectLine).toHaveBeenCalledWith(1);
+  });
+
   it("keeps gaps between related ranges visible but non-commentable", async () => {
     const selectLine = vi.fn();
     const user = userEvent.setup();
