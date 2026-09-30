@@ -1,4 +1,5 @@
 import { mapWithLimit } from "~/lib/concurrency";
+import { pullRequestFileCommitShas } from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   applyCheckRequiredFlags,
@@ -21,6 +22,7 @@ import {
   type ChangedFilesOptions,
   type ProviderCheckState,
   ProviderError,
+  type ProviderFileCommit,
   type ProviderPullRequestCheck,
   type ProviderPullRequestLifecycle,
   type ProviderPullRequestReviewState,
@@ -107,6 +109,20 @@ interface GitHubFile {
   status: string;
   previous_filename?: string;
   sha?: string;
+  patch?: string;
+}
+interface GitHubListedCommit {
+  sha: string;
+  html_url?: string;
+  commit: {
+    message: string;
+    author: { name?: string | null; date?: string | null } | null;
+  };
+  author: { login?: string | null } | null;
+  parents?: Array<{ sha: string }>;
+}
+interface GitHubCommitDetail {
+  files?: GitHubFile[];
 }
 interface GitHubTree {
   truncated: boolean;
@@ -1523,6 +1539,77 @@ export class GitHubProvider implements PullRequestProvider {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Lists pull-request commits that touched one file, with that file's patch.
+   *
+   * Commits from before the pull request are dropped. Histories longer than
+   * the line-map limit come back without patches.
+   */
+  async listPullRequestFileCommits(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    path: string;
+    headSha: string;
+  }) {
+    const root = `${this.apiUrl}/repositories/${input.repositoryExternalId}`;
+    const [pullCommits, pathCommits] = await Promise.all([
+      this.getAllPages<GitHubListedCommit>(
+        `${root}/pulls/${input.pullRequestNumber}/commits?per_page=100`,
+      ),
+      this.getAllPages<GitHubListedCommit>(
+        `${root}/commits?sha=${encodeURIComponent(input.headSha)}&path=${encodeURIComponent(input.path)}&per_page=100`,
+      ),
+    ]);
+    const chosen = pullRequestFileCommitShas(
+      pullCommits.map((commit) => commit.sha),
+      new Set(pathCommits.map((commit) => commit.sha)),
+    );
+    const bySha = new Map(
+      [...pullCommits, ...pathCommits].map((commit) => [commit.sha, commit]),
+    );
+    const commits = await mapWithLimit(chosen.shas, 4, async (sha) => {
+      const listed = bySha.get(sha);
+      const merge = (listed?.parents?.length ?? 0) > 1;
+      const detail =
+        chosen.truncated || merge
+          ? undefined
+          : await providerFetch<GitHubCommitDetail>(
+              this.name,
+              `${root}/commits/${sha}`,
+              { headers: this.headers },
+            );
+      const file = detail?.files?.find(
+        (entry) =>
+          entry.filename === input.path ||
+          entry.previous_filename === input.path,
+      );
+      return this.fileCommitFromGitHub(listed, sha, {
+        merge,
+        patch:
+          chosen.truncated || merge ? null : file ? (file.patch ?? null) : "",
+      });
+    });
+    return { commits, truncated: chosen.truncated };
+  }
+
+  /** Normalizes one GitHub commit into the shared file-history shape. */
+  private fileCommitFromGitHub(
+    listed: GitHubListedCommit | undefined,
+    sha: string,
+    input: { merge: boolean; patch: string | null },
+  ): ProviderFileCommit {
+    return {
+      sha,
+      author:
+        listed?.author?.login ?? listed?.commit.author?.name ?? sha.slice(0, 7),
+      authoredAt: listed?.commit.author?.date ?? "",
+      message: listed?.commit.message ?? "",
+      url: listed?.html_url,
+      patch: input.patch,
+      merge: input.merge,
+    };
   }
 
   /** Maps a GitHub file status to a normalized change type. */

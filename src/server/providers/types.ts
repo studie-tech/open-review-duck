@@ -319,6 +319,33 @@ export interface PullRequestProvider {
     threadExternalId: string;
     commentExternalId: string;
   }): Promise<void>;
+  /**
+   * Lists commits in one pull request that touched a file, oldest-commit
+   * metadata first, each with that commit's unified diff for the file.
+   */
+  listPullRequestFileCommits(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    path: string;
+    headSha: string;
+  }): Promise<ProviderFileCommitList>;
+}
+
+/** One commit's patch for a single file inside a pull request. */
+export interface ProviderFileCommit {
+  sha: string;
+  author: string;
+  authoredAt: string;
+  message: string;
+  url?: string;
+  patch: string | null;
+  merge: boolean;
+}
+
+/** File commits for a pull request, flagged when the line map was cut short. */
+export interface ProviderFileCommitList {
+  commits: ProviderFileCommit[];
+  truncated: boolean;
 }
 
 export class ProviderError extends Error {

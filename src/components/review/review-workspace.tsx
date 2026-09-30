@@ -205,6 +205,7 @@ import {
   reviewLineCommentMarkersBySide,
   reviewLineCommentMarkersForLine,
 } from "./review-line-comment-markers";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
 import { ReviewMarkdownViewSwitch } from "./review-markdown-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
@@ -257,7 +258,6 @@ import {
 import {
   ReviewPathUnit,
   ReviewScopeMarker,
-  SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
   showAiStartError,
 } from "./review-workspace-diff";
@@ -3053,11 +3053,13 @@ export function ReviewWorkspace({
             sourceBytes={sourceBytes}
             markdownView={markdownView}
             onSourceNeeded={prepareSourcePath}
+            pullRequestId={initialData.pullRequest.id}
           />
         );
       }),
     [
       activeConceptFileCards.length,
+      initialData.pullRequest.id,
       commentOnMemberLine,
       commentThreadsByPath,
       fileContexts,
@@ -6973,9 +6975,11 @@ export function ReviewWorkspace({
                   {selectedFileSourceExpanded &&
                     !markdownPreviewVisible &&
                     sideBySideVisible && (
-                      <SideBySideUnitDiff
+                      <ReviewDiffWithLineHistory
                         key={activeUnit.id}
                         ref={diffContextRef}
+                        pullRequestId={initialData.pullRequest.id}
+                        path={activeUnit.path}
                         className="rounded-none border-0"
                         previousSource={diffPreviousSource}
                         currentSource={diffCurrentSource}
