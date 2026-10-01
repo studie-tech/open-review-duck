@@ -88,6 +88,7 @@ export class PrivateWorkspaceSourceStore<
   readonly #statuses = new Map<string, WorkspaceSourceStatus>();
   readonly #listeners = new Set<() => void>();
   #protectedPaths = new Set<string>();
+  readonly #visiblePaths = new Map<string, number>();
   #queue: Array<SourceRequest<Unit, Context>> = [];
   #active = 0;
   #sequence = 0;
@@ -236,16 +237,33 @@ export class PrivateWorkspaceSourceStore<
     this.#protectedPaths = new Set(paths);
   }
 
+  /** Keeps visible previews resident independently of the selected file. */
+  retainPath = (path: string) => {
+    this.#visiblePaths.set(path, (this.#visiblePaths.get(path) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const owners = (this.#visiblePaths.get(path) ?? 1) - 1;
+      if (owners > 0) this.#visiblePaths.set(path, owners);
+      else this.#visiblePaths.delete(path);
+    };
+  };
+
   /** Warms subsequent files serially without evicting the reader's working set. */
   async prefetch(paths: readonly string[], cancelled: () => boolean) {
     if (cancelled() || this.#disposed) return;
-    const desired = new Set(this.#protectedPaths);
+    const desired = new Set([
+      ...this.#protectedPaths,
+      ...this.#visiblePaths.keys(),
+    ]);
     for (const path of paths) {
       if (desired.size >= this.#maximumReadyFiles) break;
       desired.add(path);
     }
     for (const path of this.#results.keys()) {
-      if (!desired.has(path)) this.#dropResult(path);
+      if (!desired.has(path) && !this.#visiblePaths.has(path))
+        this.#dropResult(path);
     }
     this.#publish();
     for (const path of paths.filter((path) => desired.has(path))) {
@@ -389,7 +407,10 @@ export class PrivateWorkspaceSourceStore<
   #evictLeastRecentlyUsed(newestPath: string) {
     while (this.#results.size > this.#maximumReadyFiles) {
       const oldestPath = [...this.#results.keys()].find(
-        (path) => path !== newestPath && !this.#protectedPaths.has(path),
+        (path) =>
+          path !== newestPath &&
+          !this.#protectedPaths.has(path) &&
+          !this.#visiblePaths.has(path),
       );
       if (!oldestPath) return;
       if (oldestPath === newestPath && this.#results.size === 1) return;

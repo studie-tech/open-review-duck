@@ -5,6 +5,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -16,7 +17,6 @@ import {
   SYMBOL_PEEK_CLOSE_DELAY_MS,
   SYMBOL_PEEK_HOVER_DELAY_MS,
   SYMBOL_PEEK_LINE_ATTRIBUTE,
-  SYMBOL_PEEK_MAXIMUM_LINES,
 } from "~/lib/symbol-peek";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
@@ -264,10 +264,40 @@ export function SymbolPeekCard({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const placement = peekPlacement(peeked.anchor, viewport);
+  const placement = peekPlacement(peeked.anchor, viewport, {
+    width: SYMBOL_PEEK_CARD_WIDTH,
+    minimumHeight: 480,
+  });
   const lines = useHighlightedSource(definition.source, definition.language);
-  const shown = lines.slice(0, SYMBOL_PEEK_MAXIMUM_LINES);
-  const hidden = Math.max(0, lines.length - shown.length);
+  const sourceRef = useRef<HTMLElement>(null);
+  const focusRef = useRef<HTMLDivElement>(null);
+  const scrolledDefinition = useRef<SymbolDefinition | undefined>(undefined);
+
+  useLayoutEffect(() => {
+    const previous = scrolledDefinition.current;
+    if (
+      previous?.source === definition.source &&
+      previous.focusLine === definition.focusLine &&
+      previous.startLine === definition.startLine
+    )
+      return;
+    const source = sourceRef.current;
+    const focus =
+      definition.focusLine >= definition.startLine ? focusRef.current : null;
+    if (
+      !source ||
+      !definition.source ||
+      lines.map((line) => line.text).join("\n") !== definition.source
+    )
+      return;
+    // Start at the declaration, with two lines of lead-in. Documentation above
+    // it remains reachable by scrolling up, and the complete body below it is
+    // available in the same scroll region.
+    source.scrollTop = focus
+      ? Math.max(0, focus.offsetTop - source.offsetTop - focus.offsetHeight * 2)
+      : 0;
+    scrolledDefinition.current = definition;
+  }, [definition, lines]);
 
   return (
     <section
@@ -276,7 +306,7 @@ export function SymbolPeekCard({
       onMouseLeave={() => onHold(false)}
       style={{
         left: placement.left,
-        maxHeight: placement.maxHeight,
+        maxHeight: Math.min(640, Math.max(0, placement.maxHeight - 6)),
         top: placement.top,
         transform:
           placement.placement === "above" ? "translateY(-100%)" : undefined,
@@ -284,7 +314,7 @@ export function SymbolPeekCard({
       }}
       className="border-cyan/25 bg-panel fixed z-[60] flex max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-xl border font-sans shadow-[0_20px_60px_var(--app-shadow)]"
     >
-      <header className="bg-cyan/[.045] flex items-center gap-2 border-b border-line px-3 py-2">
+      <header className="bg-cyan/[.045] flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <FileCode2 className="text-cyan size-3.5 shrink-0" aria-hidden="true" />
         <span className="text-cloud truncate font-mono text-[11px] font-medium">
           {peeked.symbol}
@@ -304,12 +334,23 @@ export function SymbolPeekCard({
       <p className="text-fog shrink-0 truncate px-3 py-1.5 font-mono text-[9px]">
         {definition.path} · lines {definition.startLine}–{definition.endLine}
       </p>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-line">
-        {shown.map((line, index) => (
+      <section
+        ref={sourceRef}
+        aria-label={`Source of ${peeked.symbol}`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: enables keyboard scrolling in the source region
+        tabIndex={0}
+        className="min-h-0 flex-1 overflow-auto border-t border-line focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
+      >
+        {lines.map((line, index) => (
           <div
             key={`${definition.path}-${definition.startLine + index}`}
+            ref={
+              definition.focusLine === definition.startLine + index
+                ? focusRef
+                : undefined
+            }
             className={cn(
-              "grid grid-cols-[44px_1fr] px-2",
+              "grid min-w-max grid-cols-[44px_1fr] px-2",
               definition.focusLine === definition.startLine + index &&
                 "bg-cyan/[.07]",
             )}
@@ -322,9 +363,9 @@ export function SymbolPeekCard({
             </pre>
           </div>
         ))}
-      </div>
+      </section>
       <footer className="text-fog flex shrink-0 items-center gap-2 border-t border-line bg-surface-subtle/25 px-3 py-1.5 text-[9px]">
-        {hidden > 0 ? <span>{hidden} more lines</span> : <span />}
+        <span>{lines.length} lines</span>
         {definition.unitId && onOpenUnit && (
           <button
             type="button"

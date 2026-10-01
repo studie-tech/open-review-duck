@@ -388,6 +388,7 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   const LineContainer = reviewLine === undefined ? "div" : "button";
   return (
     <div
+      data-current-line={lineNumber}
       data-history-row={historyRow}
       data-history-columns={
         historyRow === undefined ? undefined : historyColumns
@@ -504,6 +505,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   // most one side carries the provider line and the other is always unset.
   const reviewLine = currentReviewLine ?? previousReviewLine;
   const historyAttributes = {
+    "data-current-line": currentLineNumber,
     "data-history-row": historyRow,
     "data-history-columns":
       historyRow === undefined

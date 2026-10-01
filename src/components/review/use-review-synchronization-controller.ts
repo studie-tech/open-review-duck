@@ -16,6 +16,9 @@ type WorkspaceData = RouterOutputs["review"]["workspace"];
 
 interface ReviewSynchronizationControllerInput {
   manualSyncPending: boolean;
+  canLoadChanges?: boolean | (() => boolean);
+  stagedRevisionAvailable?: boolean;
+  onBeforeLoad?: () => void;
   onReset: () => void;
   onRevisionAcknowledged: () => void;
   pullRequest: WorkspaceData["pullRequest"];
@@ -35,6 +38,9 @@ interface ReviewSynchronizationControllerInput {
  */
 export function useReviewSynchronizationController({
   manualSyncPending,
+  canLoadChanges = true,
+  stagedRevisionAvailable = false,
+  onBeforeLoad,
   onReset,
   onRevisionAcknowledged,
   pullRequest,
@@ -52,7 +58,20 @@ export function useReviewSynchronizationController({
   const failedAttempts = useRef(0);
   const retryRevision = useRef<string | undefined>(undefined);
   const queueInFlight = useRef(false);
-  const refreshedSnapshotId = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (stagedRevisionAvailable) setUpdateAvailable(true);
+  }, [stagedRevisionAvailable]);
+
+  const loadedSnapshotId = useRef(snapshot?.id);
+  useEffect(() => {
+    if (loadedSnapshotId.current === snapshot?.id) return;
+    loadedSnapshotId.current = snapshot?.id;
+    setUpdateAvailable(false);
+    void utils.review.revisionProbe.invalidate({
+      pullRequestId: pullRequest.id,
+    });
+  }, [snapshot?.id, pullRequest.id, utils.review.revisionProbe.invalidate]);
 
   const pollLatestPullRequest = api.review.poll.useMutation({
     onSuccess: (result) => {
@@ -92,16 +111,9 @@ export function useReviewSynchronizationController({
     const status = syncStatus.data?.status;
     if (status === "completed") {
       setActiveSyncId(undefined);
-      if (snapshot) {
-        acknowledgeReviewRevision(window.localStorage, pullRequest.id, {
-          headSha: snapshot.headSha,
-          snapshotId: snapshot.id,
-          version: snapshot.version,
-        });
-      }
       failedAttempts.current = 0;
       retryAfter.current = 0;
-      setUpdateAvailable(false);
+      setUpdateAvailable(true);
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
@@ -119,11 +131,11 @@ export function useReviewSynchronizationController({
       sendReviewSession({ type: "SYNC_FINISHED" });
       if (!silentSync.current) {
         toast.success("Pull request synchronized", {
-          description: "The latest review revision is loaded.",
+          description:
+            "New changes are ready. Load them when you are ready to continue.",
         });
       }
       silentSync.current = false;
-      router.refresh();
     } else if (status === "failed" || status === "cancelled") {
       if (status === "failed") {
         autoSyncedHeadSha.current = undefined;
@@ -156,9 +168,7 @@ export function useReviewSynchronizationController({
     utils.review.providerLifecycle.invalidate,
     utils.review.providerReviewState.invalidate,
     pullRequest.id,
-    router,
     sendReviewSession,
-    snapshot,
   ]);
 
   const resetReview = api.review.reset.useMutation({
@@ -226,11 +236,9 @@ export function useReviewSynchronizationController({
       probe?.current &&
       probe.snapshotId &&
       probe.snapshotId !== snapshot?.id &&
-      probe.snapshotId !== refreshedSnapshotId.current &&
       !syncing
     ) {
-      refreshedSnapshotId.current = probe.snapshotId;
-      router.refresh();
+      setUpdateAvailable(true);
     }
     const revision = probe ? `${probe.headSha}:${probe.baseSha}` : undefined;
     if (
@@ -280,7 +288,6 @@ export function useReviewSynchronizationController({
     revisionProbe.dataUpdatedAt,
     syncing,
     snapshot?.id,
-    router,
   ]);
 
   /** Persists the exact pull-request revision currently on screen. */
@@ -296,6 +303,18 @@ export function useReviewSynchronizationController({
   /** Replaces the workspace with the newly synchronized revision. */
   function loadAvailableChanges() {
     if (loadingChanges) return;
+    if (
+      !(typeof canLoadChanges === "function"
+        ? canLoadChanges()
+        : canLoadChanges)
+    ) {
+      toast.info("Finish the current action before loading changes", {
+        description:
+          "Save or close your draft and let pending review actions finish. Your place will be preserved.",
+      });
+      return;
+    }
+    onBeforeLoad?.();
     rememberLoadedRevision();
     startLoadingChanges(() => {
       setUpdateAvailable(false);

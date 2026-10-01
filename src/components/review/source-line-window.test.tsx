@@ -85,6 +85,18 @@ function reportIntersection(block: number, isIntersecting: boolean) {
 }
 
 describe("SourceLineWindow", () => {
+  it("measures late content growth before folding a block away", () => {
+    let height = 1000;
+    const measure = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(() => height);
+    renderLines(WINDOWED_SOURCE_LINE_COUNT + 1);
+    height = 1600;
+    reportIntersection(0, false);
+    expect(observedBlocks[0]?.element).toHaveStyle({ height: "1600px" });
+    measure.mockRestore();
+  });
+
   it("mounts every line of source short enough to read at once", () => {
     renderLines(WINDOWED_SOURCE_LINE_COUNT);
     expect(screen.getByTestId("line-1")).toBeInTheDocument();
