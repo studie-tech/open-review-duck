@@ -243,6 +243,7 @@ function highlightsReviewLine(
 }
 
 export interface SideBySideUnitDiffProps {
+  ignoreWhitespace?: boolean;
   previousSource: string;
   currentSource: string;
   language: string;
@@ -835,6 +836,7 @@ export const SideBySideUnitDiff = forwardRef<
     selectedLine,
     keyboardLine,
     findingLine,
+    ignoreWhitespace = false,
     expanded = false,
     onSelectReviewLine,
     isReviewLineCollapsed,
@@ -873,8 +875,8 @@ export const SideBySideUnitDiff = forwardRef<
   const previousLines = useHighlightedSource(previousSource, language);
   const currentLines = useHighlightedSource(currentSource, language);
   const rows = useMemo(
-    () => sideBySideDiff(previousSource, currentSource),
-    [currentSource, previousSource],
+    () => sideBySideDiff(previousSource, currentSource, ignoreWhitespace),
+    [currentSource, previousSource, ignoreWhitespace],
   );
   const focusRange = useMemo(() => {
     const previousRanges =
