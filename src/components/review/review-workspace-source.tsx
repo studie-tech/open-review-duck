@@ -44,8 +44,12 @@ import {
   ReviewLineCommentMarkers,
   reviewLineCommentMarkersBySide,
 } from "./review-line-comment-markers";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
+import {
+  SideBySideUnitDiff,
+  type SideBySideUnitDiffProps,
+} from "./review-workspace-diff";
 import { ReviewMarkdownPreview } from "./review-workspace-markdown";
-import { SideBySideUnitDiff } from "./review-workspace-diff";
 import {
   SourceLineWindow,
   WORKSPACE_SOURCE_ROW_HEIGHT_PX,
@@ -355,6 +359,27 @@ function ReviewConceptFileCardSource({
   );
 }
 
+/**
+ * Uses commit history on a neighbor card only when the card knows its pull request.
+ *
+ * Tests and callers without that id keep the plain diff, so they do not ask
+ * the provider for commits.
+ */
+function ReviewConceptFileDiff({
+  path,
+  pullRequestId,
+  ...diff
+}: SideBySideUnitDiffProps & { path: string; pullRequestId?: string }) {
+  if (!pullRequestId) return <SideBySideUnitDiff {...diff} />;
+  return (
+    <ReviewDiffWithLineHistory
+      path={path}
+      pullRequestId={pullRequestId}
+      {...diff}
+    />
+  );
+}
+
 /** Neighbor file card that uses the same source body as the selected card. */
 export function ReviewConceptFileCardPreview({
   members,
@@ -364,6 +389,7 @@ export function ReviewConceptFileCardPreview({
   sourceAvailable = true,
   previousFileSource = "",
   diffVisible = true,
+  ignoreWhitespace = false,
   onSelect,
   onCommentLine,
   onOpenLineComment,
@@ -372,6 +398,7 @@ export function ReviewConceptFileCardPreview({
   sourceBytes,
   markdownView = "preview",
   onSourceNeeded,
+  pullRequestId,
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -380,6 +407,7 @@ export function ReviewConceptFileCardPreview({
   sourceAvailable?: boolean;
   previousFileSource?: string;
   diffVisible?: boolean;
+  ignoreWhitespace?: boolean;
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
   onOpenLineComment?: (threadExternalId: string) => void;
@@ -388,6 +416,7 @@ export function ReviewConceptFileCardPreview({
   sourceBytes?: number;
   markdownView?: MarkdownReviewView;
   onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
+  pullRequestId?: string;
 }) {
   const first = members[0];
   const articleRef = useRef<HTMLElement>(null);
@@ -531,7 +560,10 @@ export function ReviewConceptFileCardPreview({
           />
         ) : expanded ? (
           canShowDiff && first ? (
-            <SideBySideUnitDiff
+            <ReviewConceptFileDiff
+              ignoreWhitespace={ignoreWhitespace}
+              pullRequestId={pullRequestId}
+              path={first.path}
               previousSource={previousFileSource}
               currentSource={fileSource}
               language={first.language ?? "text"}

@@ -1,3 +1,7 @@
+import {
+  type InboxInvolvement,
+  matchesInboxInvolvement,
+} from "~/lib/pull-request-involvement";
 import type { PullRequestLabel } from "~/lib/pull-request-labels";
 
 type PriorityInboxGroupId = "continue" | "ready" | "unreviewable";
@@ -5,7 +9,9 @@ export type PriorityInboxView = "all" | PriorityInboxGroupId;
 
 export interface PriorityInboxItem {
   additions: number;
+  assignedToViewer?: boolean;
   authorLogin: string;
+  authoredByViewer?: boolean;
   deletions: number;
   id: string;
   labels?: readonly PullRequestLabel[];
@@ -94,6 +100,7 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
   pullRequests: readonly T[],
   filters: {
     includeDrafts?: boolean;
+    involvement?: InboxInvolvement;
     provider: "all" | PriorityInboxItem["provider"];
     repositories: readonly string[];
     search: string;
@@ -126,6 +133,9 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
       filters.repositories.length > 0 &&
       !filters.repositories.includes(priorityInboxRepositoryKey(pullRequest))
     ) {
+      return false;
+    }
+    if (!matchesInboxInvolvement(pullRequest, filters.involvement)) {
       return false;
     }
     if (searchTerms.length === 0) return true;

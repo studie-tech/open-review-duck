@@ -35,6 +35,7 @@ describe("dashboardFilters", () => {
         }),
       ),
     ).toEqual({
+      involvement: "all",
       provider: "gitlab",
       repositories: ["gitlab:payments/api", "github:acme/web"],
       search: "sonia",
@@ -95,12 +96,14 @@ describe("rememberDashboardFilters", () => {
   it("writes the current filters for the next visit", () => {
     const storage = memoryStorage();
     rememberDashboardFilters(storage, {
+      involvement: "created",
       provider: "github",
       repositories: ["github:acme/web", "gitlab:payments/api"],
       search: "inventory",
       showDrafts: false,
     });
     expect(dashboardFilters(storage)).toEqual({
+      involvement: "created",
       provider: "github",
       repositories: ["github:acme/web", "gitlab:payments/api"],
       search: "inventory",

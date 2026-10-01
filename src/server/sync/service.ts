@@ -11,6 +11,7 @@ import {
   snapshotFiles,
 } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { pullRequestParticipantColumns } from "~/lib/pull-request-involvement";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import {
   analyzeFiles,
@@ -117,6 +118,7 @@ export async function syncPullRequest(
           description: remote.description,
           authorLogin: remote.authorLogin,
           authorAvatarUrl: remote.authorAvatarUrl,
+          ...pullRequestParticipantColumns(remote),
           sourceBranch: remote.sourceBranch,
           targetBranch: remote.targetBranch,
           state: remote.state,
@@ -263,6 +265,7 @@ export async function syncPullRequest(
         description: confirmedRemote.description,
         authorLogin: confirmedRemote.authorLogin,
         authorAvatarUrl: confirmedRemote.authorAvatarUrl,
+        ...pullRequestParticipantColumns(confirmedRemote),
         sourceBranch: confirmedRemote.sourceBranch,
         targetBranch: confirmedRemote.targetBranch,
         headSha: confirmedRemote.headSha,
@@ -283,6 +286,7 @@ export async function syncPullRequest(
           description: confirmedRemote.description,
           authorLogin: confirmedRemote.authorLogin,
           authorAvatarUrl: confirmedRemote.authorAvatarUrl,
+          ...pullRequestParticipantColumns(confirmedRemote),
           sourceBranch: confirmedRemote.sourceBranch,
           targetBranch: confirmedRemote.targetBranch,
           headSha: confirmedRemote.headSha,

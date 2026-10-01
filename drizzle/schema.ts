@@ -529,6 +529,15 @@ export const pullRequests = createTable(
     description: text(),
     authorLogin: varchar({ length: 255 }).notNull(),
     authorAvatarUrl: text(),
+    authorExternalId: text(),
+    reviewerExternalIds: jsonb()
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    assigneeExternalIds: jsonb()
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     sourceBranch: varchar({ length: 255 }).notNull(),
     targetBranch: varchar({ length: 255 }).notNull(),
     headSha: varchar({ length: 64 }).notNull(),
