@@ -2,8 +2,19 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import mermaid from "mermaid";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderCommentBody } from "./provider-comment-body";
+
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    parse: vi.fn(async () => true),
+    render: vi.fn(async () => ({
+      svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>A to B</text></svg>',
+    })),
+  },
+}));
 
 afterEach(cleanup);
 
@@ -53,6 +64,40 @@ describe("ProviderCommentBody", () => {
     expect(imagePlaceholder).toHaveTextContent("badge");
     expect(container.querySelector("img")).not.toBeInTheDocument();
     expect(container.innerHTML).not.toContain("https://example.com/badge.svg");
+  });
+
+  it("renders a Mermaid fence as a diagram instead of a source listing", async () => {
+    render(
+      <ProviderCommentBody
+        variant="document"
+        body={["```mermaid", "flowchart LR", "A --> B", "```"].join("\n")}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("img", { name: "Mermaid diagram" }),
+    ).toBeVisible();
+    expect(screen.queryByText("flowchart LR", { selector: "code" })).toBeNull();
+  });
+
+  it("keeps the Mermaid source visible when drawing fails", async () => {
+    vi.mocked(mermaid.parse).mockRejectedValueOnce(
+      new Error("Parse error on line 1"),
+    );
+
+    render(
+      <ProviderCommentBody
+        variant="document"
+        body={["```mermaid", "flowchart LR", "A --> B", "```"].join("\n")}
+      />,
+    );
+
+    expect(await screen.findByText("Parse error on line 1")).toBeVisible();
+    expect(screen.getByText(/flowchart LR/)).toBeVisible();
+    expect(screen.getByText(/A --> B/)).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: "Mermaid diagram" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders remote priority images as local badges", () => {

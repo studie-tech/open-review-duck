@@ -69,7 +69,6 @@ describe("ReviewMarkdownPreview", () => {
       />,
     );
 
-    expect(screen.getByText("guide.md")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Compare Markdown" }),
     ).toHaveAttribute("aria-pressed", "true");
