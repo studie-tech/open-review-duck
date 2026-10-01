@@ -31,6 +31,10 @@ export const reviewWorkspaceSchema = z.object({
   pullRequestId: z.string().uuid(),
 });
 
+export const fileLineHistorySchema = reviewWorkspaceSchema.extend({
+  path: z.string().trim().min(1).max(1_024),
+});
+
 export const providerReviewDecisionSchema = reviewWorkspaceSchema.extend({
   action: z.enum(["approve", "request_changes", "clear"]),
   body: z.string().trim().max(10_000).optional(),
@@ -42,6 +46,19 @@ export const reviewUnitSchema = z.object({
 
 export const unreviewSchema = reviewUnitSchema.extend({
   sessionId: z.string().uuid().optional(),
+});
+export type UnreviewInput = z.infer<typeof unreviewSchema>;
+
+export const unreviewBatchSchema = z.object({
+  undos: z
+    .array(unreviewSchema)
+    .min(2)
+    .max(20)
+    .refine(
+      (entries) =>
+        new Set(entries.map(({ unitId }) => unitId)).size === entries.length,
+      "An undo batch cannot contain the same unit twice",
+    ),
 });
 
 export const signOffConceptSchema = z.object({

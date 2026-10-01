@@ -27,7 +27,13 @@ export const reviewShortcuts = {
   reviewPullRequest: [{ key: "a" }],
   comment: [{ key: "l" }],
   commentHere: [{ key: "Enter" }],
+  lineActionComment: [{ key: "1", mod: true }],
+  lineActionAskAi: [{ key: "2", mod: true }],
   undoSignOff: [{ key: "u", mod: true }],
+  discussions: [{ key: "d", mod: true }],
+  commands: [{ key: "k", mod: true }],
+  openProvider: [{ key: "o", mod: true, shift: true }],
+  toggleTheme: [{ key: "l", mod: true, shift: true }],
   context: [{ key: "c" }],
   signOff: [{ key: "s" }],
   // Shift already carries the wider variant of an action here — concept
@@ -36,12 +42,15 @@ export const reviewShortcuts = {
   signOffDeletions: [{ key: "d", shift: true }],
   undoReview: [{ key: "u" }],
   awaitResponse: [{ key: "w" }],
-  refresh: [{ key: "r" }],
-  reset: [{ key: "r", shift: true }],
-  loadChanges: [{ key: "r" }],
+  refresh: [{ key: "r", mod: true }],
+  reset: [{ key: "r", mod: true, shift: true }],
+  loadChanges: [{ key: "r", mod: true }],
   dashboard: [{ key: "g" }, { key: "r" }],
   aiSettings: [{ key: "g" }, { key: "a" }],
   postComment: [{ key: "Enter", mod: true }],
+  // The rare way to leave a note on a resolved conversation without bringing
+  // it back onto the author's unresolved list.
+  postCommentKeepResolved: [{ key: "Enter", mod: true, shift: true }],
 } satisfies Record<string, KeyboardShortcut>;
 
 /**

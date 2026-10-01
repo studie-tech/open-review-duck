@@ -45,7 +45,7 @@ test("bootstraps local provider setup and preserves the session across restart",
   ).toBeVisible();
   await expect(
     page.getByText(
-      "docker exec --tty <container-name> reviewduck-local admin bootstrap",
+      "docker exec open-review-duck reviewduck-local admin bootstrap",
     ),
   ).toBeVisible();
 

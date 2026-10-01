@@ -1027,6 +1027,7 @@ export function RepositoryReader({
                       count={1}
                       selected
                       sourceBytes={reviewSourceByteLength(activeFileContext)}
+                      fileContents={fullFileSource}
                     />
                     <ContextRevealControl
                       availableLines={availableBefore}

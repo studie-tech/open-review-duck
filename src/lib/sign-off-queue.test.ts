@@ -1,23 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   createSignOffQueue,
-  nextSignOffBatchSize,
   reviewFooterSaveState,
   signOffQueueReducer,
 } from "./sign-off-queue";
 
 describe("sign-off save queue", () => {
-  it.each([
-    [0, 0],
-    [1, 1],
-    [2, 2],
-    [20, 20],
-    [21, 20],
-    [100, 20],
-  ])("takes %i queued saves as a batch of %i", (pending, expected) => {
-    expect(nextSignOffBatchSize(pending)).toBe(expected);
-  });
-
   it("reports completed work against an expanding batch total", () => {
     let state = createSignOffQueue();
     state = signOffQueueReducer(state, { type: "enqueue", unitId: "one" });

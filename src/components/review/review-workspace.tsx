@@ -8,9 +8,11 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  CornerDownRight,
   CornerUpLeft,
   ExternalLink,
   FileCode2,
+  FileX2,
   FolderInput,
   GitBranch,
   Info,
@@ -53,8 +55,13 @@ import {
   useCommandCenterBindings,
 } from "~/components/command-center";
 import { usePendingNavigation } from "~/components/navigation-progress";
+import {
+  AiReviewStatusDialog,
+  aiReviewStatusLabel,
+} from "~/components/review/ai-review-status-dialog";
 import { ContextRevealControl } from "~/components/review/context-reveal-control";
-import { ThemeToggle } from "~/components/theme-toggle";
+import { useStartPullRequestAiReview } from "~/components/review/use-start-pull-request-ai-review";
+import { ThemeToggle, toggleColorTheme } from "~/components/theme-toggle";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
@@ -65,25 +72,29 @@ import {
 import { aiErrorPresentation } from "~/lib/ai-errors";
 import { lockDocumentScroll } from "~/lib/document-scroll-lock";
 import {
-  findImportedDeclarationLine,
   findImportTargetUnit,
   type ImportReference,
 } from "~/lib/import-navigation";
-import { commandMenuShortcut } from "~/lib/keyboard-shortcuts";
+import { formatShortcut } from "~/lib/keyboard-shortcuts";
+import { takeOptimisticActionBatch } from "~/lib/optimistic-action-queue";
 import { providerLabel } from "~/lib/provider-labels";
 import { followPendingProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   FILES_VIEWER_PAGE_SIZE,
   FILES_VIEWER_PREFETCH_RADIUS,
   FILES_VIEWER_PREVIEW_RADIUS,
+  firstReviewFileUnitIndex,
+  type MarkdownReviewView,
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
   type ReviewFileEntry,
   type ReviewMode,
+  rememberMarkdownReviewView,
   rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
+  storedMarkdownReviewView,
   storedReviewMode,
   waitingReviewFileUnits,
   windowReviewFileCards,
@@ -114,9 +125,11 @@ import {
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceLineCount,
+  selectedReviewFileCardExpanded,
 } from "~/lib/review-source-display";
 import {
   currentChangedLineIndexes,
@@ -127,7 +140,6 @@ import {
 } from "~/lib/side-by-side-diff";
 import {
   createSignOffQueue,
-  nextSignOffBatchSize,
   reviewFooterSaveState,
   signOffQueueReducer,
 } from "~/lib/sign-off-queue";
@@ -136,7 +148,7 @@ import {
   type ReviewViewSnapshot,
   rememberSignOff,
   type SignOffUndoEntry,
-  signOffUndoTarget,
+  unreviewOutcomeError,
 } from "~/lib/sign-off-undo";
 import { isPeekableToken, symbolPeekAttributes } from "~/lib/symbol-peek";
 import {
@@ -144,10 +156,14 @@ import {
   useHighlightedSource,
 } from "~/lib/syntax-highlighting";
 import { formatTokenCount } from "~/lib/token-usage";
-import { useImportReferences } from "~/lib/tree-sitter-import-navigation";
+import {
+  findImportedDeclarationLine,
+  useImportReferences,
+} from "~/lib/tree-sitter-import-navigation";
 import { useSettledValue } from "~/lib/use-settled-value";
 import { cn } from "~/lib/utils";
 import { api, type RouterInputs, type RouterOutputs } from "~/trpc/react";
+import { commentImageBase64 } from "./comment-image-textarea";
 import {
   DeepReviewFindingChip,
   DeepReviewFindingRow,
@@ -164,6 +180,7 @@ import {
 import { HighlightedTokens } from "./highlighted-tokens";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
+import { ReviewChangeComposition } from "./review-change-composition";
 import { findNextReview, ReviewCompletion } from "./review-completion";
 import {
   isOpenProviderDiscussion,
@@ -178,9 +195,18 @@ import {
   relatedReviewRanges,
   reviewCardRanges,
   reviewedFileCard,
+  reviewUnitIsCollapsed,
+  reviewUnitStartsCollapsed,
 } from "./review-file-card";
 import { ReviewFilesPanel } from "./review-files-panel";
 import { ReviewBinaryPreview } from "./review-image-preview";
+import {
+  ReviewLineCommentMarkers,
+  reviewLineCommentMarkersBySide,
+  reviewLineCommentMarkersForLine,
+} from "./review-line-comment-markers";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
+import { ReviewMarkdownViewSwitch } from "./review-markdown-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   REVIEW_INSIGHTS_PANEL_WIDTHS,
@@ -197,11 +223,17 @@ import {
   initialReviewSessionState,
   reviewSessionReducer,
 } from "./review-session-machine";
+import {
+  REVIEW_TOOLBAR_BUTTON_CLASS,
+  ReviewSyncStatusButton,
+} from "./review-sync-status";
+import { ReviewToolbar, ReviewToolbarTooltip } from "./review-toolbar-tooltip";
 import { ReviewWaitingCompletion } from "./review-waiting-completion";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   aiConversationVisibility,
   InlineAiQuestion,
-  InlineCommentComposer,
+  InlineLineActionSurface,
   rememberAiConversationVisibility,
   withoutDeletedAiQuestions,
 } from "./review-workspace-ai-conversation";
@@ -225,10 +257,8 @@ import {
   UnitImportContext,
 } from "./review-workspace-dialogs";
 import {
-  AskAiLineButton,
   ReviewPathUnit,
   ReviewScopeMarker,
-  SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
   showAiStartError,
 } from "./review-workspace-diff";
@@ -236,9 +266,13 @@ import {
   aiJobActive,
   reviewCardPinTarget,
   useReviewExitPrefetch,
+  useReviewFileAdvance,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
-import { ProviderCommentBody } from "./review-workspace-markdown";
+import {
+  ProviderCommentBody,
+  ReviewMarkdownPreview,
+} from "./review-workspace-markdown";
 import {
   CopyRepositoryUrlButton,
   ProviderConversation,
@@ -288,8 +322,13 @@ type ReviewConcept = WorkspaceData["concepts"][number];
 type ImportTarget = RouterOutputs["review"]["importTarget"];
 type ImportPreview = Extract<ImportTarget, { kind: "preview" }>;
 type SignOffInput = RouterInputs["review"]["signOff"];
+type UnreviewInput = RouterInputs["review"]["unreview"];
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
+type RestoredReviewView = Pick<
+  ReviewViewSnapshot,
+  "contextAfter" | "contextBefore" | "scrollTop" | "showDiff"
+>;
 
 interface SignOffRollback {
   contextAfter: number;
@@ -305,6 +344,18 @@ interface SignOffRollback {
 interface QueuedSignOff {
   input: SignOffInput;
   rollback: SignOffRollback;
+}
+
+interface QueuedSignOffUndo {
+  actionId: number;
+  input: UnreviewInput;
+  rollback: ReviewUnit;
+}
+
+interface QueuedSignOffUndoAction {
+  entry: SignOffUndoEntry;
+  error?: string;
+  remaining: number;
 }
 
 /** Matches the `h-5` spacer above the selected card so its header is never flush. */
@@ -331,6 +382,37 @@ function questionGroupsAt<Entry>(
   return index.get(line) ?? NO_QUESTION_GROUPS;
 }
 
+/** Finds the first review unit that is available for an immediate decision. */
+function firstActionableReviewUnitIndex(units: readonly ReviewUnit[]) {
+  return Math.max(
+    0,
+    units.findIndex(
+      (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
+    ),
+  );
+}
+
+/** Scrolls to a review line only when it is outside the reading pane. */
+function revealReviewLineIfNeeded(line: number) {
+  const target = document.getElementById(`review-line-${line}`);
+  if (!target) return;
+  const pane = target.closest("[data-code-scroll-pane]");
+  if (!(pane instanceof HTMLElement)) {
+    target.scrollIntoView({ block: "center" });
+    return;
+  }
+  const paneRect = pane.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const margin = 64;
+  if (
+    targetRect.top >= paneRect.top + margin &&
+    targetRect.bottom <= paneRect.bottom - margin
+  ) {
+    return;
+  }
+  target.scrollIntoView({ block: "center" });
+}
+
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
   initialData,
@@ -340,22 +422,48 @@ export function ReviewWorkspace({
   const router = useRouter();
   const { navigate, pending: navigationPending } = usePendingNavigation();
   const [layoutRefreshing, startLayoutRefresh] = useTransition();
-  const [, startReviewFileAdvance] = useTransition();
   const [reviewSession, sendReviewSession] = useReducer(
     reviewSessionReducer,
     initialReviewSessionState,
   );
   useLayoutEffect(() => lockDocumentScroll(document), []);
-  // The workspace opens on work the reviewer can act on. A wait is a
-  // property of one unit, so a pending sibling remains a valid first landing.
+  // Files mode starts in sidebar order, independently of the guided path.
   const [activeIndex, setActiveIndex] = useState(() =>
-    Math.max(
-      0,
-      initialData.units.findIndex(
-        (unit) => unit.status !== "signed_off" && unit.status !== "waiting",
-      ),
-    ),
+    firstReviewFileUnitIndex(initialData.units),
   );
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
+  const [sourceIntentSnapshotId, setSourceIntentSnapshotId] =
+    useState<string>();
+  const snapshotId = initialData.snapshot?.id;
+  const sourceIntentReady = sourceIntentSnapshotId === snapshotId;
+  // Source loading must not begin against server defaults and then compete
+  // with the review position and mode restored from this browser.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a snapshot is immutable and owns its initial navigation intent
+  useEffect(() => {
+    if (!snapshotId) return;
+    const rememberedUnitId = rememberedReviewPosition(
+      window.localStorage,
+      initialData.pullRequest.id,
+      snapshotId,
+    );
+    const rememberedIndex = initialData.units.findIndex(
+      (unit) =>
+        unit.id === rememberedUnitId &&
+        unit.status !== "signed_off" &&
+        unit.status !== "waiting",
+    );
+    const mode = storedReviewMode(window.localStorage);
+    setReviewMode(mode);
+    setMarkdownView(storedMarkdownReviewView(window.localStorage));
+    setActiveIndex(
+      rememberedIndex >= 0
+        ? rememberedIndex
+        : mode === "files"
+          ? firstReviewFileUnitIndex(initialData.units)
+          : firstActionableReviewUnitIndex(initialData.units),
+    );
+    setSourceIntentSnapshotId(snapshotId);
+  }, [initialData.pullRequest.id, snapshotId]);
   const [sourcePinRequest, setSourcePinRequest] = useState<{
     kind: "file" | "unit";
     unitId: string;
@@ -363,15 +471,27 @@ export function ReviewWorkspace({
   const {
     fileContexts,
     hydratedUnitIds,
+    prepareSourcePath,
     settledUnitIds,
     setUnits,
     sourceHydrationPending,
+    sourceStatus,
     units,
-  } = usePrivateWorkspaceSourceHydration(initialData, activeIndex);
+  } = usePrivateWorkspaceSourceHydration(
+    initialData,
+    activeIndex,
+    reviewMode,
+    sourceIntentReady,
+  );
   const unitsRef = useRef(units);
   unitsRef.current = units;
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [reviewMode, setReviewMode] = useState<ReviewMode>("files");
+  const [pendingSourceNavigation, setPendingSourceNavigation] = useState<{
+    pin: "file" | "unit";
+    restoredView?: RestoredReviewView;
+    unitId: string;
+  }>();
+  const sourceNavigationSequence = useRef(0);
   const [filesViewerAbove, setFilesViewerAbove] = useState(
     FILES_VIEWER_PAGE_SIZE,
   );
@@ -383,17 +503,29 @@ export function ReviewWorkspace({
     path: string;
     reviewed: boolean;
   }>();
+  const [inspectedFilePath, setInspectedFilePath] = useState<string>();
   const [completedBrowsing, setCompletedBrowsing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
+  const [markdownView, setMarkdownView] =
+    useState<MarkdownReviewView>("preview");
+  /** Changes only the Markdown presentation and remembers it for later reviews. */
+  const changeMarkdownView = useCallback((view: MarkdownReviewView) => {
+    setMarkdownView(view);
+    rememberMarkdownReviewView(window.localStorage, view);
+  }, []);
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
   );
   const [fullFileUnitIds, setFullFileUnitIds] = useState(
     () => new Set<string>(),
+  );
+  const [unitFoldOverrides, setUnitFoldOverrides] = useState(
+    () => new Map<string, boolean>(),
   );
   const [pathSearch, setPathSearch] = useState("");
   const [queueLimit, setQueueLimit] = useState(INITIAL_PATH_ITEMS);
@@ -440,18 +572,13 @@ export function ReviewWorkspace({
     line: number;
     unitId: string;
   }>();
-  const [pendingAiQuestionLine, setPendingAiQuestionLine] = useState<{
-    line: number;
-    unitId: string;
-  }>();
+  const [focusedProviderThreadId, setFocusedProviderThreadId] =
+    useState<string>();
   const [keyboardLine, setKeyboardLine] = useState<number>();
   const [contextBefore, setContextBefore] = useState(0);
   const [contextAfter, setContextAfter] = useState(0);
   const [commandCenterMode, setCommandCenterMode] =
     useState<CommandCenterMode>();
-  useEffect(() => {
-    setReviewMode(storedReviewMode(window.localStorage));
-  }, []);
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [explanationLine, setExplanationLine] = useState<number>();
   // A ref, not state: the composer owns the draft while it is mounted, and a
@@ -463,6 +590,10 @@ export function ReviewWorkspace({
   const [signOffUndoHistory, setSignOffUndoHistory] = useState<
     SignOffUndoEntry[]
   >([]);
+  const signOffUndoHistoryRef = useRef<SignOffUndoEntry[]>([]);
+  useEffect(() => {
+    signOffUndoHistoryRef.current = signOffUndoHistory;
+  }, [signOffUndoHistory]);
   const [importPreview, setImportPreview] = useState<ImportPreview>();
   const [resolvingImport, setResolvingImport] = useState<string>();
   const [importReturn, setImportReturn] = useState<{
@@ -488,22 +619,30 @@ export function ReviewWorkspace({
     splitConceptDialogOpen,
   } = useReviewDialogController({
     importPreviewOpen: importPreview !== undefined,
+    lineActionOpen: selectedLine !== undefined,
     linePickerOpen: keyboardLine !== undefined,
   });
   const pathSearchRef = useRef<HTMLInputElement>(null);
   const codeScrollRef = useRef<HTMLDivElement>(null);
   const clearFindingLineRef = useRef<() => void>(() => undefined);
   const dismissedAiQuestionUnits = useRef(new Set<string>());
-  // Units of a multi-unit undo whose own success is not worth a toast.
-  const quietUndoUnitIds = useRef(new Set<string>());
-  const undoInFlight = useRef(false);
-  const [undoPending, setUndoPending] = useState(false);
+  const queuedSignOffUndos = useRef<QueuedSignOffUndo[]>([]);
+  const queuedSignOffUndoActions = useRef(
+    new Map<number, QueuedSignOffUndoAction>(),
+  );
+  const nextSignOffUndoActionId = useRef(1);
+  const undoDrainPromise = useRef<Promise<void> | null>(null);
+  const [pendingUndoUnitIds, setPendingUndoUnitIds] = useState(
+    () => new Set<string>(),
+  );
+  const undoPending = pendingUndoUnitIds.size > 0;
   const diffContextRef = useRef<SideBySideUnitDiffHandle>(null);
   const reviewUnitStartRef = useRef<HTMLDivElement>(null);
   const reviewCardsAboveRef = useRef<HTMLDivElement>(null);
   const codeOverviewRef = useRef<HTMLDivElement>(null);
   const [selectedCardStuck, setSelectedCardStuck] = useState(false);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
+  const importPreviewRequestRef = useRef(0);
   const [sessionId, setSessionId] = useState<string>();
   const [signOffQueue, dispatchSignOffQueue] = useReducer(
     signOffQueueReducer,
@@ -514,46 +653,19 @@ export function ReviewWorkspace({
     () => new Set<string>(),
   );
   const queuedSignOffs = useRef<QueuedSignOff[]>([]);
-  const signOffDrainRunning = useRef(false);
+  const signOffDrainPromise = useRef<Promise<void> | null>(null);
   const utils = api.useUtils();
   const activeUnit = units[activeIndex];
   const activeUnitId = activeUnit?.id;
-  const restoredPositionSnapshotId = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const snapshotId = initialData.snapshot?.id;
-    if (!snapshotId || units.length === 0) return;
-    if (restoredPositionSnapshotId.current !== snapshotId) {
-      restoredPositionSnapshotId.current = snapshotId;
-      const rememberedUnitId = rememberedReviewPosition(
-        window.localStorage,
-        initialData.pullRequest.id,
-        snapshotId,
-      );
-      const rememberedIndex = units.findIndex(
-        (unit) =>
-          unit.id === rememberedUnitId &&
-          unit.status !== "signed_off" &&
-          unit.status !== "waiting",
-      );
-      if (rememberedIndex >= 0) {
-        if (rememberedIndex !== activeIndex) setActiveIndex(rememberedIndex);
-        return;
-      }
-    }
-    if (!activeUnitId) return;
+    if (!snapshotId || !sourceIntentReady || !activeUnitId) return;
     rememberReviewPosition(
       window.localStorage,
       initialData.pullRequest.id,
       snapshotId,
       activeUnitId,
     );
-  }, [
-    activeIndex,
-    activeUnitId,
-    initialData.pullRequest.id,
-    initialData.snapshot?.id,
-    units,
-  ]);
+  }, [activeUnitId, initialData.pullRequest.id, snapshotId, sourceIntentReady]);
   const unitsById = useMemo(
     () => new Map(units.map((unit) => [unit.id, unit])),
     [units],
@@ -777,7 +889,6 @@ export function ReviewWorkspace({
         pullRequestId: initialData.pullRequest.id,
         unitId: previousUnitId,
       }),
-      utils.review.unitDiscussion.cancel({ unitId: previousUnitId }),
     ]);
   }, [activeUnitId, initialData.pullRequest.id, utils]);
   useEffect(() => {
@@ -935,6 +1046,13 @@ export function ReviewWorkspace({
   const activeReviewFile = activeUnit
     ? reviewFiles.find(({ path }) => path === activeUnit.path)
     : undefined;
+  /** Where the open file lived before this revision moved it, if it moved. */
+  const activeFileMovedFrom =
+    activeReviewFile?.changeType === "renamed" &&
+    activeReviewFile.previousPath &&
+    activeReviewFile.previousPath !== activeReviewFile.path
+      ? activeReviewFile.previousPath
+      : undefined;
   const activeFileOutstandingUnits = activeReviewFile
     ? activeReviewFile.totalUnits -
       activeReviewFile.reviewedUnits -
@@ -1035,6 +1153,29 @@ export function ReviewWorkspace({
       refetchInterval: followPendingProviderLifecycle,
     },
   );
+  const markReadyForReview = api.review.markReadyForReview.useMutation({
+    onSuccess: () => {
+      toast.success("Pull request marked ready for review");
+      void Promise.all([
+        utils.review.providerLifecycle.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+        utils.review.providerReviewState.invalidate({
+          pullRequestId: initialData.pullRequest.id,
+        }),
+        utils.review.dashboard.invalidate(),
+      ]);
+      router.refresh();
+    },
+    onError: (error) => {
+      toast.error("Could not mark pull request ready", {
+        description: error.message,
+      });
+      void utils.review.providerLifecycle.invalidate({
+        pullRequestId: initialData.pullRequest.id,
+      });
+    },
+  });
   const mergePullRequest = api.review.mergePullRequest.useMutation({
     onSuccess: (state) => {
       utils.review.providerLifecycle.setData(
@@ -1061,10 +1202,14 @@ export function ReviewWorkspace({
         },
       );
     },
-    onError: (error) =>
+    onError: (error) => {
       toast.error("Pull request was not merged", {
         description: error.message,
-      }),
+      });
+      void utils.review.providerLifecycle.invalidate({
+        pullRequestId: initialData.pullRequest.id,
+      });
+    },
   });
   const nextReview = useMemo(
     () => findNextReview(reviewQueue.data, initialData.pullRequest.id),
@@ -1131,7 +1276,20 @@ export function ReviewWorkspace({
         activeUnit.changeType === "added" ||
         Boolean(activeModule?.previousSource)),
   );
-  const sideBySideVisible = showDiff && diffAvailable;
+  const activeFileIsMarkdown = Boolean(
+    activeUnit &&
+      isReviewMarkdownFile({
+        language: activeUnit.language,
+        path: activeUnit.path,
+      }),
+  );
+  const markdownPreviewVisible = Boolean(
+    activeFileIsMarkdown &&
+      markdownView === "preview" &&
+      activeUnit?.kind !== "binary",
+  );
+  const sideBySideVisible =
+    !markdownPreviewVisible && showDiff && diffAvailable;
   const importsVisible = activeUnit
     ? importContextUnitIds.has(activeUnit.id)
     : false;
@@ -1194,15 +1352,16 @@ export function ReviewWorkspace({
     path: activeUnit?.path,
     source: activeModule?.source,
   });
-  const selectedFileSourceExpanded =
-    fileSourceReveal &&
-    fileSourceReveal.path === (activeUnit?.path ?? "") &&
-    fileSourceReveal.reviewed === activeFileCardReviewed
-      ? fileSourceReveal.expanded
-      : reviewFileCardStartsExpanded({
-          reviewed: activeFileCardReviewed,
-          heavy: activeFileCardHeavy,
-        });
+  const selectedFileSourceExpanded = selectedReviewFileCardExpanded({
+    defaultExpanded: reviewFileCardStartsExpanded({
+      reviewed: activeFileCardReviewed,
+      heavy: activeFileCardHeavy,
+    }),
+    inspected: inspectedFilePath === (activeUnit?.path ?? ""),
+    path: activeUnit?.path ?? "",
+    reviewed: activeFileCardReviewed,
+    reveal: fileSourceReveal,
+  });
   const firstCurrentReviewLine =
     currentRelatedRanges?.at(0)?.startLine ?? activeUnit?.startLine ?? 1;
   const primaryReviewRanges =
@@ -1249,9 +1408,13 @@ export function ReviewWorkspace({
   const overviewRows = useMemo(
     () =>
       overviewEnabled
-        ? sideBySideDiff(diffPreviousSource, diffCurrentSource)
+        ? sideBySideDiff(
+            diffPreviousSource,
+            diffCurrentSource,
+            ignoreWhitespace,
+          )
         : [],
-    [diffCurrentSource, diffPreviousSource, overviewEnabled],
+    [diffCurrentSource, diffPreviousSource, overviewEnabled, ignoreWhitespace],
   );
   const overviewMarks = useMemo(
     () => overviewMarksFromDiffRows(overviewRows),
@@ -1446,7 +1609,9 @@ export function ReviewWorkspace({
     },
     {
       enabled: Boolean(peekedSymbol && activeUnit && peekable),
-      staleTime: 5 * 60_000,
+      // A thrown lookup is not a definition. Forget it immediately so the
+      // "try hovering again" message can issue another request.
+      staleTime: (query) => (query.state.status === "error" ? 0 : 5 * 60_000),
       retry: false,
     },
   );
@@ -1454,58 +1619,170 @@ export function ReviewWorkspace({
     importPreview?.source ?? "",
     importPreview?.language ?? "text",
   );
-  /** Opens the provider comment composer for one reviewable diff line. */
+  /** Opens a line action, or a prepared provider draft when one was supplied. */
   const openInlineComment = useCallback((line: number, draft = "") => {
     setKeyboardLine(undefined);
     setSelectedLine(line);
     commentDraft.current = draft;
     setDraftRevision((revision) => revision + 1);
     window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() =>
-        document
-          .getElementById(`review-line-${line}`)
-          ?.scrollIntoView({ block: "center" }),
-      ),
+      window.requestAnimationFrame(() => revealReviewLineIfNeeded(line)),
     );
   }, []);
   /** Scrolls the source to one AI walkthrough note, mounting its block first. */
-  const revealExplanation = useCallback((endLine: number, index: number) => {
-    setExplanationLine(endLine);
-    window.requestAnimationFrame(() =>
+  const revealExplanation = useCallback(
+    (endLine: number, index: number) => {
+      changeMarkdownView("raw");
+      setExplanationLine(endLine);
       window.requestAnimationFrame(() =>
-        document
-          .getElementById(`ai-explanation-${index}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-      ),
-    );
-  }, []);
-  /** Opens one atomic review unit and selects its concept card. */
-  const selectUnit = useCallback(
-    (index: number, pin: "file" | "unit" = "unit") => {
-      const target = units[index];
-      if (!target) return;
+        window.requestAnimationFrame(() =>
+          document
+            .getElementById(`ai-explanation-${index}`)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        ),
+      );
+    },
+    [changeMarkdownView],
+  );
+  /** Commits a prepared review-unit selection without exposing an empty card. */
+  const commitUnitSelection = useCallback(
+    (
+      unitId: string,
+      pin: "file" | "unit",
+      restoredView?: RestoredReviewView,
+    ) => {
+      const index = unitsRef.current.findIndex(({ id }) => id === unitId);
+      const target = unitsRef.current[index];
+      if (!target || index < 0) return;
       setSourcePinRequest({ kind: pin, unitId: target.id });
       setActiveIndex(index);
-      setShowDiff(true);
+      setInspectedFilePath((current) =>
+        current === target.path ? current : undefined,
+      );
+      setShowDiff(restoredView?.showDiff ?? true);
       setStartedAt(Date.now());
       setQueueLimit(INITIAL_PATH_ITEMS);
       setKeyboardLine(undefined);
+      setPendingProviderThread((pending) =>
+        pending?.unitId === target.id ? pending : undefined,
+      );
+      setFocusedProviderThreadId(undefined);
       // `openFinding` sets the finding line after calling this, and the later
       // set wins in the same batch; a unit reached by ⌘↓, the path panel or a
       // concept card instead arrives with no stale amber line lit.
       clearFindingLineRef.current();
-      setContextBefore(0);
-      setContextAfter(0);
+      setContextBefore(restoredView?.contextBefore ?? 0);
+      setContextAfter(restoredView?.contextAfter ?? 0);
       setImportReturn(undefined);
       setImportPreview(undefined);
       setPathPanelOpen(false);
       setInsightsPanelOpen(false);
+      if (restoredView) {
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() => {
+            codeScrollRef.current?.scrollTo({
+              top: restoredView.scrollTop,
+              behavior: "auto",
+            });
+          }),
+        );
+      }
     },
-    [units, setPathPanelOpen, setInsightsPanelOpen],
+    [setPathPanelOpen, setInsightsPanelOpen],
   );
-  /** Opens a file at its first actionable unit without expanding to the full file. */
+  /**
+   * Opens one atomic review unit after its destination surface settles.
+   *
+   * File mode prepares one file. Guided mode prepares every file in the target
+   * concept. Both keep the current source mounted until ready or failed.
+   */
+  const selectUnit = useCallback(
+    (
+      index: number,
+      pin: "file" | "unit" = "unit",
+      restoredView?: RestoredReviewView,
+    ) => {
+      const target = unitsRef.current[index];
+      if (!target) return;
+      const targetConcept = initialData.concepts.find(({ memberIds }) =>
+        memberIds.includes(target.id),
+      );
+      const destinationPaths =
+        reviewMode === "path" && targetConcept
+          ? [
+              ...new Set(
+                targetConcept.memberIds.flatMap((id) => {
+                  const member = unitsRef.current.find(
+                    (unit) => unit.id === id,
+                  );
+                  return member ? [member.path] : [];
+                }),
+              ),
+            ]
+          : [target.path];
+      const pendingPaths = destinationPaths.filter(
+        (path) => !["ready", "error"].includes(sourceStatus(path)),
+      );
+      const staysOnCurrentSurface =
+        reviewMode === "files"
+          ? target.path === activeUnit?.path
+          : Boolean(
+              activeUnitId && targetConcept?.memberIds.includes(activeUnitId),
+            );
+      if (staysOnCurrentSurface || pendingPaths.length === 0) {
+        sourceNavigationSequence.current += 1;
+        setPendingSourceNavigation(undefined);
+        commitUnitSelection(target.id, pin, restoredView);
+        return;
+      }
+      const sequence = sourceNavigationSequence.current + 1;
+      sourceNavigationSequence.current = sequence;
+      setPendingSourceNavigation({ pin, restoredView, unitId: target.id });
+      void Promise.allSettled(
+        pendingPaths.map((path) =>
+          prepareSourcePath(path, path === target.path ? "active" : "next"),
+        ),
+      ).then(() => {
+        if (sourceNavigationSequence.current !== sequence) return;
+        setPendingSourceNavigation(undefined);
+        commitUnitSelection(target.id, pin, restoredView);
+      });
+    },
+    [
+      activeUnit?.path,
+      activeUnitId,
+      commitUnitSelection,
+      initialData.concepts,
+      prepareSourcePath,
+      reviewMode,
+      sourceStatus,
+    ],
+  );
+  /** Opens a chosen file's card and every unit so the reviewer can read it. */
+  const inspectReviewFile = useCallback(
+    (path: string, unitIds: readonly string[]) => {
+      setInspectedFilePath(path);
+      setFileSourceReveal((current) =>
+        current?.path === path ? undefined : current,
+      );
+      setUnitFoldOverrides((current) => {
+        if (unitIds.every((id) => !current.has(id))) return current;
+        const next = new Map(current);
+        for (const id of unitIds) next.delete(id);
+        return next;
+      });
+    },
+    [],
+  );
+  /**
+   * Opens a file at its first actionable unit without expanding to the full file.
+   *
+   * Sidebar picks pass `inspect` so a reviewed or heavy card opens, including
+   * every signed-off unit, until the reviewer leaves. File-advance after
+   * sign-off keeps the destination's default fold.
+   */
   const selectReviewFile = useCallback(
-    (file: ReviewFileEntry) => {
+    (file: ReviewFileEntry, options?: { inspect?: boolean }) => {
       const member = actionableReviewCardMember(file.units);
       if (!member) {
         toast.info("This file has no semantic review units", {
@@ -1521,9 +1798,19 @@ export function ReviewWorkspace({
       if (index < 0) return;
       setCompletedBrowsing(false);
       setCompletionOpen(false);
+      if (options?.inspect) {
+        inspectReviewFile(
+          file.path,
+          file.units.map((unit) => unit.id),
+        );
+      }
       selectUnit(index, "file");
     },
-    [selectUnit, units],
+    [inspectReviewFile, selectUnit, units],
+  );
+  const requestReviewFileAdvance = useReviewFileAdvance(
+    reviewFiles,
+    selectReviewFile,
   );
 
   /**
@@ -1581,9 +1868,7 @@ export function ReviewWorkspace({
       { advance: false },
     );
     if (nextFile) {
-      startReviewFileAdvance(() => {
-        selectReviewFile(nextFile);
-      });
+      requestReviewFileAdvance(nextFile.path);
     }
   }
   const applyReviewFileToggleRef = useRef(applyReviewFileToggle);
@@ -1633,85 +1918,6 @@ export function ReviewWorkspace({
       openInlineComment,
     ],
   );
-  /** Opens AI assistance through the atomic owner represented in the card. */
-  function askAboutCardLine(line: number) {
-    const owner = reviewCardMemberForLine(activeFileCardMembers, line);
-    if (!owner) return;
-    if (owner.id === activeUnitId) {
-      openAiQuestionAt(line);
-      return;
-    }
-    const index = unitIndexById.get(owner.id) ?? -1;
-    if (index < 0) return;
-    setPendingAiQuestionLine({ unitId: owner.id, line });
-    selectUnit(index);
-  }
-  // File cards are re-rendered only when their members or source move, so
-  // unrelated workspace state never re-reconciles hundreds of source lines.
-  const conceptFileCardPreviews = useMemo(
-    () =>
-      viewerCardWindow.cards.map((card, windowIndex) => {
-        const cardIndex = viewerCardWindow.start + windowIndex;
-        const firstActionable = actionableReviewCardMember(card.members);
-        const fileContext = fileContexts.find(({ path }) => path === card.path);
-        const itemLabel = reviewMode === "files" ? "File" : "Card";
-        const sourceBytes = reviewSourceByteLength(fileContext);
-        /** Opens this file card at its first remaining review unit. */
-        const openCard = () =>
-          selectUnit(
-            firstActionable
-              ? (unitIndexById.get(firstActionable.id) ?? -1)
-              : -1,
-          );
-        if (
-          reviewMode === "files" &&
-          Math.abs(cardIndex - activeConceptCardIndex) >
-            FILES_VIEWER_PREVIEW_RADIUS
-        ) {
-          return (
-            <article
-              key={card.path}
-              className="mx-4 overflow-hidden rounded-xl border border-line bg-surface/30"
-            >
-              <ReviewFileCardHeader
-                members={card.members}
-                index={cardIndex}
-                count={activeConceptFileCards.length}
-                selected={false}
-                itemLabel={itemLabel}
-                onSelect={openCard}
-                sourceBytes={sourceBytes}
-              />
-            </article>
-          );
-        }
-        return (
-          <ReviewConceptFileCardPreview
-            key={card.path}
-            members={card.members}
-            index={cardIndex}
-            count={activeConceptFileCards.length}
-            fileSource={fileContext?.source ?? ""}
-            itemLabel={itemLabel}
-            onSelect={openCard}
-            onCommentLine={commentOnMemberLine}
-            sourceBytes={sourceBytes}
-          />
-        );
-      }),
-    [
-      activeConceptCardIndex,
-      activeConceptFileCards.length,
-      commentOnMemberLine,
-      fileContexts,
-      reviewMode,
-      selectUnit,
-      unitIndexById,
-      viewerCardWindow.cards,
-      viewerCardWindow.start,
-    ],
-  );
-
   /** Opens the anchor unit for one concept-first path entry. */
   function selectConceptPath(index: number) {
     // The entry is anchored on the concept's first member that this snapshot
@@ -1754,6 +1960,7 @@ export function ReviewWorkspace({
   /** Navigates an import to its review unit or opens its source context. */
   async function followImport(reference: ImportReference) {
     if (!activeUnit) return;
+    const requestId = ++importPreviewRequestRef.current;
     const resolutionKey = `${activeUnit.id}:${reference.from}:${reference.to}`;
     const localTarget = findImportTargetUnit(
       activeUnit.path,
@@ -1787,6 +1994,13 @@ export function ReviewWorkspace({
         ({ unit }) => unit.id === localTarget.moduleUnit?.id,
       );
       if (moduleUnit) {
+        const focusLine = await findImportedDeclarationLine(
+          moduleUnit.unit.source,
+          reference.imported,
+          moduleUnit.unit.language,
+          moduleUnit.unit.startLine,
+        );
+        if (requestId !== importPreviewRequestRef.current) return;
         setImportPreview({
           kind: "preview",
           path: moduleUnit.unit.path,
@@ -1795,12 +2009,7 @@ export function ReviewWorkspace({
           source: moduleUnit.unit.source,
           startLine: moduleUnit.unit.startLine,
           endLine: moduleUnit.unit.endLine,
-          focusLine: findImportedDeclarationLine(
-            moduleUnit.unit.source,
-            reference.imported,
-            moduleUnit.unit.language,
-            moduleUnit.unit.startLine,
-          ),
+          focusLine,
           inReviewPath: true,
         });
         return;
@@ -1817,6 +2026,7 @@ export function ReviewWorkspace({
         imported: reference.imported,
         kind: reference.kind,
       });
+      if (requestId !== importPreviewRequestRef.current) return;
       if (result.kind === "unit") {
         const index = units.findIndex((unit) => unit.id === result.unitId);
         if (index >= 0) {
@@ -1842,6 +2052,7 @@ export function ReviewWorkspace({
             : "This import could not be found at the reviewed revision",
       );
     } catch (cause) {
+      if (requestId !== importPreviewRequestRef.current) return;
       toast.error(
         cause instanceof Error
           ? cause.message
@@ -2034,7 +2245,7 @@ export function ReviewWorkspace({
     }
     const nextIndex = nextReviewIndexAfterAction(updated, preferredNextUnit);
     if (nextIndex >= 0) {
-      setActiveIndex(nextIndex);
+      selectUnit(nextIndex);
     }
     setQueueLimit(INITIAL_PATH_ITEMS);
     setShowDiff(true);
@@ -2063,25 +2274,13 @@ export function ReviewWorkspace({
       ),
     );
     const rollback = first.queued.rollback;
-    setActiveIndex(rollback.unitIndex);
+    selectUnit(rollback.unitIndex, "unit", rollback);
     if (rollback.pathSearch.trim()) {
       setPathSearch((current) =>
         current.trim() ? current : rollback.pathSearch,
       );
       setSearchLimit(rollback.searchLimit);
     }
-    setShowDiff(rollback.showDiff);
-    setContextBefore(rollback.contextBefore);
-    setContextAfter(rollback.contextAfter);
-    setStartedAt(Date.now());
-    window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() => {
-        codeScrollRef.current?.scrollTo({
-          top: rollback.scrollTop,
-          behavior: "auto",
-        });
-      }),
-    );
     if (
       failures.some(({ code }) => code === "CONFLICT" || code === "NOT_FOUND")
     ) {
@@ -2107,13 +2306,11 @@ export function ReviewWorkspace({
   }
 
   /** Drains one immediate save, then coalesces accumulated work into batches. */
-  async function drainSignOffQueue() {
-    if (signOffDrainRunning.current) return;
-    signOffDrainRunning.current = true;
-    try {
+  function drainSignOffQueue(): Promise<void> {
+    if (signOffDrainPromise.current) return signOffDrainPromise.current;
+    const drain = (async () => {
       while (queuedSignOffs.current.length > 0) {
-        const batchSize = nextSignOffBatchSize(queuedSignOffs.current.length);
-        const batch = queuedSignOffs.current.splice(0, batchSize);
+        const batch = takeOptimisticActionBatch(queuedSignOffs.current);
         let saved = 0;
         try {
           if (batch.length === 1) {
@@ -2187,9 +2384,11 @@ export function ReviewWorkspace({
           }
         }
       }
-    } finally {
-      signOffDrainRunning.current = false;
-    }
+    })().finally(() => {
+      signOffDrainPromise.current = null;
+    });
+    signOffDrainPromise.current = drain;
+    return drain;
   }
   /**
    * Returns the named units to the review path before the server answers.
@@ -2227,6 +2426,145 @@ export function ReviewWorkspace({
     setUnits(updated);
   }
 
+  const queuedUndoSignOff = api.review.unreview.useMutation();
+  const queuedUndoBatch = api.review.unreviewBatch.useMutation();
+
+  /** Records one optimistic undo step for the shared background drain. */
+  function queueSignOffUndo(entry: SignOffUndoEntry, undone: ReviewUnit[]) {
+    const actionId = nextSignOffUndoActionId.current++;
+    queuedSignOffUndoActions.current.set(actionId, {
+      entry,
+      remaining: undone.length,
+    });
+    queuedSignOffUndos.current.push(
+      ...undone.map((unit) => ({
+        actionId,
+        input: { unitId: unit.id, sessionId },
+        rollback: unit,
+      })),
+    );
+    setPendingUndoUnitIds((current) => {
+      const pending = new Set(current);
+      for (const unit of undone) pending.add(unit.id);
+      return pending;
+    });
+    void drainSignOffUndoQueue();
+  }
+
+  /** Settles optimistic undo units and completes their user-visible steps. */
+  function settleSignOffUndoBatch(
+    batch: QueuedSignOffUndo[],
+    failures: Map<string, string>,
+  ) {
+    restoreUndoneSignOffs(
+      batch.flatMap((queued) =>
+        failures.has(queued.input.unitId) ? [queued.rollback] : [],
+      ),
+    );
+    setPendingUndoUnitIds((current) => {
+      const pending = new Set(current);
+      for (const { input } of batch) pending.delete(input.unitId);
+      return pending;
+    });
+
+    const completed: Array<{
+      actionId: number;
+      action: QueuedSignOffUndoAction;
+    }> = [];
+    for (const queued of batch) {
+      const action = queuedSignOffUndoActions.current.get(queued.actionId);
+      if (!action) continue;
+      action.remaining -= 1;
+      action.error ??= failures.get(queued.input.unitId);
+      if (action.remaining === 0) {
+        queuedSignOffUndoActions.current.delete(queued.actionId);
+        completed.push({ actionId: queued.actionId, action });
+      }
+    }
+
+    const failed = completed
+      .filter(({ action }) => action.error)
+      .sort((left, right) => right.actionId - left.actionId);
+    if (failed.length > 0) {
+      setSignOffUndoHistory((current) => {
+        const history = failed.reduce(
+          (restored, { action }) => rememberSignOff(restored, action.entry),
+          current,
+        );
+        signOffUndoHistoryRef.current = history;
+        return history;
+      });
+      toast.error(
+        failed.length === 1
+          ? "Sign-off could not be undone"
+          : "Some undos failed",
+        {
+          id: "review-sign-off-undo-error",
+          description:
+            failed[0]?.action.error ??
+            "The affected units were restored to their signed-off state.",
+        },
+      );
+    }
+    const succeeded = completed.length - failed.length;
+    if (succeeded > 0) {
+      toast.success(
+        succeeded === 1
+          ? "Sign-off returned to the review path"
+          : `${succeeded} sign-offs returned to the review path`,
+        { id: "review-sign-off-undo-success" },
+      );
+    }
+  }
+
+  /** Waits for dependent sign-offs, then drains one undo and queued batches. */
+  function drainSignOffUndoQueue(): Promise<void> {
+    if (undoDrainPromise.current) return undoDrainPromise.current;
+    const drain = (async () => {
+      await drainSignOffQueue();
+      while (queuedSignOffUndos.current.length > 0) {
+        const batch = takeOptimisticActionBatch(queuedSignOffUndos.current);
+        const failures = new Map<string, string>();
+        let changed = 0;
+        try {
+          if (batch.length === 1) {
+            const queued = batch[0];
+            if (!queued) continue;
+            const result = await queuedUndoSignOff.mutateAsync(queued.input);
+            const error = unreviewOutcomeError(result);
+            if (error) failures.set(queued.input.unitId, error);
+            else changed += 1;
+          } else {
+            const results = await queuedUndoBatch.mutateAsync({
+              undos: batch.map(({ input }) => input),
+            });
+            for (const result of results) {
+              const error = unreviewOutcomeError(result);
+              if (error) failures.set(result.unitId, error);
+              else changed += 1;
+            }
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "The undo request failed";
+          for (const { input } of batch) failures.set(input.unitId, message);
+        }
+        settleSignOffUndoBatch(batch, failures);
+        if (changed > 0) {
+          void Promise.all([
+            utils.workspace.guidance.invalidate(),
+            utils.review.dashboard.invalidate(),
+            utils.review.gamification.invalidate(),
+          ]);
+        }
+      }
+    })().finally(() => {
+      undoDrainPromise.current = null;
+    });
+    undoDrainPromise.current = drain;
+    return drain;
+  }
+
   // Keyed by the unit the request named rather than the one on screen: undo
   // reaches back to a sign-off the reviewer has since moved on from.
   const undoSignOff = api.review.unreview.useMutation({
@@ -2241,9 +2579,6 @@ export function ReviewWorkspace({
         utils.review.dashboard.invalidate(),
         utils.review.gamification.invalidate(),
       ]);
-      // One undo of a many-unit step is one decision, so only the request
-      // that finishes it says so.
-      if (quietUndoUnitIds.current.delete(unitId)) return;
       toast.success("Marked as not reviewed", {
         description: `${units.find(({ id }) => id === unitId)?.name ?? "The unit"} is back in your review queue.`,
       });
@@ -2522,11 +2857,25 @@ export function ReviewWorkspace({
   // refuse.
   const deepReviewAvailable =
     aiConfiguration.data?.deepReviewAvailable ?? false;
+  const imageUpload = api.review.uploadCommentImage.useMutation();
+  /** Uploads clipboard bytes under the unit's existing provider authorization. */
+  async function uploadCommentImage(unitId: string, file: File) {
+    const result = await imageUpload.mutateAsync({
+      unitId,
+      base64: await commentImageBase64(file),
+      contentType: file.type as
+        | "image/png"
+        | "image/jpeg"
+        | "image/gif"
+        | "image/webp",
+    });
+    return result.markdown;
+  }
+
   const pullRequestReview = api.ai.reviewStatus.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
-      refetchInterval: (query) =>
-        aiJobActive(query.state.data?.status) ? 2_000 : false,
+      refetchInterval: 2_000,
     },
   );
   const explanationRunning =
@@ -2565,6 +2914,19 @@ export function ReviewWorkspace({
       activeUnit?.startLine,
     ],
   );
+  const visibleConversationUnitIds = useMemo(
+    () =>
+      activeFileCardMembers.length > 0
+        ? activeFileCardMembers.map(({ id }) => id)
+        : activeUnit
+          ? [activeUnit.id]
+          : [],
+    [activeFileCardMembers, activeUnit],
+  );
+  const unitPathById = useMemo(
+    () => new Map(units.map((unit) => [unit.id, unit.path])),
+    [units],
+  );
   const {
     conversations: providerConversations,
     discussion,
@@ -2572,6 +2934,7 @@ export function ReviewWorkspace({
     providerThreadActions,
     publishComment,
     replyingToThread,
+    visibleThreads: visibleProviderThreads,
   } = useProviderConversationController({
     clearDraft: () => {
       commentDraft.current = "";
@@ -2580,6 +2943,8 @@ export function ReviewWorkspace({
     pullRequest: initialData.pullRequest,
     refreshIntervalMs: PROVIDER_CONVERSATION_REFRESH_MS,
     settledUnitId: settledActiveUnitId,
+    unitPathById,
+    visibleUnitIds: visibleConversationUnitIds,
     waitingCount,
   });
   const providerDiscussionThreads = providerConversations.data?.threads ?? [];
@@ -2591,18 +2956,132 @@ export function ReviewWorkspace({
     (thread: ProviderDiscussionThread) => {
       const index = unitIndexById.get(thread.unitId) ?? -1;
       if (index < 0) return;
+      const targetUnit = units[index];
+      if (!targetUnit) return;
+      const fileMembers = units.filter(({ path }) => path === targetUnit.path);
       setDiscussionsOpen(false);
       setCompletionOpen(false);
       setWaitingCompletionOpen(false);
       setCompletedBrowsing(true);
+      setFileSourceReveal({
+        expanded: true,
+        path: targetUnit.path,
+        reviewed: reviewedFileCard(fileMembers),
+      });
+      setUnitFoldOverrides((current) => {
+        const next = new Map(current);
+        next.set(thread.unitId, false);
+        return next;
+      });
+      if (thread.side === "left") setShowDiff(true);
+      if (
+        isReviewMarkdownFile({
+          language: targetUnit.language,
+          path: targetUnit.path,
+        })
+      ) {
+        changeMarkdownView("raw");
+      }
       setPendingProviderThread({
         externalId: thread.externalId,
         line: thread.line,
         unitId: thread.unitId,
       });
       selectUnit(index);
+      setFocusedProviderThreadId(thread.externalId);
     },
-    [selectUnit, unitIndexById],
+    [changeMarkdownView, selectUnit, unitIndexById, units],
+  );
+  const commentThreadsByPath = useMemo(() => {
+    const byPath = new Map<string, ProviderDiscussionThread[]>();
+    for (const thread of providerDiscussionThreads) {
+      const group = byPath.get(thread.path) ?? [];
+      group.push(thread);
+      byPath.set(thread.path, group);
+    }
+    return byPath;
+  }, [providerDiscussionThreads]);
+  const visibleLineCommentMarkers = useMemo(
+    () => reviewLineCommentMarkersBySide(visibleProviderThreads),
+    [visibleProviderThreads],
+  );
+  /** Opens a conversation from a gutter avatar on the selected or neighbor card. */
+  const openLineCommentThread = useCallback(
+    (threadExternalId: string) => {
+      const thread =
+        visibleProviderThreads.find(
+          (item) => item.externalId === threadExternalId,
+        ) ??
+        providerDiscussionThreads.find(
+          (item) => item.externalId === threadExternalId,
+        );
+      if (thread) openProviderDiscussion(thread);
+    },
+    [openProviderDiscussion, providerDiscussionThreads, visibleProviderThreads],
+  );
+  // File cards are re-rendered only when their members or source move, so
+  // unrelated workspace state never re-reconciles hundreds of source lines.
+  const conceptFileCardPreviews = useMemo(
+    () =>
+      viewerCardWindow.cards.map((card, windowIndex) => {
+        const cardIndex = viewerCardWindow.start + windowIndex;
+        const firstActionable = actionableReviewCardMember(card.members);
+        const fileContext = fileContexts.find(({ path }) => path === card.path);
+        const itemLabel = reviewMode === "files" ? "File" : "Card";
+        const sourceBytes = reviewSourceByteLength(fileContext);
+        /** Opens this file card at its first remaining review unit. */
+        const openCard = () => {
+          inspectReviewFile(
+            card.path,
+            card.members.map((member) => member.id),
+          );
+          selectUnit(
+            firstActionable
+              ? (unitIndexById.get(firstActionable.id) ?? -1)
+              : -1,
+          );
+        };
+        return (
+          <ReviewConceptFileCardPreview
+            key={card.path}
+            members={card.members}
+            index={cardIndex}
+            count={activeConceptFileCards.length}
+            fileSource={fileContext?.source ?? ""}
+            sourceAvailable={fileContext !== undefined}
+            previousFileSource={fileContext?.previousSource ?? ""}
+            diffVisible={showDiff}
+            ignoreWhitespace={ignoreWhitespace}
+            itemLabel={itemLabel}
+            onSelect={openCard}
+            onCommentLine={commentOnMemberLine}
+            onOpenLineComment={openLineCommentThread}
+            commentThreads={commentThreadsByPath.get(card.path)}
+            sourceBytes={sourceBytes}
+            markdownView={markdownView}
+            onSourceNeeded={prepareSourcePath}
+            pullRequestId={initialData.pullRequest.id}
+          />
+        );
+      }),
+    [
+      activeConceptFileCards.length,
+      initialData.pullRequest.id,
+      commentOnMemberLine,
+      commentThreadsByPath,
+      fileContexts,
+      inspectReviewFile,
+      markdownView,
+      openLineCommentThread,
+      prepareSourcePath,
+      reviewMode,
+      selectUnit,
+      showDiff,
+      unitIndexById,
+      viewerCardWindow.cards,
+      viewerCardWindow.start,
+      ignoreWhitespace,
+    ],
   );
   const manualSyncPending = reviewSession === "synchronizing";
   const {
@@ -2613,6 +3092,7 @@ export function ReviewWorkspace({
     markUpdateAvailable,
     resetReview,
     syncExternalData,
+    syncStatus,
     updateAvailable,
   } = useReviewSynchronizationController({
     manualSyncPending,
@@ -2623,9 +3103,13 @@ export function ReviewWorkspace({
       queuedSignOffs.current = [];
       dispatchSignOffQueue({ type: "synchronize", unitIds: [] });
       setPendingConceptSignOffIds(new Set());
+      queuedSignOffUndos.current = [];
+      queuedSignOffUndoActions.current.clear();
+      setPendingUndoUnitIds(new Set());
+      signOffUndoHistoryRef.current = [];
       setSignOffUndoHistory([]);
       const nextIndex = nextPendingReviewIndex(updated);
-      if (nextIndex >= 0) setActiveIndex(nextIndex);
+      if (nextIndex >= 0) selectUnit(nextIndex);
       setCompletedBrowsing(false);
       setCompletionOpen(false);
       setWaitingCompletionOpen(false);
@@ -2638,7 +3122,6 @@ export function ReviewWorkspace({
   });
 
   const {
-    activeThreads: activeProviderThreads,
     activeUnitHasConversation,
     answeredWaitCount,
     awaitResponse,
@@ -2678,21 +3161,28 @@ export function ReviewWorkspace({
     const targetThread = pendingProviderThread;
     let frame = 0;
     let attempts = 0;
-    const maximumAttempts = 180;
+    const maximumAttempts = 600;
 
     /** Reveals the requested discussion once its hydrated target has mounted. */
     function revealDiscussion() {
-      const target =
-        document.getElementById(
-          providerConversationElementId(targetThread.externalId),
-        ) ?? document.getElementById(`review-line-${targetThread.line}`);
+      const target = document.getElementById(
+        providerConversationElementId(targetThread.externalId),
+      );
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.focus({ preventScroll: true });
         setPendingProviderThread(undefined);
         return;
       }
       attempts += 1;
       if (attempts >= maximumAttempts) {
+        document
+          .getElementById(`review-line-${targetThread.line}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        toast.error("The conversation could not be opened inline", {
+          description:
+            "The review moved to its line, but its source is not available yet.",
+        });
         setPendingProviderThread(undefined);
         return;
       }
@@ -2703,44 +3193,46 @@ export function ReviewWorkspace({
     return () => window.cancelAnimationFrame(frame);
   }, [activeUnitId, pendingProviderThread]);
   const hasLiveConversation = activeUnitHasConversation;
+  /** Posts or rewrites one finding against a line the reviewer can comment on. */
+  function findingCommentActions(finding: DeepReviewFinding, line: number) {
+    if (!activeUnit) return { publishing: false };
+    const jobId = deepReview.data?.jobId;
+    return {
+      publishing:
+        publishComment.isPending &&
+        publishComment.variables?.aiFindingId === finding.id,
+      onPublish: jobId
+        ? () =>
+            publishComment.mutate({
+              unitId: activeUnit.id,
+              line,
+              aiJobId: jobId,
+              aiFindingId: finding.id,
+            })
+        : undefined,
+      onEdit: () =>
+        openInlineComment(line, `**${finding.title}**\n\n${finding.body}`),
+    };
+  }
+
   /** Renders the open finding inline beside the line it accuses. */
   function renderInlineFindingCard(
     finding: DeepReviewFinding,
     lineNumber: number,
   ) {
     if (!activeUnit) return null;
-    const jobId = deepReview.data?.jobId;
     return (
       <DeepReviewInlineFinding
+        canEvaluate={Boolean(aiConfiguration.data?.canEditPrompts)}
         key={finding.id}
         finding={finding}
         variant="line"
         locationIndex={activeFindingLocationIndex}
-        providerName={providerLabel(initialData.pullRequest.provider)}
+        pullRequest={initialData.pullRequest}
         published={findingPublished(finding)}
-        publishing={
-          publishComment.isPending &&
-          publishComment.variables?.aiFindingId === finding.id
-        }
         onOpenLocation={(index) => openFinding(finding, index)}
-        onPublish={
-          jobId
-            ? () =>
-                publishComment.mutate({
-                  unitId: activeUnit.id,
-                  line: lineNumber,
-                  aiJobId: jobId,
-                  aiFindingId: finding.id,
-                })
-            : undefined
-        }
-        onEdit={() =>
-          openInlineComment(
-            lineNumber,
-            `**${finding.title}**\n\n${finding.body}`,
-          )
-        }
         onCollapse={() => collapseFinding(finding.id)}
+        {...findingCommentActions(finding, lineNumber)}
       />
     );
   }
@@ -2773,18 +3265,44 @@ export function ReviewWorkspace({
         : target.kind === "unit"
           ? "Finding with no line in this file"
           : "Finding whose line this unit does not render";
+    const candidateCommentLine =
+      target.kind === "line"
+        ? target.line
+        : activeFinding.startLine !== null &&
+            activeUnit.startLine <= activeFinding.startLine &&
+            activeFinding.startLine <= activeUnit.endLine
+          ? activeFinding.startLine
+          : undefined;
+    // A line inside the unit's bounds can still sit in a gap the provider
+    // will not take a comment on. Posting from here has to use the same
+    // ranges the publish mutation enforces.
+    const commentLine =
+      candidateCommentLine !== undefined &&
+      isPrimaryReviewLine(candidateCommentLine)
+        ? candidateCommentLine
+        : undefined;
+    // A published finding whose line still renders details already shows the
+    // provider thread there. The detached card would repeat that comment.
+    if (
+      commentLine !== undefined &&
+      findingPublished(activeFinding) &&
+      groupedEntries(providerThreadsByLine, commentLine).length > 0 &&
+      (sideBySideVisible || isPrimaryReviewLine(commentLine))
+    ) {
+      return null;
+    }
     return (
       <div className="mb-3">
         <p className="text-fog px-4 text-[9px] tracking-[.14em] uppercase">
           {label}
         </p>
         <DeepReviewInlineFinding
+          canEvaluate={Boolean(aiConfiguration.data?.canEditPrompts)}
           finding={activeFinding}
           variant="detached"
           locationIndex={activeFindingLocationIndex}
-          providerName={providerLabel(initialData.pullRequest.provider)}
+          pullRequest={initialData.pullRequest}
           published={findingPublished(activeFinding)}
-          publishing={false}
           onOpenLocation={(index) => openFinding(activeFinding, index)}
           onCollapse={() => collapseFinding(activeFinding.id)}
           onShowInCode={
@@ -2792,16 +3310,195 @@ export function ReviewWorkspace({
               ? () => openFinding(activeFinding, activeFindingLocationIndex)
               : undefined
           }
+          {...(commentLine === undefined
+            ? { publishing: false }
+            : findingCommentActions(activeFinding, commentLine))}
         />
       </div>
     );
   }
 
-  /** Units that open on this line when Files mode is showing more than one. */
+  const unitsWithVisibleConversations = useMemo(
+    () => new Set(visibleProviderThreads.map(({ unitId }) => unitId)),
+    [visibleProviderThreads],
+  );
+  const displayedLineEntries = useMemo(
+    () =>
+      lines.flatMap((line, index) => {
+        const lineNumber = visibleStartLine + index;
+        if (activeFileCardMembers.length <= 1) return [{ line, lineNumber }];
+        const owner = reviewCardMemberForLine(
+          activeFileCardMembers,
+          lineNumber,
+        );
+        const collapsed = owner
+          ? reviewUnitIsCollapsed({
+              hasVisibleConversation: unitsWithVisibleConversations.has(
+                owner.id,
+              ),
+              inspected: inspectedFilePath === owner.path,
+              override: unitFoldOverrides.get(owner.id),
+              startsCollapsed: reviewUnitStartsCollapsed(owner),
+            })
+          : false;
+        const opensUnit = activeFileCardMembers.some(
+          (member) => member.startLine === lineNumber,
+        );
+        return collapsed && !opensUnit ? [] : [{ line, lineNumber }];
+      }),
+    [
+      activeFileCardMembers,
+      inspectedFilePath,
+      lines,
+      unitFoldOverrides,
+      unitsWithVisibleConversations,
+      visibleStartLine,
+    ],
+  );
+
+  /** Reports a unit's explicit fold choice or its status-based default. */
+  function unitIsCollapsed(member: ReviewUnit) {
+    return reviewUnitIsCollapsed({
+      hasVisibleConversation: unitsWithVisibleConversations.has(member.id),
+      inspected: inspectedFilePath === member.path,
+      override: unitFoldOverrides.get(member.id),
+      startsCollapsed: reviewUnitStartsCollapsed(member),
+    });
+  }
+
+  /** Changes one unit without disturbing the fold state of its siblings. */
+  function toggleUnitCollapsed(member: ReviewUnit) {
+    setUnitFoldOverrides((current) => {
+      const next = new Map(current);
+      next.set(
+        member.id,
+        !reviewUnitIsCollapsed({
+          hasVisibleConversation: unitsWithVisibleConversations.has(member.id),
+          inspected: inspectedFilePath === member.path,
+          override: current.get(member.id),
+          startsCollapsed: reviewUnitStartsCollapsed(member),
+        }),
+      );
+      return next;
+    });
+  }
+
+  /** Reports whether this unit's individual ledger action is being saved. */
+  function unitReviewActionPending(member: ReviewUnit) {
+    const concept = conceptByMemberId.get(member.id);
+    return (
+      signOffQueue.ids.has(member.id) ||
+      pendingUndoUnitIds.has(member.id) ||
+      (undoSignOff.isPending && undoSignOff.variables?.unitId === member.id) ||
+      Boolean(concept && pendingConceptSignOffIds.has(concept.id))
+    );
+  }
+
+  /** Reports whether an atomic ledger action is safe from this card. */
+  function unitReviewActionDisabled(member: ReviewUnit) {
+    if (
+      unitReviewActionPending(member) ||
+      undoPending ||
+      undoSignOff.isPending ||
+      undoConcept.isPending ||
+      resetReview.isPending
+    ) {
+      return true;
+    }
+    if (member.status === "signed_off") return false;
+    return (
+      reviewComplete ||
+      member.status === "waiting" ||
+      (member.kind !== "binary" && !hydratedUnitIds.has(member.id))
+    );
+  }
+
+  /** Toggles one unit's review ledger without advancing or changing its card. */
+  function toggleUnitReview(member: ReviewUnit) {
+    if (unitReviewActionDisabled(member)) return;
+    if (member.status === "signed_off") {
+      undoSignOff.mutate({ unitId: member.id, sessionId });
+      return;
+    }
+    optimisticallyQueueSignOffs(
+      [
+        {
+          unitId: member.id,
+          sessionId,
+          durationSeconds:
+            member.id === activeUnit?.id
+              ? Math.round((Date.now() - startedAt) / 1000)
+              : 0,
+        },
+      ],
+      undefined,
+      { advance: false },
+    );
+  }
+
+  /** Units that open on this line when a card contains more than one. */
   function fileUnitsStartingAt(lineNumber: number) {
-    if (reviewMode !== "files" || activeFileCardMembers.length <= 1) return [];
+    if (activeFileCardMembers.length <= 1) return [];
     return activeFileCardMembers.filter(
       (member) => member.startLine === lineNumber,
+    );
+  }
+
+  /** Reports whether the atomic owner of a rendered card line is folded. */
+  function isFileUnitLineCollapsed(lineNumber: number) {
+    if (activeFileCardMembers.length <= 1) return false;
+    const owner = reviewCardMemberForLine(activeFileCardMembers, lineNumber);
+    return owner ? unitIsCollapsed(owner) : false;
+  }
+
+  /** Renders the persistent opener for each atomic unit in a file card. */
+  function renderFileUnitMarkers(lineNumber: number) {
+    return fileUnitsStartingAt(lineNumber).map((member) => (
+      <ReviewFileUnitMarker
+        key={member.id}
+        collapsed={unitIsCollapsed(member)}
+        member={member}
+        onToggleCollapsed={() => toggleUnitCollapsed(member)}
+        onToggleReview={() => toggleUnitReview(member)}
+        onStopWaiting={
+          member.status === "waiting"
+            ? () => stopWaitingOnUnit(member.id)
+            : undefined
+        }
+        reviewActionDisabled={unitReviewActionDisabled(member)}
+        reviewActionPending={unitReviewActionPending(member)}
+      />
+    ));
+  }
+
+  /** Mounts leftover provider conversations for the given threads. */
+  function renderProviderConversations(threads: typeof visibleProviderThreads) {
+    return threads.map((thread) => (
+      <ProviderConversation
+        key={thread.externalId}
+        onUploadImage={(file) => uploadCommentImage(thread.unitId, file)}
+        pullRequest={initialData.pullRequest}
+        revealed={focusedProviderThreadId === thread.externalId}
+        thread={thread}
+        newSince={
+          activeUnit?.status === "waiting" ? activeUnit.waitingSince : null
+        }
+        managing={managingThread(thread.externalId)}
+        replying={replyingToThread(thread.externalId)}
+        {...providerThreadActions(thread.unitId, thread.externalId)}
+        publishedByReviewDuck={publishedProviderThreadIds.has(
+          thread.externalId,
+        )}
+      />
+    ));
+  }
+
+  /** Mounts previous-side conversations that the current-line details would miss. */
+  function renderPreviousSideConversations(lineNumber: number) {
+    return renderProviderConversations(
+      groupedEntries(providerThreadsByLine, lineNumber).filter(
+        (thread) => thread.side === "left",
+      ),
     );
   }
 
@@ -2831,7 +3528,15 @@ export function ReviewWorkspace({
     const lineQuestions = activeThreadId
       ? groupedEntries(lineQuestionGroups, activeThreadId)
       : NO_GROUPED_ENTRIES;
-    const lineThreads = groupedEntries(providerThreadsByLine, lineNumber);
+    const hidePreviousSideHere =
+      !sideBySideVisible &&
+      previousRewriteLines.length > 0 &&
+      lineNumber >= previousUnitStartLine &&
+      lineNumber < previousUnitStartLine + previousRewriteLines.length;
+    const lineThreads = groupedEntries(
+      providerThreadsByLine,
+      lineNumber,
+    ).filter((thread) => thread.side !== "left" || !hidePreviousSideHere);
     const lineComments = groupedEntries(publishedCommentsByLine, lineNumber);
 
     return (
@@ -3008,6 +3713,9 @@ export function ReviewWorkspace({
           const published = publishedAiProposals.has(
             `${finding.aiJobId}:${finding.index}`,
           );
+          if (published && lineThreads.length > 0) {
+            return null;
+          }
           const publishingThisFinding =
             publishComment.isPending &&
             publishComment.variables?.aiJobId === finding.aiJobId &&
@@ -3062,7 +3770,11 @@ export function ReviewWorkspace({
         })}
         {/* The model's claim reads above the human conversation about it. */}
         {lineDeepFindings
-          .filter(({ id }) => id !== activeFindingId)
+          .filter(
+            (finding) =>
+              finding.id !== activeFindingId &&
+              !(findingPublished(finding) && lineThreads.length > 0),
+          )
           .map((finding) => (
             <DeepReviewFindingChip
               key={finding.id}
@@ -3076,23 +3788,9 @@ export function ReviewWorkspace({
           activeFindingTarget.line === lineNumber &&
           units[activeFindingTarget.unitIndex]?.id === activeUnit.id &&
           !findingRevealExhausted &&
+          !(findingPublished(activeFinding) && lineThreads.length > 0) &&
           renderInlineFindingCard(activeFinding, lineNumber)}
-        {lineThreads.map((thread) => (
-          <ProviderConversation
-            key={thread.externalId}
-            provider={initialData.pullRequest.provider}
-            thread={thread}
-            newSince={
-              activeUnit.status === "waiting" ? activeUnit.waitingSince : null
-            }
-            managing={managingThread(thread.externalId)}
-            replying={replyingToThread(thread.externalId)}
-            {...providerThreadActions(activeUnit.id, thread.externalId)}
-            publishedByReviewDuck={publishedProviderThreadIds.has(
-              thread.externalId,
-            )}
-          />
-        ))}
+        {renderProviderConversations(lineThreads)}
         {lineComments.map((comment) => (
           <div
             key={comment.id}
@@ -3105,9 +3803,12 @@ export function ReviewWorkspace({
           </div>
         ))}
         {selectedLine === lineNumber && (
-          <InlineCommentComposer
+          <InlineLineActionSurface
             key={`${lineNumber}-${draftRevision}`}
+            canAsk={canAskAi}
+            onUploadImage={(file) => uploadCommentImage(activeUnit.id, file)}
             initialDraft={commentDraft.current}
+            initialMode={commentDraft.current ? "provider" : "choose"}
             line={lineNumber}
             path={activeUnit.path}
             pending={publishComment.isPending}
@@ -3115,6 +3816,7 @@ export function ReviewWorkspace({
               publishComment.isPending && publishComment.variables?.body != null
             }
             provider={initialData.pullRequest.provider}
+            onAskAi={() => openAiQuestionAt(lineNumber)}
             onCancel={() => {
               setSelectedLine(undefined);
               commentDraft.current = "";
@@ -3134,15 +3836,10 @@ export function ReviewWorkspace({
       </>
     );
   }
-  const startPullRequestReview = api.ai.start.useMutation({
+  const startPullRequestReview = useStartPullRequestAiReview({
     onSuccess: () => {
-      toast.success("Pull request review started", {
-        description:
-          "Findings will appear inline as the review agent completes its analysis.",
-      });
       void pullRequestReview.refetch();
     },
-    onError: showAiStartError,
   });
   const reviewRunning =
     startPullRequestReview.isPending ||
@@ -3243,14 +3940,14 @@ export function ReviewWorkspace({
     return byLine;
   }, [discussion.data?.findings]);
   const providerThreadsByLine = useMemo(() => {
-    const byLine = new Map<number, typeof activeProviderThreads>();
-    for (const thread of activeProviderThreads) {
+    const byLine = new Map<number, typeof visibleProviderThreads>();
+    for (const thread of visibleProviderThreads) {
       const group = byLine.get(thread.line) ?? [];
       group.push(thread);
       byLine.set(thread.line, group);
     }
     return byLine;
-  }, [activeProviderThreads]);
+  }, [visibleProviderThreads]);
   const publishedAiProposals = useMemo(() => {
     const proposals = new Set<string>();
     for (const comment of discussion.data?.comments ?? []) {
@@ -3367,7 +4064,9 @@ export function ReviewWorkspace({
       aiConfiguration.data.reviewPullRequests &&
       aiConfiguration.data.mode !== "off" &&
       !pullRequestReview.isLoading &&
-      !pullRequestReview.data &&
+      (!pullRequestReview.data ||
+        (!aiJobActive(pullRequestReview.data.status) &&
+          pullRequestReview.data.snapshotId !== initialData.snapshot?.id)) &&
       !startPullRequestReview.isPending &&
       !pullReviewRequested.current
     ) {
@@ -3382,6 +4081,7 @@ export function ReviewWorkspace({
     aiConfiguration.data?.mode,
     aiConfiguration.data?.reviewPullRequests,
     initialData.pullRequest.id,
+    initialData.snapshot?.id,
     pullRequestReview.data,
     pullRequestReview.isLoading,
     startPullRequestReview,
@@ -3412,19 +4112,6 @@ export function ReviewWorkspace({
     setPendingCommentLine(undefined);
     openInlineComment(pendingCommentLine.line);
   }, [activeUnitId, openInlineComment, pendingCommentLine]);
-  // The two state dependencies cause a fresh render after selecting the line's
-  // owning unit, so this intentionally calls that render's question opener.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the opener is render-local and the pending selection owns this effect
-  useEffect(() => {
-    if (
-      !pendingAiQuestionLine ||
-      pendingAiQuestionLine.unitId !== activeUnitId
-    ) {
-      return;
-    }
-    setPendingAiQuestionLine(undefined);
-    openAiQuestionAt(pendingAiQuestionLine.line);
-  }, [activeUnitId, pendingAiQuestionLine]);
   useEffect(() => {
     if (!importPreview) return;
     importPreviewFocusRef.current?.scrollIntoView({ block: "center" });
@@ -3599,7 +4286,8 @@ export function ReviewWorkspace({
   // A concept action needs a layout to name, and a concept of one member is
   // its unit — there the two levels collapse into a single action.
   const conceptActionAvailable = Boolean(
-    activeConcept &&
+    reviewMode === "path" &&
+      activeConcept &&
       initialData.conceptLayout &&
       activeConceptMembers.length > 1,
   );
@@ -3612,6 +4300,7 @@ export function ReviewWorkspace({
     reviewComplete ||
     activeWaitStatus === "waiting" ||
     activeSignOffPending ||
+    undoPending ||
     undoSignOff.isPending ||
     undoConcept.isPending ||
     awaitPending ||
@@ -3620,6 +4309,7 @@ export function ReviewWorkspace({
     !activeUnit ||
     reviewComplete ||
     activeSignOffPending ||
+    undoPending ||
     undoSignOff.isPending ||
     undoConcept.isPending ||
     awaitPending ||
@@ -3671,6 +4361,7 @@ export function ReviewWorkspace({
       ? !!activeUnit &&
         !reviewComplete &&
         !activeSignOffPending &&
+        !undoPending &&
         !undoSignOff.isPending &&
         !undoConcept.isPending &&
         !awaitPending &&
@@ -3723,10 +4414,8 @@ export function ReviewWorkspace({
   const undoableSignOff = nextUndoableSignOff(signOffUndoHistory, units);
   const canUndoSignOff =
     !!undoableSignOff &&
-    // Both ways a sign-off is saved mark their units optimistically, so undo
-    // waits for the save it would otherwise race: the queue drains unit
-    // sign-offs, and a concept sign-off is one request of its own.
-    signOffQueue.ids.size === 0 &&
+    // A concept is still one atomic mutation. Unit and card saves can be
+    // undone immediately because their undo queue waits behind their drain.
     pendingConceptSignOffIds.size === 0 &&
     !undoSignOff.isPending &&
     !undoConcept.isPending &&
@@ -3745,6 +4434,7 @@ export function ReviewWorkspace({
   /** Opens an inline question at the visible in-scope line nearest the reader. */
   function openAiQuestion() {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     openAiQuestionAt(centredReviewLine());
   }
 
@@ -3786,6 +4476,7 @@ export function ReviewWorkspace({
   /** Opens the provider comment composer on the line the reviewer is reading. */
   function openCentredInlineComment() {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     commentOnCardLine(
       closestReviewLine(
         centredReviewLine(),
@@ -3819,16 +4510,6 @@ export function ReviewWorkspace({
       setAiQuestionThreadId(startedThreadId);
     }
     return Boolean(startedThreadId);
-  }
-
-  /** Starts a complete evidence-based review of the pull request. */
-  function reviewPullRequestWithAi() {
-    if (reviewRunning) return;
-    setAiReviewDialogOpen(false);
-    startPullRequestReview.mutate({
-      pullRequestId: initialData.pullRequest.id,
-      kind: "review",
-    });
   }
 
   /** Asks the model to regroup this layout once the reviewer has agreed. */
@@ -4027,7 +4708,7 @@ export function ReviewWorkspace({
     );
     setPendingConceptSignOffIds((current) => new Set(current).add(concept.id));
     setUnits(updated);
-    if (nextIndex >= 0) setActiveIndex(nextIndex);
+    if (nextIndex >= 0) selectUnit(nextIndex);
     setQueueLimit(INITIAL_PATH_ITEMS);
     setShowDiff(true);
     setContextBefore(0);
@@ -4112,7 +4793,7 @@ export function ReviewWorkspace({
       const index = units.findIndex(({ id }) => id === unitId);
       return index >= 0 ? [index] : [];
     });
-    setActiveIndex(
+    selectUnit(
       surviving.includes(view.unitIndex)
         ? view.unitIndex
         : (surviving[0] ??
@@ -4120,80 +4801,43 @@ export function ReviewWorkspace({
               Math.max(0, view.unitIndex),
               Math.max(0, units.length - 1),
             )),
+      "unit",
+      view,
     );
     if (view.pathSearch.trim()) {
       setPathSearch((current) => (current.trim() ? current : view.pathSearch));
       setSearchLimit(view.searchLimit);
     }
-    setShowDiff(view.showDiff);
-    setContextBefore(view.contextBefore);
-    setContextAfter(view.contextAfter);
-    setStartedAt(Date.now());
-    window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() => {
-        codeScrollRef.current?.scrollTo({
-          top: view.scrollTop,
-          behavior: "auto",
-        });
-      }),
-    );
   }
 
   /**
    * Takes back the most recent sign-off that still stands.
    *
-   * Sign-offs are saved through a queue, so undo waits for that queue to
-   * drain rather than racing a save it would have to undo twice. Steps whose
-   * units a resync removed, or which some other action already returned to
-   * the queue, are dropped instead of replayed.
+   * The history ref is updated before React renders, so repeated clicks pop
+   * distinct decisions even when they arrive in one frame. Persistence waits
+   * behind any sign-off saves these undos depend on, then follows the same
+   * immediate-first, batch-afterward flow as sign-off itself.
    */
   async function undoLastSignOff() {
-    // A mutation's pending flag only reaches this closure on the next render,
-    // so a held shortcut would otherwise take the same step back twice.
-    if (!undoableSignOff || !canUndoSignOff || undoInFlight.current) return;
-    undoInFlight.current = true;
-    setUndoPending(true);
-    const { entry, remaining } = undoableSignOff;
+    const next = nextUndoableSignOff(
+      signOffUndoHistoryRef.current,
+      unitsRef.current,
+    );
+    if (
+      !next ||
+      pendingConceptSignOffIds.size > 0 ||
+      undoSignOff.isPending ||
+      undoConcept.isPending ||
+      resetReview.isPending
+    ) {
+      return;
+    }
+    const { entry, remaining } = next;
+    signOffUndoHistoryRef.current = remaining;
     setSignOffUndoHistory(remaining);
     restoreReviewView(entry.view, entry.unitIds);
-    const target = signOffUndoTarget(
-      entry,
-      initialData.conceptLayout ?? undefined,
-    );
-    try {
-      if (target.kind === "concept") {
-        await undoConcept.mutateAsync({ ...target, sessionId });
-        return;
-      }
-      // A step that names several units is one undo to the reviewer, so only
-      // the request for the last of them speaks.
-      for (const unitId of target.unitIds.slice(0, -1)) {
-        quietUndoUnitIds.current.add(unitId);
-      }
-      // The requests name distinct units and do not depend on each other, so
-      // they go out together and the step comes back in one frame. Every one
-      // of them has to settle before the quiet marks are dropped, so a
-      // failure among them cannot let the rest each announce themselves.
-      const undos = await Promise.allSettled(
-        target.unitIds.map((unitId) =>
-          undoSignOff.mutateAsync({ unitId, sessionId }),
-        ),
-      );
-      for (const undo of undos) {
-        if (undo.status === "rejected") throw undo.reason;
-      }
-    } catch {
-      // The mutation owns the user-facing error. The step goes back on the
-      // history so the reviewer can take it back again rather than being left
-      // with a sign-off standing and nothing left to undo it from.
-      setSignOffUndoHistory((history) => rememberSignOff(history, entry));
-    } finally {
-      // A request that failed leaves its unit marked quiet, and the next undo
-      // of that unit would otherwise succeed without saying so.
-      quietUndoUnitIds.current.clear();
-      undoInFlight.current = false;
-      setUndoPending(false);
-    }
+    const undone = optimisticallyUndoSignOffs(entry.unitIds);
+    if (undone) queueSignOffUndo(entry, undone);
   }
 
   /** Pauses the open unit until its own conversation moves. */
@@ -4290,6 +4934,7 @@ export function ReviewWorkspace({
   /** Opens inline commenting at the first eligible source line. */
   function beginKeyboardComment() {
     if (!activeUnit) return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     const firstChangedLine = [...changedCurrentLines]
       .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];
@@ -4346,12 +4991,7 @@ export function ReviewWorkspace({
   function renderAiActionButtons() {
     const aiDisabled = aiConfiguration.data?.mode === "off";
     return (
-      <div
-        className={cn(
-          "grid w-full gap-2",
-          deepReviewAvailable ? "grid-cols-2" : "grid-cols-1",
-        )}
-      >
+      <div className="grid w-full min-w-0 grid-cols-1 gap-2">
         <Button
           type="button"
           variant="secondary"
@@ -4366,12 +5006,29 @@ export function ReviewWorkspace({
             className="ml-auto hidden sm:inline-flex"
           />
         </Button>
-        {deepReviewAvailable && (
+        {(deepReviewAvailable || pullRequestReview.data) && (
           <Button
             type="button"
             variant="secondary"
-            className="min-w-0 px-2.5"
-            disabled={aiDisabled || reviewRunning}
+            className={cn(
+              "min-w-0 px-2.5",
+              pullRequestReview.data &&
+                (reviewRunning
+                  ? "border-violet/30 text-violet"
+                  : pullRequestReview.data.status === "failed" ||
+                      pullRequestReview.data.deepReviewTerminalState ===
+                        "failed"
+                    ? "border-coral/30 text-coral"
+                    : pullRequestReview.data.status === "cancelled" ||
+                        ["partial", "skipped"].includes(
+                          pullRequestReview.data.deepReviewTerminalState ?? "",
+                        )
+                      ? "border-amber-500/30 text-amber-500"
+                      : "border-lime/30 text-lime"),
+            )}
+            aria-label={aiReviewStatusLabel(pullRequestReview.data)}
+            title={aiReviewStatusLabel(pullRequestReview.data)}
+            disabled={aiDisabled && !pullRequestReview.data}
             onClick={() => setAiReviewDialogOpen(true)}
           >
             {reviewRunning ? (
@@ -4379,9 +5036,7 @@ export function ReviewWorkspace({
             ) : (
               <Sparkles className="size-3.5 shrink-0" />
             )}
-            <span className="truncate">
-              {reviewRunning ? "Reviewing…" : "Review"}
-            </span>
+            <span className="whitespace-nowrap">AI review</span>
             <ShortcutHint
               shortcut={reviewShortcuts.reviewPullRequest}
               className="ml-auto hidden sm:inline-flex"
@@ -4758,12 +5413,14 @@ export function ReviewWorkspace({
       deletedUnitsToSignOff,
       externalSyncPending,
       fileWaitingUnitIds,
+      loadingChanges,
       filteredReviewActive,
       initialData,
       nextQueueEntry,
       nextReview,
       outstandingCardMembers,
       pendingConceptSignOffIds,
+      pendingUndoCount: pendingUndoUnitIds.size,
       primaryIsContinue,
       primaryScopeLabel,
       resetReview,
@@ -4812,6 +5469,50 @@ export function ReviewWorkspace({
       unreviewActiveUnit,
     },
     unitCommands,
+  );
+  /** Toggles the discussion panel using the same action for pointer and keyboard. */
+  function toggleDiscussions() {
+    setDiscussionsOpen((open) => {
+      if (!open) setInsightsPanelOpen(false);
+      return !open;
+    });
+  }
+  reviewCommands.push(
+    {
+      id: "toggle-discussions",
+      label: "Toggle discussions",
+      group: "Review actions",
+      shortcut: reviewShortcuts.discussions,
+      disabled: completionChromeHidden,
+      onSelect: toggleDiscussions,
+    },
+    {
+      id: "open-review-commands",
+      label: "Open review commands",
+      group: "Review actions",
+      shortcut: reviewShortcuts.commands,
+      onSelect: openCommands,
+    },
+    {
+      id: "open-review-provider",
+      label: "Open pull request in provider",
+      group: "Review actions",
+      shortcut: reviewShortcuts.openProvider,
+      onSelect: () => {
+        window.open(
+          initialData.pullRequest.webUrl,
+          "_blank",
+          "noopener,noreferrer",
+        );
+      },
+    },
+    {
+      id: "toggle-review-theme",
+      label: "Toggle color theme",
+      group: "Review actions",
+      shortcut: reviewShortcuts.toggleTheme,
+      onSelect: toggleColorTheme,
+    },
   );
   const pendingShortcut = useCommandCenterBindings({
     commands: reviewCommands,
@@ -4921,6 +5622,8 @@ export function ReviewWorkspace({
     pendingFindingReveal?.line,
     pendingProviderThread?.line,
     selectedLine,
+    ...visibleProviderThreads.map(({ line }) => line),
+    ...[...publishedCommentsByLine.keys()],
   ].flatMap((line) => (line === undefined ? [] : [line]));
 
   const reviewHeaderUrl = reviewProviderWebUrl(initialData.pullRequest);
@@ -4985,175 +5688,132 @@ export function ReviewWorkspace({
             />
           </div>
         </div>
-        <button
-          type="button"
-          aria-controls="review-discussions-panel"
-          aria-expanded={discussionsOpen}
-          aria-label={`Show pull request discussions, ${openProviderDiscussionCount} open`}
-          title={`${openProviderDiscussionCount} open ${openProviderDiscussionCount === 1 ? "discussion" : "discussions"}`}
-          onClick={() => {
-            setDiscussionsOpen((open) => {
-              if (!open) setInsightsPanelOpen(false);
-              return !open;
-            });
-          }}
-          className={cn(
-            "flex h-9 shrink-0 items-center gap-2 rounded-lg border px-2.5 text-[10px] transition",
-            completionChromeHidden && "hidden",
-            discussionsOpen
-              ? "border-cyan/30 bg-cyan/[.08] text-cyan"
-              : "text-mist hover:text-cloud border-line hover:bg-surface-subtle",
+        <ReviewToolbar>
+          {!completionChromeHidden && (
+            <ReviewToolbarTooltip
+              shortcut={reviewShortcuts.discussions}
+              label={`${openProviderDiscussionCount} open ${openProviderDiscussionCount === 1 ? "discussion" : "discussions"}`}
+            >
+              <button
+                type="button"
+                aria-controls="review-discussions-panel"
+                aria-expanded={discussionsOpen}
+                aria-label={`Show pull request discussions, ${openProviderDiscussionCount} open`}
+                onClick={toggleDiscussions}
+                className={cn(
+                  REVIEW_TOOLBAR_BUTTON_CLASS,
+                  completionChromeHidden && "hidden",
+                  discussionsOpen
+                    ? "border-cyan/30 bg-cyan/[.08] text-cyan"
+                    : "",
+                )}
+              >
+                {providerConversations.isLoading &&
+                !providerConversations.data ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <MessageSquareText className="size-4" />
+                )}
+                {openProviderDiscussionCount > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="bg-coral absolute right-1 top-1 size-1.5 rounded-full ring-2 ring-surface"
+                  />
+                )}
+              </button>
+            </ReviewToolbarTooltip>
           )}
-        >
-          {providerConversations.isLoading && !providerConversations.data ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : (
-            <MessageSquareText className="size-4" />
-          )}
-          <span className="hidden lg:inline">Discussions</span>
-          <span
-            className={cn(
-              "grid min-w-4 place-items-center rounded-md px-1 py-0.5 font-mono text-[9px]",
-              openProviderDiscussionCount > 0
-                ? "bg-coral/10 text-coral"
-                : "bg-lime/10 text-lime",
-            )}
-          >
-            {openProviderDiscussionCount}
-          </span>
-          {openProviderDiscussionCount > 0 && (
-            <span
-              className="bg-coral size-1.5 rounded-full"
-              aria-hidden="true"
-            />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={
-            updateAvailable
-              ? loadAvailableChanges
-              : () => void syncExternalData()
-          }
-          disabled={
-            resetReview.isPending ||
-            loadingChanges ||
-            (!updateAvailable && externalSyncPending)
-          }
-          aria-label={
-            updateAvailable
-              ? "Load new code changes"
-              : `Sync ${providerLabel(initialData.pullRequest.provider)} pull request`
-          }
-          title={
-            updateAvailable
-              ? "Load the synced code changes (R)"
-              : `Fetch the latest ${providerLabel(initialData.pullRequest.provider)} code and review conversations (R)`
-          }
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-wait"
-        >
-          <RefreshCw
-            className={cn(
-              "size-4",
-              (loadingChanges || (externalSyncPending && !updateAvailable)) &&
-                "animate-spin",
-            )}
-          />
-          <span className="hidden sm:inline">
-            {loadingChanges ? (
-              "Loading…"
-            ) : updateAvailable ? (
-              <>
-                Load
-                <span className="hidden xl:inline"> changes</span>
-              </>
-            ) : externalSyncPending ? (
-              "Syncing…"
-            ) : (
-              "Sync"
-            )}
-          </span>
-          <ShortcutHint
-            shortcut={
-              updateAvailable
-                ? reviewShortcuts.loadChanges
-                : reviewShortcuts.refresh
-            }
-            className="hidden 2xl:inline-flex"
-          />
-        </button>
-        <button
-          type="button"
-          onClick={undoLastSignOff}
-          disabled={!canUndoSignOff}
-          aria-busy={undoPending || undefined}
-          aria-label="Undo the last sign-off"
-          title={
-            undoableSignOff
-              ? `Return ${undoableSignOff.entry.label} to the review path`
-              : "No sign-off from this session left to undo"
-          }
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          {undoPending ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : (
-            <Undo2 className="size-4" />
-          )}
-          <span className="hidden sm:inline">
-            {undoPending ? "Undoing…" : "Undo"}
-          </span>
-          <ShortcutHint
+          <ReviewToolbarTooltip
             shortcut={reviewShortcuts.undoSignOff}
-            className="hidden 2xl:inline-flex"
-          />
-        </button>
-        <button
-          type="button"
-          onClick={() => setResetDialogOpen(true)}
-          disabled={
-            pendingSignOffCount > 0 ||
-            externalSyncPending ||
-            resetReview.isPending
-          }
-          aria-label="Reset review"
-          title={
-            pendingSignOffCount > 0
-              ? "Wait for pending sign-offs to finish before resetting"
-              : "Sync the latest code and clear all of your sign-offs (Shift+R)"
-          }
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <RotateCcw className="size-4" />
-          <span className="hidden sm:inline">Reset</span>
-          <ShortcutHint
+            label={
+              undoableSignOff
+                ? `Undo: return ${undoableSignOff.entry.label} to the review path`
+                : "No sign-off from this session left to undo"
+            }
+          >
+            <button
+              type="button"
+              onClick={undoLastSignOff}
+              disabled={!canUndoSignOff}
+              aria-busy={undoPending || undefined}
+              aria-label="Undo the last sign-off"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              {undoPending ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Undo2 className="size-4" />
+              )}
+            </button>
+          </ReviewToolbarTooltip>
+          <ReviewToolbarTooltip
             shortcut={reviewShortcuts.reset}
-            className="hidden 2xl:inline-flex"
+            label={
+              pendingSignOffCount > 0 || undoPending
+                ? "Wait for pending review changes to finish before resetting"
+                : "Sync the latest code and clear all of your sign-offs"
+            }
+          >
+            <button
+              type="button"
+              onClick={() => setResetDialogOpen(true)}
+              disabled={
+                pendingSignOffCount > 0 ||
+                undoPending ||
+                externalSyncPending ||
+                resetReview.isPending
+              }
+              aria-label="Reset review"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              <RotateCcw className="size-4" />
+            </button>
+          </ReviewToolbarTooltip>
+          <ReviewToolbarTooltip
+            label="Open review commands"
+            shortcut={reviewShortcuts.commands}
+          >
+            <button
+              type="button"
+              onClick={openCommands}
+              aria-label="Open review commands"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              <Keyboard className="size-4" />
+            </button>
+          </ReviewToolbarTooltip>
+          <ReviewSyncStatusButton
+            provider={initialData.pullRequest.provider}
+            status={syncStatus}
+            onClick={
+              updateAvailable
+                ? loadAvailableChanges
+                : () => void syncExternalData()
+            }
           />
-        </button>
-        <button
-          type="button"
-          onClick={openCommands}
-          aria-label="Open review commands"
-          title="Open review commands"
-          className="text-mist hover:text-cloud flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line px-2.5 text-[10px] transition hover:bg-surface-subtle"
-        >
-          <Keyboard className="size-4" />
-          <ShortcutHint
-            shortcut={commandMenuShortcut}
-            className="hidden sm:inline-flex"
-          />
-        </button>
-        <a
-          href={initialData.pullRequest.webUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Open pull request in provider"
-          className="text-mist hover:text-cloud grid size-9 place-items-center rounded-full hover:bg-surface-subtle"
-        >
-          <ExternalLink className="size-4" />
-        </a>
-        <ThemeToggle className="size-9 rounded-full" />
+          <ReviewToolbarTooltip
+            label={`Open pull request in ${providerLabel(initialData.pullRequest.provider)}`}
+            shortcut={reviewShortcuts.openProvider}
+          >
+            <a
+              href={initialData.pullRequest.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open pull request in provider"
+              className={REVIEW_TOOLBAR_BUTTON_CLASS}
+            >
+              <ExternalLink className="size-4" />
+            </a>
+          </ReviewToolbarTooltip>
+          <ReviewToolbarTooltip
+            label="Toggle color theme"
+            shortcut={reviewShortcuts.toggleTheme}
+          >
+            <ThemeToggle
+              className={cn(REVIEW_TOOLBAR_BUTTON_CLASS, "bg-transparent")}
+            />
+          </ReviewToolbarTooltip>
+        </ReviewToolbar>
       </header>
 
       {updateAvailable && (
@@ -5170,7 +5830,7 @@ export function ReviewWorkspace({
             size="sm"
             loading={loadingChanges}
             onClick={loadAvailableChanges}
-            title="Load the synced code changes (R)"
+            title={`Load the synced code changes (${formatShortcut(reviewShortcuts.loadChanges).join(" then ")})`}
           >
             <span>{loadingChanges ? "Loading changes…" : "Load changes"}</span>
             {!loadingChanges && (
@@ -5200,10 +5860,7 @@ export function ReviewWorkspace({
         <ReviewDiscussionsPanel
           error={providerConversations.error?.message}
           loading={providerConversations.isFetching}
-          provider={
-            providerConversations.data?.provider ??
-            initialData.pullRequest.provider
-          }
+          pullRequest={initialData.pullRequest}
           threads={providerDiscussionThreads}
           onClose={() => setDiscussionsOpen(false)}
           onOpenThread={openProviderDiscussion}
@@ -5313,6 +5970,9 @@ export function ReviewWorkspace({
                 style={{ width: `${progress}%` }}
               />
             </div>
+            {reviewMode === "files" && (
+              <ReviewChangeComposition files={reviewFiles} className="mt-3" />
+            )}
             <div className="relative mt-3">
               <input
                 ref={pathSearchRef}
@@ -5628,7 +6288,7 @@ export function ReviewWorkspace({
               search={pathSearch}
               selectedPath={completedBrowsing ? undefined : activeUnit.path}
               pendingFileIds={pendingFiles}
-              onSelect={selectReviewFile}
+              onSelect={(file) => selectReviewFile(file, { inspect: true })}
               onToggle={toggleReviewFile}
               onResumeWaiting={resumeReviewFile}
             />
@@ -5682,10 +6342,7 @@ export function ReviewWorkspace({
               nextReviewShortcut={reviewShortcuts.nextReview}
               discussionStatus={
                 <ReviewDiscussionSummary
-                  provider={
-                    providerConversations.data?.provider ??
-                    initialData.pullRequest.provider
-                  }
+                  pullRequest={initialData.pullRequest}
                   threads={providerDiscussionThreads}
                   onOpenThread={openProviderDiscussion}
                 />
@@ -5698,17 +6355,31 @@ export function ReviewWorkspace({
                     providerLifecycle.error?.message
                   }
                   loading={providerLifecycle.isFetching}
-                  mutationPending={mergePullRequest.isPending}
+                  mutationPending={
+                    mergePullRequest.isPending || markReadyForReview.isPending
+                  }
+                  readyError={markReadyForReview.error?.message}
+                  onMarkReady={() =>
+                    markReadyForReview.mutate({
+                      pullRequestId: initialData.pullRequest.id,
+                    })
+                  }
                   permissionDenied={
+                    markReadyForReview.error?.data?.code === "FORBIDDEN" ||
                     mergePullRequest.error?.data?.code === "FORBIDDEN" ||
                     providerLifecycle.error?.data?.code === "FORBIDDEN"
                   }
-                  provider={initialData.pullRequest.provider}
-                  pullRequestUrl={initialData.pullRequest.webUrl}
+                  pullRequest={initialData.pullRequest}
+                  discussions={providerDiscussionThreads.filter(
+                    isOpenProviderDiscussion,
+                  )}
                   reviewPath={`/review/${initialData.pullRequest.id}`}
                   onRefresh={() => {
                     void providerLifecycle.refetch().then((result) => {
-                      if (!result.error) mergePullRequest.reset();
+                      if (!result.error) {
+                        mergePullRequest.reset();
+                        markReadyForReview.reset();
+                      }
                     });
                   }}
                   onMerge={() =>
@@ -5795,8 +6466,12 @@ export function ReviewWorkspace({
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <h1
-                      className="truncate text-sm font-medium"
-                      title={`${activeUnit.path}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
+                      className={cn(
+                        "truncate text-sm font-medium",
+                        activeFileIsDeleted &&
+                          "text-coral decoration-coral/50 line-through",
+                      )}
+                      title={`${activeUnit.path}${activeFileIsDeleted ? " (deleted)" : ""}, lines ${activeUnit.startLine}–${activeUnit.endLine}`}
                     >
                       {reviewMode === "files"
                         ? (activeUnit.path.split("/").at(-1) ?? activeUnit.path)
@@ -5846,22 +6521,60 @@ export function ReviewWorkspace({
                           Updated
                         </Badge>
                       )}
-                    {activeUnit.changeType !== "modified" && (
-                      <Badge
-                        className={cn(
-                          "capitalize",
-                          activeUnit.changeType === "deleted" &&
-                            "border-red-500/25 bg-red-400/10 text-red-700 dark:border-red-300/20 dark:text-red-200",
-                        )}
-                      >
-                        {activeUnit.changeType}
+                    {activeFileIsDeleted ? (
+                      <Badge className="border-coral/30 bg-coral/10 text-coral">
+                        <FileX2 className="size-3" aria-hidden />
+                        File deleted
                       </Badge>
+                    ) : activeFileMovedFrom ? (
+                      <Badge
+                        title={`Moved from ${activeFileMovedFrom}. The diff compares the file with its previous path, so only the edits inside the move show.`}
+                      >
+                        <CornerDownRight className="size-3" aria-hidden />
+                        {activeReviewFile &&
+                        activeReviewFile.additions +
+                          activeReviewFile.deletions >
+                          0
+                          ? "Moved + edited"
+                          : "Moved"}
+                      </Badge>
+                    ) : (
+                      activeUnit.changeType !== "modified" && (
+                        <Badge className="capitalize">
+                          {activeUnit.changeType}
+                        </Badge>
+                      )
                     )}
                   </div>
                   <p className="text-fog mt-1 flex min-w-0 items-center gap-1.5 truncate text-[10px]">
-                    <span className="text-mist font-mono">
+                    <span
+                      className={cn(
+                        "font-mono",
+                        activeFileIsDeleted
+                          ? "text-coral/80 decoration-coral/40 line-through"
+                          : "text-mist",
+                      )}
+                    >
                       {activeUnit.path}
                     </span>
+                    {activeFileMovedFrom && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="flex min-w-0 shrink items-center gap-1"
+                          title={`Moved from ${activeFileMovedFrom}`}
+                        >
+                          <CornerDownRight
+                            className="size-3 shrink-0"
+                            aria-hidden
+                          />
+                          <span className="sr-only">Moved from </span>
+                          <span className="truncate font-mono">
+                            {activeFileMovedFrom}
+                          </span>
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     <span className="shrink-0">
                       {reviewMode === "files"
@@ -5883,15 +6596,27 @@ export function ReviewWorkspace({
                   </p>
                 </div>
                 <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                  {sourceHydrationPending && (
+                  {(sourceHydrationPending || pendingSourceNavigation) && (
                     <span
                       role="status"
-                      aria-label="Loading private review source"
+                      aria-label={
+                        pendingSourceNavigation
+                          ? "Preparing selected review source"
+                          : "Loading private review source"
+                      }
                       className="text-mist flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[10px]"
-                      title="Loading and verifying review source in the background"
+                      title={
+                        pendingSourceNavigation
+                          ? "Keeping the current source visible until the selected file is ready"
+                          : "Loading and verifying the current review source"
+                      }
                     >
                       <LoaderCircle className="size-3.5 animate-spin" />
-                      <span className="hidden lg:inline">Loading source…</span>
+                      <span className="hidden lg:inline">
+                        {pendingSourceNavigation
+                          ? "Opening next source…"
+                          : "Loading source…"}
+                      </span>
                     </span>
                   )}
                   {initialData.conceptLayout && !conceptLayoutLocked && (
@@ -5955,7 +6680,13 @@ export function ReviewWorkspace({
                   >
                     <GitBranch className="size-3.5" />
                   </button>
-                  {diffAvailable && (
+                  {activeFileIsMarkdown && (
+                    <ReviewMarkdownViewSwitch
+                      view={markdownView}
+                      onChange={changeMarkdownView}
+                    />
+                  )}
+                  {diffAvailable && !markdownPreviewVisible && (
                     <ReviewCodeViewSwitch
                       diffVisible={sideBySideVisible}
                       onChange={(diffVisible) => {
@@ -5964,6 +6695,12 @@ export function ReviewWorkspace({
                         setContextBefore(0);
                         setContextAfter(0);
                       }}
+                    />
+                  )}
+                  {sideBySideVisible && (
+                    <ReviewWhitespaceToggle
+                      checked={ignoreWhitespace}
+                      onChange={setIgnoreWhitespace}
                     />
                   )}
                   <button
@@ -6053,7 +6790,7 @@ export function ReviewWorkspace({
                 >
                   <span className="text-cloud flex items-center gap-2 font-medium">
                     <MessageSquareText className="text-cyan size-3.5" />
-                    Choose a line to comment on
+                    Choose a line to respond to
                   </span>
                   <span className="flex items-center gap-1.5">
                     <ShortcutHint
@@ -6121,7 +6858,10 @@ export function ReviewWorkspace({
                   />
                   <div
                     className={cn(
-                      "overflow-hidden border-x border-b border-cyan/35 bg-panel shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-cyan)_8%,transparent)]",
+                      "overflow-hidden border-x border-b bg-panel",
+                      activeFileIsDeleted
+                        ? "border-coral/40 shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-coral)_10%,transparent)]"
+                        : "border-lime/50 shadow-[0_0_0_1px_color-mix(in_srgb,var(--app-accent)_18%,transparent)]",
                       selectedCardStuck
                         ? "rounded-none border-t-0"
                         : "rounded-t-xl border-t",
@@ -6134,6 +6874,12 @@ export function ReviewWorkspace({
                       itemLabel={reviewMode === "files" ? "File" : "Card"}
                       selected
                       sourceBytes={reviewSourceByteLength(activeModule)}
+                      fileContents={
+                        activeFileIsDeleted
+                          ? (activeModule?.previousSource ??
+                            activeModule?.source)
+                          : activeModule?.source
+                      }
                       onResumeWaiting={
                         fileWaitingUnitIds.length > 0
                           ? stopWaitingOnActive
@@ -6149,7 +6895,8 @@ export function ReviewWorkspace({
                       }}
                       actions={
                         selectedFileSourceExpanded &&
-                        activeUnit.kind !== "binary" ? (
+                        activeUnit.kind !== "binary" &&
+                        !markdownPreviewVisible ? (
                           <ReviewUnitViewOptions
                             importsVisible={importsVisible}
                             fullFileVisible={fullFileVisible}
@@ -6177,33 +6924,36 @@ export function ReviewWorkspace({
                         ) : undefined
                       }
                     />
-                    <ReviewScrollOverviewStrip
-                      className="px-3 py-2 sm:px-3 lg:px-3"
-                      label={
-                        activeUnit
-                          ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
-                          : undefined
-                      }
-                      marks={overviewMarks}
-                      rows={overviewRows}
-                      revealWholeFile={fullFileVisible}
-                      unitRange={overviewUnitRange}
-                      viewport={overviewViewport}
-                      onSeek={seekCodeOverview}
-                    />
+                    {!markdownPreviewVisible && (
+                      <ReviewScrollOverviewStrip
+                        className="px-3 py-2 sm:px-3 lg:px-3"
+                        label={
+                          activeUnit
+                            ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
+                            : undefined
+                        }
+                        marks={overviewMarks}
+                        rows={overviewRows}
+                        revealWholeFile={fullFileVisible}
+                        unitRange={overviewUnitRange}
+                        viewport={overviewViewport}
+                        onSeek={seekCodeOverview}
+                      />
+                    )}
                   </div>
                 </div>
                 <div
                   ref={codeOverviewRef}
                   className={cn(
-                    "-mt-px",
-                    !sideBySideVisible &&
-                      "overflow-hidden rounded-b-xl border-x border-b border-line bg-code",
+                    "-mt-px overflow-hidden rounded-b-xl border-x border-b bg-code",
+                    activeFileIsDeleted ? "border-coral/40" : "border-lime/50",
                   )}
                 >
                   {!selectedFileSourceExpanded &&
                   activeFileCardSourceAvailable ? (
                     <ReviewFileCardSourcePlaceholder
+                      deleted={activeFileIsDeleted}
+                      framed
                       itemLabel={reviewMode === "files" ? "file" : "card"}
                       language={activeUnit.language}
                       lineCount={activeFileCardLineCount}
@@ -6219,61 +6969,80 @@ export function ReviewWorkspace({
                       sourceBytes={reviewSourceByteLength(activeModule)}
                     />
                   ) : null}
-                  {selectedFileSourceExpanded && sideBySideVisible && (
-                    <SideBySideUnitDiff
-                      key={activeUnit.id}
-                      ref={diffContextRef}
-                      previousSource={diffPreviousSource}
-                      currentSource={diffCurrentSource}
-                      language={activeUnit.language}
-                      previousStartLine={1}
-                      currentStartLine={1}
-                      previousFocusRanges={previousCardRanges}
-                      currentFocusRanges={currentCardRanges}
-                      previousFocusStartLine={
-                        activeUnit.changeType === "added"
-                          ? null
-                          : (previousCardRanges.at(0)?.startLine ??
-                            previousUnitStartLine)
-                      }
-                      previousFocusEndLine={
-                        activeUnit.changeType === "added"
-                          ? null
-                          : (previousCardRanges.at(-1)?.endLine ??
-                            previousUnitEndLine)
-                      }
-                      currentFocusStartLine={
-                        activeUnit.changeType === "deleted"
-                          ? null
-                          : (cardStartLine ?? activeUnit.startLine)
-                      }
-                      currentFocusEndLine={
-                        activeUnit.changeType === "deleted"
-                          ? null
-                          : (cardEndLine ?? activeUnit.endLine)
-                      }
-                      selectedLine={selectedLine}
-                      keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
-                      findingLine={findingLine}
-                      expanded={fullFileVisible}
-                      onSelectReviewLine={commentOnCardLine}
-                      onAskReviewLine={askAboutCardLine}
-                      renderBeforeLine={(lineNumber) =>
-                        fileUnitsStartingAt(lineNumber).map((member) => (
-                          <ReviewFileUnitMarker
-                            key={member.id}
-                            member={member}
-                            onStopWaiting={
-                              member.status === "waiting"
-                                ? () => stopWaitingOnUnit(member.id)
-                                : undefined
-                            }
-                          />
-                        ))
-                      }
-                      renderLineDetails={renderReviewLineDetails}
-                    />
-                  )}
+                  {selectedFileSourceExpanded &&
+                    markdownPreviewVisible &&
+                    activeFileCardSourceAvailable &&
+                    activeUnit && (
+                      <ReviewMarkdownPreview
+                        key={activeUnit.path}
+                        path={activeUnit.path}
+                        currentSource={
+                          activeModule?.source ?? activeUnit.source
+                        }
+                        previousSource={
+                          activeModule?.previousSource ??
+                          activeUnit.previousSource ??
+                          ""
+                        }
+                      />
+                    )}
+                  {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
+                    sideBySideVisible && (
+                      <ReviewDiffWithLineHistory
+                        ignoreWhitespace={ignoreWhitespace}
+                        key={activeUnit.id}
+                        ref={diffContextRef}
+                        pullRequestId={initialData.pullRequest.id}
+                        path={activeUnit.path}
+                        className="rounded-none border-0"
+                        previousSource={diffPreviousSource}
+                        currentSource={diffCurrentSource}
+                        language={activeUnit.language}
+                        previousStartLine={1}
+                        currentStartLine={1}
+                        previousFocusRanges={previousCardRanges}
+                        currentFocusRanges={currentCardRanges}
+                        previousFocusStartLine={
+                          activeUnit.changeType === "added"
+                            ? null
+                            : (previousCardRanges.at(0)?.startLine ??
+                              previousUnitStartLine)
+                        }
+                        previousFocusEndLine={
+                          activeUnit.changeType === "added"
+                            ? null
+                            : (previousCardRanges.at(-1)?.endLine ??
+                              previousUnitEndLine)
+                        }
+                        currentFocusStartLine={
+                          activeUnit.changeType === "deleted"
+                            ? null
+                            : (cardStartLine ?? activeUnit.startLine)
+                        }
+                        currentFocusEndLine={
+                          activeUnit.changeType === "deleted"
+                            ? null
+                            : (cardEndLine ?? activeUnit.endLine)
+                        }
+                        selectedLine={selectedLine}
+                        keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
+                        findingLine={findingLine}
+                        expanded={fullFileVisible}
+                        isReviewLineCollapsed={isFileUnitLineCollapsed}
+                        onSelectReviewLine={commentOnCardLine}
+                        leftLineCommentMarkers={visibleLineCommentMarkers.left}
+                        rightLineCommentMarkers={
+                          visibleLineCommentMarkers.right
+                        }
+                        onOpenLineComment={openLineCommentThread}
+                        renderBeforeLine={renderFileUnitMarkers}
+                        renderLineDetails={renderReviewLineDetails}
+                        renderPreviousLineDetails={
+                          renderPreviousSideConversations
+                        }
+                      />
+                    )}
                   {activeFileCardHydrationPending &&
                     !activeFileCardSourceAvailable && (
                       <div
@@ -6305,14 +7074,30 @@ export function ReviewWorkspace({
                           </p>
                           <p className="text-mist mt-2 text-xs leading-5">
                             This private source could not be verified and
-                            loaded. Reload the review before signing off this
-                            unit.
+                            loaded. Retry this file before signing off its
+                            units.
                           </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="mt-5"
+                            onClick={() =>
+                              void prepareSourcePath(
+                                activeUnit.path,
+                                "active",
+                                true,
+                              ).catch(() => undefined)
+                            }
+                          >
+                            <RefreshCw className="size-3.5" /> Retry source
+                          </Button>
                         </div>
                       </div>
                     )}
                   {selectedFileSourceExpanded &&
                     importsVisible &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeModule && (
@@ -6334,6 +7119,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     contextAvailable &&
@@ -6356,17 +7142,34 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeUnit.kind !== "binary" && (
                       <SourceLineWindow
                         key={activeUnit.id}
-                        items={lines}
+                        items={displayedLineEntries}
+                        lineNumberForItem={(entry) => entry.lineNumber}
                         pinnedLines={pinnedReviewLines}
                         rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
                         startLine={visibleStartLine}
-                        renderLine={(line, lineNumber) => {
+                        renderLine={(entry, lineNumber) => {
+                          const { line } = entry;
+                          const unitMarkers = renderFileUnitMarkers(lineNumber);
+                          if (isFileUnitLineCollapsed(lineNumber)) {
+                            return (
+                              <Fragment key={`${activeUnit.id}-${lineNumber}`}>
+                                {unitMarkers}
+                              </Fragment>
+                            );
+                          }
                           const isUnitLine = isPrimaryReviewLine(lineNumber);
+                          const lineCommentMarkers =
+                            reviewLineCommentMarkersForLine(
+                              visibleLineCommentMarkers,
+                              lineNumber,
+                              "right",
+                            );
                           const isChangedLine =
                             isUnitLine && changedCurrentLines.has(lineNumber);
                           const isContextLine = !isUnitLine;
@@ -6380,17 +7183,7 @@ export function ReviewWorkspace({
                             : [];
                           return (
                             <Fragment key={`${activeUnit.id}-${lineNumber}`}>
-                              {fileUnitsStartingAt(lineNumber).map((member) => (
-                                <ReviewFileUnitMarker
-                                  key={member.id}
-                                  member={member}
-                                  onStopWaiting={
-                                    member.status === "waiting"
-                                      ? () => stopWaitingOnUnit(member.id)
-                                      : undefined
-                                  }
-                                />
-                              ))}
+                              {unitMarkers}
                               {contextBefore > 0 &&
                                 lineNumber === cardStartLine &&
                                 cardStartLine && (
@@ -6404,30 +7197,52 @@ export function ReviewWorkspace({
                                   (line, previousIndex) => {
                                     const previousLineNumber =
                                       previousUnitStartLine + previousIndex;
+                                    const previousMarkers =
+                                      reviewLineCommentMarkersForLine(
+                                        visibleLineCommentMarkers,
+                                        previousLineNumber,
+                                        "left",
+                                      );
                                     return (
-                                      <div
+                                      <Fragment
                                         key={`${activeUnit.id}-previous-${previousIndex}`}
-                                        className="group grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20"
                                       >
-                                        <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
-                                          {previousLineNumber}
-                                        </span>
-                                        <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
-                                          <HighlightedTokens
-                                            tokens={line.tokens}
-                                          />
-                                        </pre>
-                                      </div>
+                                        <div className="group relative grid grid-cols-[66px_1fr] border-l-2 border-l-red-400/45 bg-red-400/15 px-4 hover:bg-red-400/20">
+                                          {previousMarkers.length > 0 ? (
+                                            <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                                              <ReviewLineCommentMarkers
+                                                markers={previousMarkers}
+                                                onOpen={openLineCommentThread}
+                                              />
+                                            </div>
+                                          ) : null}
+                                          <span className="flex items-center justify-end pr-3 text-right text-red-700 opacity-80 select-none dark:text-red-200">
+                                            {previousLineNumber}
+                                          </span>
+                                          <pre className="syntax-code overflow-visible text-cloud line-through opacity-80">
+                                            <HighlightedTokens
+                                              tokens={line.tokens}
+                                            />
+                                          </pre>
+                                        </div>
+                                        {renderPreviousSideConversations(
+                                          previousLineNumber,
+                                        )}
+                                      </Fragment>
                                     );
                                   },
                                 )}
                               <div
                                 id={`review-line-${lineNumber}`}
                                 className={cn(
-                                  "group grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
+                                  "group relative grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
                                   contextVisible &&
                                     isUnitLine &&
+                                    !activeFileIsDeleted &&
                                     "border-l-cyan/35 bg-cyan/[.012]",
+                                  activeFileIsDeleted &&
+                                    isUnitLine &&
+                                    "border-l-coral/45 bg-coral/[.09] hover:bg-coral/[.14]",
                                   isChangedLine &&
                                     "border-l-addition/45 bg-addition/15 hover:bg-addition/20",
                                   isContextLine &&
@@ -6448,37 +7263,32 @@ export function ReviewWorkspace({
                                     "bg-violet/[.075] shadow-[inset_2px_0_0_var(--app-ai)]",
                                 )}
                               >
+                                {lineCommentMarkers.length > 0 ? (
+                                  <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                                    <ReviewLineCommentMarkers
+                                      markers={lineCommentMarkers}
+                                      onOpen={openLineCommentThread}
+                                    />
+                                  </div>
+                                ) : null}
                                 {isUnitLine && activeUnit.kind !== "binary" ? (
                                   <span
                                     className={cn(
                                       "flex items-center justify-end gap-1 pr-1.5 text-right text-fog select-none",
                                       isChangedLine &&
                                         "bg-addition/20 text-addition",
+                                      activeFileIsDeleted && "text-coral",
                                     )}
                                   >
-                                    <AskAiLineButton
-                                      line={lineNumber}
-                                      onAsk={askAboutCardLine}
-                                      visible={aiQuestionLine === lineNumber}
-                                    />
                                     <button
                                       type="button"
-                                      aria-label={`Comment on line ${lineNumber}`}
+                                      aria-label={`Open actions for line ${lineNumber}`}
                                       aria-pressed={selectedLine === lineNumber}
                                       onClick={() =>
                                         commentOnCardLine(lineNumber)
                                       }
-                                      className="hover:text-violet flex items-center gap-1 transition"
+                                      className="hover:text-cyan transition"
                                     >
-                                      <MessageSquareText
-                                        className={cn(
-                                          "size-3 transition-opacity",
-                                          selectedLine === lineNumber ||
-                                            keyboardLine === lineNumber
-                                            ? "text-cyan opacity-100"
-                                            : "opacity-0 group-hover:opacity-100",
-                                        )}
-                                      />
                                       <span>{lineNumber}</span>
                                     </button>
                                   </span>
@@ -6487,7 +7297,14 @@ export function ReviewWorkspace({
                                     {lineNumber}
                                   </span>
                                 )}
-                                <pre className="syntax-code overflow-visible text-cloud">
+                                <pre
+                                  className={cn(
+                                    "syntax-code overflow-visible text-cloud",
+                                    activeFileIsDeleted &&
+                                      isUnitLine &&
+                                      "text-cloud/80 line-through decoration-coral/35",
+                                  )}
+                                >
                                   <HighlightedTokens
                                     tokens={line.tokens}
                                     renderToken={({
@@ -6567,6 +7384,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     contextAvailable &&
                     !fullFileVisible && (
@@ -6683,15 +7501,17 @@ export function ReviewWorkspace({
                         shortcut={reviewShortcuts.previousUnit}
                         alternateShortcut={reviewShortcuts.nextUnit}
                       />
-                      Card
+                      {reviewMode === "files" ? "File" : "Card"}
                     </span>
-                    <span className="flex items-center gap-1.5 whitespace-nowrap">
-                      <ShortcutAlternatives
-                        shortcut={reviewShortcuts.previousConcept}
-                        alternateShortcut={reviewShortcuts.nextConcept}
-                      />
-                      Concept
-                    </span>
+                    {reviewMode === "path" && (
+                      <span className="flex items-center gap-1.5 whitespace-nowrap">
+                        <ShortcutAlternatives
+                          shortcut={reviewShortcuts.previousConcept}
+                          alternateShortcut={reviewShortcuts.nextConcept}
+                        />
+                        Concept
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
@@ -7233,9 +8053,27 @@ export function ReviewWorkspace({
         </aside>
 
         {peekedSymbol &&
+          peekedDefinition.isFetching &&
+          !peekedDefinition.data && (
+            <SymbolPeekMessage
+              message={`Finding the definition of ${peekedSymbol.symbol}…`}
+              peeked={peekedSymbol}
+            />
+          )}
+        {peekedSymbol && peekedDefinition.isError && (
+          <SymbolPeekMessage
+            message="This definition could not be loaded. Try hovering the symbol again."
+            peeked={peekedSymbol}
+          />
+        )}
+        {peekedSymbol &&
           peekedDefinition.data?.kind === "unresolved" &&
           (() => {
-            const message = symbolPeekNotice(peekedDefinition.data.reason);
+            const message =
+              symbolPeekNotice(peekedDefinition.data.reason) ??
+              (peekedImport && peekedDefinition.data.reason === "not_found"
+                ? `No definition was found for the imported symbol ${peekedSymbol.symbol}.`
+                : undefined);
             return message ? (
               <SymbolPeekMessage message={message} peeked={peekedSymbol} />
             ) : null;
@@ -7298,27 +8136,10 @@ export function ReviewWorkspace({
         )}
 
         {aiReviewDialogOpen && (
-          <ConfirmationDialog
-            title="Review this pull request with AI?"
-            description={
-              <>
-                The review agent will inspect all changed files and add
-                evidence-backed findings beside the relevant code. This uses
-                your configured model and contributes to this PR&apos;s token
-                usage.
-              </>
-            }
-            confirmLabel="Start AI review"
-            pendingLabel={
-              <>
-                <LoaderCircle className="size-4 animate-spin" />
-                Starting…
-              </>
-            }
-            pending={startPullRequestReview.isPending}
-            icon={<Sparkles className="text-violet size-4" />}
-            onCancel={() => setAiReviewDialogOpen(false)}
-            onConfirm={reviewPullRequestWithAi}
+          <AiReviewStatusDialog
+            pullRequestId={initialData.pullRequest.id}
+            startDisabled={aiConfiguration.data?.mode === "off"}
+            onClose={() => setAiReviewDialogOpen(false)}
           />
         )}
 

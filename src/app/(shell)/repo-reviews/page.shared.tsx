@@ -10,12 +10,14 @@ export default async function RepoReviewsPage({
 }) {
   await protectApplicationRoute();
   const monitor = (await searchParams).monitor;
-  const [monitors, repositories] = await Promise.all([
+  const [evaluationAccess, monitors, repositories] = await Promise.all([
+    api.evaluations.access(),
     api.repoReviews.list(),
     api.provider.listImportedRepositories(),
   ]);
   return (
     <RepoReviewsContent
+      canEvaluate={evaluationAccess.allowed}
       initialMonitors={monitors}
       initialRepositories={repositories}
       initialMonitorId={typeof monitor === "string" ? monitor : undefined}

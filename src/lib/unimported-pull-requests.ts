@@ -4,13 +4,18 @@ import {
   type PriorityInboxItem,
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
+import type { InboxInvolvement } from "~/lib/pull-request-involvement";
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
 
 export interface UnimportedPullRequest {
   additions: number;
+  assignedToViewer?: boolean;
   authorAvatarUrl: string | null;
   authorLogin: string;
+  authoredByViewer?: boolean;
   deletions: number;
   externalId: string;
+  labels: PullRequestLabel[];
   number: number;
   provider: PriorityInboxItem["provider"];
   repositoryId: string;
@@ -63,6 +68,7 @@ export function filterUnimportedPullRequests<T extends UnimportedPullRequest>(
   pullRequests: readonly T[],
   filters: {
     includeDrafts?: boolean;
+    involvement?: InboxInvolvement;
     provider: "all" | PriorityInboxItem["provider"];
     repositories: readonly string[];
     search: string;
@@ -71,6 +77,7 @@ export function filterUnimportedPullRequests<T extends UnimportedPullRequest>(
   const allowed = new Set(
     filterPriorityInbox(pullRequests.map(asPriorityInboxItem), {
       includeDrafts: filters.includeDrafts,
+      involvement: filters.involvement,
       provider: filters.provider,
       repositories: filters.repositories,
       search: filters.search,
@@ -88,9 +95,12 @@ function asPriorityInboxItem(
 ): PriorityInboxItem {
   return {
     additions: pullRequest.additions,
+    assignedToViewer: pullRequest.assignedToViewer,
     authorLogin: pullRequest.authorLogin,
+    authoredByViewer: pullRequest.authoredByViewer,
     deletions: pullRequest.deletions,
     id: unimportedPullRequestKey(pullRequest),
+    labels: pullRequest.labels,
     number: pullRequest.number,
     provider: pullRequest.provider,
     repositoryName: pullRequest.repositoryName,

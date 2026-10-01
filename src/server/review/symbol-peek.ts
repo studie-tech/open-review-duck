@@ -4,24 +4,76 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import type { z } from "zod";
 import { type providerConnections, reviewUnits } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { importPathCandidates } from "~/lib/import-navigation";
+import { SYMBOL_PEEK_MAXIMUM_LINES } from "~/lib/symbol-peek";
+import { languageAdapterForFile } from "~/server/analysis/adapters";
 import {
   findImportedDeclarationLine,
-  importPathCandidates,
-} from "~/lib/import-navigation";
-import { SYMBOL_PEEK_MAXIMUM_LINES } from "~/lib/symbol-peek";
+  findImportedReexport,
+} from "~/server/analysis/declarations";
 import { analyzeFiles } from "~/server/analysis/engine";
 import { parseImportReferences } from "~/server/analysis/imports";
+import {
+  type TreeSitterLanguage,
+  withPreparedTreeSitterLanguages,
+} from "~/server/analysis/tree-sitter";
+import { grammarAssets, type SourceFile } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { providerForConnection } from "~/server/providers/credentials";
 import {
   ProviderError,
   type PullRequestProvider,
 } from "~/server/providers/types";
+import { projectImportMaps } from "~/server/review/project-import-maps";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { hydrateReviewUnits } from "~/server/storage/review-units";
 import type { symbolDefinitionSchema } from "~/validators/review";
 
 type SymbolDefinitionInput = z.infer<typeof symbolDefinitionSchema>;
+
+type ImportedDefinitionResult =
+  | ReturnType<typeof symbolDefinitionOf>
+  | { kind: "unresolved"; reason: "unavailable" | "too_large" }
+  | undefined;
+
+/**
+ * Picks the Tree-sitter grammars a peek has to load before it can parse.
+ *
+ * The process-wide cache starts empty after a restart and keeps only a
+ * handful of languages warm. A hover that analyzes without loading first
+ * throws, and the reviewer sees a failed lookup for a name declared nearby.
+ */
+function treeSitterLanguagesFor(
+  ...languages: Array<string | undefined>
+): TreeSitterLanguage[] {
+  const prepared: TreeSitterLanguage[] = [];
+  for (const language of languages) {
+    if (
+      language &&
+      language !== "text" &&
+      language in grammarAssets &&
+      !prepared.includes(language as TreeSitterLanguage)
+    ) {
+      prepared.push(language as TreeSitterLanguage);
+    }
+  }
+  return prepared;
+}
+
+/**
+ * Analyzes files after loading every grammar those paths need.
+ *
+ * Import previews and imported-symbol peeks share this path so a restart
+ * cannot turn a click or hover into a thrown lookup.
+ */
+export async function analyzeFilesForSymbolPeek(files: SourceFile[]) {
+  return withPreparedTreeSitterLanguages(
+    treeSitterLanguagesFor(
+      ...files.map((file) => languageAdapterForFile(file)?.language),
+    ),
+    () => analyzeFiles(files),
+  );
+}
 
 /** Shapes one declaration as the definition card the reviewer reads. */
 function symbolDefinitionOf(
@@ -183,6 +235,47 @@ interface ParsedSymbolFile {
 }
 
 /**
+ * Builds the declaration and import index a hover uses for one file's source.
+ *
+ * Loading the file's grammar here keeps a peek from throwing when the review
+ * was analyzed in an earlier server lifetime and the warm cache is empty.
+ */
+export async function parsedSymbolFileFromSource(
+  path: string,
+  source: string,
+  sourceLanguage: string,
+) {
+  const sourceFile = {
+    path,
+    content: source,
+    changeType: "modified" as const,
+    reviewWholeFile: true,
+  };
+  return withPreparedTreeSitterLanguages(
+    treeSitterLanguagesFor(
+      sourceLanguage,
+      languageAdapterForFile(sourceFile)?.language,
+    ),
+    () => {
+      const declarations: ParsedSymbolFile["declarations"] = new Map();
+      for (const unit of analyzeFiles([sourceFile]).units) {
+        if (unit.kind === "file" || unit.kind === "module") continue;
+        // The first declaration of a name wins, the same way a single `find` did.
+        if (!declarations.has(unit.name)) {
+          declarations.set(unit.name, symbolDefinitionOf(unit, unit.startLine));
+        }
+      }
+      return {
+        declarations,
+        imports: parseImportReferences(source, sourceLanguage),
+        language: sourceLanguage,
+        source,
+      } satisfies ParsedSymbolFile;
+    },
+  );
+}
+
+/**
  * Narrows a whole file to the lines a definition card can actually show.
  *
  * A module answers when no declaration in it does, and the file behind it may
@@ -221,7 +314,9 @@ let symbolFileCacheCharacters = 0;
  * Peek fires on hover, and one parse answers every name in the file, so the
  * declarations and imports are kept against the snapshot revision they came
  * from instead of running the analysis again for the next name on the same
- * line.
+ * line. The parse loads its own grammar: a review analyzed before this
+ * process started has no warm Tree-sitter cache, and throwing there would
+ * hide even snapshot units the hover could have shown.
  */
 export async function parsedSymbolFile(
   db: typeof database,
@@ -250,32 +345,31 @@ export async function parsedSymbolFile(
     }),
   );
   if (!file?.source) return undefined;
-  const declarations: ParsedSymbolFile["declarations"] = new Map();
-  for (const unit of analyzeFiles([
-    {
-      path: input.sourcePath,
-      content: file.source,
-      changeType: "modified",
-      reviewWholeFile: true,
-    },
-  ]).units) {
-    if (unit.kind === "file" || unit.kind === "module") continue;
-    // The first declaration of a name wins, the same way a single `find` did.
-    if (!declarations.has(unit.name)) {
-      declarations.set(unit.name, symbolDefinitionOf(unit, unit.startLine));
-    }
+  // A parse failure must not take the lookup down: the snapshot often already
+  // stores the declaration, and that fallback is how a nearby name still
+  // answers after a restart before the grammar cache is warm.
+  let parsed: ParsedSymbolFile;
+  try {
+    parsed = await parsedSymbolFileFromSource(
+      input.sourcePath,
+      file.source,
+      input.sourceLanguage,
+    );
+  } catch (cause) {
+    console.error(
+      "Symbol definition lookup could not parse the reviewed file",
+      {
+        path: input.sourcePath,
+        message: cause instanceof Error ? cause.message : String(cause),
+      },
+    );
+    return undefined;
   }
   // Two hovers on the same file can both miss while the first is still
   // reading it, and both arrive here. The entry they overwrite has to leave
   // the total, or it keeps a surplus that eventually empties the ring on
   // every insert and quietly costs a parse per hover.
   symbolFileCacheCharacters -= symbolFileCacheWeights.get(key) ?? 0;
-  const parsed = {
-    declarations,
-    imports: parseImportReferences(file.source, input.sourceLanguage),
-    language: input.sourceLanguage,
-    source: file.source,
-  } satisfies ParsedSymbolFile;
   symbolFileCache.set(key, parsed);
   symbolFileCacheCharacters += file.source.length;
   symbolFileCacheWeights.set(key, file.source.length);
@@ -310,12 +404,53 @@ export async function importedSymbolDefinition(
   },
   input: SymbolDefinitionInput,
 ) {
+  const provider = await providerForConnection(db, scope.connection);
+  return followImportedDefinition(
+    db,
+    userId,
+    snapshot,
+    scope,
+    input,
+    provider,
+    new Set(),
+  );
+}
+
+const MAXIMUM_REEXPORT_HOPS = 1;
+
+/** Follows one import, and at most one re-export hop, to a declaration. */
+async function followImportedDefinition(
+  db: typeof database,
+  userId: string,
+  snapshot: { headSha: string; id: string },
+  scope: {
+    connection: typeof providerConnections.$inferSelect;
+    pullRequestId: string;
+    repositoryExternalId: string;
+  },
+  input: SymbolDefinitionInput,
+  provider: Awaited<ReturnType<typeof providerForConnection>>,
+  seen: Set<string>,
+  hops = 0,
+): Promise<ImportedDefinitionResult> {
   if (!input.specifier) return undefined;
   const imported = input.imported ?? input.symbol;
+  const seenKey = `${input.sourcePath}\0${input.specifier}\0${imported}`;
+  if (seen.has(seenKey)) return undefined;
+  seen.add(seenKey);
+
+  const maps = await projectImportMaps(
+    provider,
+    scope.repositoryExternalId,
+    snapshot.headSha,
+    snapshot.id,
+    input.sourcePath,
+  );
   const candidates = importPathCandidates(
     input.sourcePath,
     input.specifier,
     input.sourceLanguage,
+    maps,
   );
   if (candidates.length === 0) return undefined;
 
@@ -334,17 +469,46 @@ export async function importedSymbolDefinition(
   const [known] = stored;
   if (known) return symbolDefinitionOf(known, known.startLine, known.id);
 
-  // Only now does a hover become provider traffic, and one unresolved name can
-  // try every extension the specifier could carry. The repository pays for that
-  // fan-out, so it is gated per pull request the way every other
-  // provider-backed procedure in this router is.
+  const storedFiles = await db.query.reviewUnits.findMany({
+    where: and(
+      eq(reviewUnits.snapshotId, snapshot.id),
+      inArray(reviewUnits.path, candidates),
+      eq(reviewUnits.kind, "file"),
+    ),
+  });
+  const preferredFile = storedFiles.sort(
+    (left, right) =>
+      candidates.indexOf(left.path) - candidates.indexOf(right.path),
+  )[0];
+  const [storedFile] = preferredFile
+    ? await hydrateReviewUnits(db, [preferredFile])
+    : [];
+  if (storedFile?.source) {
+    const fromStored = await definitionFromImportedSource(
+      db,
+      userId,
+      snapshot,
+      scope,
+      input,
+      provider,
+      seen,
+      storedFile.path,
+      storedFile.source,
+      storedFile.language,
+      hops,
+    );
+    if (fromStored) return fromStored;
+  }
+
+  // Candidate source reads are the expensive fan-out. Config maps may already
+  // have been fetched for this snapshot, but they are cached and shared; this
+  // gate still covers one unresolved name trying every extension it could carry.
   await enforceRateLimit(
     db,
     `review-symbol-resource:${userId}:${scope.pullRequestId}`,
     30,
     60_000,
   );
-  const provider = await providerForConnection(db, scope.connection);
   // A file answers before the directory of the same name, the way the runtime
   // resolves it, so the two are bounded apart rather than as one list: a flat
   // bound would spend itself on extensions and never reach an index at all.
@@ -380,29 +544,94 @@ export async function importedSymbolDefinition(
     if (read.content === undefined) {
       return { kind: "unresolved" as const, reason: "too_large" as const };
     }
-    const analyzed = analyzeFiles([
-      { path: read.path, content: read.content, changeType: "modified" },
-    ]).units;
-    const declaration = analyzed.find(
-      (unit) =>
-        unit.name === imported &&
-        unit.kind !== "file" &&
-        unit.kind !== "module",
+    const found = await definitionFromImportedSource(
+      db,
+      userId,
+      snapshot,
+      scope,
+      input,
+      provider,
+      seen,
+      read.path,
+      read.content,
+      input.sourceLanguage,
+      hops,
     );
-    if (declaration) {
-      return symbolDefinitionOf(declaration, declaration.startLine);
-    }
-    const module = analyzed.find((unit) => unit.kind === "file");
-    if (module) {
-      const focusLine = findImportedDeclarationLine(
-        module.source,
-        imported,
-        module.language,
-        module.startLine,
-      );
-      const windowed = windowedModuleSource(module, focusLine);
-      return symbolDefinitionOf(windowed, focusLine ?? windowed.startLine);
-    }
+    if (found) return found;
   }
   return undefined;
+}
+
+/** Reads a declaration, or one re-export, out of an imported source file. */
+async function definitionFromImportedSource(
+  db: typeof database,
+  userId: string,
+  snapshot: { headSha: string; id: string },
+  scope: {
+    connection: typeof providerConnections.$inferSelect;
+    pullRequestId: string;
+    repositoryExternalId: string;
+  },
+  input: SymbolDefinitionInput,
+  provider: Awaited<ReturnType<typeof providerForConnection>>,
+  seen: Set<string>,
+  path: string,
+  content: string,
+  language: string,
+  hops = 0,
+): Promise<ImportedDefinitionResult> {
+  const imported = input.imported ?? input.symbol;
+  let analyzed: Awaited<ReturnType<typeof analyzeFilesForSymbolPeek>>["units"];
+  try {
+    analyzed = (
+      await analyzeFilesForSymbolPeek([
+        { path, content, changeType: "modified" },
+      ])
+    ).units;
+  } catch (cause) {
+    console.error(
+      "Symbol definition lookup could not parse the imported source",
+      {
+        path,
+        pullRequestId: scope.pullRequestId,
+        message: cause instanceof Error ? cause.message : String(cause),
+      },
+    );
+    return { kind: "unresolved" as const, reason: "unavailable" as const };
+  }
+  const declaration = analyzed.find(
+    (unit) =>
+      unit.name === imported && unit.kind !== "file" && unit.kind !== "module",
+  );
+  if (declaration) {
+    return symbolDefinitionOf(declaration, declaration.startLine);
+  }
+  const reexport = await findImportedReexport(content, imported, language);
+  if (reexport && hops < MAXIMUM_REEXPORT_HOPS) {
+    return followImportedDefinition(
+      db,
+      userId,
+      snapshot,
+      scope,
+      {
+        ...input,
+        sourcePath: path,
+        specifier: reexport.specifier,
+        imported: reexport.imported,
+      },
+      provider,
+      seen,
+      hops + 1,
+    );
+  }
+  const module = analyzed.find((unit) => unit.kind === "file");
+  if (!module) return undefined;
+  const focusLine = await findImportedDeclarationLine(
+    module.source,
+    imported,
+    module.language,
+    module.startLine,
+  );
+  const windowed = windowedModuleSource(module, focusLine);
+  return symbolDefinitionOf(windowed, focusLine ?? windowed.startLine);
 }

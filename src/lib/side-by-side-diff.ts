@@ -345,10 +345,22 @@ function pairChangedBlock(operations: LineDiffOperation[]) {
 }
 
 /** Pairs the two revisions into aligned diff rows. */
-function alignedDiffRows(previousSource: string, currentSource: string) {
+function alignedDiffRows(
+  previousSource: string,
+  currentSource: string,
+  ignoreWhitespace = false,
+) {
   const previousLines = previousSource ? previousSource.split("\n") : [];
   const currentLines = currentSource ? currentSource.split("\n") : [];
-  const operations = lineDiffOperations(previousLines, currentLines);
+  /** Normalizes comparison keys while preserving original source indexes. */
+  const comparisonLines = (lines: string[]) =>
+    ignoreWhitespace
+      ? lines.map((line) => line.replace(/[ \t\r]+/g, ""))
+      : lines;
+  const operations = lineDiffOperations(
+    comparisonLines(previousLines),
+    comparisonLines(currentLines),
+  );
 
   const rows: SideBySideDiffRow[] = [];
   let changedBlock: LineDiffOperation[] = [];
@@ -386,14 +398,15 @@ const diffRowCache = new Map<string, readonly SideBySideDiffRow[]>();
 export function sideBySideDiff(
   previousSource: string,
   currentSource: string,
+  ignoreWhitespace = false,
 ): readonly SideBySideDiffRow[] {
   if (typeof window === "undefined") {
-    return alignedDiffRows(previousSource, currentSource);
+    return alignedDiffRows(previousSource, currentSource, ignoreWhitespace);
   }
-  const key = `${previousSource.length}\0${previousSource}\0${currentSource}`;
+  const key = `${ignoreWhitespace ? 1 : 0}\0${previousSource.length}\0${previousSource}\0${currentSource}`;
   const cached = diffRowCache.get(key);
   if (cached) return cached;
-  const rows = alignedDiffRows(previousSource, currentSource);
+  const rows = alignedDiffRows(previousSource, currentSource, ignoreWhitespace);
   diffRowCache.set(key, rows);
   if (diffRowCache.size > DIFF_CACHE_LIMIT) {
     const oldest = diffRowCache.keys().next().value;

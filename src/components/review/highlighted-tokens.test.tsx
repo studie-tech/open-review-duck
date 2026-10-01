@@ -1,14 +1,22 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SyntaxToken } from "~/lib/highlight-tokens";
+import { symbolPeekAttributes } from "~/lib/symbol-peek";
 import { HighlightedSourceLines } from "./highlighted-source-lines";
 import { HighlightedTokens } from "./highlighted-tokens";
 import { UnitImportContext } from "./review-workspace-dialogs";
-import { SymbolPeekCard } from "./symbol-peek";
+import { SymbolPeekCard, useSymbolPeek } from "./symbol-peek";
 
 vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
   const actual =
@@ -22,12 +30,17 @@ vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
           ? [{ className: "tok-test", from: 0, text, to: text.length }]
           : [],
       })),
+    withClientSyntaxTree: async (
+      _source: string,
+      _language: string,
+      callback: (root: unknown) => unknown,
+    ) => callback({}),
   };
 });
 
-vi.mock("~/lib/tree-sitter-import-navigation", () => ({
-  useImportStatements: (source: string) => {
-    if (!source.startsWith("import")) return [];
+vi.mock("~/lib/tree-sitter-imports", () => ({
+  importStatementsFromTree: (source: string) => {
+    if (!source.includes("import")) return [];
     const local = "helper";
     const from = source.indexOf(local);
     return [
@@ -55,6 +68,7 @@ vi.mock("~/lib/tree-sitter-import-navigation", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 /** Creates a classified token with offsets that remain stable on re-render. */
@@ -137,6 +151,28 @@ describe("HighlightedTokens", () => {
 });
 
 describe("highlighted source surfaces", () => {
+  it("opens a symbol lookup after the hover dwell", async () => {
+    vi.useFakeTimers();
+    /** Exposes the delayed symbol-peek state for the hover interaction. */
+    function PeekHarness() {
+      const { peeked, peekHandlers } = useSymbolPeek(true);
+      return (
+        <div {...peekHandlers}>
+          <span {...symbolPeekAttributes("ensureFilesIndexed", 89)}>
+            ensureFilesIndexed
+          </span>
+          {peeked ? <output>{`${peeked.symbol}:${peeked.line}`}</output> : null}
+        </div>
+      );
+    }
+    render(<PeekHarness />);
+
+    fireEvent.mouseOver(screen.getByText("ensureFilesIndexed"));
+    await act(async () => vi.advanceTimersByTimeAsync(350));
+
+    expect(screen.getByText("ensureFilesIndexed:89")).toBeInTheDocument();
+  });
+
   it("keeps source-row selection on the gutter while sharing token output", () => {
     const onSelectLine = vi.fn();
     render(
@@ -205,9 +241,11 @@ describe("highlighted source surfaces", () => {
       />,
     );
 
-    const importButton = screen.getByRole("button", {
-      name: "Open helper from ./helper",
-    });
+    const importButton = await waitFor(() =>
+      screen.getByRole("button", {
+        name: "Open helper from ./helper",
+      }),
+    );
     expect(importButton).toHaveClass("tok-test", "text-cyan");
     await userEvent.click(importButton);
     expect(onFollow).toHaveBeenCalledWith(

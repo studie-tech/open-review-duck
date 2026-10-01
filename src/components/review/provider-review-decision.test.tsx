@@ -104,7 +104,7 @@ describe("ProviderReviewDecision", () => {
     );
   });
 
-  it("keeps direct provider navigation when personal actions are unavailable", () => {
+  it("presents GitHub App personal review as a neutral provider handoff", () => {
     render(
       <ProviderReviewDecision
         state={{
@@ -130,10 +130,17 @@ describe("ProviderReviewDecision", () => {
       />,
     );
 
-    expect(screen.getByText(/personal approval/i)).toBeVisible();
+    expect(screen.getByText("Review decisions happen on GitHub")).toBeVisible();
     expect(
-      screen.getByRole("link", { name: /Finish on GitHub/i }),
+      screen.getByText(/keeps the approval status in sync/i),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /Review on GitHub/i }),
     ).toHaveAttribute("href", "https://github.com/acme/review/pull/12");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /Open provider settings/i }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Approve" }),
     ).not.toBeInTheDocument();

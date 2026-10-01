@@ -5,14 +5,36 @@ import {
   HEAVY_DATA_SOURCE_BYTES,
   isDataOrGeneratedReviewPath,
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewPathExtension,
   reviewSourceByteLength,
   reviewSourceKindLabel,
   reviewSourceLineCount,
+  selectedReviewFileCardExpanded,
 } from "./review-source-display";
 
 describe("review source display", () => {
+  it("recognizes Markdown from the stored language or the path", () => {
+    expect(
+      isReviewMarkdownFile({ path: "README.md", language: "markdown" }),
+    ).toBe(true);
+    expect(
+      isReviewMarkdownFile({ path: "docs/guide.mdx", language: "mdx" }),
+    ).toBe(true);
+    expect(isReviewMarkdownFile({ path: "CHANGELOG.markdown" })).toBe(true);
+    expect(isReviewMarkdownFile({ path: "notes.MD" })).toBe(true);
+    expect(
+      isReviewMarkdownFile({
+        path: "src/review-workspace.tsx",
+        language: "tsx",
+      }),
+    ).toBe(false);
+    expect(isReviewMarkdownFile({ path: "README", language: "text" })).toBe(
+      false,
+    );
+  });
+
   it("recognizes serialized data paths without treating code as data", () => {
     expect(
       isDataOrGeneratedReviewPath(
@@ -77,6 +99,43 @@ describe("review source display", () => {
     expect(
       reviewFileCardStartsExpanded({ reviewed: false, heavy: false }),
     ).toBe(true);
+  });
+
+  it("opens an inspected selected card unless a reveal folded it", () => {
+    expect(
+      selectedReviewFileCardExpanded({
+        defaultExpanded: false,
+        inspected: true,
+        path: "src/village/page.tsx",
+        reviewed: true,
+      }),
+    ).toBe(true);
+    expect(
+      selectedReviewFileCardExpanded({
+        defaultExpanded: false,
+        inspected: true,
+        path: "src/village/page.tsx",
+        reviewed: true,
+        reveal: {
+          expanded: false,
+          path: "src/village/page.tsx",
+          reviewed: true,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      selectedReviewFileCardExpanded({
+        defaultExpanded: false,
+        inspected: false,
+        path: "src/village/page.tsx",
+        reviewed: true,
+        reveal: {
+          expanded: true,
+          path: "src/other.ts",
+          reviewed: true,
+        },
+      }),
+    ).toBe(false);
   });
 
   it("labels hidden source from the language or the path", () => {

@@ -9,13 +9,20 @@ import {
   Send,
   ShieldCheck,
 } from "lucide-react";
+import Link from "next/link";
 import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import {
+  type AiFixPromptPullRequest,
+  findingFixPrompt,
+} from "~/lib/ai-fix-prompt";
+import { providerLabel } from "~/lib/provider-labels";
 import { unpublishableFindingReason } from "~/lib/review-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 
 type DeepReviewRun = NonNullable<RouterOutputs["review"]["deepReviewFindings"]>;
 type DeepReviewFinding = DeepReviewRun["findings"][number];
@@ -360,29 +367,32 @@ export function DeepReviewFindingChip({
  */
 export function DeepReviewInlineFinding({
   finding,
+  canEvaluate = false,
   locationIndex,
   onCollapse,
   onEdit,
   onOpenLocation,
   onPublish,
   onShowInCode,
-  providerName,
+  pullRequest,
   published,
   publishing,
   variant,
 }: {
   finding: DeepReviewFinding;
+  canEvaluate?: boolean;
   locationIndex: number;
   onCollapse: () => void;
   onEdit?: () => void;
   onOpenLocation: (index: number) => void;
   onPublish?: () => void;
   onShowInCode?: () => void;
-  providerName: string;
+  pullRequest: AiFixPromptPullRequest;
   published: boolean;
   publishing: boolean;
   variant: "line" | "detached";
 }) {
+  const providerName = providerLabel(pullRequest.provider);
   // The read path already decides publishability against the same predicate
   // the publish mutation enforces; restating it here would let the button and
   // the server disagree.
@@ -472,6 +482,14 @@ export function DeepReviewInlineFinding({
       {finding.contentAvailable ? (
         <>
           <p className="text-cloud mt-1 text-sm font-medium">{finding.title}</p>
+          {canEvaluate && (
+            <Link
+              className="text-cyan mt-2 inline-block text-xs hover:underline"
+              href={`/evaluations?finding=${encodeURIComponent(finding.id)}`}
+            >
+              Save to evals
+            </Link>
+          )}
           <p className="text-mist mt-1.5 text-xs leading-5">{finding.body}</p>
         </>
       ) : (
@@ -581,6 +599,15 @@ export function DeepReviewInlineFinding({
             <FileCode2 className="size-3" />
             Show me the file
           </Button>
+        )}
+        {/* Whether or not the finding can be posted, the branch may still
+            need the change; a withheld finding is still a fix request. */}
+        {finding.contentAvailable && (
+          <CopyAiFixPromptButton
+            variant="button"
+            subject="this finding"
+            prompt={() => findingFixPrompt(pullRequest, finding)}
+          />
         )}
         <Button
           size="sm"

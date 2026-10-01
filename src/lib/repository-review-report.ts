@@ -1,3 +1,5 @@
+import { codeFence, escapeMarkdownText } from "~/lib/prompt-markdown";
+
 export interface RepositoryReportFinding {
   id: string;
   severity: string;
@@ -17,30 +19,6 @@ interface RepositoryReportInput {
   revision: string;
   purpose: "code" | "compliance";
   findings: readonly RepositoryReportFinding[];
-}
-
-/** Selects a Markdown fence longer than any tick run in source. */
-function codeFence(source: string) {
-  const longest = Math.max(
-    2,
-    ...[...source.matchAll(/`+/g)].map(([ticks]) => ticks.length),
-  );
-  const fence = "`".repeat(longest + 1);
-  return `${fence}\n${source}\n${fence}`;
-}
-
-/**
- * Neutralizes Markdown structure inside finding-authored text.
- *
- * Titles and bodies come from a model, so a crafted heading or rule could
- * otherwise forge instructions in the brief another agent is told to execute.
- */
-function escapeMarkdownText(value: string) {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("#", "\\#")
-    .replaceAll("---", "\\-\\-\\-")
-    .replaceAll("`", "\\`");
 }
 
 /** Builds a self-contained fixing brief safe to paste into another agent. */

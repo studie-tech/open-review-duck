@@ -34,6 +34,7 @@ const aiConfigurationSchema = z.object({
   useManagedModels: z.boolean(),
   mode: z.enum(["off", "on_demand", "automatic"]),
   reviewPullRequests: z.boolean(),
+  autoPublishFindings: z.boolean(),
   maxReviewTokens: z
     .number()
     .int()

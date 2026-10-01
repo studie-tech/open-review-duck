@@ -23,6 +23,7 @@ const configuredLocalAi: LocalConfiguration = {
   managedModel: "gpt-4.1-mini",
   managedModels: ["gpt-4.1-mini"],
   reviewPullRequests: true,
+  autoPublishFindings: false,
   maxReviewTokens: null,
   deepReviewAvailable: true,
   configuration: {
@@ -85,7 +86,7 @@ afterEach(() => {
 });
 
 describe("LocalAiSettings", () => {
-  it("uses the full-width SaaS layout with preferences and provider cards", () => {
+  it("renders the local layout with preferences and provider cards", () => {
     render(<LocalAiSettings initialConfiguration={localConfiguration()} />);
 
     expect(
@@ -106,6 +107,11 @@ describe("LocalAiSettings", () => {
     expect(screen.getByText("OpenAI · gpt-4.1-mini")).toBeVisible();
     expect(
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
     ).toBeEnabled();
     expect(screen.queryByText(/monthly plan tokens/)).not.toBeInTheDocument();
     expect(
@@ -152,7 +158,55 @@ describe("LocalAiSettings", () => {
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
     ).toBeDisabled();
     expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
+    ).toBeDisabled();
+    expect(
       screen.getByText("This deployment cannot run a pull-request review."),
+    ).toBeVisible();
+  });
+
+  it("guides Bedrock and Azure AI Foundry OpenAI-compatible setup", async () => {
+    const user = userEvent.setup();
+    render(
+      <LocalAiSettings
+        initialConfiguration={localConfiguration({
+          managedModel: "",
+          managedModels: [""],
+          configuration: null,
+        })}
+      />,
+    );
+
+    const provider = screen.getByRole("combobox", { name: "Provider" });
+    await user.selectOptions(provider, "bedrock");
+    expect(
+      screen.getByPlaceholderText(
+        "https://bedrock-runtime.<region>.amazonaws.com/openai/v1",
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Amazon Bedrock API key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(screen.getByText(/model's AWS Region/)).toBeVisible();
+
+    await user.selectOptions(provider, "azure_foundry");
+    expect(
+      screen.getByPlaceholderText(
+        "https://<resource>.openai.azure.com/openai/v1",
+      ),
+    ).toBeVisible();
+    expect(screen.getByPlaceholderText("Deployment name")).toBeVisible();
+    expect(screen.getByLabelText("Foundry resource API key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(
+      screen.getByText(
+        /deployment name, not the catalog model ID.*supports Chat Completions/,
+      ),
     ).toBeVisible();
   });
 
@@ -199,6 +253,7 @@ describe("LocalAiSettings", () => {
       useManagedModels: false,
       mode: "automatic",
       reviewPullRequests: false,
+      autoPublishFindings: false,
       maxReviewTokens: 12_345,
     });
   });
@@ -218,6 +273,11 @@ describe("LocalAiSettings", () => {
     ).toBeDisabled();
     expect(
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
     ).toBeDisabled();
     expect(
       screen.getByRole("textbox", { name: /Tokens per review/ }),

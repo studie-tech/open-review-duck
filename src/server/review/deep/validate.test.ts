@@ -289,6 +289,39 @@ describe("anchoring", () => {
     expect(boundParams(updates[0]?.values.state)).toEqual(["f1", "anchored"]);
   });
 
+  it("binds the start-line unit when a snippet spans two units", async () => {
+    // A comment can only sit on one line. The start is the line the reviewer
+    // posts on, so a span that crosses a unit boundary still names a unit.
+    const rows = [
+      await sealFinding({
+        id: "f1",
+        existingCode: [
+          "  return value;",
+          "}",
+          "export function beta() {",
+          "  const other = compute();",
+        ].join("\n"),
+      }),
+    ];
+    const { db, updates } = fakeDatabase(rows);
+    const result = await validateFileFindings(
+      db,
+      validationInput({
+        changedRanges: [{ startLine: 1, endLine: 9 }],
+      }),
+    );
+    expect(result.findings[0]).toMatchObject({
+      state: "anchored",
+      startLine: 3,
+      endLine: 7,
+      unitId: "unit-alpha",
+    });
+    expect(boundParams(updates[0]?.values.unitId)).toEqual([
+      "f1",
+      "unit-alpha",
+    ]);
+  });
+
   it("keeps a snippet that matches nothing, in the file-level bucket", async () => {
     const rows = [
       await sealFinding({ id: "f1", existingCode: "const nowhere = true;" }),

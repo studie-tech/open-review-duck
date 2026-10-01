@@ -1,9 +1,18 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import type { RouterOutputs } from "~/trpc/react";
 import {
   DeepReviewFindingRow,
@@ -13,11 +22,16 @@ import {
 } from "./deep-review-findings";
 import {
   aiJobActive,
+  mergePendingProviderThreads,
+  pendingProviderThreadFromComment,
+  providerThreadsForVisibleUnits,
   reshapeProviderThreads,
   restoreProviderThread,
   reviewCardPinTarget,
   useReviewExitPrefetch,
+  useReviewFileAdvance,
   useTerminalReviewRefetch,
+  withPublishedDiscussionComment,
 } from "./review-workspace-hooks";
 import {
   applyAiQuestionStreamUpdate,
@@ -60,6 +74,18 @@ function finding(
   };
 }
 
+const findingPullRequest: AiFixPromptPullRequest = {
+  provider: "github",
+  repositoryOwner: "acme",
+  repositoryName: "review",
+  number: 12,
+  title: "Retry provider calls",
+  webUrl: "https://github.com/acme/review/pull/12",
+  sourceBranch: "feature/retries",
+  targetBranch: "main",
+  headSha: "abc1234",
+};
+
 /** Renders one inline finding card with only the props a case overrides. */
 function renderCard(
   props: Partial<Parameters<typeof DeepReviewInlineFinding>[0]> = {},
@@ -69,7 +95,7 @@ function renderCard(
       finding={finding()}
       variant="line"
       locationIndex={0}
-      providerName="GitHub"
+      pullRequest={findingPullRequest}
       published={false}
       publishing={false}
       onCollapse={vi.fn()}
@@ -154,6 +180,47 @@ describe("reviewCardPinTarget", () => {
         unitLine: "changed-line",
       }),
     ).toBe("changed-line");
+  });
+});
+
+describe("useReviewFileAdvance", () => {
+  it("selects the requested file after the sign-off render commits", () => {
+    const files = [{ path: "src/one.ts" }, { path: "src/two.ts" }];
+    const selectFile = vi.fn();
+    const { result } = renderHook(() =>
+      useReviewFileAdvance(files, selectFile),
+    );
+
+    act(() => result.current("src/two.ts"));
+
+    expect(selectFile).toHaveBeenCalledExactlyOnceWith(files[1]);
+  });
+
+  it("does not reopen a file that disappeared during the sign-off", () => {
+    const selectFile = vi.fn();
+    const { result } = renderHook(() =>
+      useReviewFileAdvance([{ path: "src/one.ts" }], selectFile),
+    );
+
+    act(() => result.current("src/two.ts"));
+
+    expect(selectFile).not.toHaveBeenCalled();
+  });
+
+  it("uses the latest committed file-selection callback", () => {
+    const files = [{ path: "src/one.ts" }, { path: "src/two.ts" }];
+    const firstSelectFile = vi.fn();
+    const latestSelectFile = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ selectFile }) => useReviewFileAdvance(files, selectFile),
+      { initialProps: { selectFile: firstSelectFile } },
+    );
+
+    rerender({ selectFile: latestSelectFile });
+    act(() => result.current("src/two.ts"));
+
+    expect(firstSelectFile).not.toHaveBeenCalled();
+    expect(latestSelectFile).toHaveBeenCalledExactlyOnceWith(files[1]);
   });
 });
 
@@ -284,6 +351,87 @@ describe("reshapeProviderThreads", () => {
       ],
     },
   ];
+
+  it("keeps sibling-unit conversations on the file card that shows them", () => {
+    expect(
+      providerThreadsForVisibleUnits(threads, ["unit-2"]).map(
+        ({ externalId }) => externalId,
+      ),
+    ).toEqual(["910"]);
+    expect(
+      providerThreadsForVisibleUnits(threads, ["unit-1", "unit-2"]),
+    ).toHaveLength(2);
+    expect(providerThreadsForVisibleUnits(threads, [])).toEqual([]);
+  });
+
+  it("hides a just-published conversation that belongs to another file card", () => {
+    const pending = pendingProviderThreadFromComment(
+      {
+        body: "Please cap this retry.",
+        line: 129,
+        providerExternalId: "980",
+        publishedAt: new Date("2026-09-09T18:00:00Z"),
+        unitId: "unit-1",
+      },
+      "src/retry.ts",
+    );
+
+    expect(
+      mergePendingProviderThreads(
+        providerThreadsForVisibleUnits(threads, ["unit-2"]),
+        providerThreadsForVisibleUnits(pending ? [pending] : [], ["unit-2"]),
+      ).map(({ externalId }) => externalId),
+    ).toEqual(["910"]);
+  });
+
+  it("keeps a just-published conversation until the provider lists it", () => {
+    const pending = pendingProviderThreadFromComment(
+      {
+        body: "Please cap this retry.",
+        line: 129,
+        providerExternalId: "980",
+        publishedAt: new Date("2026-09-09T18:00:00Z"),
+        unitId: "unit-1",
+      },
+      "src/retry.ts",
+    );
+
+    expect(pending).toMatchObject({
+      externalId: "980",
+      line: 129,
+      unitId: "unit-1",
+    });
+    expect(
+      mergePendingProviderThreads(threads, pending ? [pending] : []).map(
+        ({ externalId }) => externalId,
+      ),
+    ).toEqual(["901", "910", "980"]);
+    const alreadyListed = threads[0];
+    expect(alreadyListed).toBeDefined();
+    expect(
+      mergePendingProviderThreads(
+        threads,
+        alreadyListed ? [alreadyListed] : [],
+      ).map(({ externalId }) => externalId),
+    ).toEqual(["901", "910"]);
+  });
+
+  it("writes a published comment into a unit discussion that never had one", () => {
+    const comment = {
+      id: "comment-1",
+      unitId: "unit-1",
+      body: "Please cap this retry.",
+      line: 129,
+      source: "user" as const,
+      status: "published" as const,
+      providerExternalId: "980",
+    };
+    const seeded = withPublishedDiscussionComment(undefined, comment as never);
+    expect(seeded.comments).toEqual([comment]);
+    expect(
+      withPublishedDiscussionComment(seeded, comment as never).comments,
+    ).toHaveLength(1);
+  });
 
   it("flips only the named conversation between resolved and open", () => {
     const resolved = reshapeProviderThreads(threads, {
@@ -620,6 +768,18 @@ describe("groupDeepReviewFindings", () => {
 });
 
 describe("DeepReviewInlineFinding", () => {
+  it("offers evaluation capture only to permitted users", () => {
+    const rendered = renderCard({ canEvaluate: true });
+    expect(screen.getByRole("link", { name: "Save to evals" })).toHaveAttribute(
+      "href",
+      `/evaluations?finding=${encodeURIComponent(finding().id)}`,
+    );
+    rendered.unmount();
+    renderCard({ canEvaluate: false });
+    expect(
+      screen.queryByRole("link", { name: "Save to evals" }),
+    ).not.toBeInTheDocument();
+  });
   it("offers publication for an anchored finding that was not refuted", async () => {
     const user = userEvent.setup();
     const onPublish = vi.fn();
@@ -635,6 +795,40 @@ describe("DeepReviewInlineFinding", () => {
 
     await user.click(screen.getByRole("button", { name: /Post to GitHub/ }));
     expect(onPublish).toHaveBeenCalledOnce();
+  });
+
+  it("offers a fix prompt whether or not the finding can be posted", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const rendered = renderCard({
+      finding: finding({ publishable: false, state: "unanchored" }),
+    });
+
+    expect(screen.getByText(/Not publishable/)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy AI fix prompt for this finding",
+      }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+    });
+    const prompt = writeText.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("# Fix a review finding on pull request #12");
+    expect(prompt).toContain("## Unbounded read");
+    expect(prompt).toContain("- Location: src/app.ts:12-14");
+    expect(prompt).toContain("read(body)");
+
+    rendered.unmount();
+    renderCard({
+      finding: finding({ contentAvailable: false, title: "", body: "" }),
+    });
+    expect(
+      screen.queryByRole("button", { name: /fix prompt/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("names the file when it is mounted away from the accused line", () => {
@@ -664,11 +858,26 @@ describe("DeepReviewInlineFinding", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("still offers publication when the finding never stored a unit", async () => {
+    // The comment's unit comes from the line the reviewer is looking at, not
+    // from a unit bound while the finding was validated.
+    const user = userEvent.setup();
+    const onPublish = vi.fn();
+    renderCard({
+      finding: finding({ unitId: null }),
+      onPublish,
+    });
+
+    await user.click(screen.getByRole("button", { name: /Post to GitHub/ }));
+    expect(onPublish).toHaveBeenCalledOnce();
+  });
+
   it.each<[DeepReviewFinding["state"], string]>([
     ["unanchored", "No line in this revision matched the quoted code"],
     ["out_of_scope", "Anchored outside the lines this pull request changed"],
     ["ungrounded", "The agent never proved it read the code it reported on"],
     ["refuted", "A verification pass could not reproduce this"],
+    ["anchored", "This finding no longer names a line a comment can sit on"],
   ])("keeps a %s finding visible but unpublishable", (state, reason) => {
     renderCard({
       finding: finding({ state, publishable: false }),

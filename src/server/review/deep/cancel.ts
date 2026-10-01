@@ -1,12 +1,13 @@
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { aiJobs, aiReviewItems } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import {
   type DeepReviewFinalizeResult,
   deepReviewTreeLockKey,
   finalizeDeepReview,
+  UNKNOWN_SWEEP_REASON,
 } from "./finalize";
 
 type Database = typeof database;
@@ -69,7 +70,18 @@ export async function cancelDeepReviewTree(
       .where(
         and(
           eq(aiReviewItems.parentJobId, parentJobId),
-          eq(aiReviewItems.state, "selected"),
+          or(
+            eq(aiReviewItems.state, "selected"),
+            // A concurrent finalize may already have swept leftovers as the
+            // generic unknown closer. Cancellation is the stated cause, so
+            // those rows have to be rewritten or the partition reads as if
+            // the run merely ended.
+            and(
+              eq(aiReviewItems.state, "failed"),
+              eq(aiReviewItems.failureClass, "unknown"),
+              eq(aiReviewItems.reason, UNKNOWN_SWEEP_REASON),
+            ),
+          ),
         ),
       );
   });

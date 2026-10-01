@@ -1,21 +1,45 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReviewFileTree,
+  commonDirectory,
   filterReviewFiles,
+  firstReviewFileUnitIndex,
   flattenReviewFileTree,
+  initialReviewFileTreeDirectoryPaths,
+  isUnchangedMove,
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
+  rememberMarkdownReviewView,
   rememberReviewMode,
+  reviewChangeComposition,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
   reviewFileTreeDirectoryPaths,
+  reviewFileTreeMovesPath,
   sortByReviewFileTreeOrder,
+  storedMarkdownReviewView,
   storedReviewMode,
   visibleReviewFileTreeItems,
   waitingReviewFileUnits,
   windowReviewFileCards,
 } from "./review-files";
+
+describe("firstReviewFileUnitIndex", () => {
+  it("starts at the first explorer file rather than the first guided unit", () => {
+    const units = [
+      { path: "app/tests/setup/testDatabase.ts", status: "pending" },
+      { path: "app/index.ts", status: "pending" },
+      { path: "app/components/button.ts", status: "signed_off" },
+      { path: "app/components/button.ts", status: "pending" },
+    ];
+    expect(firstReviewFileUnitIndex(units)).toBe(2);
+  });
+
+  it("handles an empty review", () => {
+    expect(firstReviewFileUnitIndex([])).toBe(0);
+  });
+});
 
 const files = [
   {
@@ -206,6 +230,70 @@ describe("review file browsing", () => {
     );
   });
 
+  it("advances through a whole-file fallback before the next semantic file", () => {
+    const ordered = reviewFileEntries(
+      [
+        {
+          id: "snowflake-file",
+          path: "app/flakegraph_app/backends/snowflake.py",
+          previousPath: null,
+          changeType: "modified",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "init-file",
+          path: "app/flakegraph_app/ui/__init__.py",
+          previousPath: null,
+          changeType: "added",
+          additions: 0,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "authentication-file",
+          path: "app/flakegraph_app/ui/authentication.py",
+          previousPath: null,
+          changeType: "added",
+          additions: 10,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+      ],
+      [
+        {
+          id: "snowflake-unit",
+          path: "app/flakegraph_app/backends/snowflake.py",
+          status: "signed_off",
+          revisionState: "unchanged" as const,
+        },
+        {
+          id: "init-whole-file-unit",
+          path: "app/flakegraph_app/ui/__init__.py",
+          status: "pending",
+          revisionState: "new" as const,
+        },
+        {
+          id: "authentication-unit",
+          path: "app/flakegraph_app/ui/authentication.py",
+          status: "pending",
+          revisionState: "new" as const,
+        },
+      ],
+    );
+
+    expect(
+      nextOutstandingReviewFile(
+        ordered,
+        "app/flakegraph_app/backends/snowflake.py",
+      )?.path,
+    ).toBe("app/flakegraph_app/ui/__init__.py");
+  });
+
   it("sorts concept cards in the same order the sidebar walks the tree", () => {
     const nested = reviewFileEntries(
       [
@@ -278,6 +366,200 @@ describe("review file browsing", () => {
     ).toEqual(["public", "src", "src/review", "src/two.ts"]);
   });
 });
+
+/** A file the revision moved, changing nothing unless `additions` says so. */
+function movedFile(
+  id: string,
+  previousPath: string,
+  path: string,
+  additions = 0,
+) {
+  return {
+    id,
+    path,
+    previousPath,
+    changeType: "renamed",
+    additions,
+    deletions: 0,
+    isBinary: false,
+    skipReason: null,
+  };
+}
+
+describe("moved files", () => {
+  const shellMove = [
+    movedFile(
+      "academy-layout",
+      "app/src/app/academy/layout.tsx",
+      "app/src/app/[shell]/academy/layout.tsx",
+    ),
+    movedFile(
+      "academy-page",
+      "app/src/app/academy/page.tsx",
+      "app/src/app/[shell]/academy/page.tsx",
+    ),
+    movedFile(
+      "delete-page",
+      "app/src/app/account/delete/page.tsx",
+      "app/src/app/[shell]/account/delete/page.tsx",
+    ),
+    movedFile(
+      "admin-page",
+      "app/src/app/adminbuilding/page.tsx",
+      "app/src/app/[shell]/adminbuilding/page.tsx",
+      1,
+    ),
+    {
+      id: "shell-layout",
+      path: "app/src/app/[shell]/layout.tsx",
+      previousPath: null,
+      changeType: "added",
+      additions: 12,
+      deletions: 0,
+      isBinary: false,
+      skipReason: null,
+    },
+  ];
+  const shellUnits = [
+    {
+      id: "admin-import",
+      path: "app/src/app/[shell]/adminbuilding/page.tsx",
+      status: "pending",
+      revisionState: "initial" as const,
+    },
+    {
+      id: "shell-layout-unit",
+      path: "app/src/app/[shell]/layout.tsx",
+      status: "pending",
+      revisionState: "initial" as const,
+    },
+  ];
+
+  it("recognizes a move that changed nothing and nothing else", () => {
+    const entries = reviewFileEntries(shellMove, shellUnits);
+    expect(entries.filter(isUnchangedMove).map(({ id }) => id)).toEqual([
+      "academy-layout",
+      "academy-page",
+      "delete-page",
+    ]);
+    expect(
+      isUnchangedMove({
+        ...movedFile("stale", "old.ts", "new.ts"),
+        totalUnits: 2,
+      }),
+    ).toBe(false);
+    expect(
+      isUnchangedMove({
+        ...movedFile("binary", "old.png", "new.png"),
+        isBinary: true,
+        totalUnits: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("folds a relocated subtree into one row where it landed", () => {
+    const tree = buildReviewFileTree(reviewFileEntries(shellMove, shellUnits));
+    const shell = tree
+      .flatMap((node) => (node.kind === "directory" ? [node] : []))
+      .flatMap((node) => flattenDirectories(node))
+      .find((node) => node.path === "app/src/app/[shell]");
+    expect(shell?.children.map((node) => [node.kind, node.path])).toEqual([
+      ["directory", "app/src/app/[shell]/adminbuilding"],
+      ["file", "app/src/app/[shell]/layout.tsx"],
+      ["moves", reviewFileTreeMovesPath("app/src/app/[shell]")],
+    ]);
+    const moves = shell?.children.at(-1);
+    expect(moves).toMatchObject({
+      kind: "moves",
+      directory: "app/src/app/[shell]",
+      origin: "app/src/app",
+    });
+    expect(
+      moves?.kind === "moves" ? moves.files.map(({ id }) => id) : [],
+    ).toEqual(["academy-layout", "academy-page", "delete-page"]);
+    expect(shell).toMatchObject({ totalUnits: 2, reviewedUnits: 0 });
+    expect(reviewFileTreeDirectoryPaths(tree)).not.toContain(
+      "app/src/app/[shell]/academy",
+    );
+    expect(flattenReviewFileTree(tree).map(({ id }) => id)).toEqual([
+      "admin-page",
+      "shell-layout",
+    ]);
+  });
+
+  it("keeps a moved file that also changed as an ordinary row", () => {
+    const entries = reviewFileEntries(shellMove, shellUnits);
+    expect(reviewFileCardsInTreeOrder(entries).map(({ path }) => path)).toEqual(
+      [
+        "app/src/app/[shell]/adminbuilding/page.tsx",
+        "app/src/app/[shell]/layout.tsx",
+      ],
+    );
+  });
+
+  it("leaves the moves row closed but reachable by keyboard", () => {
+    const tree = buildReviewFileTree(reviewFileEntries(shellMove, shellUnits));
+    const movesPath = reviewFileTreeMovesPath("app/src/app/[shell]");
+    const open = new Set(initialReviewFileTreeDirectoryPaths(tree));
+    expect(open.has("app/src/app/[shell]")).toBe(true);
+    expect(open.has(movesPath)).toBe(false);
+    expect(
+      visibleReviewFileTreeItems(tree, open).map(({ kind, path }) => [
+        kind,
+        path,
+      ]),
+    ).toContainEqual(["moves", movesPath]);
+  });
+
+  it("finds a moved file by the path it came from", () => {
+    const entries = reviewFileEntries(shellMove, shellUnits);
+    expect(
+      filterReviewFiles(entries, "all", "app/academy/").map(({ id }) => id),
+    ).toEqual(["academy-layout", "academy-page"]);
+    expect(filterReviewFiles(entries, "needs_review", "")).not.toContainEqual(
+      expect.objectContaining({ id: "academy-layout" }),
+    );
+  });
+
+  it("names the one folder a group of moves came from", () => {
+    expect(
+      commonDirectory([
+        "app/src/app/academy/layout.tsx",
+        "app/src/app/account/delete/page.tsx",
+      ]),
+    ).toBe("app/src/app");
+    expect(commonDirectory(["lib/a.ts", "docs/a.md"])).toBeNull();
+    expect(commonDirectory([])).toBeNull();
+    expect(commonDirectory(["README.md"])).toBeNull();
+  });
+
+  it("counts the files each kind of revision accounts for", () => {
+    expect(
+      reviewChangeComposition(reviewFileEntries(shellMove, shellUnits)),
+    ).toEqual({
+      movedUnchanged: 3,
+      movedEdited: 1,
+      modified: 0,
+      added: 1,
+      deleted: 0,
+    });
+  });
+});
+
+/** Every folder node below one folder, including itself. */
+function flattenDirectories(
+  node: Extract<
+    ReturnType<typeof buildReviewFileTree>[number],
+    { kind: "directory" }
+  >,
+): (typeof node)[] {
+  return [
+    node,
+    ...node.children.flatMap((child) =>
+      child.kind === "directory" ? flattenDirectories(child) : [],
+    ),
+  ];
+}
 
 describe("files-mode viewer cards", () => {
   it("includes every reviewable file across concepts and skips empty files", () => {
@@ -356,5 +638,43 @@ describe("storedReviewMode", () => {
     expect(storedReviewMode({ getItem: (key) => store.get(key) ?? null })).toBe(
       "files",
     );
+  });
+});
+
+describe("storedMarkdownReviewView", () => {
+  it("defaults to preview when no preference is saved", () => {
+    expect(storedMarkdownReviewView({ getItem: () => null })).toBe("preview");
+  });
+
+  it("keeps a saved raw preference", () => {
+    expect(storedMarkdownReviewView({ getItem: () => "raw" })).toBe("raw");
+  });
+
+  it("defaults to preview when storage is unavailable", () => {
+    expect(
+      storedMarkdownReviewView({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBe("preview");
+  });
+
+  it("round-trips the reviewer's last chosen Markdown presentation", () => {
+    const store = new Map<string, string>();
+    rememberMarkdownReviewView(
+      { setItem: (key, value) => store.set(key, value) },
+      "raw",
+    );
+    expect(
+      storedMarkdownReviewView({ getItem: (key) => store.get(key) ?? null }),
+    ).toBe("raw");
+    rememberMarkdownReviewView(
+      { setItem: (key, value) => store.set(key, value) },
+      "preview",
+    );
+    expect(
+      storedMarkdownReviewView({ getItem: (key) => store.get(key) ?? null }),
+    ).toBe("preview");
   });
 });

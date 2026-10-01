@@ -14,7 +14,9 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
   type AiProviderPreset,
+  aiProviderPresetDefinition,
   aiProviderPresets,
+  aiProviderRequiresApiKey,
   matchingAiProviderPreset,
 } from "~/lib/ai-provider-presets";
 import { api, type RouterOutputs } from "~/trpc/react";
@@ -29,6 +31,12 @@ const localPreferenceDeployment = {
     available:
       "Ask the assistant for evidence-backed findings when a new revision syncs. One agent runs per changed file.",
     unavailable: "This deployment cannot run a pull-request review.",
+  },
+  autoPublishDescription: {
+    available:
+      "Post each publishable finding to the pull request when a review finishes. Leave this off to validate findings first.",
+    unavailable:
+      "Automatic publishing needs a pull-request review this deployment cannot run.",
   },
   tokenCapDescription: "Optional cap on one review. Leave empty for no limit.",
 } as const;
@@ -85,6 +93,10 @@ export function LocalAiSettings({
     initialConfiguration.configuration?.provider === provider &&
       initialConfiguration.configuration.hasHeaders,
   );
+  const presetDefinition = preset
+    ? aiProviderPresetDefinition(preset)
+    : undefined;
+  const apiKeyAvailable = Boolean(apiKey || (hasStoredApiKey && !clearApiKey));
   const connectionFingerprint = JSON.stringify([
     provider,
     model,
@@ -97,6 +109,7 @@ export function LocalAiSettings({
   const [verification, setVerification] = useState<{
     fingerprint: string;
     latencyMs: number;
+    modelVerified: boolean;
   } | null>(null);
   const [testFailure, setTestFailure] = useState<{
     fingerprint: string;
@@ -109,6 +122,7 @@ export function LocalAiSettings({
     Boolean(model) &&
     Boolean(provider) &&
     Boolean(baseUrl) &&
+    (!aiProviderRequiresApiKey(provider) || apiKeyAvailable) &&
     parsedHeaders !== null;
   const testConnection = api.ai.testConfiguration.useMutation();
   const save = api.ai.saveConfiguration.useMutation({
@@ -137,6 +151,7 @@ export function LocalAiSettings({
     useManagedModels: false as const,
     mode: preferences.values.mode,
     reviewPullRequests: preferences.values.reviewPullRequests,
+    autoPublishFindings: preferences.values.autoPublishFindings,
     maxReviewTokens: preferences.maxReviewTokens.cap,
   });
 
@@ -154,6 +169,7 @@ export function LocalAiSettings({
       setVerification({
         fingerprint,
         latencyMs: result.latencyMs,
+        modelVerified: result.modelVerified,
       });
       toast.success("Provider connection verified");
     } catch (cause) {
@@ -214,8 +230,9 @@ export function LocalAiSettings({
                 Provider status
               </h2>
               <p className="text-fog mt-2 text-xs leading-5">
-                ReviewDuck checks the endpoint, credentials, and selected model
-                without spending inference tokens.
+                ReviewDuck checks the endpoint and credentials without spending
+                inference tokens. It also confirms the selected model when the
+                provider lists request model IDs.
               </p>
             </div>
             {savedConfiguration && (
@@ -260,7 +277,9 @@ export function LocalAiSettings({
                 {testConnection.isPending
                   ? "Checking authentication and confirming that the selected model is available."
                   : isVerified
-                    ? `Authenticated and found the selected model in ${verification.latencyMs.toLocaleString()} ms.`
+                    ? verification.modelVerified
+                      ? `Authenticated and found the selected model in ${verification.latencyMs.toLocaleString()} ms.`
+                      : `Authenticated and reached the provider in ${verification.latencyMs.toLocaleString()} ms. The deployment name will be used for model requests.`
                     : visibleFailure?.message ||
                       (savedConfiguration
                         ? `${savedPresetLabel} is saved. Test the current settings before saving again.`
@@ -329,7 +348,7 @@ export function LocalAiSettings({
                   setClearHeaders(false);
                   return;
                 }
-                const defaults = aiProviderPresets[next];
+                const defaults = aiProviderPresetDefinition(next);
                 setPreset(next);
                 setProvider(next === "custom" ? "" : next);
                 setBaseUrl(defaults.baseUrl);
@@ -349,6 +368,21 @@ export function LocalAiSettings({
               ))}
             </select>
           </label>
+          {presetDefinition?.connectionHelp && (
+            <p className="text-mist self-end text-xs leading-5 sm:col-span-2">
+              {presetDefinition.connectionHelp}{" "}
+              {presetDefinition.documentationUrl && (
+                <a
+                  href={presetDefinition.documentationUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-violet underline underline-offset-2"
+                >
+                  Provider documentation
+                </a>
+              )}
+            </p>
+          )}
           {preset === "custom" && (
             <label className="grid gap-2">
               <span className="text-cloud text-sm font-medium">
@@ -368,6 +402,7 @@ export function LocalAiSettings({
               id="ai-provider-model"
               value={model}
               onChange={(event) => setModel(event.target.value)}
+              placeholder={presetDefinition?.modelPlaceholder}
               className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 font-mono text-sm outline-none"
             />
           </label>
@@ -376,13 +411,16 @@ export function LocalAiSettings({
             <input
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
-              placeholder="https://provider.example.com/v1"
+              placeholder={
+                presetDefinition?.baseUrlPlaceholder ??
+                "https://provider.example.com/v1"
+              }
               className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 text-sm outline-none"
             />
           </label>
           <label className="grid gap-2">
             <span className="text-cloud flex flex-wrap items-center gap-2 text-sm font-medium">
-              API key
+              {presetDefinition?.apiKeyLabel ?? "API key"}
               {hasStoredApiKey && (
                 <span className="text-lime text-xs font-normal">
                   A key is already stored
@@ -398,7 +436,9 @@ export function LocalAiSettings({
                 setClearApiKey(false);
               }}
               placeholder={
-                hasStoredApiKey ? "Leave blank to keep current key" : undefined
+                hasStoredApiKey
+                  ? "Leave blank to keep current key"
+                  : presetDefinition?.apiKeyPlaceholder
               }
               className="bg-surface text-cloud focus:border-violet/40 h-11 rounded-xl border border-line px-3 font-mono text-sm outline-none"
             />

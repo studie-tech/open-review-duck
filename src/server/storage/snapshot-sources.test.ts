@@ -105,6 +105,34 @@ describe("snapshot source availability", () => {
     ).resolves.toBe(false);
   });
 
+  it("treats a probe failure as unavailable for one snapshot", async () => {
+    mocks.exists.mockReset();
+    mocks.exists.mockRejectedValue(new Error("probe failed"));
+    const database = {
+      query: {
+        reviewUnits: {
+          findMany: vi.fn(async () => [
+            { currentBlobId: "current", previousBlobId: null },
+          ]),
+        },
+        sourceBlobs: {
+          findMany: vi.fn(async () => [
+            {
+              id: "current",
+              state: "ready",
+              storage: "local",
+              objectKey: "objects/current",
+            },
+          ]),
+        },
+      },
+    };
+
+    await expect(
+      reviewSnapshotSourcesAvailable(database as never, "snapshot"),
+    ).resolves.toBe(false);
+  });
+
   it("accepts a snapshot only after every referenced object exists", async () => {
     mocks.exists.mockReset();
     mocks.exists.mockResolvedValue(true);

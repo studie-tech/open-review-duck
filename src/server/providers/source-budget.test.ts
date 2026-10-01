@@ -42,6 +42,47 @@ describe("provider source budget", () => {
     expect(maximumActive).toBe(8);
   });
 
+  it("reuses completed slots while the first file is still downloading", async () => {
+    const first = deferredLoad();
+    const ninth = deferredLoad();
+    const paths = Array.from({ length: 12 }, (_, index) => `file-${index}.ts`);
+    const collected = collectProviderSourceFiles(paths, 100, async (path) => {
+      if (path === paths[0]) await first.started;
+      if (path === paths[8]) ninth.release();
+      return { file: { path, content: path, isBinary: false } };
+    });
+    try {
+      await ninth.started;
+    } finally {
+      first.release();
+    }
+    expect((await collected).map(({ path }) => path)).toEqual(paths);
+  });
+
+  it("keeps equal-size budget decisions independent of download order", async () => {
+    const first = deferredLoad();
+    const second = deferredLoad();
+    const collected = collectProviderSourceFiles(
+      ["first", "second"],
+      3,
+      async (path) => {
+        if (path === "first") await first.started;
+        else second.release();
+        return { file: { path, content: "123", isBinary: false } };
+      },
+    );
+    await second.started;
+    first.release();
+    expect(await collected).toEqual([
+      { path: "first", content: "123", isBinary: false },
+      expect.objectContaining({
+        path: "second",
+        skipReason: "too_large",
+        content: "",
+      }),
+    ]);
+  });
+
   it("evicts the largest sources once the byte budget is exceeded", async () => {
     const files = await collectProviderSourceFiles(
       ["small", "largest", "medium"],

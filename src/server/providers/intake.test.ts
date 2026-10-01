@@ -95,7 +95,14 @@ describe("workspace intake reconciliation", () => {
   });
 
   it("reconciles from the repository rows the pass already loaded", async () => {
-    const findFirst = vi.fn();
+    const repositories = [
+      {
+        id: "repository-1",
+        connectionId: "connection-1",
+        reviewIntakeMode: "all" as const,
+      },
+    ];
+    const findMany = vi.fn(async () => repositories);
     const update = {
       set: () => update,
       where: () => update,
@@ -104,18 +111,12 @@ describe("workspace intake reconciliation", () => {
     const db = {
       query: {
         repositories: {
-          findMany: async () => [
-            {
-              id: "repository-1",
-              connectionId: "connection-1",
-              reviewIntakeMode: "all" as const,
-            },
-          ],
-          findFirst,
+          findMany,
         },
       },
       update: () => update,
     } as unknown as Database;
+    mocks.refreshRepositoryPullRequestStates.mockReset();
     mocks.refreshRepositoryPullRequestStates.mockResolvedValue({
       checked: false,
       changed: 0,
@@ -124,7 +125,13 @@ describe("workspace intake reconciliation", () => {
 
     const result = await reconcileWorkspaceIntake(db, "workspace-1");
 
-    expect(findFirst).not.toHaveBeenCalled();
+    expect(findMany).toHaveBeenCalledOnce();
+    expect(mocks.refreshRepositoryPullRequestStates).toHaveBeenCalledOnce();
+    expect(mocks.refreshRepositoryPullRequestStates).toHaveBeenCalledWith(
+      db,
+      repositories[0],
+      expect.anything(),
+    );
     expect(result).toEqual({ checked: 0, queued: 0, stateChanges: 0 });
   });
 });

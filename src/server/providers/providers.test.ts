@@ -236,6 +236,11 @@ describe("provider normalization", () => {
     });
 
     expect(pulls.map((pull) => pull.number)).toEqual([7]);
+    expect(pulls[0]).toMatchObject({
+      authorExternalId: "1",
+      reviewerExternalIds: ["42"],
+      assigneeExternalIds: [],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -259,9 +264,86 @@ describe("provider normalization", () => {
     expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toContain(
       "reviewer_id=42",
     );
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toContain(
+      "with_labels_details=true",
+    );
     expect(requestUrl(fetchMock.mock.calls[1]?.[0])).toContain(
       "searchCriteria.reviewerId=reviewer-id",
     );
+  });
+
+  it("normalizes pull request labels from each provider", async () => {
+    mockJson([
+      {
+        id: 11,
+        number: 7,
+        title: "Review me",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/7",
+        user: { id: 1, login: "author", avatar_url: "" },
+        labels: [
+          { name: "size:XXL", color: "b60205", description: "Huge" },
+          { name: "feat", color: "0e8a16" },
+        ],
+        head: { ref: "feature", sha: "head" },
+        base: { ref: "main", sha: "base" },
+      },
+    ]);
+    const github = await new GitHubProvider("token").listOpenPullRequests("1");
+    expect(github[0]?.labels).toEqual([
+      { name: "size:XXL", color: "b60205", description: "Huge" },
+      { name: "feat", color: "0e8a16" },
+    ]);
+
+    mockJson([
+      {
+        id: 81,
+        iid: 9,
+        title: "Safer sync",
+        description: null,
+        state: "opened",
+        draft: false,
+        web_url: "https://gitlab.com/acme/review/-/merge_requests/9",
+        source_branch: "sync",
+        target_branch: "main",
+        sha: "head",
+        diff_refs: { base_sha: "base", head_sha: "head" },
+        author: { username: "reviewer", avatar_url: null },
+        labels: [{ name: "bug", color: "#d73a4a", description: "Broken" }],
+        changes_count: "4",
+      },
+    ]);
+    const gitlab = await new GitLabProvider("token").listOpenPullRequests("1");
+    expect(gitlab[0]?.labels).toEqual([
+      { name: "bug", color: "d73a4a", description: "Broken" },
+    ]);
+
+    mockJson({
+      pullRequestId: 12,
+      title: "Complete review",
+      status: "active",
+      isDraft: false,
+      sourceRefName: "refs/heads/feature",
+      targetRefName: "refs/heads/main",
+      lastMergeSourceCommit: { commitId: "head" },
+      lastMergeTargetCommit: { commitId: "base" },
+      repository: {
+        id: "repo",
+        name: "reviewduck",
+        project: { name: "platform" },
+      },
+      createdBy: { displayName: "Alex Reviewer" },
+      labels: [
+        { name: "hotfix", active: true },
+        { name: "old", active: false },
+      ],
+    });
+    const azure = await new AzureDevOpsProvider(
+      "token",
+      "https://dev.azure.com/acme",
+    ).getPullRequest("repo", 12);
+    expect(azure.labels).toEqual([{ name: "hotfix" }]);
   });
 
   it("normalizes merged Azure DevOps pull requests", async () => {
@@ -589,6 +671,9 @@ describe("provider normalization", () => {
   it("retrieves deleted GitHub source from the base revision", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
       if (url.includes("/files?")) {
         return jsonResponse([{ filename: "src/legacy.ts", status: "removed" }]);
       }
@@ -604,7 +689,7 @@ describe("provider normalization", () => {
         html_url: "https://github.com/acme/review/pull/7",
         user: { login: "reviewer", avatar_url: "" },
         head: { ref: "cleanup", sha: "head-sha" },
-        base: { ref: "main", sha: "base-sha" },
+        base: { ref: "main", sha: "target-sha" },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -621,6 +706,68 @@ describe("provider normalization", () => {
     expect(
       fetchMock.mock.calls.some(([url]) =>
         requestUrl(url).includes("ref=base-sha"),
+      ),
+    ).toBe(true);
+  });
+
+  it("records where a renamed GitHub file came from", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
+      if (url.includes("/files?")) {
+        return jsonResponse([
+          {
+            filename: "app/[shell]/academy/layout.tsx",
+            previous_filename: "app/academy/layout.tsx",
+            status: "renamed",
+          },
+          {
+            filename: "app/academy/page.tsx",
+            previous_filename: "app/academy/page.tsx",
+            status: "modified",
+          },
+        ]);
+      }
+      if (url.includes("/contents/")) {
+        return new Response("export default function Layout() {}");
+      }
+      return jsonResponse({
+        id: 12,
+        number: 8,
+        title: "Move the academy under the shell",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/8",
+        user: { login: "reviewer", avatar_url: "" },
+        head: { ref: "shell", sha: "head-sha" },
+        base: { ref: "main", sha: "target-sha" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitHubProvider("token").getChangedFiles("42", 8);
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "app/[shell]/academy/layout.tsx",
+        previousPath: "app/academy/layout.tsx",
+        changeType: "renamed",
+        content: "export default function Layout() {}",
+        previousContent: "export default function Layout() {}",
+      }),
+      expect.objectContaining({
+        path: "app/academy/page.tsx",
+        changeType: "modified",
+      }),
+    ]);
+    expect(files[1]).not.toHaveProperty("previousPath", expect.any(String));
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) =>
+          requestUrl(url).includes("/contents/app/academy/layout.tsx") &&
+          requestUrl(url).includes("ref=base-sha"),
       ),
     ).toBe(true);
   });
@@ -777,6 +924,9 @@ describe("provider normalization", () => {
   it("keeps GitHub base content for precise first-revision comparison", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
       if (url.includes("/files?")) {
         return jsonResponse([
           { filename: "src/format.ts", status: "modified" },
@@ -797,7 +947,7 @@ describe("provider normalization", () => {
         html_url: "https://github.com/acme/review/pull/8",
         user: { login: "reviewer", avatar_url: "" },
         head: { ref: "format", sha: "head-sha" },
-        base: { ref: "main", sha: "base-sha" },
+        base: { ref: "main", sha: "target-sha" },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -814,6 +964,9 @@ describe("provider normalization", () => {
   it("keeps smaller GitHub sources when the pull request exceeds its budget", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
       if (url.includes("/files?")) {
         return jsonResponse(
           ["one.ts", "two.ts", "three.ts"].map((filename) => ({
@@ -841,7 +994,7 @@ describe("provider normalization", () => {
         html_url: "https://github.com/acme/review/pull/9",
         user: { login: "reviewer", avatar_url: "" },
         head: { ref: "large", sha: "head-sha" },
-        base: { ref: "main", sha: "base-sha" },
+        base: { ref: "main", sha: "target-sha" },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -1118,6 +1271,7 @@ describe("provider normalization", () => {
     expect(files).toEqual([
       expect.objectContaining({
         path: "src/new.ts",
+        previousPath: "src/old.ts",
         content: "after",
         previousContent: "before",
         changeType: "renamed",
@@ -1356,6 +1510,9 @@ describe("provider normalization", () => {
   it("retrieves modified Azure source from both revisions", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/diffs/commits?")) {
+        return jsonResponse({ commonCommit: "base-sha" });
+      }
       if (url.includes("/iterations?")) {
         return jsonResponse({ value: [{ id: 3 }] });
       }
@@ -1392,7 +1549,7 @@ describe("provider normalization", () => {
         sourceRefName: "refs/heads/sync",
         targetRefName: "refs/heads/main",
         lastMergeSourceCommit: { commitId: "head-sha" },
-        lastMergeTargetCommit: { commitId: "base-sha" },
+        lastMergeTargetCommit: { commitId: "target-sha" },
         repository: { webUrl: "https://dev.azure.com/acme/repo" },
         createdBy: { displayName: "Duck", uniqueName: "duck@example.com" },
       });
@@ -1421,6 +1578,9 @@ describe("provider normalization", () => {
     }> = [];
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/diffs/commits?")) {
+        return jsonResponse({ commonCommit: "base-sha" });
+      }
       if (url.includes("/iterations?")) {
         return jsonResponse({ value: [{ id: 3 }] });
       }
@@ -1465,7 +1625,7 @@ describe("provider normalization", () => {
         sourceRefName: "refs/heads/worker-move",
         targetRefName: "refs/heads/main",
         lastMergeSourceCommit: { commitId: "head-sha" },
-        lastMergeTargetCommit: { commitId: "base-sha" },
+        lastMergeTargetCommit: { commitId: "target-sha" },
         repository: { webUrl: "https://dev.azure.com/acme/repo" },
         createdBy: { displayName: "Duck" },
       });
@@ -1480,6 +1640,7 @@ describe("provider normalization", () => {
     ).resolves.toEqual([
       expect.objectContaining({
         path: "shared/worker/worker-messages.ts",
+        previousPath: "app/_shared/utils/worker/worker-messages.ts",
         content: "afterRename()",
         previousContent: "beforeRename()",
         changeType: "renamed",
@@ -1500,6 +1661,9 @@ describe("provider normalization", () => {
   it("keeps smaller Azure sources when the pull request exceeds its budget", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
+      if (url.includes("/diffs/commits?")) {
+        return jsonResponse({ commonCommit: "base-sha" });
+      }
       if (url.includes("/iterations?")) {
         return jsonResponse({ value: [{ id: 3 }] });
       }
@@ -1764,12 +1928,6 @@ describe("provider normalization", () => {
           base: { ref: "main", sha: "base-sha" },
         });
       }
-      if (url.endsWith("/installation")) {
-        return jsonResponse({
-          id: 17,
-          account: { id: 7, login: "acme" },
-        });
-      }
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -1787,6 +1945,9 @@ describe("provider normalization", () => {
       canRequestChanges: false,
       actorName: "connected GitHub App",
     });
+    expect(
+      fetchMock.mock.calls.map(([input]) => requestUrl(input)),
+    ).not.toContain("https://api.github.com/installation");
     await expect(
       provider.setPullRequestReviewDecision({
         repositoryExternalId: "42",
@@ -2260,6 +2421,140 @@ describe("provider normalization", () => {
     });
   });
 
+  it("uses the minted GitHub App Contents grant for merge permission", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/pulls/12")) {
+        return jsonResponse({
+          id: 12,
+          number: 12,
+          title: "Checks",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/12",
+          user: { id: 9, login: "author", avatar_url: "" },
+          head: { ref: "feature", sha: "head-sha" },
+          base: { ref: "main", sha: "base-sha" },
+          mergeable: true,
+          mergeable_state: "clean",
+        });
+      }
+      if (url.includes("/check-runs")) {
+        return jsonResponse({ check_runs: [] });
+      }
+      if (url.includes("/status")) {
+        return jsonResponse({ statuses: [] });
+      }
+      if (url.includes("graphql")) {
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewDecision: "APPROVED",
+                statusCheckRollup: { contexts: { nodes: [] } },
+              },
+            },
+          },
+        });
+      }
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+          permissions: { pull: true, push: false },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider(
+      "token",
+      "https://api.github.com",
+      true,
+      "write",
+    );
+
+    await expect(
+      provider.getPullRequestLifecycle("42", 12),
+    ).resolves.toMatchObject({
+      canMerge: true,
+      hasMergePermission: true,
+      mergeable: true,
+      pullRequestState: "open",
+    });
+  });
+
+  it("blocks a rebase-only GitHub repository when the pull request is not rebaseable", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/pulls/12")) {
+        return jsonResponse({
+          id: 12,
+          number: 12,
+          title: "Conflicted rebase",
+          body: null,
+          state: "open",
+          html_url: "https://github.com/acme/review/pull/12",
+          user: { id: 9, login: "author", avatar_url: "" },
+          head: { ref: "feature", sha: "head-sha" },
+          base: { ref: "main", sha: "base-sha" },
+          mergeable: true,
+          mergeable_state: "clean",
+          rebaseable: false,
+        });
+      }
+      if (url.includes("/check-runs")) {
+        return jsonResponse({ check_runs: [] });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse({ statuses: [] });
+      }
+      if (url.includes("graphql")) {
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewDecision: "APPROVED",
+                statusCheckRollup: { contexts: { nodes: [] } },
+              },
+            },
+          },
+        });
+      }
+      if (url.endsWith("/repositories/42")) {
+        return jsonResponse({
+          id: 42,
+          name: "review",
+          full_name: "acme/review",
+          private: false,
+          html_url: "https://github.com/acme/review",
+          default_branch: "main",
+          allow_merge_commit: false,
+          allow_squash_merge: false,
+          allow_rebase_merge: true,
+          permissions: { pull: true, push: true },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new GitHubProvider("token");
+
+    await expect(
+      provider.getPullRequestLifecycle("42", 12),
+    ).resolves.toMatchObject({
+      canMerge: false,
+      hasMergePermission: true,
+      mergeable: false,
+      mergeBlockedReason:
+        "The repository requires rebase merges, but this pull request cannot be rebased because its commits conflict with the target branch. Resolve the conflicts on GitHub, then refresh.",
+    });
+  });
+
   it("surfaces GitLab pipeline failures and merge blockers", async () => {
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {
@@ -2370,6 +2665,7 @@ describe("provider normalization", () => {
       mergeable: null,
       canMerge: false,
       mergeBlockedReason: "Pipeline must succeed before this can be merged",
+      mergeBlockedFix: "fix_checks",
       mergeActionLabel: "Merge",
       hasMergePermission: true,
     });
@@ -3040,5 +3336,134 @@ describe("provider normalization", () => {
 
     expect(method).toBe("PUT");
     expect(resolved).toBe(JSON.stringify({ resolved: true }));
+  });
+});
+
+describe("native comment attachments", () => {
+  it("uploads Azure bytes to the scoped pull request with a unique filename", async () => {
+    mockJson({ url: "https://dev.azure.com/acme/attachment" });
+    const file = new File(["bytes"], "image-unique.png", { type: "image/png" });
+    expect(
+      await new AzureDevOpsProvider(
+        "secret",
+        "https://dev.azure.com/acme",
+      ).uploadCommentImage({
+        repositoryExternalId: "repo",
+        pullRequestNumber: 4,
+        file,
+      }),
+    ).toBe("https://dev.azure.com/acme/attachment");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain(
+      "/repositories/repo/pullRequests/4/attachments/image-unique.png?",
+    );
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.body).toEqual(
+      new TextEncoder().encode("bytes"),
+    );
+  });
+  it("uploads GitLab multipart data and returns an absolute native URL", async () => {
+    mockJson({ full_path: "/-/project/4/uploads/secret/image.png" });
+    expect(
+      await new GitLabProvider("secret").uploadCommentImage({
+        repositoryExternalId: "4",
+        pullRequestNumber: 2,
+        file: new File(["bytes"], "image.png"),
+      }),
+    ).toBe("https://gitlab.com/-/project/4/uploads/secret/image.png");
+    const request = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(request?.body).toBeInstanceOf(Uint8Array);
+    expect(new Headers(request?.headers).get("content-type")).toMatch(
+      /^multipart\/form-data; boundary=/,
+    );
+    expect(new TextDecoder().decode(request?.body as Uint8Array)).toContain(
+      'name="file"; filename="image.png"',
+    );
+  });
+  it("uses GitHub's user-attachment endpoint and rejects installation tokens", async () => {
+    mockJson({ url: "https://github.com/user-attachments/assets/image" });
+    const input = {
+      repositoryExternalId: "42",
+      pullRequestNumber: 2,
+      file: new File(["bytes"], "image.png", { type: "image/png" }),
+    };
+    await expect(
+      new GitHubProvider("secret").uploadCommentImage(input),
+    ).resolves.toContain("user-attachments");
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain(
+      "https://uploads.github.com/user-attachments/assets?",
+    );
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain(
+      "repository_id=42",
+    );
+    await expect(
+      new GitHubProvider(
+        "secret",
+        "https://api.github.com",
+        true,
+      ).uploadCommentImage(input),
+    ).rejects.toThrow("personal GitHub.com connection");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pull request file commits", () => {
+  it("keeps GitHub patches for commits that belong to the pull request", async () => {
+    const listedCommit = {
+      sha: "aaa1111",
+      html_url: "https://github.com/acme/review-duck/commit/aaa1111",
+      commit: {
+        message: "Add flag\n\nBody",
+        author: { name: "Ada", date: "2026-09-01T00:00:00Z" },
+      },
+      author: { login: "ada" },
+      parents: [{ sha: "base" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.includes("/pulls/7/commits"))
+          return jsonResponse([listedCommit]);
+        if (url.includes("/commits?")) {
+          return jsonResponse([
+            listedCommit,
+            {
+              ...listedCommit,
+              sha: "not-in-pr",
+              parents: [{ sha: "older" }],
+            },
+          ]);
+        }
+        return jsonResponse({
+          files: [
+            {
+              filename: "src/auth/session.ts",
+              patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+            },
+          ],
+        });
+      }),
+    );
+
+    const listed = await new GitHubProvider("token").listPullRequestFileCommits(
+      {
+        repositoryExternalId: "42",
+        pullRequestNumber: 7,
+        path: "src/auth/session.ts",
+        headSha: "headsha",
+      },
+    );
+
+    expect(listed.truncated).toBe(false);
+    expect(listed.commits).toEqual([
+      {
+        sha: "aaa1111",
+        author: "ada",
+        authoredAt: "2026-09-01T00:00:00Z",
+        message: "Add flag\n\nBody",
+        url: "https://github.com/acme/review-duck/commit/aaa1111",
+        patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+        merge: false,
+      },
+    ]);
   });
 });

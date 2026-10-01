@@ -1,0 +1,1 @@
+ALTER TABLE "open_review_duck_ai_preference" ADD COLUMN "autoPublishFindings" boolean DEFAULT false NOT NULL;

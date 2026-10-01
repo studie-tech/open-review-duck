@@ -15,14 +15,6 @@ export type SignOffQueueAction =
   | { type: "settle"; unitId: string }
   | { type: "synchronize"; unitIds: string[] };
 
-const SIGN_OFF_BATCH_SIZE = 20;
-
-/** Selects one immediate save or a bounded batch from queued sign-offs. */
-export function nextSignOffBatchSize(pendingCount: number) {
-  if (pendingCount <= 0) return 0;
-  return pendingCount === 1 ? 1 : Math.min(pendingCount, SIGN_OFF_BATCH_SIZE);
-}
-
 /** Creates an idle sign-off queue progress state. */
 export function createSignOffQueue(): SignOffQueueState {
   return { completed: 0, ids: new Set(), total: 0 };

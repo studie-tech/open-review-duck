@@ -14,16 +14,20 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import { sortByReviewFileTreeOrder } from "~/lib/review-files";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
   InlineAiQuestion,
   InlineCommentComposer,
+  InlineLineActionChooser,
+  InlineLineActionSurface,
   rememberAiConversationVisibility,
   withoutDeletedAiQuestions,
   withoutDeletedLiveAiQuestions,
@@ -49,6 +53,7 @@ import {
   REVISION_NOTICE_DISMISS_MS,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
+  ReviewFileCardSourcePlaceholder,
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   reviewCardMemberForLine,
@@ -125,7 +130,12 @@ describe("review shortcuts", () => {
     ]);
     expect(reviewShortcuts.nextConcept).toEqual([{ key: "ArrowRight" }]);
     expect(reviewShortcuts.previousConcept).toEqual([{ key: "ArrowLeft" }]);
-    expect(JSON.stringify(reviewShortcuts)).not.toMatch(/"[jk]"/);
+    const bareKeys = Object.values(reviewShortcuts)
+      .flat()
+      .filter((stroke) => !("mod" in stroke && stroke.mod))
+      .map((stroke) => stroke.key);
+    expect(bareKeys).not.toContain("j");
+    expect(bareKeys).not.toContain("k");
   });
 
   it("puts the concept variant of an action behind shift", () => {
@@ -139,6 +149,13 @@ describe("review shortcuts", () => {
   it("steps through review findings on the bracket keys", () => {
     expect(reviewShortcuts.nextFinding).toEqual([{ key: "]" }]);
     expect(reviewShortcuts.previousFinding).toEqual([{ key: "[" }]);
+  });
+
+  it("posts a resolved reply with the same chord, and keeps it resolved behind shift", () => {
+    expect(reviewShortcuts.postComment).toEqual([{ key: "Enter", mod: true }]);
+    expect(reviewShortcuts.postCommentKeepResolved).toEqual([
+      { key: "Enter", mod: true, shift: true },
+    ]);
   });
 });
 
@@ -332,6 +349,7 @@ describe("same-file concept cards", () => {
         members={[units[0], units[2]] as never}
         index={0}
         count={2}
+        diffVisible={false}
         fileSource={[
           "// setup",
           "const configuration = true;",
@@ -355,22 +373,189 @@ describe("same-file concept cards", () => {
     ).toHaveClass("opacity-45");
     expect(
       screen.queryByRole("button", {
-        name: "Comment on line 3 of configuration",
+        name: "Open actions for line 3 of configuration",
       }),
     ).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+      screen.getByRole("button", {
+        name: "Open actions for line 5 of main",
+      }),
     );
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
+  });
+
+  it("shows the same side-by-side diff the selected card uses", async () => {
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              ...units[0],
+              changeType: "modified",
+              previousSource: "const configuration = false;",
+              source: "const configuration = true;",
+            },
+          ] as never
+        }
+        index={0}
+        count={2}
+        previousFileSource={["// setup", "const configuration = false;"].join(
+          "\n",
+        )}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Side-by-side code diff" });
+    expect(diff).toHaveTextContent("const configuration = false;");
+    expect(diff).toHaveTextContent("const configuration = true;");
+    expect(
+      screen.queryByRole("button", {
+        name: "Open actions for line 2 of configuration",
+      }),
+    ).not.toBeInTheDocument();
+
+    const [commentButton] = screen.getAllByRole("button", {
+      name: "Open actions for current line 2",
+    });
+    if (!commentButton) throw new Error("Expected a current-line action");
+    await userEvent.click(commentButton);
+    expect(onCommentLine).toHaveBeenCalledWith("configuration", 2);
+    expect(document.getElementById("review-line-2")).toBeNull();
+  });
+
+  it("marks a commented neighbor line with the poster's avatar", async () => {
+    const onOpenLineComment = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              ...units[0],
+              changeType: "modified",
+              previousSource: "const configuration = false;",
+              source: "const configuration = true;",
+            },
+          ] as never
+        }
+        index={0}
+        count={2}
+        previousFileSource={["// setup", "const configuration = false;"].join(
+          "\n",
+        )}
+        fileSource={["// setup", "const configuration = true;"].join("\n")}
+        onSelect={vi.fn()}
+        onOpenLineComment={onOpenLineComment}
+        commentThreads={[
+          {
+            comments: [
+              {
+                author: "ada",
+                authorAvatarUrl: "https://avatars.example/ada.png",
+              },
+            ],
+            externalId: "thread-ada",
+            line: 2,
+            side: "right",
+            status: "resolved",
+          },
+        ]}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Open resolved comment by ada",
+      }),
+    );
+    expect(onOpenLineComment).toHaveBeenCalledWith("thread-ada");
+  });
+
+  it("requests and mounts a file preview only when it approaches the viewport", () => {
+    let report: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        /** Captures visibility transitions for this preview. */
+        constructor(callback: IntersectionObserverCallback) {
+          report = callback;
+        }
+        /** Waits for the test to report visibility. */
+        observe() {}
+        /** Releases the observer at unmount. */
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const onSourceNeeded = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ReviewConceptFileCardPreview
+        members={[{ ...units[0], startLine: 1, endLine: 1 }] as never}
+        index={0}
+        count={1}
+        diffVisible={false}
+        fileSource="const visiblePreview = true;"
+        onSelect={vi.fn()}
+        onSourceNeeded={onSourceNeeded}
+      />,
+    );
+    expect(onSourceNeeded).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("const visiblePreview = true;"),
+    ).not.toBeInTheDocument();
+    act(() =>
+      report?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    );
+    expect(onSourceNeeded).toHaveBeenCalledWith(units[0]?.path, "preview");
+    expect(
+      screen.getByText("const visiblePreview = true;"),
+    ).toBeInTheDocument();
+    const height = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ height: 1200 } as DOMRect);
+    act(() =>
+      report?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    );
+    expect(
+      screen.queryByText("const visiblePreview = true;"),
+    ).not.toBeInTheDocument();
+    expect(
+      document.querySelector('[aria-hidden="true"][style*="1200px"]'),
+    ).not.toBeNull();
+    height.mockRestore();
   });
 
   it("mounts only the leading rows of a file card longer than a window", () => {
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        /** Ignores the block: this case only reads the first paint. */
-        observe() {}
+        /** Retains the observer callback for the article entering the viewport. */
+        constructor(private callback: IntersectionObserverCallback) {}
+        /** Exposes the card while leaving its later row windows unmounted. */
+        observe(element: Element) {
+          if (element.tagName === "ARTICLE")
+            this.callback(
+              [
+                {
+                  isIntersecting: true,
+                  target: element,
+                } as IntersectionObserverEntry,
+              ],
+              this as unknown as IntersectionObserver,
+            );
+        }
 
         /** Ignores teardown: nothing was ever reported. */
         disconnect() {}
@@ -391,6 +576,7 @@ describe("same-file concept cards", () => {
         members={[member] as never}
         index={0}
         count={1}
+        diffVisible={false}
         fileSource={Array.from(
           { length: 600 },
           (_, index) => `const line${index + 1} = true;`,
@@ -419,20 +605,24 @@ describe("same-file concept cards", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Comment on line 2 of configuration",
+        name: "Open actions for line 2 of configuration",
       }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+      screen.getByRole("button", {
+        name: "Open actions for line 5 of main",
+      }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Comment on line 3 of configuration",
+        name: "Open actions for line 3 of configuration",
       }),
     ).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Comment on line 5 of main" }),
+      screen.getByRole("button", {
+        name: "Open actions for line 5 of main",
+      }),
     );
     expect(onCommentLine).toHaveBeenCalledWith("main", 5);
   });
@@ -473,6 +663,30 @@ describe("same-file concept cards", () => {
       "const configuration = true;",
     );
     expect(highlight).toHaveBeenCalled();
+  });
+
+  it("keeps the selected card frame around a hidden source notice", () => {
+    render(
+      <ReviewFileCardSourcePlaceholder
+        framed
+        language="json"
+        lineCount={812}
+        onShow={vi.fn()}
+        path="values.schema.json"
+        reviewed={false}
+      />,
+    );
+
+    const frame = screen
+      .getByRole("button", { name: "Show file" })
+      .closest("div");
+    expect(frame).toHaveClass(
+      "rounded-b-xl",
+      "border-x",
+      "border-b",
+      "border-line",
+    );
+    expect(frame).toHaveTextContent("812 lines of json hidden");
   });
 
   it("keeps a card open when a new unit arrives after older units were signed off", () => {
@@ -635,6 +849,95 @@ describe("same-file concept cards", () => {
     expect(highlight).not.toHaveBeenCalled();
   });
 
+  it("renders Markdown neighbor cards as a document until Raw is chosen", async () => {
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "readme",
+              path: "README.md",
+              name: "README.md",
+              changedLineCount: 2,
+              changeType: "modified",
+              previousSource: ["# Old pond", "", "Ducks."].join("\n"),
+              source: ["# ReviewDuck", "", "Read the **docs**."].join("\n"),
+              startLine: 1,
+              endLine: 3,
+              language: "markdown",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={["# Old pond", "", "Ducks."].join("\n")}
+        fileSource={["# ReviewDuck", "", "Read the **docs**."].join("\n")}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Rendered Markdown. Switch to Raw to comment on lines or read the diff.",
+        ),
+      ).toBeVisible();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("heading", { name: "ReviewDuck" }),
+      ).not.toHaveLength(0);
+    });
+    expect(highlight).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("region", { name: "Side-by-side code diff" }),
+    ).not.toBeInTheDocument();
+
+    cleanup();
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "readme",
+              path: "README.md",
+              name: "README.md",
+              changedLineCount: 2,
+              changeType: "modified",
+              previousSource: ["# Old pond", "", "Ducks."].join("\n"),
+              source: ["# ReviewDuck", "", "Read the **docs**."].join("\n"),
+              startLine: 1,
+              endLine: 3,
+              language: "markdown",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={["# Old pond", "", "Ducks."].join("\n")}
+        fileSource={["# ReviewDuck", "", "Read the **docs**."].join("\n")}
+        markdownView="raw"
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Side-by-side code diff" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "ReviewDuck" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("lets the reviewer fold a file card back up after opening it", async () => {
     render(
       <ReviewConceptFileCardPreview
@@ -739,6 +1042,218 @@ async function flushAnimationFrame() {
   );
 }
 
+describe("InlineLineActionChooser", () => {
+  it("makes the provider boundary explicit before opening either composer", async () => {
+    const comment = vi.fn();
+    const ask = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <InlineLineActionChooser
+        canAsk
+        line={42}
+        path="src/server/queue.ts"
+        provider="github"
+        onAskAi={ask}
+        onCancel={vi.fn()}
+        onComment={comment}
+      />,
+    );
+
+    expect(screen.getByText(/Published immediately to GitHub/)).toBeVisible();
+    expect(screen.getByText(/conversation stays in ReviewDuck/i)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    ).toHaveFocus();
+
+    await user.click(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    );
+    expect(comment).toHaveBeenCalledOnce();
+    expect(ask).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Ask AI/ }));
+    expect(ask).toHaveBeenCalledOnce();
+  });
+
+  it("explains why AI is unavailable without hiding the provider option", () => {
+    render(
+      <InlineLineActionChooser
+        canAsk={false}
+        line={9}
+        path="src/index.ts"
+        provider="gitlab"
+        onAskAi={vi.fn()}
+        onCancel={vi.fn()}
+        onComment={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Ask AI/ })).toBeDisabled();
+    expect(screen.getByText(/Enable AI assistance/)).toBeVisible();
+  });
+
+  it("selects either destination with the modified number shortcuts", () => {
+    const comment = vi.fn();
+    const ask = vi.fn();
+    render(
+      <InlineLineActionChooser
+        canAsk
+        line={42}
+        path="src/server/queue.ts"
+        provider="github"
+        onAskAi={ask}
+        onCancel={vi.fn()}
+        onComment={comment}
+      />,
+    );
+
+    fireEvent.keyDown(window, {
+      code: "Digit1",
+      key: "1",
+      metaKey: true,
+    });
+    fireEvent.keyDown(window, {
+      code: "Digit2",
+      ctrlKey: true,
+      key: "2",
+    });
+
+    expect(comment).toHaveBeenCalledOnce();
+    expect(ask).toHaveBeenCalledOnce();
+  });
+
+  it("cancels on Escape without also reaching the workspace", async () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    const user = userEvent.setup();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      render(
+        <InlineLineActionChooser
+          canAsk
+          line={42}
+          path="src/server/queue.ts"
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={cancel}
+          onComment={vi.fn()}
+        />,
+      );
+
+      await user.keyboard("{Escape}");
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+
+  it("cancels on Escape when the originating line kept focus", () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    render(
+      <div>
+        <button type="button" id="review-line-42">
+          42
+        </button>
+        <InlineLineActionChooser
+          canAsk
+          line={42}
+          path="src/server/queue.ts"
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={cancel}
+          onComment={vi.fn()}
+        />
+      </div>,
+    );
+    screen.getByRole("button", { name: "42" }).focus();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.activeElement as HTMLElement, {
+        key: "Escape",
+      });
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+
+  it("cancels on Escape after focus returns to the page", () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    render(
+      <InlineLineActionChooser
+        canAsk
+        line={42}
+        path="src/server/queue.ts"
+        provider="github"
+        onAskAi={vi.fn()}
+        onCancel={cancel}
+        onComment={vi.fn()}
+      />,
+    );
+    (document.activeElement as HTMLElement).blur();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+
+  it("leaves Escape to an unrelated input the reviewer is editing", () => {
+    const cancel = vi.fn();
+    render(
+      <div>
+        <input aria-label="Filter review path" />
+        <InlineLineActionChooser
+          canAsk
+          line={42}
+          path="src/server/queue.ts"
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={cancel}
+          onComment={vi.fn()}
+        />
+      </div>,
+    );
+    const filter = screen.getByRole("textbox", { name: "Filter review path" });
+    filter.focus();
+    fireEvent.keyDown(filter, { key: "Escape" });
+
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the disabled AI option from its shortcut", () => {
+    const ask = vi.fn();
+    render(
+      <InlineLineActionChooser
+        canAsk={false}
+        line={9}
+        path="src/index.ts"
+        provider="gitlab"
+        onAskAi={ask}
+        onCancel={vi.fn()}
+        onComment={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(window, { code: "Digit2", key: "2", metaKey: true });
+
+    expect(ask).not.toHaveBeenCalled();
+  });
+});
+
 describe("InlineCommentComposer", () => {
   it("keeps typing inside the composer and reports the draft upward", async () => {
     const change = vi.fn();
@@ -820,8 +1335,75 @@ describe("InlineCommentComposer", () => {
     await user.keyboard("{Meta>}{Enter}{/Meta}");
     expect(post).not.toHaveBeenCalled();
 
+    screen.getByRole("button", { name: "Cancel" }).focus();
     await user.keyboard("{Escape}");
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels on Escape after focus returns to the page", () => {
+    const cancel = vi.fn();
+    const workspaceEscape = vi.fn();
+    render(
+      <InlineCommentComposer
+        initialDraft="Guard"
+        line={42}
+        path="src/server/queue.ts"
+        pending={false}
+        posting={false}
+        provider="github"
+        onCancel={cancel}
+        onDraftChange={vi.fn()}
+        onPost={vi.fn()}
+      />,
+    );
+    (document.activeElement as HTMLElement).blur();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
+  });
+});
+
+describe("InlineLineActionSurface", () => {
+  it("opens the provider composer without asking the parent to remount", async () => {
+    const user = userEvent.setup();
+    const parentRender = vi.fn();
+    /** Counts parent renders so the line-action composer must stay local. */
+    function Harness() {
+      parentRender();
+      return (
+        <InlineLineActionSurface
+          canAsk
+          initialDraft=""
+          line={42}
+          path="src/server/queue.ts"
+          pending={false}
+          posting={false}
+          provider="github"
+          onAskAi={vi.fn()}
+          onCancel={vi.fn()}
+          onDraftChange={vi.fn()}
+          onPost={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    expect(parentRender).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByRole("button", { name: /Post review comment/ }),
+    );
+
+    expect(
+      screen.getByPlaceholderText("Write an inline GitHub comment\u2026"),
+    ).toBeVisible();
+    expect(parentRender).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -863,6 +1445,41 @@ describe("InlineAiQuestion", () => {
     ).toBeVisible();
     expect(priorControl).toHaveFocus();
     priorControl.remove();
+  });
+
+  it("closes a restored conversation with Escape after its opener unmounts", () => {
+    const close = vi.fn();
+    const workspaceEscape = vi.fn();
+    const priorControl = document.createElement("button");
+    document.body.append(priorControl);
+    priorControl.focus();
+    render(
+      <InlineAiQuestion
+        autoFocus={false}
+        canAsk
+        initialDraft=""
+        entries={[]}
+        line={17}
+        minimumLine={10}
+        maximumLine={30}
+        onAsk={vi.fn()}
+        onDraftChange={vi.fn()}
+        onClose={close}
+        onMove={vi.fn()}
+        onPreview={vi.fn()}
+        onStep={vi.fn()}
+      />,
+    );
+    priorControl.remove();
+    document.addEventListener("keydown", workspaceEscape);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(close).toHaveBeenCalledOnce();
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", workspaceEscape);
+    }
   });
 
   it("shows the focused conversation and submits with Enter", async () => {
@@ -1133,6 +1750,7 @@ describe("InlineAiQuestion", () => {
   });
 
   it("confirms before permanently deleting a completed conversation", async () => {
+    const close = vi.fn();
     const deleteThread = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(
@@ -1154,7 +1772,7 @@ describe("InlineAiQuestion", () => {
         maximumLine={20}
         onAsk={vi.fn()}
         onDraftChange={vi.fn()}
-        onClose={vi.fn()}
+        onClose={close}
         onDeleteThread={deleteThread}
         onMove={vi.fn()}
         onPreview={vi.fn()}
@@ -1174,6 +1792,18 @@ describe("InlineAiQuestion", () => {
     expect(
       screen.getByText(/Comments already published to GitHub will remain/),
     ).toBeVisible();
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("dialog", {
+        name: "Delete this AI conversation?",
+      }),
+    ).not.toBeInTheDocument();
+    expect(close).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete AI conversation" }),
+    );
 
     await user.click(
       screen.getByRole("button", { name: /Delete conversation/ }),
@@ -1454,13 +2084,218 @@ function conversationActions(
   };
 }
 
+const conversationPullRequest: AiFixPromptPullRequest = {
+  provider: "github",
+  repositoryOwner: "acme",
+  repositoryName: "review",
+  number: 12,
+  title: "Retry provider calls",
+  webUrl: "https://github.com/acme/review/pull/12",
+  sourceBranch: "feature/retries",
+  targetBranch: "main",
+  headSha: "abc1234",
+};
+
 describe("ProviderConversation", () => {
+  it("keeps edit and reply submission blocked until both image uploads finish", async () => {
+    const completions: Array<(value: string) => void> = [];
+    const upload = vi.fn(
+      () => new Promise<string>((resolve) => completions.push(resolve)),
+    );
+    const edit = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{
+          externalId: "906",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "open",
+          comments: [
+            {
+              externalId: "906",
+              author: "reviewer",
+              body: "Original",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        onUploadImage={upload}
+        {...conversationActions({ onEditComment: edit, onReply: reply })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit the comment by reviewer" }),
+    );
+    const editor = screen.getByRole("textbox", {
+      name: "Edit the comment by reviewer on GitHub",
+    });
+    const response = screen.getByPlaceholderText("Continue this conversation…");
+    fireEvent.change(response, { target: { value: "Reply" } });
+    const clipboardData = {
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () =>
+            new File(["image"], "image.png", { type: "image/png" }),
+        },
+      ],
+    };
+    fireEvent.paste(editor, { clipboardData });
+    fireEvent.paste(response, { clipboardData });
+    expect(upload).toHaveBeenCalledTimes(2);
+    await act(async () =>
+      completions[0]?.("![first](https://provider.example/first)"),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeDisabled();
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    expect(edit).not.toHaveBeenCalled();
+    await act(async () =>
+      completions[1]?.("![second](https://provider.example/second)"),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeEnabled();
+  });
+
+  it("offers a fix prompt for an open conversation and not a resolved one", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const thread = {
+      externalId: "906",
+      path: "src/retry.ts",
+      line: 17,
+      side: "right" as const,
+      status: "open" as const,
+      comments: [
+        {
+          externalId: "906",
+          author: "reviewer",
+          body: "Cap the delay.",
+          createdAt: "2026-07-20T10:00:00Z",
+          publishedByAnotherReviewer: false,
+        },
+      ],
+      unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+    };
+    const view = render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={thread}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy AI fix prompt for this conversation",
+      }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+    });
+    const prompt = writeText.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("### src/retry.ts line 17");
+    expect(prompt).toContain("**reviewer** (2026-07-20T10:00:00Z):");
+    expect(prompt).toContain("Cap the delay.");
+
+    view.rerender(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{ ...thread, status: "resolved" }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /fix prompt/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens a resolved conversation selected from the PR-wide list", () => {
+    const { rerender } = render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{
+          externalId: "900",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "900",
+              author: "reviewer",
+              body: "This answer should be revealed.",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    expect(
+      screen.queryByText("This answer should be revealed."),
+    ).not.toBeInTheDocument();
+    rerender(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        revealed
+        thread={{
+          externalId: "900",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "900",
+              author: "reviewer",
+              body: "This answer should be revealed.",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions()}
+      />,
+    );
+
+    expect(screen.getByText("This answer should be revealed.")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Collapse GitHub conversation" }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("publishes a reply inside the existing provider thread", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "901",
           path: "src/retry.ts",
@@ -1480,7 +2315,7 @@ describe("ProviderConversation", () => {
         }}
         publishedByReviewDuck={false}
         replying={false}
-        {...conversationActions({ onReply: reply })}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
       />,
     );
 
@@ -1493,19 +2328,167 @@ describe("ProviderConversation", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    expect(
+      screen.getByText(
+        "This conversation is resolved. Posting a reply reopens it.",
+      ),
+    ).toBeVisible();
     await user.type(
       screen.getByPlaceholderText("Continue this conversation…"),
       "I restored the previous behavior.",
     );
-    await user.click(screen.getByRole("button", { name: "Reply" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Post and reopen this conversation",
+      }),
+    );
 
     expect(reply).toHaveBeenCalledWith("I restored the previous behavior.");
+    expect(resolve).toHaveBeenCalledWith(false);
+  });
+
+  it("can leave a note on a resolved conversation without reopening it", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{
+          externalId: "901b",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "901b",
+              author: "reviewer",
+              body: "Could this retain the previous behavior?",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Expand GitHub conversation",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    await user.type(
+      screen.getByPlaceholderText("Continue this conversation…"),
+      "Noted, leaving this resolved.",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Keep resolved: post the reply without reopening this conversation",
+      }),
+    );
+
+    expect(reply).toHaveBeenCalledWith("Noted, leaving this resolved.");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("reopens a resolved conversation from the reply shortcut", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{
+          externalId: "901c",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "901c",
+              author: "reviewer",
+              body: "Could this retain the previous behavior?",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Expand GitHub conversation",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    const composer = screen.getByPlaceholderText("Continue this conversation…");
+    await user.type(composer, "Please take another look.");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    expect(reply).toHaveBeenCalledWith("Please take another look.");
+    expect(resolve).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps a resolved conversation closed from the shift reply shortcut", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <ProviderConversation
+        pullRequest={conversationPullRequest}
+        thread={{
+          externalId: "901d",
+          path: "src/retry.ts",
+          line: 17,
+          side: "right",
+          status: "resolved",
+          comments: [
+            {
+              externalId: "901d",
+              author: "reviewer",
+              body: "Could this retain the previous behavior?",
+              createdAt: "2026-07-20T10:00:00Z",
+              publishedByAnotherReviewer: false,
+            },
+          ],
+          unitId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+        }}
+        publishedByReviewDuck={false}
+        replying={false}
+        {...conversationActions({ onReply: reply, onResolve: resolve })}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Expand GitHub conversation",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reply on GitHub" }));
+    const composer = screen.getByPlaceholderText("Continue this conversation…");
+    await user.type(composer, "Leaving a note only.");
+    await user.keyboard("{Meta>}{Shift>}{Enter}{/Shift}{/Meta}");
+
+    expect(reply).toHaveBeenCalledWith("Leaving a note only.");
+    expect(resolve).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved conversations open when the page loads", () => {
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "902",
           path: "src/retry.ts",
@@ -1559,7 +2542,7 @@ describe("ProviderConversation", () => {
     };
     const { rerender } = render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={thread}
         publishedByReviewDuck={false}
         replying={false}
@@ -1574,7 +2557,7 @@ describe("ProviderConversation", () => {
 
     rerender(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{ ...thread, status: "resolved" }}
         publishedByReviewDuck={false}
         replying={false}
@@ -1593,7 +2576,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "904",
           path: "src/retry.ts",
@@ -1645,7 +2628,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "906",
           path: "src/retry.ts",
@@ -1687,7 +2670,7 @@ describe("ProviderConversation", () => {
     // member, so only ReviewDuck knows whose words these are.
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "920",
           path: "src/retry.ts",
@@ -1733,7 +2716,7 @@ describe("ProviderConversation", () => {
     // Deleting a conversation takes every comment in it.
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "922",
           path: "src/retry.ts",
@@ -1779,7 +2762,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "909",
           path: "src/retry.ts",
@@ -1822,7 +2805,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "910",
           path: "src/retry.ts",
@@ -1870,7 +2853,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "911",
           path: "src/retry.ts",
@@ -1914,7 +2897,7 @@ describe("ProviderConversation", () => {
     const user = userEvent.setup();
     render(
       <ProviderConversation
-        provider="github"
+        pullRequest={conversationPullRequest}
         thread={{
           externalId: "907",
           path: "src/retry.ts",
@@ -1959,6 +2942,57 @@ describe("ProviderConversation", () => {
 });
 
 describe("SideBySideUnitDiff", () => {
+  it("filters whitespace changes without changing source text or comment line numbers", async () => {
+    const onChange = vi.fn();
+    const selectLine = vi.fn();
+    const props = {
+      previousSource: "  return value;\n  const count = 1;",
+      currentSource: "    return value;\n    const count = 2;",
+      language: "typescript",
+      previousStartLine: 10,
+      currentStartLine: 20,
+      onSelectReviewLine: selectLine,
+      expanded: true,
+    };
+    const { rerender } = render(
+      <>
+        <ReviewWhitespaceToggle checked={false} onChange={onChange} />
+        <SideBySideUnitDiff {...props} />
+      </>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    );
+    expect(onChange).toHaveBeenCalledWith(true);
+    rerender(
+      <>
+        <ReviewWhitespaceToggle checked onChange={onChange} />
+        <SideBySideUnitDiff {...props} ignoreWhitespace />
+      </>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const line = screen.getByRole("button", {
+      name: "Open actions for current line 20",
+    });
+    expect(line.textContent).toContain("    return value;");
+    expect(line.className).not.toContain("bg-addition/15");
+    expect(
+      screen.getByRole("button", { name: "Open actions for current line 21" })
+        .className,
+    ).toContain("bg-addition/15");
+    await userEvent.click(line);
+    expect(selectLine).toHaveBeenCalledWith(20);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    );
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows aligned base and pull-request lines and opens current comments", async () => {
     const selectLine = vi.fn();
     const user = userEvent.setup();
@@ -1984,9 +3018,10 @@ describe("SideBySideUnitDiff", () => {
       screen.getByRole("region", { name: "Side-by-side code diff" }),
     ).toHaveTextContent("const value = 2;");
     expect(screen.getByText("Inline details for line 12")).toBeInTheDocument();
+    expect(document.getElementById("review-line-12")).not.toBeNull();
 
     const [commentButton] = screen.getAllByRole("button", {
-      name: "Comment on current line 12",
+      name: "Open actions for current line 12",
     });
     if (!commentButton) throw new Error("Expected a current-line action");
     expect(commentButton).toHaveTextContent("const value = 2;");
@@ -1994,7 +3029,7 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenCalledWith(12);
 
     const [unchangedLine] = screen.getAllByRole("button", {
-      name: "Comment on current line 13",
+      name: "Open actions for current line 13",
     });
     if (!unchangedLine) throw new Error("Expected an unchanged-line action");
     expect(unchangedLine).toHaveTextContent("return value;");
@@ -2003,14 +3038,94 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenLastCalledWith(13);
   });
 
-  it("routes row actions to the latest handlers after a re-render", async () => {
-    const staleSelect = vi.fn();
-    const staleAsk = vi.fn();
-    const freshSelect = vi.fn();
-    const freshAsk = vi.fn();
+  it("opens a line conversation from the poster avatar without selecting the line", async () => {
+    const selectLine = vi.fn();
+    const openComment = vi.fn();
     const user = userEvent.setup();
-    /** Renders the diff with one generation of the two line handlers. */
-    function diff(onSelect: () => void, onAsk: () => void) {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={selectLine}
+        rightLineCommentMarkers={
+          new Map([
+            [
+              12,
+              [
+                {
+                  author: "ada",
+                  authorAvatarUrl: "https://avatars.example/ada.png",
+                  resolved: true,
+                  threadExternalId: "thread-ada",
+                },
+              ],
+            ],
+          ])
+        }
+        onOpenLineComment={openComment}
+      />,
+    );
+
+    expect(screen.getByRole("presentation")).toHaveAttribute(
+      "src",
+      "https://avatars.example/ada.png",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open resolved comment by ada",
+      }),
+    );
+    expect(openComment).toHaveBeenCalledWith("thread-ada");
+    expect(selectLine).not.toHaveBeenCalled();
+  });
+
+  it("mounts previous-side conversations when that line is not the review line", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={vi.fn()}
+        renderLineDetails={(line) => <div>Current details {line}</div>}
+        renderPreviousLineDetails={(line) => <div>Previous details {line}</div>}
+      />,
+    );
+
+    expect(screen.getByText("Previous details 10")).toBeInTheDocument();
+    expect(screen.getByText("Current details 12")).toBeInTheDocument();
+  });
+
+  it("can skip global review-line anchors", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const value = 1;\nreturn value;"}
+        currentSource={"const value = 2;\nreturn value;"}
+        language="typescript"
+        previousStartLine={10}
+        currentStartLine={12}
+        onSelectReviewLine={vi.fn()}
+        emitReviewLineAnchors={false}
+        renderLineDetails={(line) =>
+          line === 12 ? <div>Inline details for line 12</div> : null
+        }
+      />,
+    );
+
+    expect(screen.getByText("Inline details for line 12")).toBeInTheDocument();
+    expect(document.getElementById("review-line-12")).toBeNull();
+  });
+
+  it("routes row actions to the latest handler after a re-render", async () => {
+    const staleSelect = vi.fn();
+    const freshSelect = vi.fn();
+    const user = userEvent.setup();
+    /** Renders the diff with one generation of the line handler. */
+    function diff(onSelect: () => void) {
       return (
         <SideBySideUnitDiff
           previousSource={"const value = 1;\nreturn value;"}
@@ -2019,29 +3134,20 @@ describe("SideBySideUnitDiff", () => {
           previousStartLine={10}
           currentStartLine={12}
           onSelectReviewLine={onSelect}
-          onAskReviewLine={onAsk}
         />
       );
     }
-    const { rerender } = render(diff(staleSelect, staleAsk));
+    const { rerender } = render(diff(staleSelect));
 
-    rerender(diff(freshSelect, freshAsk));
+    rerender(diff(freshSelect));
 
     const [commentButton] = screen.getAllByRole("button", {
-      name: "Comment on current line 12",
+      name: "Open actions for current line 12",
     });
     if (!commentButton) throw new Error("Expected a current-line action");
     await user.click(commentButton);
     expect(staleSelect).not.toHaveBeenCalled();
     expect(freshSelect).toHaveBeenCalledWith(12);
-
-    const [askButton] = screen.getAllByRole("button", {
-      name: "Ask AI about line 12",
-    });
-    if (!askButton) throw new Error("Expected an ask action");
-    await user.click(askButton);
-    expect(staleAsk).not.toHaveBeenCalled();
-    expect(freshAsk).toHaveBeenCalledWith(12);
   });
 
   it("renders a file-mode unit label before the line it opens", () => {
@@ -2067,6 +3173,30 @@ describe("SideBySideUnitDiff", () => {
     );
   });
 
+  it("keeps a folded unit label visible while omitting its code rows", () => {
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={"const reviewed = true;\nconst pending = true;"}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={20}
+        currentFocusStartLine={20}
+        currentFocusEndLine={21}
+        isReviewLineCollapsed={(line) => line === 20}
+        onSelectReviewLine={vi.fn()}
+        renderBeforeLine={(line) =>
+          line === 20 ? <div>Reviewed unit folded</div> : null
+        }
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Added code diff" });
+    expect(diff).toHaveTextContent("Reviewed unit folded");
+    expect(diff).not.toHaveTextContent("const reviewed = true;");
+    expect(diff).toHaveTextContent("const pending = true;");
+  });
+
   it("uses one full-width pull-request pane for pure additions", async () => {
     const selectLine = vi.fn();
     const user = userEvent.setup();
@@ -2087,7 +3217,7 @@ describe("SideBySideUnitDiff", () => {
     expect(screen.queryByText("Base")).not.toBeInTheDocument();
 
     const addedLine = screen.getByRole("button", {
-      name: "Comment on current line 18",
+      name: "Open actions for current line 18",
     });
     expect(addedLine).toHaveTextContent("const added = true;");
     expect(addedLine).toHaveClass("select-text");
@@ -2120,13 +3250,17 @@ describe("SideBySideUnitDiff", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Comment on current line 18" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 18",
+      }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
     );
     expect(
-      screen.getByRole("button", { name: "Comment on current line 19" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 19",
+      }),
     ).not.toHaveClass("bg-amber-400/[.09]");
   });
 
@@ -2146,25 +3280,33 @@ describe("SideBySideUnitDiff", () => {
     // The row is laid out for one width at a time, so the highlight has to
     // survive the swap or the finding is invisible on a narrow viewport.
     expect(
-      screen.getByRole("button", { name: "Comment on current line 12" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 12",
+      }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
     );
     expect(
-      screen.getByRole("button", { name: "Comment on current line 13" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 13",
+      }),
     ).not.toHaveClass("bg-amber-400/[.09]");
 
     act(() => setViewportWide(false));
 
     expect(
-      screen.getByRole("button", { name: "Comment on current line 12" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 12",
+      }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
     );
     expect(
-      screen.getByRole("button", { name: "Comment on current line 13" }),
+      screen.getByRole("button", {
+        name: "Open actions for current line 13",
+      }),
     ).not.toHaveClass("bg-amber-400/[.09]");
   });
 
@@ -2181,7 +3323,7 @@ describe("SideBySideUnitDiff", () => {
     );
 
     const splitColumns =
-      '[class*="grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)]"]';
+      '[class*="grid-cols-[56px_minmax(0,1fr)_56px_minmax(0,1fr)]"]';
     expect(container.querySelectorAll("[data-review-scope]")).toHaveLength(2);
     expect(container.querySelectorAll(splitColumns)).toHaveLength(2);
 
@@ -2190,7 +3332,9 @@ describe("SideBySideUnitDiff", () => {
     expect(container.querySelectorAll("[data-review-scope]")).toHaveLength(2);
     expect(container.querySelectorAll(splitColumns)).toHaveLength(0);
     expect(
-      screen.getAllByRole("button", { name: "Comment on current line 12" }),
+      screen.getAllByRole("button", {
+        name: "Open actions for current line 12",
+      }),
     ).toHaveLength(1);
   });
 
@@ -2214,7 +3358,7 @@ describe("SideBySideUnitDiff", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Comment on deleted line 8" }),
+      screen.getByRole("button", { name: "Open actions for deleted line 8" }),
     ).toHaveClass(
       "bg-amber-400/[.09]",
       "shadow-[inset_2px_0_0_rgb(245_158_11/.85)]",
@@ -2365,13 +3509,72 @@ describe("SideBySideUnitDiff", () => {
     });
     expect(diff).toHaveTextContent("const removed = true;");
     const deletedLineActions = screen.getAllByRole("button", {
-      name: "Comment on deleted line 8",
+      name: "Open actions for deleted line 8",
     });
     const deletedLine = deletedLineActions[0];
     if (!deletedLine) throw new Error("Expected a deleted-line action");
     expect(deletedLine).toHaveTextContent("const removed = true;");
     await user.click(deletedLine);
     expect(selectLine).toHaveBeenCalledWith(8);
+  });
+
+  it("shows pull-request commits for a shift-clicked line range", async () => {
+    const selectLine = vi.fn();
+    const onRequest = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const removed = true;\nconst retained = true;"}
+        currentSource={"const retained = true;"}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={1}
+        previousFocusEndLine={1}
+        currentFocusStartLine={null}
+        currentFocusEndLine={null}
+        onSelectReviewLine={selectLine}
+        lineHistory={{
+          status: "ready",
+          truncated: false,
+          unmapped: false,
+          onRequest,
+          commits: [
+            {
+              sha: "c4e91a2abcdef",
+              shortSha: "c4e91a2",
+              author: "reviewer",
+              authoredAt: "2026-09-30T12:00:00.000Z",
+              subject: "Stop writing tutorial flags during sign-in",
+              body: "The tutorial service already covers this.",
+              baseLines: [1],
+              headLines: [],
+              mapped: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const deletedLine = screen.getAllByRole("button", {
+      name: "Open actions for deleted line 1",
+    })[0];
+    if (!deletedLine) throw new Error("Expected a deleted-line action");
+    fireEvent.click(deletedLine, { shiftKey: true });
+
+    expect(selectLine).not.toHaveBeenCalled();
+    await waitFor(() => expect(onRequest).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "Show 1 commit" }));
+    expect(
+      screen.getByText("Stop writing tutorial flags during sign-in"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The tutorial service already covers this."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed lines 1")).toBeInTheDocument();
+
+    fireEvent.click(deletedLine);
+    expect(selectLine).toHaveBeenCalledWith(1);
   });
 
   it("keeps gaps between related ranges visible but non-commentable", async () => {
@@ -2401,23 +3604,31 @@ describe("SideBySideUnitDiff", () => {
     );
 
     expect(
-      screen.getAllByRole("button", { name: "Comment on current line 2" }),
+      screen.getAllByRole("button", {
+        name: "Open actions for current line 2",
+      }),
     ).toHaveLength(1);
     expect(
-      screen.getAllByRole("button", { name: "Comment on current line 5" }),
+      screen.getAllByRole("button", {
+        name: "Open actions for current line 5",
+      }),
     ).toHaveLength(1);
     expect(
-      screen.queryByRole("button", { name: "Comment on current line 3" }),
+      screen.queryByRole("button", {
+        name: "Open actions for current line 3",
+      }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Comment on current line 4" }),
+      screen.queryByRole("button", {
+        name: "Open actions for current line 4",
+      }),
     ).not.toBeInTheDocument();
     expect(
       container.querySelectorAll('[data-review-scope="context"]'),
     ).toHaveLength(2);
 
     const currentLine = screen.getAllByRole("button", {
-      name: "Comment on current line 5",
+      name: "Open actions for current line 5",
     })[0];
     if (!currentLine) throw new Error("Expected a current-line action");
     await user.click(currentLine);
@@ -2468,7 +3679,7 @@ describe("SideBySideUnitDiff", () => {
     });
     // Interior collapses page; finish any remainder with the in-flow control.
     const remaining = screen.queryAllByRole("button", {
-      name: /Show \d+ more unchanged lines/,
+      name: /Show \d+ unchanged lines downward/,
     });
     for (const button of remaining) {
       await user.click(button);
@@ -2505,14 +3716,14 @@ describe("SideBySideUnitDiff", () => {
     for (const pageSize of [20, 20, 2]) {
       await user.click(
         screen.getByRole("button", {
-          name: `Show ${pageSize} more unchanged lines`,
+          name: `Show ${pageSize} unchanged lines downward`,
         }),
       );
     }
 
     expect(diff).toHaveTextContent("const addition25 = true;");
     expect(
-      screen.queryByRole("button", { name: /more unchanged lines/ }),
+      screen.queryByRole("button", { name: /unchanged lines downward/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -2544,15 +3755,51 @@ describe("SideBySideUnitDiff", () => {
     for (const pageSize of [20, 20, 15]) {
       await user.click(
         screen.getByRole("button", {
-          name: `Show ${pageSize} more unchanged lines`,
+          name: `Show ${pageSize} unchanged lines downward`,
         }),
       );
     }
 
     expect(diff).toHaveTextContent("const retained30 = true;");
     expect(
-      screen.queryByRole("button", { name: /more unchanged lines/ }),
+      screen.queryByRole("button", { name: /unchanged lines downward/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("reveals collapsed context from the code below when paging upward", async () => {
+    const user = userEvent.setup();
+    const additions = Array.from(
+      { length: 50 },
+      (_, index) => `const addition${index + 1} = true;`,
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource=""
+        currentSource={additions.join("\n")}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusRanges={[]}
+        currentFocusRanges={[
+          { startLine: 1, endLine: 1 },
+          { startLine: 50, endLine: 50 },
+        ]}
+        onSelectReviewLine={vi.fn()}
+      />,
+    );
+
+    const diff = screen.getByRole("region", { name: "Added code diff" });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Show 20 unchanged lines upward",
+      }),
+    );
+
+    expect(diff).toHaveTextContent("const addition30 = true;");
+    expect(diff).not.toHaveTextContent("const addition20 = true;");
+    expect(
+      screen.getByRole("group", { name: "22 unchanged lines hidden" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the entire file without collapsed gaps when expanded", () => {
@@ -2644,7 +3891,7 @@ describe("SideBySideUnitDiff", () => {
     ).not.toBeInTheDocument();
 
     const deletedLine = screen.getAllByRole("button", {
-      name: "Comment on deleted line 31",
+      name: "Open actions for deleted line 31",
     })[0];
     if (!deletedLine) throw new Error("Expected a deleted-line action");
     await user.click(deletedLine);

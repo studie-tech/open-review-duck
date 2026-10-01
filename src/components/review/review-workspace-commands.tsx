@@ -59,6 +59,7 @@ export interface ReviewCommandState {
   deletedUnitsToSignOff: readonly unknown[];
   externalSyncPending: boolean;
   fileWaitingUnitIds: readonly string[];
+  loadingChanges: boolean;
   filteredReviewActive: boolean;
   initialData: Pick<WorkspaceData, "concepts" | "pullRequest">;
   nextQueueEntry?: { index: number; unit: { name: string } };
@@ -69,6 +70,7 @@ export interface ReviewCommandState {
   };
   outstandingCardMembers: readonly unknown[];
   pendingConceptSignOffIds: ReadonlySet<string>;
+  pendingUndoCount: number;
   primaryIsContinue: boolean;
   primaryScopeLabel: string;
   resetReview: CommandMutationState;
@@ -110,12 +112,90 @@ export interface ReviewCommandActions {
   stepAiQuestion: (direction: -1 | 1) => void;
   stepFinding: (direction: -1 | 1) => void;
   stopWaitingOnActive: () => void;
-  syncExternalData: () => Promise<void>;
+  syncExternalData: (options?: { silent?: boolean }) => Promise<boolean>;
   toggleContext: () => void;
   toggleInsightsPanel: () => void;
   togglePathPanel: () => void;
   undoLastSignOff: () => Promise<void>;
   unreviewActiveUnit: () => void;
+}
+
+interface ReviewStepCommandOptions {
+  activeCardIndex: number;
+  activeConceptIndex: number;
+  cardCount: number;
+  conceptCount: number;
+  navigateCard: (direction: -1 | 1) => void;
+  navigateConcept: (direction: -1 | 1) => void;
+  reviewMode: ReviewMode;
+}
+
+/** Builds the navigation steps that belong to the active review mode. */
+export function buildReviewStepCommands({
+  activeCardIndex,
+  activeConceptIndex,
+  cardCount,
+  conceptCount,
+  navigateCard,
+  navigateConcept,
+  reviewMode,
+}: ReviewStepCommandOptions): CommandCenterItem[] {
+  const itemLabel = reviewMode === "files" ? "file" : "card";
+  const commands: CommandCenterItem[] = [
+    {
+      id: "next-unit",
+      label: `Select next ${itemLabel}`,
+      description:
+        reviewMode === "files"
+          ? "Select the next changed file"
+          : "Select the next file card in this concept",
+      group: "Review navigation",
+      icon: <ChevronDown className="size-4" />,
+      shortcut: reviewShortcuts.nextUnit,
+      disabled: activeCardIndex >= cardCount - 1,
+      onSelect: () => navigateCard(1),
+    },
+    {
+      id: "previous-unit",
+      label: `Select previous ${itemLabel}`,
+      description:
+        reviewMode === "files"
+          ? "Select the previous changed file"
+          : "Select the previous file card in this concept",
+      group: "Review navigation",
+      icon: <ChevronRight className="size-4 -rotate-90" />,
+      shortcut: reviewShortcuts.previousUnit,
+      disabled: activeCardIndex <= 0,
+      onSelect: () => navigateCard(-1),
+    },
+  ];
+
+  if (reviewMode === "path") {
+    commands.push(
+      {
+        id: "next-concept",
+        label: "Open next concept",
+        description: "Move to the next concept in the review path",
+        group: "Review navigation",
+        icon: <ChevronRight className="size-4" />,
+        shortcut: reviewShortcuts.nextConcept,
+        disabled: activeConceptIndex >= conceptCount - 1,
+        onSelect: () => navigateConcept(1),
+      },
+      {
+        id: "previous-concept",
+        label: "Open previous concept",
+        description: "Move to the previous concept in the review path",
+        group: "Review navigation",
+        icon: <ChevronRight className="size-4 rotate-180" />,
+        shortcut: reviewShortcuts.previousConcept,
+        disabled: activeConceptIndex <= 0,
+        onSelect: () => navigateConcept(-1),
+      },
+    );
+  }
+
+  return commands;
 }
 
 /** Builds search-only commands for every review unit. */
@@ -173,11 +253,13 @@ export function buildReviewWorkspaceCommands(
     externalSyncPending,
     fileWaitingUnitIds,
     filteredReviewActive,
+    loadingChanges,
     initialData,
     nextQueueEntry,
     nextReview,
     outstandingCardMembers,
     pendingConceptSignOffIds,
+    pendingUndoCount,
     primaryIsContinue,
     primaryScopeLabel,
     resetReview,
@@ -227,7 +309,9 @@ export function buildReviewWorkspaceCommands(
   } = actions;
   const reviewPullRequestCommand: CommandCenterItem = {
     id: "review-pull-request-with-ai",
-    label: "Review the full pull request",
+    label: reviewRunning
+      ? "View AI review progress"
+      : "AI review status and results",
     description:
       aiConfiguration.data?.mode === "off"
         ? "Enable AI assistance in settings first"
@@ -235,7 +319,7 @@ export function buildReviewWorkspaceCommands(
     group: "Review actions",
     icon: <Sparkles className="size-4" />,
     shortcut: reviewShortcuts.reviewPullRequest,
-    disabled: reviewRunning || aiConfiguration.data?.mode === "off",
+    disabled: false,
     onSelect: () => setAiReviewDialogOpen(true),
   };
   const reviewCommands: CommandCenterItem[] = [
@@ -311,52 +395,15 @@ export function buildReviewWorkspaceCommands(
         (!contextAvailable || contextBefore >= availableBefore),
       onSelect: revealContextAbove,
     },
-    {
-      id: "next-unit",
-      label: "Select next card",
-      description:
-        reviewMode === "files"
-          ? "Select the next changed file"
-          : "Select the next file card in this concept",
-      group: "Review navigation",
-      icon: <ChevronDown className="size-4" />,
-      shortcut: reviewShortcuts.nextUnit,
-      disabled: activeConceptCardIndex >= activeConceptFileCards.length - 1,
-      onSelect: () => navigateConceptCard(1),
-    },
-    {
-      id: "previous-unit",
-      label: "Select previous card",
-      description:
-        reviewMode === "files"
-          ? "Select the previous changed file"
-          : "Select the previous file card in this concept",
-      group: "Review navigation",
-      icon: <ChevronRight className="size-4 -rotate-90" />,
-      shortcut: reviewShortcuts.previousUnit,
-      disabled: activeConceptCardIndex <= 0,
-      onSelect: () => navigateConceptCard(-1),
-    },
-    {
-      id: "next-concept",
-      label: "Open next concept",
-      description: "Move to the next concept in the review path",
-      group: "Review navigation",
-      icon: <ChevronRight className="size-4" />,
-      shortcut: reviewShortcuts.nextConcept,
-      disabled: activeConceptPathIndex >= initialData.concepts.length - 1,
-      onSelect: () => navigateConcept(1),
-    },
-    {
-      id: "previous-concept",
-      label: "Open previous concept",
-      description: "Move to the previous concept in the review path",
-      group: "Review navigation",
-      icon: <ChevronRight className="size-4 rotate-180" />,
-      shortcut: reviewShortcuts.previousConcept,
-      disabled: activeConceptPathIndex <= 0,
-      onSelect: () => navigateConcept(-1),
-    },
+    ...buildReviewStepCommands({
+      activeCardIndex: activeConceptCardIndex,
+      activeConceptIndex: activeConceptPathIndex,
+      cardCount: activeConceptFileCards.length,
+      conceptCount: initialData.concepts.length,
+      navigateCard: navigateConceptCard,
+      navigateConcept,
+      reviewMode,
+    }),
     {
       id: "next-pending-unit",
       label: "Resume the review queue",
@@ -425,8 +472,8 @@ export function buildReviewWorkspaceCommands(
     },
     {
       id: "comment-on-line",
-      label: "Comment on a line",
-      description: "Choose a line with the keyboard, then write feedback",
+      label: "Respond on a line",
+      description: "Choose a line, then post a review comment or ask AI",
       group: "Review actions",
       icon: <MessageSquareText className="size-4" />,
       shortcut: reviewShortcuts.comment,
@@ -435,8 +482,8 @@ export function buildReviewWorkspaceCommands(
     },
     {
       id: "comment-here",
-      label: "Comment here",
-      description: `Write a ${providerLabel(initialData.pullRequest.provider)} comment on the line in the middle of the view`,
+      label: "Respond here",
+      description: `Post to ${providerLabel(initialData.pullRequest.provider)} or ask AI about the line in the middle of the view`,
       group: "Review actions",
       icon: <MessageSquareText className="size-4" />,
       shortcut: reviewShortcuts.commentHere,
@@ -485,7 +532,9 @@ export function buildReviewWorkspaceCommands(
             ? "Continue through the matching review units in planned order"
             : "Open the next unit that still needs review"
           : cardActionAvailable
-            ? `Remember all ${outstandingCardMembers.length} outstanding units in this file card and open the next card`
+            ? reviewMode === "files"
+              ? `Remember all ${outstandingCardMembers.length} outstanding units in this file and open the next file`
+              : `Remember all ${outstandingCardMembers.length} outstanding units in this file card and open the next card`
             : "Remember this unit at the current revision and open the next one",
       group: "Review actions",
       icon: reviewCaughtUp ? (
@@ -499,16 +548,20 @@ export function buildReviewWorkspaceCommands(
         ? () => setWaitingCompletionOpen(true)
         : runPrimaryAction,
     },
-    {
-      id: "sign-off-concept",
-      label: `Sign off concept (${activeConceptMembers.length})`,
-      description: "Remember every member of this concept at once",
-      group: "Review actions",
-      icon: <CheckCheck className="size-4" />,
-      shortcut: reviewShortcuts.signOffConcept,
-      disabled: !canSignOffConcept,
-      onSelect: signOffActiveConcept,
-    },
+    ...(reviewMode === "path"
+      ? [
+          {
+            id: "sign-off-concept",
+            label: `Sign off concept (${activeConceptMembers.length})`,
+            description: "Remember every member of this concept at once",
+            group: "Review actions",
+            icon: <CheckCheck className="size-4" />,
+            shortcut: reviewShortcuts.signOffConcept,
+            disabled: !canSignOffConcept,
+            onSelect: signOffActiveConcept,
+          },
+        ]
+      : []),
     {
       id: "sign-off-deleted-files",
       label: "Sign off deletes",
@@ -566,17 +619,29 @@ export function buildReviewWorkspaceCommands(
 
     {
       id: "sync-provider-data",
-      label: updateAvailable ? "Load code changes" : "Sync",
-      description: updateAvailable
-        ? "Load the synced revision and preserve unaffected sign-offs"
-        : "Poll for the latest code and conversations",
+      label: loadingChanges
+        ? "Loading new revision"
+        : updateAvailable
+          ? "Load code changes"
+          : externalSyncPending
+            ? "Syncing…"
+            : "Check for updates",
+      description: loadingChanges
+        ? "ReviewDuck is replacing the workspace with the synced revision"
+        : updateAvailable
+          ? "Load the synced revision and preserve unaffected sign-offs"
+          : externalSyncPending
+            ? "ReviewDuck is fetching the latest pull request revision"
+            : "ReviewDuck watches the pull-request head and syncs when it moves",
       group: "Review actions",
       icon: <RefreshCw className="size-4" />,
       shortcut: updateAvailable
         ? reviewShortcuts.loadChanges
         : reviewShortcuts.refresh,
       disabled:
-        resetReview.isPending || (!updateAvailable && externalSyncPending),
+        resetReview.isPending ||
+        loadingChanges ||
+        (!updateAvailable && externalSyncPending),
       onSelect: updateAvailable
         ? loadAvailableChanges
         : () => void syncExternalData(),
@@ -591,7 +656,9 @@ export function buildReviewWorkspaceCommands(
       disabled:
         signOffQueue.ids.size > 0 ||
         pendingConceptSignOffIds.size > 0 ||
+        pendingUndoCount > 0 ||
         externalSyncPending ||
+        loadingChanges ||
         resetReview.isPending,
       onSelect: () => setResetDialogOpen(true),
     },

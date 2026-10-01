@@ -6,16 +6,18 @@ injectWorkspacePackages: true
 
 overrides:
   "@xmldom/xmldom": 0.9.12
-  brace-expansion: 5.0.9
+  "@xhmikosr/decompress": 11.1.4
+  brace-expansion: 5.0.12
+  devalue: 5.9.1
   effect: 3.20.0
   esbuild: 0.25.0
-  fast-uri: 3.1.6
+  fast-uri: 3.1.8
   "nanoid@<3.3.18": 3.3.18
   "nanoid@>=4.0.0 <5.1.16": 5.1.16
   postcss: 8.5.25
   qs: 6.16.0
-  sharp: 0.35.0
-  "undici@>=7.0.0 <7.29.0": 7.29.0
+  sharp: 0.35.4
+  "undici@>=7.0.0 <7.29.1": 7.29.1
 
 allowBuilds:
   "@google/genai": false
@@ -39,3 +41,6 @@ allowBuilds:
   typescript: true
   unrs-resolver: true
   workerd: false
+
+minimumReleaseAgeExclude:
+  - sharp@0.35.4

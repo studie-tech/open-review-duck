@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Bot,
   Flame,
+  FlaskConical,
   GitBranch,
   GitPullRequest,
   LayoutDashboard,
@@ -50,7 +51,7 @@ import { sidebarGuidance } from "~/lib/sidebar-guidance";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
-const navigation = [
+const allNavigation = [
   {
     href: "/dashboard",
     label: "Dashboard",
@@ -99,6 +100,15 @@ const navigation = [
     primary: false,
   },
   {
+    href: "/evaluations",
+    label: "Evaluations",
+    mobileLabel: "Evals",
+    icon: FlaskConical,
+    shortcut: [{ key: "g" }, { key: "e" }],
+    eagerPrefetch: false,
+    primary: false,
+  },
+  {
     href: "/settings",
     label: "Settings",
     mobileLabel: "Settings",
@@ -137,7 +147,7 @@ function DesktopNavigationLink({
   active,
   showShortcut,
 }: {
-  item: (typeof navigation)[number];
+  item: (typeof allNavigation)[number];
   active: boolean;
   showShortcut: boolean;
 }) {
@@ -190,13 +200,22 @@ export function AppShell({
   initialGuidance,
   initialAiConfiguration,
   initialAiPlanUsage,
+  canEvaluate = false,
 }: {
+  canEvaluate?: boolean;
   children: ReactNode;
   deploymentMode: DeploymentMode;
   initialGuidance: Guidance;
   initialAiConfiguration?: AiConfiguration;
   initialAiPlanUsage?: AiPlanUsage;
 }) {
+  const navigation = useMemo(
+    () =>
+      allNavigation.filter(
+        (item) => item.href !== "/evaluations" || canEvaluate,
+      ),
+    [canEvaluate],
+  );
   const pathname = usePathname();
   const { navigate } = usePendingNavigation();
   const utils = api.useUtils();
@@ -315,7 +334,7 @@ export function AppShell({
       },
       ...pageCommands.flat(),
     ],
-    [pageCommands, pathname, navigate],
+    [pageCommands, pathname, navigate, navigation],
   );
   const pendingShortcut = useCommandCenterBindings({
     commands,

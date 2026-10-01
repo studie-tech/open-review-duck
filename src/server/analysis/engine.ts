@@ -1,5 +1,11 @@
 import { basename } from "node:path";
 import {
+  type ImportPathContext,
+  importMapsFromProjectFiles,
+  mergeImportPathContexts,
+  PROJECT_IMPORT_CONFIG_NAMES,
+} from "~/lib/import-maps";
+import {
   type ImportStatement,
   resolveImportPath,
   resolvePythonImportedSubmodulePath,
@@ -28,7 +34,8 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-export const CURRENT_ANALYSIS_VERSION = 43;
+// Rebuild snapshots that loaded PR before-content from the target tip instead of the merge base.
+export const CURRENT_ANALYSIS_VERSION = 46;
 
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 
@@ -78,6 +85,40 @@ export function changedLineCount(
   return (
     masks.previous.filter(Boolean).length + masks.current.filter(Boolean).length
   );
+}
+
+/**
+ * Counts the lines a revision added to and deleted from one file.
+ *
+ * A file the revision compares on both sides is diffed, so a moved file that
+ * kept its content counts nothing and an edit inside a move counts only the
+ * edit. A one-sided revision counts every line it introduced or removed, and a
+ * file without readable source counts nothing.
+ */
+export function changedFileLineCounts(
+  file: Pick<
+    SourceFile,
+    "changeType" | "content" | "isBinary" | "previousContent" | "skipReason"
+  >,
+) {
+  if (file.isBinary || file.skipReason) return { additions: 0, deletions: 0 };
+  /** Displayed lines in one side of the file, without the trailing-newline phantom row. */
+  const lineCount = (source: string) => {
+    if (!source) return 0;
+    const lines = source.split("\n");
+    return lines.at(-1) === "" ? lines.length - 1 : lines.length;
+  };
+  if (file.changeType === "deleted") {
+    return { additions: 0, deletions: lineCount(file.content) };
+  }
+  if (file.changeType === "added" || file.previousContent === undefined) {
+    return { additions: lineCount(file.content), deletions: 0 };
+  }
+  const masks = changedLineMasks(file.previousContent, file.content);
+  return {
+    additions: masks.current.filter(Boolean).length,
+    deletions: masks.previous.filter(Boolean).length,
+  };
 }
 
 /** The subset of a review unit that decides which lines it renders. */
@@ -341,10 +382,10 @@ function renamedUnitPairs(
 /**
  * Represents a file that is signed off as a whole rather than piece by piece.
  *
- * Two kinds of file are read this way: one whose text no grammar can break
- * into declarations, and one whose grammar declares that its content is data
- * rather than behaviour. Both are confirmed by reading the file, so the file
- * is the unit.
+ * A file is read this way when its text has no supported grammar, its grammar
+ * declares that the content is data rather than behaviour, or it contains no
+ * semantic declarations at all. All three are confirmed by reading the file,
+ * so the file itself is the review unit.
  */
 function wholeFileDeclaration(
   file: SourceFile,
@@ -659,9 +700,13 @@ function rawFileReviewUnits(file: SourceFile) {
     declarations,
     isContextOnly,
   );
+  const reviewUnits = [...declarations, ...moduleUnits];
   return {
     adapter,
-    reviewUnits: [...declarations, ...moduleUnits],
+    reviewUnits:
+      reviewUnits.length > 0
+        ? reviewUnits
+        : [wholeFileDeclaration(file, adapter?.language ?? "text")],
   };
 }
 
@@ -1181,14 +1226,27 @@ function absorbNewDeclarationMembers(
     });
 }
 
-/** Scopes parsed units to the actual base-to-head changes in one modified file. */
+/**
+ * Whether a revision's two sides describe the same file, so its declarations
+ * can be scoped to what actually changed between them.
+ *
+ * A rename is such a revision: the file kept its content and took a new path,
+ * so a byte-identical move contributes nothing to review, and a move that
+ * also edits the file asks only for the edits. Only an addition or a deletion
+ * has a single side to show.
+ */
+function revisionComparesSides(file: SourceFile) {
+  return file.changeType === "modified" || file.changeType === "renamed";
+}
+
+/** Scopes parsed units to the actual base-to-head changes in one modified or moved file. */
 function prScopedReviewUnits(
   file: SourceFile,
   language: SupportedLanguage,
   currentUnits: RawUnit[],
 ) {
   if (
-    file.changeType !== "modified" ||
+    !revisionComparesSides(file) ||
     file.previousContent === undefined ||
     file.isBinary ||
     file.skipReason
@@ -1678,7 +1736,7 @@ function clusterRelatedChangeUnits(
 ) {
   if (
     language === "text" ||
-    file.changeType !== "modified" ||
+    !revisionComparesSides(file) ||
     !file.previousContent ||
     units.length < 2
   ) {
@@ -1997,8 +2055,24 @@ function clusterConceptUnits(units: AnalyzedUnit[]) {
   return [...orderedReviewable, ...fileContexts];
 }
 
+/** Builds import maps from living project files already in the analysis set. */
+function importMapsFromAnalyzedFiles(files: SourceFile[]) {
+  return importMapsFromProjectFiles(
+    files.flatMap((file) => {
+      if (file.changeType === "deleted") return [];
+      const name = basename(file.path);
+      return PROJECT_IMPORT_CONFIG_NAMES.has(name)
+        ? [{ path: file.path, content: file.content }]
+        : [];
+    }),
+  );
+}
+
 /** Extracts review units and produces their dependency-aware review order. */
-export function analyzeFiles(files: SourceFile[]): AnalysisResult {
+export function analyzeFiles(
+  files: SourceFile[],
+  importMaps?: ImportPathContext,
+): AnalysisResult {
   const rawUnits = files.flatMap((file) => {
     const { adapter, reviewUnits: unscopedReviewUnits } =
       rawFileReviewUnits(file);
@@ -2010,7 +2084,7 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     // modified with both sides identical, and scoping is what drops those.
     const scopedReviewUnits = adapter?.reviewsWholeFile
       ? !file.reviewWholeFile &&
-        changeType === "modified" &&
+        revisionComparesSides(file) &&
         file.previousContent === file.content
         ? []
         : unscopedReviewUnits
@@ -2075,7 +2149,11 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
     appendToIndex(byShortKey, shortKey, unit.stableKey);
     appendToIndex(byName, unit.name, unit.stableKey);
   }
-  const importAliases = buildImportAliases(files, rawUnits);
+  const importAliases = buildImportAliases(
+    files,
+    rawUnits,
+    mergeImportPathContexts(importMapsFromAnalyzedFiles(files), importMaps),
+  );
   const dependencies = new Map(
     rawUnits.map((unit) => [
       unit.stableKey,
@@ -2119,6 +2197,7 @@ export function analyzeFiles(files: SourceFile[]): AnalysisResult {
 function buildImportAliases(
   files: SourceFile[],
   units: Array<Pick<AnalyzedUnit, "stableKey" | "path" | "name" | "kind">>,
+  importMaps?: ImportPathContext,
 ) {
   const paths = new Set(files.map(({ path }) => path));
   const unitsByPathAndName = new Map<string, string[]>();
@@ -2140,6 +2219,7 @@ function buildImportAliases(
         item.specifier,
         paths,
         language,
+        importMaps,
       );
       if (item.kind === "named") {
         const matches = targetPath

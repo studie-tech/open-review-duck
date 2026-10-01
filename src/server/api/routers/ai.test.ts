@@ -1,30 +1,42 @@
+import { TRPCError } from "@trpc/server";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  order: [] as string[],
-  isLocalDeployment: vi.fn(() => false),
-  enforceRateLimit: vi.fn(async () => undefined),
-  cancelWorkflowRun: vi.fn(async () => undefined),
-  cancelDeepReviewTree: vi.fn(async () => {
-    mocks.order.push("cancelDeepReviewTree");
-  }),
-  settleAiJobQuota: vi.fn(async () => {
-    mocks.order.push("settleAiJobQuota");
-  }),
-  personalWorkspace: vi.fn(async () => ({
+const mocks = vi.hoisted(() => {
+  const workspace = {
     id: "workspace-1",
     aiMode: "on_demand" as const,
     aiReviewEnabled: true,
-  })),
-}));
+  };
+  return {
+    workspace,
+    order: [] as string[],
+    isLocalDeployment: vi.fn(() => false),
+    enforceRateLimit: vi.fn(async () => undefined),
+    assertSafeRemoteUrl: vi.fn(async () => undefined),
+    safeRemoteFetch: vi.fn(),
+    cancelWorkflowRun: vi.fn(async () => undefined),
+    cancelDeepReviewTree: vi.fn(async () => {
+      mocks.order.push("cancelDeepReviewTree");
+    }),
+    settleAiJobQuota: vi.fn(async () => {
+      mocks.order.push("settleAiJobQuota");
+    }),
+    personalWorkspace: vi.fn(async () => workspace),
+    requireAdmin: vi.fn(async () => workspace),
+  };
+});
 
 vi.mock("~/server/deployment", () => ({
   isLocalDeployment: mocks.isLocalDeployment,
 }));
 vi.mock("~/server/security/rate-limit", () => ({
   enforceRateLimit: mocks.enforceRateLimit,
+}));
+vi.mock("~/server/security/remote-url", () => ({
+  assertSafeRemoteUrl: mocks.assertSafeRemoteUrl,
+  safeRemoteFetch: mocks.safeRemoteFetch,
 }));
 vi.mock("~/server/workflows/service", () => ({
   cancelWorkflowRun: mocks.cancelWorkflowRun,
@@ -37,7 +49,7 @@ vi.mock("~/server/workspaces/service", () => ({
   ensurePersonalWorkspace: mocks.personalWorkspace,
 }));
 vi.mock("~/server/workspaces/access", () => ({
-  requirePersonalWorkspaceAdministrator: mocks.personalWorkspace,
+  requirePersonalWorkspaceAdministrator: mocks.requireAdmin,
 }));
 vi.mock("~/server/ai/plan", () => ({
   PAID_AI_FEATURE: "paid_ai_models",
@@ -139,11 +151,8 @@ beforeEach(() => {
   mocks.order.length = 0;
   vi.clearAllMocks();
   mocks.isLocalDeployment.mockReturnValue(false);
-  mocks.personalWorkspace.mockResolvedValue({
-    id: "workspace-1",
-    aiMode: "on_demand",
-    aiReviewEnabled: true,
-  });
+  mocks.personalWorkspace.mockResolvedValue(mocks.workspace);
+  mocks.requireAdmin.mockResolvedValue(mocks.workspace);
 });
 
 describe("ai.configuration deep review availability", () => {
@@ -190,6 +199,146 @@ describe("ai.configuration deep review availability", () => {
     } as unknown as Database;
     await caller(db).configuration();
     expect(peak).toBe(3);
+  });
+});
+
+describe("ai.testConfiguration provider credentials", () => {
+  it.each(["bedrock", "azure_foundry"])(
+    "requires an API key for %s",
+    async (provider) => {
+      mocks.isLocalDeployment.mockReturnValue(true);
+      const { db } = createFakeDb();
+      await expect(
+        caller(db).testConfiguration({
+          provider,
+          model: "deployment-or-model-id",
+          baseUrl: "https://provider.example/openai/v1",
+          useManagedModels: false,
+          mode: "on_demand",
+          reviewPullRequests: false,
+          autoPublishFindings: false,
+          clearApiKey: false,
+          clearHeaders: false,
+          headers: {},
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "This provider requires an API key",
+      });
+    },
+  );
+
+  it.each([
+    {
+      provider: "bedrock",
+      model: "openai.gpt-oss-120b",
+      listedModel: "openai.gpt-oss-120b",
+      modelVerified: true,
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+    },
+    {
+      provider: "azure_foundry",
+      model: "reviewduck-deployment",
+      listedModel: "gpt-5.4",
+      modelVerified: false,
+      baseUrl: "https://reviewduck.openai.azure.com/openai/v1",
+    },
+  ])(
+    "verifies the documented $provider model endpoint",
+    async ({ provider, model, listedModel, modelVerified, baseUrl }) => {
+      mocks.isLocalDeployment.mockReturnValue(true);
+      mocks.safeRemoteFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ id: listedModel }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      const { db } = createFakeDb();
+
+      await expect(
+        caller(db).testConfiguration({
+          provider,
+          model,
+          apiKey: "provider-key",
+          baseUrl,
+          useManagedModels: false,
+          mode: "on_demand",
+          reviewPullRequests: false,
+          autoPublishFindings: false,
+          clearApiKey: false,
+          clearHeaders: false,
+          headers: {},
+        }),
+      ).resolves.toMatchObject({ ok: true, model, modelVerified });
+      expect(mocks.assertSafeRemoteUrl).toHaveBeenCalledWith(baseUrl, false);
+      expect(mocks.safeRemoteFetch).toHaveBeenCalledWith(
+        `${baseUrl}/models`,
+        expect.objectContaining({
+          headers: { authorization: "Bearer provider-key" },
+        }),
+        false,
+      );
+      expect(mocks.requireAdmin).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("refuses a member who cannot administer the workspace", async () => {
+    mocks.isLocalDeployment.mockReturnValue(true);
+    mocks.requireAdmin.mockRejectedValueOnce(
+      new TRPCError({
+        code: "FORBIDDEN",
+        message: "Workspace administrator access required",
+      }),
+    );
+    const { db } = createFakeDb();
+
+    await expect(
+      caller(db).testConfiguration({
+        provider: "openrouter",
+        model: "example/model",
+        apiKey: "provider-key",
+        baseUrl: "https://openrouter.ai/api/v1",
+        useManagedModels: false,
+        mode: "on_demand",
+        reviewPullRequests: false,
+        autoPublishFindings: false,
+        clearApiKey: false,
+        clearHeaders: false,
+        headers: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Workspace administrator access required",
+    });
+    expect(mocks.safeRemoteFetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member before returning a missing-URL provider error", async () => {
+    mocks.isLocalDeployment.mockReturnValue(true);
+    mocks.requireAdmin.mockRejectedValueOnce(
+      new TRPCError({
+        code: "FORBIDDEN",
+        message: "Workspace administrator access required",
+      }),
+    );
+    const { db } = createFakeDb();
+
+    await expect(
+      caller(db).testConfiguration({
+        provider: "openrouter",
+        model: "example/model",
+        useManagedModels: false,
+        mode: "on_demand",
+        reviewPullRequests: false,
+        autoPublishFindings: false,
+        clearApiKey: false,
+        clearHeaders: false,
+        headers: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Workspace administrator access required",
+    });
   });
 });
 
@@ -326,5 +475,34 @@ describe("ai.usage over a review tree", () => {
       cacheWriteTokens: 10,
       totalTokens: 900,
     });
+  });
+});
+
+describe("persisted PR review lookup", () => {
+  it("keeps an older snapshot's run discoverable while scoping it to its reviewer", async () => {
+    const job = {
+      id: "saved-run",
+      status: "completed",
+      snapshotId: "old-snapshot",
+      agentVersion: "old-version",
+    };
+    const { db, captured } = createFakeDb({ aiJob: job });
+    const result = await caller(db).reviewStatus({
+      pullRequestId: "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10",
+    });
+    expect(result).toEqual(job);
+    const sql = renderSql(captured.jobWhere);
+    expect(sql).toContain('"userId"');
+    expect(sql).toContain('"parentJobId" is null');
+    expect(sql).not.toContain('"snapshotId"');
+    expect(sql).not.toContain('"agentVersion"');
+  });
+
+  it("refuses details when the requested run is not owned by the caller", async () => {
+    const { db, captured } = createFakeDb();
+    await expect(
+      caller(db).reviewRun({ jobId: "3f1d1f9c-6b0b-4a2f-8a1c-9d5e2b7c4a10" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(renderSql(captured.jobWhere)).toContain('"userId"');
   });
 });

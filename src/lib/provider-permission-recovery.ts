@@ -4,7 +4,7 @@ import {
 } from "~/lib/provider-credential-recovery";
 import { providerLabel } from "~/lib/provider-labels";
 
-export type ProviderPermissionKind = "merge" | "review" | "sync";
+export type ProviderPermissionKind = "merge" | "review" | "sync" | "ready";
 
 export type ProviderPermissionName = "github" | "gitlab" | "azure_devops";
 
@@ -45,7 +45,7 @@ export function providerRequiredAccess(
   provider: ProviderPermissionName,
   kind: ProviderPermissionKind,
 ) {
-  if (kind === "review") return reviewAccess[provider];
+  if (kind === "review" || kind === "ready") return reviewAccess[provider];
   if (kind === "sync") return syncAccess[provider];
   return mergeAccess[provider];
 }
@@ -117,6 +117,23 @@ export function providerPermissionRecovery(
       settingsHref: replaceHref,
       settingsLabel: "Open provider settings",
       reconnect: Boolean(connection?.canReconnect && !githubApp),
+      replaceToken: Boolean(connection?.canReplaceToken),
+    };
+  }
+
+  if (kind === "ready") {
+    return {
+      title: `This connection cannot mark the pull request ready on ${label}`,
+      description: `Grant ${requiredAccess}, then ${connection?.canReplaceToken ? "replace the token" : "reconnect the provider"}, or mark it ready on ${label}.`,
+      requiredAccess,
+      finishLabel: `Mark ready on ${label}`,
+      settingsHref: replaceHref,
+      settingsLabel: connection?.canReplaceToken
+        ? "Update token permissions"
+        : connection?.canReconnect
+          ? `Reconnect ${label}`
+          : "Open provider settings",
+      reconnect: Boolean(connection?.canReconnect),
       replaceToken: Boolean(connection?.canReplaceToken),
     };
   }

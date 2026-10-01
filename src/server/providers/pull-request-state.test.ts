@@ -11,7 +11,10 @@ vi.mock("~/server/workflows/service", () => ({
 import { pullRequests, type repositories } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import type { ConnectionAccess } from "./credentials";
-import { refreshRepositoryPullRequestStates } from "./pull-request-state";
+import {
+  applyTerminalPullRequestState,
+  refreshRepositoryPullRequestStates,
+} from "./pull-request-state";
 import type { PullRequestSummary } from "./types";
 
 type Database = typeof database;
@@ -113,6 +116,38 @@ const repository = {
   intakeOwnerId: null,
 } as typeof repositories.$inferSelect;
 
+describe("terminal pull-request state", () => {
+  it("updates tracked rows directly without starting synchronization", async () => {
+    const writes: Record<string, unknown>[] = [];
+    const update = {
+      set(values: Record<string, unknown>) {
+        writes.push(values);
+        return update;
+      },
+      where() {
+        return update;
+      },
+      returning: async () => [{ id: "pull-request-1" }],
+    };
+    const db = { update: () => update } as unknown as Database;
+
+    const changed = await applyTerminalPullRequestState(db, {
+      repositoryIds: [repository.id],
+      pullRequestNumber: 10,
+      state: "merged",
+    });
+
+    expect(changed).toBe(1);
+    expect(writes).toEqual([
+      expect.objectContaining({
+        state: "merged",
+        lastSyncedAt: expect.any(Date),
+      }),
+    ]);
+    expect(mocks.startPullRequestSync).not.toHaveBeenCalled();
+  });
+});
+
 /** Builds a tracked row that agrees with the remote summary below. */
 function createTracked(
   overrides: Partial<TrackedPullRequest> = {},
@@ -126,6 +161,9 @@ function createTracked(
     description: "Body",
     authorLogin: "octocat",
     authorAvatarUrl: "https://example.test/avatar.png",
+    authorExternalId: null,
+    reviewerExternalIds: [],
+    assigneeExternalIds: [],
     sourceBranch: "feature",
     targetBranch: "main",
     headSha: "aaa",
@@ -135,6 +173,7 @@ function createTracked(
     additions: 12,
     deletions: 3,
     changedFiles: 2,
+    labels: [],
     lastSyncedAt: new Date("2026-08-01T00:00:00Z"),
     createdAt: new Date("2026-08-01T00:00:00Z"),
     updatedAt: new Date("2026-08-01T00:00:00Z"),
@@ -162,6 +201,7 @@ function createSummary(
     additions: 0,
     deletions: 0,
     changedFiles: 0,
+    labels: [],
     ...overrides,
   };
 }
@@ -234,6 +274,27 @@ describe("repository pull-request state refresh", () => {
       db,
       expect.objectContaining({ pullRequestNumber: 11 }),
     );
+  });
+
+  it("writes provider labels when they change without a revision move", async () => {
+    const { db, writes } = createClaimedDb([createTracked()]);
+
+    await refreshRepositoryPullRequestStates(
+      db,
+      repository,
+      createListingAccess([
+        createSummary({
+          labels: [{ name: "size:L", color: "d93f0b" }],
+        }),
+      ]),
+    );
+
+    const [write] = writes.filter((entry) => entry.table === pullRequests);
+    expect(write?.values).toMatchObject({
+      labels: [{ name: "size:L", color: "d93f0b" }],
+      headSha: "aaa",
+    });
+    expect(mocks.startPullRequestSync).not.toHaveBeenCalled();
   });
 
   it("keeps the stored diff counts for pull requests seen only in the listing", async () => {

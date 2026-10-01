@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
   and,
@@ -39,10 +38,10 @@ import {
 } from "@/drizzle/schema";
 import { conceptStatusFromMembers } from "~/lib/concept-progress";
 import {
-  findImportedDeclarationLine,
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
+import { attributeFileCommits } from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { providerConnectionRecovery } from "~/lib/provider-permission-recovery";
 import {
@@ -61,45 +60,44 @@ import {
   MAX_CONCEPT_CHANGED_LINES,
   MAX_CONCEPT_FILES,
 } from "~/server/analysis/concepts";
-import { analyzeFiles } from "~/server/analysis/engine";
+import { findImportedDeclarationLine } from "~/server/analysis/declarations";
 import { sha256 } from "~/server/analysis/hash";
 import { importReferenceForLocal } from "~/server/analysis/imports";
 import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
 import type { ProviderPullRequestLifecycle } from "~/server/providers/types";
 import {
+  providerForReviewerRead,
+  providerForReviewerWrite,
+} from "~/server/providers/user-credentials";
+import {
   assertCommentIsTheReviewersToChange,
-  claimCommentForPublicationRetry,
-  findEquivalentUserComment,
   forgetPublishedComments,
-  providerCommentBody,
-  publicationAttemptKey,
   publishedCommentId,
-  publishedThreadForComment,
+  publishedCommentLedger,
   rewrittenProviderCommentBody,
   visibleProviderCommentBody,
 } from "~/server/review/comments";
 import { reviewCompletionCounts } from "~/server/review/completion";
-import {
-  deepReviewFindingForPublication,
-  deepReviewRunPayload,
-} from "~/server/review/deep/payload";
+import { deepReviewRunPayload } from "~/server/review/deep/payload";
 import {
   recomputeReviewStats,
   reviewExperience,
 } from "~/server/review/experience";
+import { projectImportMaps } from "~/server/review/project-import-maps";
 import {
   accessiblePullRequest,
   attachedProviderThread,
   providerLifecycleForConnection,
   providerOperationError,
+  providerRevisionIsCurrent,
   providerScopeForPullRequest,
-  providerScopeForUnit,
   providerThreadError,
   reviewThreadScope,
   reviewUnitContainsLine,
   scopedProviderLifecycle,
 } from "~/server/review/provider-thread";
+import { publishReviewComment } from "~/server/review/publish-comment";
 import {
   removePullRequestFromQueue,
   restorePullRequestToQueue,
@@ -111,19 +109,27 @@ import {
   conceptMembersForMutation,
   currentSnapshotFileForMember,
   finalizeSignOffs,
+  finalizeUnreviews,
   lockConceptLayoutForReviewer,
   lockConceptLayoutScope,
   type PersistedSignOff,
   persistSignOffs,
+  persistUnreviews,
   signOffFailure,
 } from "~/server/review/sign-off";
 import {
+  analyzeFilesForSymbolPeek,
   declaredSymbolInSnapshot,
   importCandidateReads,
   importedSymbolDefinition,
   parsedSymbolFile,
 } from "~/server/review/symbol-peek";
 import { unitsWithoutSource } from "~/server/review/units";
+import {
+  uploadCommentImage,
+  uploadCommentImageSchema,
+} from "~/server/review/upload-comment-image";
+import { withViewerInvolvement } from "~/server/review/viewer-involvement";
 import {
   assignProviderThreadsToUnits,
   hasNewProviderActivity,
@@ -142,6 +148,7 @@ import {
 } from "~/server/workflows/service";
 import {
   editReviewThreadCommentSchema,
+  fileLineHistorySchema,
   importTargetSchema,
   improveConceptGroupingSchema,
   providerReviewDecisionSchema,
@@ -160,6 +167,7 @@ import {
   signOffSchema,
   symbolDefinitionSchema,
   syncPullRequestSchema,
+  unreviewBatchSchema,
   unreviewConceptSchema,
   unreviewFileSchema,
   unreviewSchema,
@@ -175,11 +183,18 @@ export const reviewRouter = createTRPCRouter({
         title: pullRequests.title,
         authorLogin: pullRequests.authorLogin,
         authorAvatarUrl: pullRequests.authorAvatarUrl,
+        authorExternalId: pullRequests.authorExternalId,
+        reviewerExternalIds: pullRequests.reviewerExternalIds,
+        assigneeExternalIds: pullRequests.assigneeExternalIds,
+        connectionId: providerConnections.id,
+        connectionAccountId: providerConnections.externalAccountId,
+        connectionDisplayName: providerConnections.displayName,
         state: pullRequests.state,
         webUrl: pullRequests.webUrl,
         updatedAt: pullRequests.updatedAt,
         additions: pullRequests.additions,
         deletions: pullRequests.deletions,
+        labels: pullRequests.labels,
         repositoryOwner: repositories.owner,
         repositoryName: repositories.name,
         provider: providerConnections.provider,
@@ -220,13 +235,17 @@ export const reviewRouter = createTRPCRouter({
         ),
       )
       .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
-    if (snapshots.length === 0) {
-      return rows.map((row) => ({
-        ...row,
-        totalUnits: 0,
-        signedUnits: 0,
-        carriedSignOffs: 0,
-      }));
+    const listed =
+      snapshots.length === 0
+        ? rows.map((row) => ({
+            ...row,
+            totalUnits: 0,
+            signedUnits: 0,
+            carriedSignOffs: 0,
+          }))
+        : null;
+    if (listed) {
+      return withViewerInvolvement(ctx.db, ctx.auth.userId, listed);
     }
     const progress = await ctx.db
       .select({
@@ -260,17 +279,21 @@ export const reviewRouter = createTRPCRouter({
     const snapshotByPullRequest = new Map(
       snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot.id]),
     );
-    return rows.map((row) => {
-      const counts = progressBySnapshot.get(
-        snapshotByPullRequest.get(row.id) ?? "",
-      );
-      return {
-        ...row,
-        totalUnits: Number(counts?.totalUnits ?? 0),
-        signedUnits: Number(counts?.signedUnits ?? 0),
-        carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
-      };
-    });
+    return withViewerInvolvement(
+      ctx.db,
+      ctx.auth.userId,
+      rows.map((row) => {
+        const counts = progressBySnapshot.get(
+          snapshotByPullRequest.get(row.id) ?? "",
+        );
+        return {
+          ...row,
+          totalUnits: Number(counts?.totalUnits ?? 0),
+          signedUnits: Number(counts?.signedUnits ?? 0),
+          carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
+        };
+      }),
+    );
   }),
 
   removeFromQueue: protectedProcedure
@@ -706,7 +729,11 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
+        const provider = await providerForReviewerRead(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
         const [state, remotePullRequest] = await Promise.all([
           provider.getPullRequestReviewState(
             scope.repositoryExternalId,
@@ -717,11 +744,10 @@ export const reviewRouter = createTRPCRouter({
             scope.pullRequestNumber,
           ),
         ]);
-        const revisionCurrent =
-          remotePullRequest.headSha === scope.headSha &&
-          remotePullRequest.baseSha === scope.baseSha &&
-          scope.snapshot?.headSha === scope.headSha &&
-          scope.snapshot?.baseSha === scope.baseSha;
+        const revisionCurrent = providerRevisionIsCurrent(
+          scope,
+          remotePullRequest,
+        );
         return {
           ...state,
           provider: scope.connection.provider,
@@ -786,6 +812,78 @@ export const reviewRouter = createTRPCRouter({
           cause,
           "lifecycle",
         );
+      }
+    }),
+
+  markReadyForReview: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `provider-ready:${ctx.auth.userId}:${input.pullRequestId}`,
+        10,
+        60_000,
+      );
+      if (
+        !scope.snapshot ||
+        scope.snapshot.headSha !== scope.headSha ||
+        scope.snapshot.baseSha !== scope.baseSha
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Synchronize the pull request before marking it ready for review",
+        });
+      }
+      const completion = await reviewCompletionCounts(
+        ctx.db,
+        scope.snapshot.id,
+        ctx.auth.userId,
+      );
+      if (completion.total === 0 || completion.signed < completion.total) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Complete every review unit before marking this pull request ready",
+        });
+      }
+      try {
+        const provider = await providerForConnection(ctx.db, scope.connection);
+        const remote = await provider.getPullRequest(
+          scope.repositoryExternalId,
+          scope.pullRequestNumber,
+        );
+        if (!providerRevisionIsCurrent(scope, remote)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The provider has a newer revision. Synchronize it before marking this pull request ready.",
+          });
+        }
+        if (remote.state !== "draft" && remote.state !== "open") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "This pull request is no longer open",
+          });
+        }
+        if (remote.state === "draft") {
+          await provider.markPullRequestReadyForReview({
+            repositoryExternalId: scope.repositoryExternalId,
+            pullRequestNumber: scope.pullRequestNumber,
+          });
+        }
+        await ctx.db
+          .update(pullRequests)
+          .set({ state: "open", lastSyncedAt: new Date() })
+          .where(eq(pullRequests.id, scope.pullRequestId));
+        return { ready: true };
+      } catch (cause) {
+        throw providerOperationError(scope.connection.provider, cause, "ready");
       }
     }),
 
@@ -967,7 +1065,11 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
         const [remotePullRequest, currentState] = await Promise.all([
           provider.getPullRequest(
             scope.repositoryExternalId,
@@ -1076,6 +1178,46 @@ export const reviewRouter = createTRPCRouter({
           cause,
           "review",
         );
+      }
+    }),
+
+  revisionProbe: protectedProcedure
+    .input(reviewWorkspaceSchema)
+    .query(async ({ ctx, input }) => {
+      const [scope] = await Promise.all([
+        providerScopeForPullRequest(
+          ctx.db,
+          ctx.auth.userId,
+          input.pullRequestId,
+        ),
+        enforceRateLimit(
+          ctx.db,
+          `review-revision-probe:${ctx.auth.userId}`,
+          90,
+          60_000,
+        ),
+      ]);
+      await enforceRateLimit(
+        ctx.db,
+        `review-revision-probe-resource:${ctx.auth.userId}:${input.pullRequestId}`,
+        20,
+        60_000,
+      );
+      try {
+        const provider = await providerForConnection(ctx.db, scope.connection);
+        const remote = await provider.getPullRequest(
+          scope.repositoryExternalId,
+          scope.pullRequestNumber,
+        );
+        return {
+          current: providerRevisionIsCurrent(scope, remote),
+          snapshotId: scope.snapshot?.id ?? null,
+          headSha: remote.headSha,
+          baseSha: remote.baseSha,
+          probedAt: new Date(),
+        };
+      } catch (cause) {
+        throw providerOperationError(scope.connection.provider, cause, "probe");
       }
     }),
 
@@ -1502,10 +1644,19 @@ export const reviewRouter = createTRPCRouter({
       const snapshot = scope.snapshot;
       if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
+      const provider = await providerForConnection(ctx.db, scope.connection);
+      const maps = await projectImportMaps(
+        provider,
+        scope.repositoryExternalId,
+        snapshot.headSha,
+        snapshot.id,
+        input.sourcePath,
+      );
       const candidates = importPathCandidates(
         input.sourcePath,
         input.specifier,
         input.sourceLanguage,
+        maps,
       );
       if (candidates.length === 0) {
         return {
@@ -1529,6 +1680,7 @@ export const reviewRouter = createTRPCRouter({
         input.sourceLanguage,
         input,
         storedUnits,
+        maps,
       );
       if (storedTarget) {
         if (storedTarget.exactUnit) {
@@ -1547,7 +1699,7 @@ export const reviewRouter = createTRPCRouter({
             source: moduleUnit.source,
             startLine: moduleUnit.startLine,
             endLine: moduleUnit.endLine,
-            focusLine: findImportedDeclarationLine(
+            focusLine: await findImportedDeclarationLine(
               moduleUnit.source,
               input.imported,
               moduleUnit.language,
@@ -1558,7 +1710,6 @@ export const reviewRouter = createTRPCRouter({
         }
       }
 
-      const provider = await providerForConnection(ctx.db, scope.connection);
       for await (const read of importCandidateReads(
         provider,
         scope.repositoryExternalId,
@@ -1580,9 +1731,11 @@ export const reviewRouter = createTRPCRouter({
             reason: "too_large" as const,
           };
         }
-        const analyzed = analyzeFiles([
-          { path: read.path, content: read.content, changeType: "modified" },
-        ]).units;
+        const analyzed = (
+          await analyzeFilesForSymbolPeek([
+            { path: read.path, content: read.content, changeType: "modified" },
+          ])
+        ).units;
         const exactTarget =
           input.kind === "named"
             ? analyzed.find(
@@ -1607,12 +1760,12 @@ export const reviewRouter = createTRPCRouter({
           endLine: target.endLine,
           focusLine:
             exactTarget?.startLine ??
-            findImportedDeclarationLine(
+            (await findImportedDeclarationLine(
               target.source,
               input.imported,
               target.language,
               target.startLine,
-            ),
+            )),
           inReviewPath: false,
         };
       }
@@ -1692,18 +1845,30 @@ export const reviewRouter = createTRPCRouter({
             };
       const read = { line: input.line, path: input.sourcePath };
       const analyzedDeclaration = parsedFile?.declarations.get(input.symbol);
+      let sameFilePeek: ReturnType<typeof sameFileDeclarationPeek> | undefined;
+      if (
+        parsedFile &&
+        (!analyzedDeclaration ||
+          definitionIsWhereTheNameWasRead(analyzedDeclaration, read))
+      ) {
+        const focusLine = await findImportedDeclarationLine(
+          parsedFile.source,
+          input.symbol,
+          parsedFile.language,
+        );
+        if (focusLine !== undefined) {
+          sameFilePeek = sameFileDeclarationPeek({
+            language: parsedFile.language,
+            path: input.sourcePath,
+            source: parsedFile.source,
+            symbol: input.symbol,
+            focusLine,
+          });
+        }
+      }
       const local = localDefinitionForPeek(
         analyzedDeclaration,
-        parsedFile &&
-          (!analyzedDeclaration ||
-            definitionIsWhereTheNameWasRead(analyzedDeclaration, read))
-          ? sameFileDeclarationPeek({
-              language: parsedFile.language,
-              path: input.sourcePath,
-              source: parsedFile.source,
-              symbol: input.symbol,
-            })
-          : undefined,
+        sameFilePeek,
         read,
       );
       const imported = resolvedInput.specifier
@@ -1732,6 +1897,57 @@ export const reviewRouter = createTRPCRouter({
         return { kind: "unresolved" as const, reason: "self" as const };
       }
       return found;
+    }),
+
+  fileLineHistory: protectedProcedure
+    .input(fileLineHistorySchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `file-line-history:${ctx.auth.userId}:${input.pullRequestId}`,
+        20,
+        60_000,
+      );
+      if (!scope.snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      const [file] = await ctx.db
+        .select({ path: snapshotFiles.path })
+        .from(snapshotFiles)
+        .where(
+          and(
+            eq(snapshotFiles.snapshotId, scope.snapshot.id),
+            or(
+              eq(snapshotFiles.path, input.path),
+              eq(snapshotFiles.previousPath, input.path),
+            ),
+          ),
+        )
+        .limit(1);
+      if (!file) throw new TRPCError({ code: "NOT_FOUND" });
+      try {
+        const provider = await providerForReviewerRead(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
+        const listed = await provider.listPullRequestFileCommits({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          path: input.path,
+          headSha: scope.snapshot.headSha,
+        });
+        return attributeFileCommits(listed);
+      } catch (cause) {
+        if (cause instanceof TRPCError) throw cause;
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: "Commit history for this file could not be loaded",
+        });
+      }
     }),
 
   unitDiscussion: protectedProcedure
@@ -1898,243 +2114,33 @@ export const reviewRouter = createTRPCRouter({
       return await deepReviewRunPayload(ctx.db, job);
     }),
 
+  uploadCommentImage: protectedProcedure
+    .input(uploadCommentImageSchema)
+    .mutation(({ ctx, input }) =>
+      uploadCommentImage(ctx.db, ctx.auth.userId, input),
+    ),
+
   publishComment: protectedProcedure
     .input(publishReviewCommentSchema)
-    .mutation(async ({ ctx, input }) => {
-      const scope = await providerScopeForUnit(
-        ctx.db,
-        ctx.auth.userId,
-        input.unitId,
-        "Synchronize the pull request before publishing a comment",
-      );
-      if (!reviewUnitContainsLine(scope, input.line)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "The selected line is outside this review unit",
-        });
-      }
-
-      let body = input.body;
-      let source: "user" | "ai" = "user";
-      let aiResultIndex = input.aiFindingIndex ?? input.aiCommentIndex;
-      if (
-        input.aiJobId !== undefined &&
-        (aiResultIndex !== undefined || input.aiFindingId !== undefined)
-      ) {
-        source = "ai";
-        const job = await ctx.db.query.aiJobs.findFirst({
-          where: and(
-            eq(aiJobs.id, input.aiJobId),
-            eq(aiJobs.userId, ctx.auth.userId),
-            eq(aiJobs.pullRequestId, scope.pullRequestId),
-            eq(aiJobs.snapshotId, scope.snapshotId),
-            eq(aiJobs.status, "completed"),
-          ),
-        });
-        if (input.aiFindingId !== undefined) {
-          // Authorization is the job lookup above, unchanged; the row
-          // predicates below only establish that the finding still describes
-          // this line.
-          if (job?.kind !== "review" || job.parentJobId !== null) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "This AI finding does not belong to the selected review",
-            });
-          }
-          const finding = await deepReviewFindingForPublication(ctx.db, {
-            findingId: input.aiFindingId,
-            parentJobId: job.id,
-            path: scope.path,
-            line: input.line,
-          });
-          body = finding.body;
-          aiResultIndex = finding.orderIndex;
-        } else if (input.aiFindingIndex !== undefined) {
-          const finding = job?.result?.findings[input.aiFindingIndex];
-          if (
-            job?.kind !== "review" ||
-            !finding ||
-            finding.path !== scope.path ||
-            finding.line !== input.line
-          ) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "This AI finding no longer matches the selected code",
-            });
-          }
-          body = `**${finding.title}**\n\n${finding.body}`;
-        } else {
-          const proposal =
-            job?.result?.commentProposals?.[input.aiCommentIndex ?? -1];
-          if (
-            job?.kind !== "explain" ||
-            !job.question ||
-            !proposal ||
-            proposal.path !== scope.path ||
-            proposal.line !== input.line
-          ) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message:
-                "This AI comment proposal no longer matches the selected code",
-            });
-          }
-          body = input.body ?? proposal.body;
-        }
-      }
-      if (!body) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Comment text is required",
-        });
-      }
-
-      let retryingPublication = false;
-      let comment =
-        source === "user"
-          ? await findEquivalentUserComment(ctx.db, {
-              unitId: scope.unitId,
-              userId: ctx.auth.userId,
-              body,
-              line: input.line,
-            })
-          : undefined;
-      const equivalentUserCommentFound = comment !== undefined;
-      if (comment?.status === "published") return comment;
-      if (comment?.status === "failed" || comment?.status === "publishing") {
-        comment = await claimCommentForPublicationRetry(ctx.db, comment.id);
-        retryingPublication = comment !== undefined;
-      }
-      if (!comment && !equivalentUserCommentFound) {
-        const publicationLeaseToken = randomUUID();
-        [comment] = await ctx.db
-          .insert(reviewComments)
-          .values({
-            unitId: scope.unitId,
-            userId: ctx.auth.userId,
-            aiJobId: input.aiJobId,
-            aiFindingIndex: aiResultIndex,
-            source,
-            body,
-            line: input.line,
-            status: "publishing",
-            publicationLeaseToken,
-          })
-          .onConflictDoNothing()
-          .returning();
-      }
-      if (!comment) {
-        comment =
-          input.aiJobId !== undefined
-            ? await ctx.db.query.reviewComments.findFirst({
-                where: and(
-                  eq(reviewComments.aiJobId, input.aiJobId),
-                  eq(reviewComments.aiFindingIndex, aiResultIndex ?? -1),
-                ),
-              })
-            : undefined;
-        if (comment?.status === "published") return comment;
-        if (comment?.status === "failed" || comment?.status === "publishing") {
-          comment = await claimCommentForPublicationRetry(ctx.db, comment.id);
-          retryingPublication = comment !== undefined;
-        }
-      }
-      if (!comment) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "This comment is already being published",
-        });
-      }
-      if (!comment.publicationLeaseToken) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "This comment publication lease is unavailable",
-        });
-      }
-      const publicationLeaseToken = comment.publicationLeaseToken;
-
-      try {
-        const provider = await providerForConnection(ctx.db, scope.connection);
-        const existingThread = retryingPublication
-          ? publishedThreadForComment(
-              await provider.listInlineCommentThreads(
-                scope.repositoryExternalId,
-                scope.pullRequestNumber,
-              ),
-              comment.id,
-            )
-          : undefined;
-        const published = existingThread
-          ? { externalId: existingThread.externalId }
-          : await provider.publishInlineComment({
-              repositoryExternalId: scope.repositoryExternalId,
-              pullRequestNumber: scope.pullRequestNumber,
-              headSha: scope.headSha,
-              path: scope.path,
-              line: input.line,
-              side: scope.changeType === "deleted" ? "left" : "right",
-              body: providerCommentBody(body, comment.id),
-              idempotencyKey: publicationAttemptKey(comment.id),
-            });
-        const [updated] = await ctx.db
-          .update(reviewComments)
-          .set({
-            status: "published",
-            providerExternalId: published.externalId,
-            publicationLeaseToken: null,
-            error: null,
-            publishedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(reviewComments.id, comment.id),
-              eq(reviewComments.status, "publishing"),
-              eq(reviewComments.publicationLeaseToken, publicationLeaseToken),
-            ),
-          )
-          .returning();
-        if (!updated) {
-          throw new Error("Comment publication lease was superseded");
-        }
-        return updated;
-      } catch (cause) {
-        const message = providerSyncErrorMessage(
-          scope.connection.provider,
-          cause,
-        );
-        await ctx.db
-          .update(reviewComments)
-          .set({
-            status: "failed",
-            publicationLeaseToken: null,
-            error: message,
-          })
-          .where(
-            and(
-              eq(reviewComments.id, comment.id),
-              eq(reviewComments.status, "publishing"),
-              eq(reviewComments.publicationLeaseToken, publicationLeaseToken),
-            ),
-          );
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message,
-          cause,
-        });
-      }
-    }),
+    .mutation(({ ctx, input }) =>
+      publishReviewComment(ctx.db, ctx.auth.userId, input),
+    ),
 
   replyToThread: protectedProcedure
     .input(replyToReviewThreadSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-reply",
       );
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
+        const thread = await attachedProviderThread(
+          listingProvider,
+          scope,
+          input,
+        );
         const parentCommentExternalId = thread.comments[0]?.externalId;
         if (!parentCommentExternalId) {
           throw new TRPCError({
@@ -2143,6 +2149,18 @@ export const reviewRouter = createTRPCRouter({
               "This provider conversation is no longer attached to the current review unit",
           });
         }
+        const ledger = await publishedCommentLedger(
+          ctx.db,
+          input.unitId,
+          thread,
+          parentCommentExternalId,
+        );
+        const { provider, publishedAs } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+          ledger?.publishedAs,
+        );
         const reply = await provider.replyToInlineThread({
           repositoryExternalId: scope.repositoryExternalId,
           pullRequestNumber: scope.pullRequestNumber,
@@ -2160,6 +2178,7 @@ export const reviewRouter = createTRPCRouter({
           body: input.body,
           line: thread.line,
           status: "published",
+          publishedAs,
           providerCommentExternalId: reply.externalId,
           publishedAt: new Date(),
         });
@@ -2195,14 +2214,18 @@ export const reviewRouter = createTRPCRouter({
   editThreadComment: protectedProcedure
     .input(editReviewThreadCommentSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-edit-comment",
       );
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
+        const thread = await attachedProviderThread(
+          listingProvider,
+          scope,
+          input,
+        );
         const edited = thread.comments.find(
           ({ externalId }) => externalId === input.commentExternalId,
         );
@@ -2212,12 +2235,18 @@ export const reviewRouter = createTRPCRouter({
             message: "That comment is no longer part of this conversation",
           });
         }
-        await assertCommentIsTheReviewersToChange(
+        const ledger = await assertCommentIsTheReviewersToChange(
           ctx.db,
           ctx.auth.userId,
           input.unitId,
           thread,
           input.commentExternalId,
+        );
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+          ledger?.publishedAs,
         );
         await provider.editInlineComment({
           repositoryExternalId: scope.repositoryExternalId,
@@ -2262,14 +2291,18 @@ export const reviewRouter = createTRPCRouter({
   deleteThreadComment: protectedProcedure
     .input(reviewThreadCommentSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-delete-comment",
       );
       try {
-        const thread = await attachedProviderThread(provider, scope, input);
+        const thread = await attachedProviderThread(
+          listingProvider,
+          scope,
+          input,
+        );
         if (
           !thread.comments.some(
             ({ externalId }) => externalId === input.commentExternalId,
@@ -2280,12 +2313,18 @@ export const reviewRouter = createTRPCRouter({
             message: "That comment is no longer part of this conversation",
           });
         }
-        await assertCommentIsTheReviewersToChange(
+        const ledger = await assertCommentIsTheReviewersToChange(
           ctx.db,
           ctx.auth.userId,
           input.unitId,
           thread,
           input.commentExternalId,
+        );
+        const { provider } = await providerForReviewerWrite(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+          ledger?.publishedAs,
         );
         await provider.deleteInlineComment({
           repositoryExternalId: scope.repositoryExternalId,
@@ -2308,34 +2347,46 @@ export const reviewRouter = createTRPCRouter({
   deleteThread: protectedProcedure
     .input(reviewThreadSchema)
     .mutation(async ({ ctx, input }) => {
-      const { provider, scope } = await reviewThreadScope(
+      const { provider: listingProvider, scope } = await reviewThreadScope(
         ctx.db,
         ctx.auth.userId,
         input,
         "review-delete-thread",
       );
-      const thread = await attachedProviderThread(provider, scope, input).catch(
-        (cause: unknown) => {
-          throw providerThreadError(scope.connection.provider, cause);
-        },
-      );
+      const thread = await attachedProviderThread(
+        listingProvider,
+        scope,
+        input,
+      ).catch((cause: unknown) => {
+        throw providerThreadError(scope.connection.provider, cause);
+      });
       // Deleting a conversation takes every comment in it, so each one has to
-      // be the reviewer's to take.
+      // be the reviewer's to take before any write starts.
+      const authored = [];
       for (const comment of thread.comments) {
-        await assertCommentIsTheReviewersToChange(
-          ctx.db,
-          ctx.auth.userId,
-          input.unitId,
-          thread,
-          comment.externalId,
-        );
+        authored.push({
+          comment,
+          ledger: await assertCommentIsTheReviewersToChange(
+            ctx.db,
+            ctx.auth.userId,
+            input.unitId,
+            thread,
+            comment.externalId,
+          ),
+        });
       }
       // Replies first: no provider lets the comment a conversation hangs
       // from leave while the conversation still holds answers to it.
-      const ordered = [...thread.comments].reverse();
+      const ordered = [...authored].reverse();
       const removed: string[] = [];
       try {
-        for (const comment of ordered) {
+        for (const { comment, ledger } of ordered) {
+          const { provider } = await providerForReviewerWrite(
+            ctx.db,
+            scope.connection,
+            ctx.auth.userId,
+            ledger?.publishedAs,
+          );
           await provider.deleteInlineComment({
             repositoryExternalId: scope.repositoryExternalId,
             pullRequestNumber: scope.pullRequestNumber,
@@ -2519,6 +2570,12 @@ export const reviewRouter = createTRPCRouter({
         and(
           eq(workspaceMembers.userId, ctx.auth.userId),
           inArray(syncRuns.status, ["queued", "running"]),
+          // A terminal webhook can race a sync that was already starting. The
+          // completed PR belongs in history, never back in review preparation.
+          or(
+            isNull(pullRequests.id),
+            inArray(pullRequests.state, ["open", "draft"]),
+          ),
         ),
       )
       .orderBy(desc(syncRuns.createdAt)),
@@ -2562,6 +2619,10 @@ export const reviewRouter = createTRPCRouter({
         and(
           eq(workspaceMembers.userId, ctx.auth.userId),
           gte(syncRuns.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1_000)),
+          or(
+            isNull(pullRequests.id),
+            inArray(pullRequests.state, ["open", "draft"]),
+          ),
         ),
       )
       .orderBy(desc(syncRuns.createdAt))
@@ -3014,15 +3075,11 @@ export const reviewRouter = createTRPCRouter({
       ctx.db.transaction(async (tx) => {
         const snapshotId = await conceptLayoutSnapshotId(tx, input.layoutId);
         await lockConceptLayoutScope(tx, ctx.auth.userId, snapshotId);
-        await assertSnapshotIsCurrent(
-          tx,
-          snapshotId,
-          "Synchronize the pull request before signing off this concept",
-        );
         const concept = await conceptMembersForMutation(
           tx,
           ctx.auth.userId,
           input,
+          { allowHistorical: true },
         );
         const waiting = await tx
           .select({ unitId: reviewWaits.unitId })
@@ -3179,6 +3236,7 @@ export const reviewRouter = createTRPCRouter({
           tx,
           ctx.auth.userId,
           input.snapshotFileId,
+          { allowHistorical: true },
         );
         if (!file) throw new TRPCError({ code: "NOT_FOUND" });
         const members = await tx.query.reviewUnits.findMany({
@@ -3459,115 +3517,58 @@ export const reviewRouter = createTRPCRouter({
     .input(unreviewSchema)
     .mutation(async ({ ctx, input }) =>
       ctx.db.transaction(async (tx) => {
-        const [unit] = await tx
-          .select({
-            id: reviewUnits.id,
-            snapshotId: reviewUnits.snapshotId,
-            semanticHash: reviewUnits.semanticHash,
-            complexity: reviewUnits.complexity,
-            stableKey: reviewUnits.stableKey,
-            pullRequestId: pullRequests.id,
-          })
-          .from(reviewUnits)
-          .innerJoin(
-            reviewSnapshots,
-            eq(reviewUnits.snapshotId, reviewSnapshots.id),
-          )
-          .innerJoin(
-            pullRequests,
-            eq(reviewSnapshots.pullRequestId, pullRequests.id),
-          )
-          .innerJoin(
-            repositories,
-            eq(pullRequests.repositoryId, repositories.id),
-          )
-          .innerJoin(
-            workspaceMembers,
-            eq(repositories.workspaceId, workspaceMembers.workspaceId),
-          )
-          .where(
-            and(
-              eq(reviewUnits.id, input.unitId),
-              eq(reviewSnapshots.headSha, pullRequests.headSha),
-              eq(reviewSnapshots.baseSha, pullRequests.baseSha),
-              eq(workspaceMembers.userId, ctx.auth.userId),
-            ),
-          )
-          .limit(1);
-        if (!unit) throw new TRPCError({ code: "NOT_FOUND" });
-
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${`review-signoffs:${unit.pullRequestId}:${ctx.auth.userId}`}))`,
-        );
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${`${unit.id}:${ctx.auth.userId}`}))`,
-        );
-        const activeSignOff = await tx.query.signOffs.findFirst({
-          where: and(
-            eq(signOffs.unitId, unit.id),
-            eq(signOffs.userId, ctx.auth.userId),
-            eq(signOffs.semanticHash, unit.semanticHash),
-            isNull(signOffs.invalidatedAt),
-          ),
-          orderBy: [desc(signOffs.signedOffAt)],
-        });
-        if (!activeSignOff) return { unreviewed: false };
-
-        const lineageUnits = await tx
-          .select({ id: reviewUnits.id })
-          .from(reviewUnits)
-          .innerJoin(
-            reviewSnapshots,
-            eq(reviewUnits.snapshotId, reviewSnapshots.id),
-          )
-          .where(
-            and(
-              eq(reviewSnapshots.pullRequestId, unit.pullRequestId),
-              eq(reviewUnits.stableKey, unit.stableKey),
-            ),
-          );
-        await tx
-          .update(signOffs)
-          .set({ invalidatedAt: new Date() })
-          .where(
-            and(
-              inArray(
-                signOffs.unitId,
-                lineageUnits.map(({ id }) => id),
-              ),
-              eq(signOffs.userId, ctx.auth.userId),
-              eq(signOffs.semanticHash, activeSignOff.semanticHash),
-              eq(signOffs.signedOffAt, activeSignOff.signedOffAt),
-              isNull(signOffs.invalidatedAt),
-            ),
-          );
-
-        if (input.sessionId) {
-          const session = await tx.query.reviewSessions.findFirst({
-            where: and(
-              eq(reviewSessions.id, input.sessionId),
-              eq(reviewSessions.userId, ctx.auth.userId),
-              eq(reviewSessions.snapshotId, unit.snapshotId),
-            ),
+        const outcome = (
+          await persistUnreviews(tx, ctx.auth.userId, [input])
+        ).get(input.unitId);
+        if (!outcome?.ok) {
+          throw new TRPCError({
+            code: outcome?.code ?? "NOT_FOUND",
+            message: outcome?.message,
           });
-          if (session && activeSignOff.signedOffAt >= session.startedAt) {
-            const experience = reviewExperience(
-              unit.complexity,
-              activeSignOff.durationSeconds,
-            );
-            await tx
-              .update(reviewSessions)
-              .set({
-                reviewedUnits: sql`greatest(${reviewSessions.reviewedUnits} - 1, 0)`,
-                experienceAwarded: sql`greatest(${reviewSessions.experienceAwarded} - ${experience}, 0)`,
-                completedAt: null,
-              })
-              .where(eq(reviewSessions.id, session.id));
-          }
         }
+        await finalizeUnreviews(
+          tx,
+          ctx.auth.userId,
+          outcome.unreviewed ? [outcome.write] : [],
+        );
+        return { unreviewed: outcome.unreviewed };
+      }),
+    ),
 
-        await recomputeReviewStats(tx, ctx.auth.userId);
-        return { unreviewed: true };
+  unreviewBatch: protectedProcedure
+    .input(unreviewBatchSchema)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        const outcomes = await persistUnreviews(
+          tx,
+          ctx.auth.userId,
+          input.undos,
+        );
+        await finalizeUnreviews(
+          tx,
+          ctx.auth.userId,
+          [...outcomes.values()].flatMap((outcome) =>
+            outcome.ok && outcome.unreviewed ? [outcome.write] : [],
+          ),
+        );
+        return input.undos.map(({ unitId }) => {
+          const outcome = outcomes.get(unitId);
+          if (!outcome) {
+            return {
+              code: "NOT_FOUND" as const,
+              message: "The review unit could not be returned",
+              ok: false as const,
+              unitId,
+            };
+          }
+          return outcome.ok
+            ? {
+                ok: true as const,
+                unitId,
+                unreviewed: outcome.unreviewed,
+              }
+            : outcome;
+        });
       }),
     ),
 

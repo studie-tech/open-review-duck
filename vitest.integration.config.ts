@@ -1,15 +1,21 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
-    alias: { "server-only": "/src/test/server-only.ts" },
+    alias: {
+      "server-only": fileURLToPath(
+        new URL("./src/test/server-only.ts", import.meta.url),
+      ),
+    },
   },
   test: {
     environment: "node",
     include: ["src/**/*.integration.test.ts"],
     setupFiles: [
       "./src/test/setup-environment.ts",
+      "./src/test/require-integration-database.ts",
       "./src/test/setup-tree-sitter.ts",
     ],
     testTimeout: 20_000,

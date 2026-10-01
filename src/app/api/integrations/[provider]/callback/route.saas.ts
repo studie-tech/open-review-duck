@@ -15,6 +15,7 @@ import { db } from "~/server/db";
 import { createProvider } from "~/server/providers";
 import { invalidateGitHubInstallationToken } from "~/server/providers/credentials";
 import {
+  exchangeGitHubUserAuthorization,
   exchangeGitHubUserCode,
   githubAppJwt,
   revokeGitHubUserToken,
@@ -24,10 +25,13 @@ import {
   hostedProvider,
   oauthCallbackUrl,
 } from "~/server/providers/oauth-callback-url";
+import { saveUserProviderCredential } from "~/server/providers/user-credentials";
 import {
   GITHUB_USER_AUTHORIZATION_STAGE,
   githubAuthorizationInstallationId,
   githubInstallationId,
+  oauthAuthorizationConnectionId,
+  oauthAuthorizationPurpose,
 } from "~/server/security/oauth-flow";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import { requireWorkspaceAdministrator } from "~/server/workspaces/access";
@@ -41,6 +45,68 @@ function securedCallbackResponse(response: NextResponse) {
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("Referrer-Policy", "no-referrer");
   return response;
+}
+
+/** Exchanges a GitLab authorization code for access and refresh tokens. */
+async function exchangeGitLabAuthorizationCode(input: {
+  code: string;
+  verifier: string;
+  redirectUri: string;
+}) {
+  if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
+    throw new Error("OAuth client is not configured");
+  }
+  const tokenResponse = await fetch("https://gitlab.com/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: env.GITLAB_CLIENT_ID,
+      client_secret: env.GITLAB_CLIENT_SECRET,
+      code: input.code,
+      code_verifier: input.verifier,
+      redirect_uri: input.redirectUri,
+    }),
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!tokenResponse.ok) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: `OAuth exchange failed (${tokenResponse.status})` },
+        { status: 502 },
+      ),
+    );
+  }
+  const tokens = (await tokenResponse.json()) as {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    expires_in?: unknown;
+  };
+  if (
+    typeof tokens.access_token !== "string" ||
+    tokens.access_token.length === 0 ||
+    tokens.access_token.length > 65_536 ||
+    typeof tokens.refresh_token !== "string" ||
+    tokens.refresh_token.length === 0 ||
+    tokens.refresh_token.length > 65_536 ||
+    typeof tokens.expires_in !== "number" ||
+    !Number.isFinite(tokens.expires_in) ||
+    tokens.expires_in <= 0 ||
+    tokens.expires_in > 7 * 86_400
+  ) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: "OAuth token response is invalid" },
+        { status: 502 },
+      ),
+    );
+  }
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    expiresIn: tokens.expires_in,
+  };
 }
 
 /** Starts the verification-only GitHub user authorization stage with PKCE. */
@@ -101,6 +167,111 @@ async function githubUserAuthorization(input: {
   return authorization;
 }
 
+/** Stores a personal GitHub or GitLab identity without creating a workspace connection. */
+async function completeUserIdentityAuthorization(input: {
+  provider: "github" | "gitlab";
+  authenticationUserId: string;
+  state: typeof oauthStates.$inferSelect;
+  stateClaims: { connectionId?: unknown };
+  stateSecret: { verifier?: unknown; connectionId?: unknown };
+  callback: string;
+  code: string | null;
+}) {
+  const connectionId = oauthAuthorizationConnectionId(
+    input.stateClaims.connectionId,
+  );
+  const encryptedConnectionId = oauthAuthorizationConnectionId(
+    input.stateSecret.connectionId,
+  );
+  if (
+    !connectionId ||
+    (encryptedConnectionId && encryptedConnectionId !== connectionId)
+  ) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: "Personal authorization is missing its connection" },
+        { status: 400 },
+      ),
+    );
+  }
+  if (
+    !input.code ||
+    input.code.length > 2_048 ||
+    typeof input.stateSecret.verifier !== "string"
+  ) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: "User authorization is missing" },
+        { status: 400 },
+      ),
+    );
+  }
+  const connection = await db.query.providerConnections.findFirst({
+    where: and(
+      eq(providerConnections.id, connectionId),
+      eq(providerConnections.workspaceId, input.state.workspaceId),
+      eq(providerConnections.provider, input.provider),
+    ),
+  });
+  if (!connection) {
+    return securedCallbackResponse(
+      NextResponse.json(
+        { error: "Provider connection not found" },
+        { status: 404 },
+      ),
+    );
+  }
+  let accessToken: string;
+  let refreshToken: string | undefined;
+  let expiresIn: number | undefined;
+  if (input.provider === "github") {
+    if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_CLIENT_SECRET) {
+      throw new Error("GitHub App is not configured");
+    }
+    const tokens = await exchangeGitHubUserAuthorization({
+      clientId: env.GITHUB_APP_CLIENT_ID,
+      clientSecret: env.GITHUB_APP_CLIENT_SECRET,
+      code: input.code,
+      codeVerifier: input.stateSecret.verifier,
+      redirectUri: input.callback,
+    });
+    accessToken = tokens.accessToken;
+    refreshToken = tokens.refreshToken;
+    expiresIn = tokens.expiresIn;
+  } else {
+    const tokens = await exchangeGitLabAuthorizationCode({
+      code: input.code,
+      verifier: input.stateSecret.verifier,
+      redirectUri: input.callback,
+    });
+    if (tokens instanceof NextResponse) return tokens;
+    accessToken = tokens.accessToken;
+    refreshToken = tokens.refreshToken;
+    expiresIn = tokens.expiresIn;
+  }
+  const identity = await createProvider(
+    input.provider,
+    accessToken,
+    connection.baseUrl ?? undefined,
+    input.provider === "github" ? "github_user" : "oauth",
+  ).getConnectionIdentity();
+  await saveUserProviderCredential(db, {
+    userId: input.authenticationUserId,
+    connection,
+    credentialKind: input.provider === "github" ? "github_user" : "oauth",
+    accessToken,
+    refreshToken,
+    expiresIn,
+    displayLogin: identity.displayName,
+    externalAccountId: identity.externalAccountId,
+  });
+  return securedCallbackResponse(
+    NextResponse.redirect(
+      new URL(input.state.redirectPath ?? "/settings/providers", env.APP_URL),
+    ),
+  );
+}
+
 /** Completes a GitHub App installation or PKCE OAuth authorization once. */
 async function completeProviderAuthorization(
   request: Request,
@@ -124,7 +295,12 @@ async function completeProviderAuthorization(
     );
   }
   let stateId: string;
-  let stateClaims: { installationId?: unknown; stage?: unknown } = {};
+  let stateClaims: {
+    installationId?: unknown;
+    stage?: unknown;
+    purpose?: unknown;
+    connectionId?: unknown;
+  } = {};
   try {
     const verified = await jwtVerify(
       stateToken,
@@ -146,6 +322,8 @@ async function completeProviderAuthorization(
     stateClaims = {
       installationId: verified.payload.installationId,
       stage: verified.payload.stage,
+      purpose: verified.payload.purpose,
+      connectionId: verified.payload.connectionId,
     };
   } catch {
     return securedCallbackResponse(
@@ -174,19 +352,22 @@ async function completeProviderAuthorization(
       ),
     );
   }
-  try {
-    await requireWorkspaceAdministrator(
-      db,
-      state.workspaceId,
-      authentication.userId,
-    );
-  } catch (cause) {
-    if (cause instanceof TRPCError && cause.code === "FORBIDDEN") {
-      return securedCallbackResponse(
-        NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+  const purpose = oauthAuthorizationPurpose(stateClaims.purpose);
+  if (purpose === "workspace") {
+    try {
+      await requireWorkspaceAdministrator(
+        db,
+        state.workspaceId,
+        authentication.userId,
       );
+    } catch (cause) {
+      if (cause instanceof TRPCError && cause.code === "FORBIDDEN") {
+        return securedCallbackResponse(
+          NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+        );
+      }
+      throw cause;
     }
-    throw cause;
   }
   const stateSecret = JSON.parse(
     await openVaultSecret(
@@ -200,8 +381,20 @@ async function completeProviderAuthorization(
   ) as {
     verifier?: unknown;
     installationId?: unknown;
+    connectionId?: unknown;
   };
   const callback = oauthCallbackUrl(env.APP_URL, provider);
+  if (purpose === "user_identity") {
+    return completeUserIdentityAuthorization({
+      provider,
+      authenticationUserId: authentication.userId,
+      state,
+      stateClaims,
+      stateSecret,
+      callback,
+      code: url.searchParams.get("code"),
+    });
+  }
   if (provider === "github") {
     const pendingInstallationId = githubAuthorizationInstallationId(
       stateClaims,
@@ -367,61 +560,15 @@ async function completeProviderAuthorization(
       NextResponse.json({ error: "OAuth code is missing" }, { status: 400 }),
     );
   }
-  const tokenUrl = "https://gitlab.com/oauth/token";
-  const clientId = env.GITLAB_CLIENT_ID;
-  const clientSecret = env.GITLAB_CLIENT_SECRET;
-  if (!clientId || !clientSecret)
-    throw new Error("OAuth client is not configured");
-  const form = new URLSearchParams({
-    grant_type: "authorization_code",
-    client_id: clientId,
-    client_secret: clientSecret,
+  const tokens = await exchangeGitLabAuthorizationCode({
     code,
-    code_verifier: stateSecret.verifier,
-    redirect_uri: callback,
+    verifier: stateSecret.verifier,
+    redirectUri: callback,
   });
-  const tokenResponse = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: form,
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!tokenResponse.ok) {
-    return securedCallbackResponse(
-      NextResponse.json(
-        { error: `OAuth exchange failed (${tokenResponse.status})` },
-        { status: 502 },
-      ),
-    );
-  }
-  const tokens = (await tokenResponse.json()) as {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-  };
-  if (
-    typeof tokens.access_token !== "string" ||
-    tokens.access_token.length === 0 ||
-    tokens.access_token.length > 65_536 ||
-    typeof tokens.refresh_token !== "string" ||
-    tokens.refresh_token.length === 0 ||
-    tokens.refresh_token.length > 65_536 ||
-    typeof tokens.expires_in !== "number" ||
-    !Number.isFinite(tokens.expires_in) ||
-    tokens.expires_in <= 0 ||
-    tokens.expires_in > 7 * 86_400
-  ) {
-    return securedCallbackResponse(
-      NextResponse.json(
-        { error: "OAuth token response is invalid" },
-        { status: 502 },
-      ),
-    );
-  }
-  const accessToken = tokens.access_token;
-  const refreshToken = tokens.refresh_token;
-  const expiresIn = tokens.expires_in;
+  if (tokens instanceof NextResponse) return tokens;
+  const accessToken = tokens.accessToken;
+  const refreshToken = tokens.refreshToken;
+  const expiresIn = tokens.expiresIn;
   const baseUrl = "https://gitlab.com/api/v4";
   const identity = await createProvider(
     provider,

@@ -27,6 +27,37 @@ describe("startHostedProviderAuthorization", () => {
     expect(navigate).toHaveBeenCalledWith("https://github.com/login/oauth");
   });
 
+  it("includes a personal-identity purpose and connection when requested", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ authorizationUrl: "https://github.com/login/oauth" }),
+      );
+    const navigate = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startHostedProviderAuthorization(
+      "github",
+      "/settings/providers",
+      navigate,
+      {
+        purpose: "user_identity",
+        connectionId: "0bf4a1f7-0f30-4f08-9439-577356ddbc13",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/integrations/github/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        redirectPath: "/settings/providers",
+        purpose: "user_identity",
+        connectionId: "0bf4a1f7-0f30-4f08-9439-577356ddbc13",
+      }),
+    });
+    expect(navigate).toHaveBeenCalledWith("https://github.com/login/oauth");
+  });
+
   it("surfaces an error returned by a non-success response", async () => {
     vi.stubGlobal(
       "fetch",

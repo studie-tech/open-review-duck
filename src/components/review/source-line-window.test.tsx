@@ -94,6 +94,24 @@ describe("SourceLineWindow", () => {
     expect(observedBlocks).toHaveLength(0);
   });
 
+  it("preserves explicit line numbers after callers fold rows away", () => {
+    render(
+      <SourceLineWindow
+        items={[{ lineNumber: 10 }, { lineNumber: 25 }]}
+        lineNumberForItem={(item) => item.lineNumber}
+        rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
+        startLine={10}
+        renderLine={(_, lineNumber) => (
+          <div key={lineNumber} data-testid={`line-${lineNumber}`} />
+        )}
+      />,
+    );
+
+    expect(screen.getByTestId("line-10")).toBeInTheDocument();
+    expect(screen.getByTestId("line-25")).toBeInTheDocument();
+    expect(screen.queryByTestId("line-11")).not.toBeInTheDocument();
+  });
+
   it("mounts only the leading blocks of longer source", () => {
     renderLines(WINDOWED_SOURCE_LINE_COUNT + 1);
     expect(screen.getByTestId("line-1")).toBeInTheDocument();

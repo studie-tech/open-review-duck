@@ -20,6 +20,7 @@ function pullRequest(
     authorLogin: "mira",
     deletions: 1,
     externalId: `${repositoryId}-${number}`,
+    labels: [],
     number,
     provider: "github",
     repositoryId,
@@ -105,5 +106,22 @@ describe("unimported pull requests", () => {
       }),
     ).toEqual([open]);
     expect(unimportedPullRequestKey(open)).toBe("repo-1:22");
+    expect(
+      filterUnimportedPullRequests(
+        [
+          pullRequest({
+            number: 23,
+            repositoryId: "repo-1",
+            labels: [{ name: "size:XXL" }],
+            title: "Huge guide",
+          }),
+        ],
+        {
+          provider: "all",
+          repositories: [],
+          search: "size:xxl",
+        },
+      ).map(({ number }) => number),
+    ).toEqual([23]);
   });
 });

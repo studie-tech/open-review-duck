@@ -24,6 +24,7 @@ const baseInput = {
   useManagedModels: false,
   mode: "on_demand" as const,
   reviewPullRequests: false,
+  autoPublishFindings: false,
 };
 
 beforeAll(async () => {

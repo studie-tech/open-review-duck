@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  Check,
-  ChevronDown,
-  Clock3,
-  MessageCircleQuestionMark,
-  MessageSquareText,
-} from "lucide-react";
+import { Check, ChevronDown, Clock3 } from "lucide-react";
 import Link from "next/link";
 import {
   Fragment,
@@ -24,6 +18,10 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
+import {
+  commitsForSelection,
+  type LineHistorySelection,
+} from "~/lib/line-commit-history";
 import type { IndexedReviewUnit } from "~/lib/review-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
@@ -41,6 +39,14 @@ import {
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 import { HighlightedTokens } from "./highlighted-tokens";
+import {
+  type ReviewLineCommentMarker,
+  ReviewLineCommentMarkers,
+} from "./review-line-comment-markers";
+import {
+  LineHistoryControl,
+  type LineHistoryView,
+} from "./review-line-history-panel";
 import { CONTEXT_PAGE_LINES } from "./review-workspace-constants";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -153,27 +159,52 @@ function DiffEdgeRevealButton({
 /** Reveals another page from an unchanged region inside the focused unit. */
 function DiffCollapsedContextButton({
   count,
-  revealed,
+  revealedFromEnd,
+  revealedFromStart,
   onReveal,
 }: {
   count: number;
-  revealed: number;
-  onReveal: () => void;
+  revealedFromEnd: number;
+  revealedFromStart: number;
+  onReveal: (direction: -1 | 1) => void;
 }) {
-  const remaining = count - revealed;
+  const remaining = count - revealedFromStart - revealedFromEnd;
   const pageSize = Math.min(CONTEXT_PAGE_LINES, remaining);
   return (
-    <button
-      type="button"
-      aria-label={`Show ${pageSize} more unchanged lines`}
-      onClick={onReveal}
-      className="text-fog hover:text-cloud flex w-full items-center justify-center gap-2 border-y border-line/70 bg-surface-subtle/55 px-3 py-2 font-sans text-[10px] transition"
+    <fieldset
+      aria-label={`${remaining} unchanged lines hidden`}
+      className="flex w-full items-center justify-center gap-2 border-y border-line/70 bg-surface-subtle/55 px-3 py-1.5 font-sans text-[10px]"
     >
-      <ChevronDown className="size-3" />
-      Show {pageSize} more unchanged lines
-      <span className="text-mist">({remaining} hidden)</span>
-    </button>
+      <button
+        type="button"
+        aria-label={`Show ${pageSize} unchanged lines downward`}
+        title={`Reveal the next ${pageSize} lines from the code above`}
+        onClick={() => onReveal(1)}
+        className="group text-fog hover:border-cyan/35 hover:bg-cyan/[.07] hover:text-cloud focus-visible:border-cyan/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan flex items-center gap-1.5 rounded-full border border-line bg-panel/70 px-2.5 py-1 font-medium shadow-sm transition"
+      >
+        <ChevronDown className="size-3 text-cyan/80 transition-transform group-hover:translate-y-px" />
+        <span>Show {pageSize} down</span>
+      </button>
+      <span className="text-mist min-w-28 text-center tabular-nums">
+        {remaining} unchanged {remaining === 1 ? "line" : "lines"} hidden
+      </span>
+      <button
+        type="button"
+        aria-label={`Show ${pageSize} unchanged lines upward`}
+        title={`Reveal the previous ${pageSize} lines from the code below`}
+        onClick={() => onReveal(-1)}
+        className="group text-fog hover:border-cyan/35 hover:bg-cyan/[.07] hover:text-cloud focus-visible:border-cyan/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan flex items-center gap-1.5 rounded-full border border-line bg-panel/70 px-2.5 py-1 font-medium shadow-sm transition"
+      >
+        <ChevronDown className="size-3 rotate-180 text-cyan/80 transition-transform group-hover:-translate-y-px" />
+        <span>Show {pageSize} up</span>
+      </button>
+    </fieldset>
   );
+}
+
+interface RevealedGapLines {
+  fromEnd: number;
+  fromStart: number;
 }
 
 export interface SideBySideUnitDiffHandle {
@@ -188,6 +219,17 @@ export interface SideBySideUnitDiffHandle {
 const FINDING_LINE_HIGHLIGHT =
   "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]";
 
+/** Paints a selected row, the commit under the pointer, or the rest dimmed. */
+function historyRowClass(
+  tone: "selected" | "added" | "removed" | "dim" | undefined,
+) {
+  if (tone === "dim") return "opacity-40";
+  if (tone === "selected") return "shadow-[inset_2px_0_0_var(--app-cyan)]";
+  if (tone === "added") return "shadow-[inset_2px_0_0_var(--app-addition)]";
+  if (tone === "removed") return "shadow-[inset_2px_0_0_var(--app-coral)]";
+  return undefined;
+}
+
 /**
  * Reports whether a highlighted line is the review line a row stands for.
  */
@@ -200,7 +242,8 @@ function highlightsReviewLine(
   return highlightedLine !== undefined && highlightedLine === reviewLine;
 }
 
-interface SideBySideUnitDiffProps {
+export interface SideBySideUnitDiffProps {
+  ignoreWhitespace?: boolean;
   previousSource: string;
   currentSource: string;
   language: string;
@@ -217,52 +260,47 @@ interface SideBySideUnitDiffProps {
   findingLine?: number;
   expanded?: boolean;
   onSelectReviewLine: (line: number) => void;
-  onAskReviewLine?: (line: number) => void;
+  isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
   renderLineDetails?: (line: number) => ReactNode;
+  /** Mounts leftover previous-side conversations when that line is not the review line. */
+  renderPreviousLineDetails?: (line: number) => ReactNode;
+  /** When false, skip global `review-line-*` ids so neighbor cards cannot steal navigation. */
+  emitReviewLineAnchors?: boolean;
+  className?: string;
+  leftLineCommentMarkers?: ReadonlyMap<
+    number,
+    readonly ReviewLineCommentMarker[]
+  >;
+  rightLineCommentMarkers?: ReadonlyMap<
+    number,
+    readonly ReviewLineCommentMarker[]
+  >;
+  onOpenLineComment?: (threadExternalId: string) => void;
+  /** Pull-request commits for this file, loaded after a line range is selected. */
+  lineHistory?: LineHistoryView;
 }
 
-/**
- * Opens an AI conversation on the line the reviewer is pointing at.
- *
- * It sits beside the comment affordance because the two are the same reach:
- * a line the reviewer has a question about is as likely as one they have a
- * remark about, and neither should cost a trip through the line picker.
- */
-export function AskAiLineButton({
+/** Pins conversation avatars to the left of a line number without nesting buttons. */
+function LineCommentGutter({
   className,
-  line,
-  onAsk,
-  visible = false,
+  markers,
+  onOpen,
 }: {
   className?: string;
-  line: number;
-  onAsk: (line: number) => void;
-  visible?: boolean;
+  markers?: readonly ReviewLineCommentMarker[];
+  onOpen: (threadExternalId: string) => void;
 }) {
+  if (!markers?.length) return null;
   return (
-    <button
-      type="button"
-      aria-label={`Ask AI about line ${line}`}
-      title="Ask AI about this line"
-      onClick={(event) => {
-        // The gutter and the side-by-side row both answer clicks with the
-        // comment composer, and this button sits inside their hit area.
-        event.stopPropagation();
-        onAsk(line);
-      }}
+    <div
       className={cn(
-        "hover:text-violet grid shrink-0 place-items-center rounded transition-opacity",
-        // The button stays in the tab order while the row is unhovered, so it
-        // has to show itself on focus or the focus ring lands on nothing.
-        visible
-          ? "text-violet opacity-100"
-          : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+        "pointer-events-auto absolute top-1/2 z-10 -translate-y-1/2",
         className,
       )}
     >
-      <MessageCircleQuestionMark className="size-3" aria-hidden="true" />
-    </button>
+      <ReviewLineCommentMarkers markers={markers} onOpen={onOpen} />
+    </div>
   );
 }
 
@@ -298,9 +336,18 @@ interface DiffRowHighlightProps {
 }
 
 interface DiffRowActionProps {
-  canAsk: boolean;
-  onAsk: (line: number) => void;
-  onSelect: (event: ReactMouseEvent<HTMLElement>, line: number) => void;
+  onSelect: (
+    event: ReactMouseEvent<HTMLElement>,
+    line: number,
+    rowIndex: number,
+  ) => void;
+}
+
+interface HistoryRowProps {
+  historyRow?: number;
+  historyClassName?: string;
+  historyColumns?: "added" | "split" | "narrow";
+  historyControl?: ReactNode;
 }
 
 /**
@@ -314,42 +361,56 @@ interface DiffRowActionProps {
 const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   added,
   anchored,
-  canAsk,
   isFinding,
   keyboardFocused,
   line,
   lineNumber,
-  onAsk,
+  markers,
+  historyClassName,
+  historyColumns = "added",
+  historyControl,
+  historyRow,
+  onOpenLineComment,
   onSelect,
   reviewLine,
   selected,
 }: DiffRowHighlightProps &
-  DiffRowActionProps & {
+  DiffRowActionProps &
+  HistoryRowProps & {
     added: boolean;
     anchored: boolean;
     line: HighlightedLine | undefined;
     lineNumber: number | undefined;
+    markers?: readonly ReviewLineCommentMarker[];
+    onOpenLineComment: (threadExternalId: string) => void;
     reviewLine: number | undefined;
   }) {
   const LineContainer = reviewLine === undefined ? "div" : "button";
   return (
-    <div className="group relative">
+    <div
+      data-history-row={historyRow}
+      data-history-columns={
+        historyRow === undefined ? undefined : historyColumns
+      }
+      className={cn("group relative", historyClassName)}
+    >
+      <LineCommentGutter
+        className="left-1"
+        markers={markers}
+        onOpen={onOpenLineComment}
+      />
       <LineContainer
         {...(reviewLine !== undefined
           ? {
               type: "button" as const,
-              "aria-label": `Comment on current line ${reviewLine}`,
-              title: "Comment on this pull-request line",
+              "aria-label": `Open actions for current line ${reviewLine}`,
               onClick: (event: ReactMouseEvent<HTMLElement>) =>
-                onSelect(event, reviewLine),
+                onSelect(event, reviewLine, historyRow ?? -1),
             }
           : {})}
         id={anchored ? `review-line-${reviewLine}` : undefined}
         data-review-scope={reviewLine === undefined ? "context" : "unit"}
         className={cn(
-          // Wide enough to hold the ask affordance that sits over the
-          // gutter's leading edge, a comment icon and a four-digit line
-          // number without crowding any of them.
           "grid w-full grid-cols-[82px_minmax(0,1fr)] text-left",
           added ? "bg-addition/15" : "bg-surface-subtle/20",
           reviewLine !== undefined &&
@@ -362,30 +423,14 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
             "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
         )}
       >
-        <span className="flex items-center justify-end gap-1 border-r border-line/60 px-2 text-addition transition select-none group-hover:text-violet">
-          {reviewLine !== undefined && (
-            <MessageSquareText
-              className={cn(
-                "size-3 transition-opacity",
-                selected || keyboardFocused
-                  ? "text-cyan opacity-100"
-                  : "opacity-0 group-hover:opacity-100",
-              )}
-            />
-          )}
+        <span className="flex items-center justify-end border-r border-line/60 px-2 text-addition transition select-none group-hover:text-cyan">
           {lineNumber}
         </span>
         <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
           <HighlightedDiffTokens line={line} lineNumber={lineNumber} />
         </span>
       </LineContainer>
-      {reviewLine !== undefined && canAsk && (
-        <AskAiLineButton
-          className="absolute top-1/2 left-1.5 size-4 -translate-y-1/2"
-          line={reviewLine}
-          onAsk={onAsk}
-        />
-      )}
+      {historyControl}
     </div>
   );
 });
@@ -421,74 +466,88 @@ function serverSideBySideWidth() {
  * hundreds of rows whose tokens no workspace event changes.
  */
 const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
-  canAsk,
   currentLine,
   currentLineNumber,
+  currentMarkers,
   currentReviewLine,
   isFinding,
   keyboardFocused,
   kind,
-  onAsk,
+  historyClassName,
+  historyColumns,
+  historyControl,
+  historyRow,
+  onOpenLineComment,
   onSelect,
   previousLine,
   previousLineNumber,
+  previousMarkers,
   previousReviewLine,
   selected,
   sideBySide,
 }: DiffRowHighlightProps &
-  DiffRowActionProps & {
+  DiffRowActionProps &
+  HistoryRowProps & {
     currentLine: HighlightedLine | undefined;
     currentLineNumber: number | undefined;
+    currentMarkers?: readonly ReviewLineCommentMarker[];
     currentReviewLine: number | undefined;
     kind: SideBySideDiffRow["kind"];
+    onOpenLineComment: (threadExternalId: string) => void;
     previousLine: HighlightedLine | undefined;
     previousLineNumber: number | undefined;
+    previousMarkers?: readonly ReviewLineCommentMarker[];
     previousReviewLine: number | undefined;
     sideBySide: boolean;
   }) {
   // A row commentable on both sides is commented through the head line, so at
   // most one side carries the provider line and the other is always unset.
   const reviewLine = currentReviewLine ?? previousReviewLine;
+  const historyAttributes = {
+    "data-history-row": historyRow,
+    "data-history-columns":
+      historyRow === undefined
+        ? undefined
+        : (historyColumns ?? (sideBySide ? "split" : "narrow")),
+  };
   if (sideBySide) {
     return (
       <div
+        {...historyAttributes}
         data-review-scope={reviewLine === undefined ? "context" : "unit"}
         className={cn(
-          "group relative grid grid-cols-[42px_minmax(0,1fr)_42px_minmax(0,1fr)]",
+          "group relative grid grid-cols-[56px_minmax(0,1fr)_56px_minmax(0,1fr)]",
           reviewLine === undefined &&
             "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
+          historyClassName,
         )}
       >
-        {reviewLine !== undefined && canAsk && (
-          <AskAiLineButton
-            className="bg-panel/90 absolute top-1/2 right-2 z-10 size-5 -translate-y-1/2 rounded-md border border-line shadow-sm"
-            line={reviewLine}
-            onAsk={onAsk}
-          />
-        )}
+        <LineCommentGutter
+          className="left-0.5"
+          markers={previousMarkers}
+          onOpen={onOpenLineComment}
+        />
+        <LineCommentGutter
+          className="left-1/2"
+          markers={currentMarkers}
+          onOpen={onOpenLineComment}
+        />
         {previousReviewLine !== undefined ? (
           <button
             type="button"
-            aria-label={`Comment on deleted line ${previousReviewLine}`}
-            title="Comment on this deleted pull-request line"
-            onClick={(event) => onSelect(event, previousReviewLine)}
+            aria-label={`Open actions for deleted line ${previousReviewLine}`}
+            onClick={(event) =>
+              onSelect(event, previousReviewLine, historyRow ?? -1)
+            }
             className={cn(
-              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               isFinding && FINDING_LINE_HIGHLIGHT,
               selected && "bg-violet/[.055]",
               keyboardFocused &&
                 "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
             )}
           >
-            <span className="flex items-center justify-end gap-1 border-r border-line/60 bg-red-400/10 px-2 text-red-700 transition select-none group-hover:text-violet dark:text-red-200">
-              <MessageSquareText
-                className={cn(
-                  "size-3 transition-opacity",
-                  selected || keyboardFocused
-                    ? "text-cyan opacity-100"
-                    : "opacity-0 group-hover:opacity-100",
-                )}
-              />
+            <span className="flex items-center justify-end border-r border-line/60 bg-red-400/10 px-2 text-red-700 transition select-none group-hover:text-cyan dark:text-red-200">
               {previousLineNumber}
             </span>
             <HighlightedDiffLine line={previousLine} />
@@ -519,7 +578,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         ) : currentReviewLine === undefined ? (
           <div
             className={cn(
-              "col-span-2 grid min-w-0 grid-cols-[42px_minmax(0,1fr)] text-fog",
+              "col-span-2 grid min-w-0 grid-cols-[56px_minmax(0,1fr)] text-fog",
               (kind === "added" || kind === "modified") && "bg-addition/15",
             )}
           >
@@ -542,11 +601,12 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         ) : (
           <button
             type="button"
-            aria-label={`Comment on current line ${currentReviewLine}`}
-            title="Comment on this pull-request line"
-            onClick={(event) => onSelect(event, currentReviewLine)}
+            aria-label={`Open actions for current line ${currentReviewLine}`}
+            onClick={(event) =>
+              onSelect(event, currentReviewLine, historyRow ?? -1)
+            }
             className={cn(
-              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+              "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               (kind === "added" || kind === "modified") &&
                 "bg-addition/15 hover:bg-addition/22",
               isFinding && FINDING_LINE_HIGHLIGHT,
@@ -557,19 +617,11 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
           >
             <span
               className={cn(
-                "flex items-center justify-end gap-1 border-r border-line/60 px-2 transition select-none group-hover:text-violet",
+                "flex items-center justify-end border-r border-line/60 px-2 transition select-none group-hover:text-cyan",
                 (kind === "added" || kind === "modified") &&
                   "bg-addition/12 text-addition",
               )}
             >
-              <MessageSquareText
-                className={cn(
-                  "size-3 transition-opacity",
-                  selected || keyboardFocused
-                    ? "text-cyan opacity-100"
-                    : "opacity-0 group-hover:opacity-100",
-                )}
-              />
               {currentLineNumber}
             </span>
             <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
@@ -580,55 +632,54 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             </span>
           </button>
         )}
+        {historyControl}
       </div>
     );
   }
   return (
     <div
+      {...historyAttributes}
       data-review-scope={reviewLine === undefined ? "context" : "unit"}
       className={cn(
         "group relative",
         reviewLine === undefined &&
           "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
+        historyClassName,
       )}
     >
-      {reviewLine !== undefined && canAsk && (
-        <AskAiLineButton
-          className="bg-panel/90 absolute top-1/2 right-2 z-10 size-5 -translate-y-1/2 rounded-md border border-line shadow-sm"
-          line={reviewLine}
-          onAsk={onAsk}
-        />
-      )}
       {kind === "unchanged" ? (
         <div
           className={cn(
-            "grid grid-cols-[42px_42px_minmax(0,1fr)]",
+            "relative grid grid-cols-[56px_56px_minmax(0,1fr)]",
             isFinding && FINDING_LINE_HIGHLIGHT,
             selected && "bg-violet/[.055]",
             keyboardFocused &&
               "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
           )}
         >
+          <LineCommentGutter
+            className="left-0.5"
+            markers={previousMarkers}
+            onOpen={onOpenLineComment}
+          />
+          <LineCommentGutter
+            className="left-[56px]"
+            markers={currentMarkers}
+            onOpen={onOpenLineComment}
+          />
           <span className="text-fog border-r border-line/60 px-2 text-right select-none">
             {previousLineNumber}
           </span>
           {currentReviewLine !== undefined ? (
             <button
               type="button"
-              aria-label={`Comment on current line ${currentReviewLine}`}
-              title="Comment on this pull-request line"
-              onClick={(event) => onSelect(event, currentReviewLine)}
-              className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[42px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
+              aria-label={`Open actions for current line ${currentReviewLine}`}
+              onClick={(event) =>
+                onSelect(event, currentReviewLine, historyRow ?? -1)
+              }
+              className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
             >
-              <span className="flex items-center justify-end gap-1 border-r border-line/60 px-2 transition select-none group-hover:text-violet">
-                <MessageSquareText
-                  className={cn(
-                    "size-3 transition-opacity",
-                    selected || keyboardFocused
-                      ? "text-cyan opacity-100"
-                      : "opacity-0 group-hover:opacity-100",
-                  )}
-                />
+              <span className="flex items-center justify-end border-r border-line/60 px-2 transition select-none group-hover:text-cyan">
                 {currentLineNumber}
               </span>
               <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
@@ -656,37 +707,42 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         <>
           {previousLine &&
             (previousReviewLine !== undefined ? (
-              <button
-                type="button"
-                aria-label={`Comment on deleted line ${previousReviewLine}`}
-                title="Comment on this deleted pull-request line"
-                onClick={(event) => onSelect(event, previousReviewLine)}
-                className={cn(
-                  "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                  isFinding && FINDING_LINE_HIGHLIGHT,
-                  selected && "bg-violet/[.055]",
-                  keyboardFocused &&
-                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                )}
-              >
-                <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
-                  {previousLineNumber}
-                </span>
-                <span className="flex items-center justify-center gap-1 border-x border-line/60 px-2 text-red-700 transition select-none group-hover:text-violet dark:text-red-200">
-                  <MessageSquareText
-                    className={cn(
-                      "size-3 transition-opacity",
-                      selected || keyboardFocused
-                        ? "text-cyan opacity-100"
-                        : "opacity-0 group-hover:opacity-100",
-                    )}
-                  />
-                  −
-                </span>
-                <HighlightedDiffLine line={previousLine} />
-              </button>
+              <div className="relative">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={previousMarkers}
+                  onOpen={onOpenLineComment}
+                />
+                <button
+                  type="button"
+                  aria-label={`Open actions for deleted line ${previousReviewLine}`}
+                  onClick={(event) =>
+                    onSelect(event, previousReviewLine, historyRow ?? -1)
+                  }
+                  className={cn(
+                    "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    isFinding && FINDING_LINE_HIGHLIGHT,
+                    selected && "bg-violet/[.055]",
+                    keyboardFocused &&
+                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                  )}
+                >
+                  <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
+                    {previousLineNumber}
+                  </span>
+                  <span className="flex items-center justify-center border-x border-line/60 px-2 text-red-700 transition select-none group-hover:text-cyan dark:text-red-200">
+                    −
+                  </span>
+                  <HighlightedDiffLine line={previousLine} />
+                </button>
+              </div>
             ) : (
-              <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-red-400/15">
+              <div className="relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={previousMarkers}
+                  onOpen={onOpenLineComment}
+                />
                 <span className="bg-red-400/10 px-2 text-right text-red-700 select-none dark:text-red-200">
                   {previousLineNumber}
                 </span>
@@ -698,42 +754,47 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             ))}
           {currentLine &&
             (currentReviewLine !== undefined ? (
-              <button
-                type="button"
-                aria-label={`Comment on current line ${currentReviewLine}`}
-                title="Comment on this pull-request line"
-                onClick={(event) => onSelect(event, currentReviewLine)}
-                className={cn(
-                  "group grid w-full cursor-pointer grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
-                  isFinding && FINDING_LINE_HIGHLIGHT,
-                  selected && "bg-violet/[.055]",
-                  keyboardFocused &&
-                    "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
-                )}
-              >
-                <span className="px-2 text-right text-addition select-none">
-                  {currentLineNumber}
-                </span>
-                <span className="flex items-center justify-center gap-1 border-x border-line/60 px-2 text-addition transition select-none group-hover:text-violet">
-                  <MessageSquareText
-                    className={cn(
-                      "size-3 transition-opacity",
-                      selected || keyboardFocused
-                        ? "text-cyan opacity-100"
-                        : "opacity-0 group-hover:opacity-100",
-                    )}
-                  />
-                  +
-                </span>
-                <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
-                  <HighlightedDiffTokens
-                    line={currentLine}
-                    lineNumber={currentLineNumber}
-                  />
-                </span>
-              </button>
+              <div className="relative">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={currentMarkers}
+                  onOpen={onOpenLineComment}
+                />
+                <button
+                  type="button"
+                  aria-label={`Open actions for current line ${currentReviewLine}`}
+                  onClick={(event) =>
+                    onSelect(event, currentReviewLine, historyRow ?? -1)
+                  }
+                  className={cn(
+                    "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    isFinding && FINDING_LINE_HIGHLIGHT,
+                    selected && "bg-violet/[.055]",
+                    keyboardFocused &&
+                      "bg-cyan/[.075] shadow-[inset_2px_0_0_var(--app-cyan)]",
+                  )}
+                >
+                  <span className="px-2 text-right text-addition select-none">
+                    {currentLineNumber}
+                  </span>
+                  <span className="flex items-center justify-center border-x border-line/60 px-2 text-addition transition select-none group-hover:text-cyan">
+                    +
+                  </span>
+                  <span className="syntax-code min-w-0 cursor-text overflow-visible px-3 whitespace-pre-wrap break-words text-cloud select-text">
+                    <HighlightedDiffTokens
+                      line={currentLine}
+                      lineNumber={currentLineNumber}
+                    />
+                  </span>
+                </button>
+              </div>
             ) : (
-              <div className="grid grid-cols-[42px_42px_minmax(0,1fr)] bg-addition/15">
+              <div className="relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15">
+                <LineCommentGutter
+                  className="left-0.5"
+                  markers={currentMarkers}
+                  onOpen={onOpenLineComment}
+                />
                 <span className="px-2 text-right text-addition select-none">
                   {currentLineNumber}
                 </span>
@@ -750,11 +811,12 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             ))}
         </>
       )}
+      {historyControl}
     </div>
   );
 });
 
-/** Shows a focused base/head diff with aligned lines and provider comment actions. */
+/** Shows a focused base/head diff with aligned line actions. */
 export const SideBySideUnitDiff = forwardRef<
   SideBySideUnitDiffHandle,
   SideBySideUnitDiffProps
@@ -774,21 +836,35 @@ export const SideBySideUnitDiff = forwardRef<
     selectedLine,
     keyboardLine,
     findingLine,
+    ignoreWhitespace = false,
     expanded = false,
     onSelectReviewLine,
-    onAskReviewLine,
+    isReviewLineCollapsed,
     renderBeforeLine,
     renderLineDetails,
+    renderPreviousLineDetails,
+    emitReviewLineAnchors = true,
+    className,
+    leftLineCommentMarkers,
+    rightLineCommentMarkers,
+    onOpenLineComment,
+    lineHistory,
   },
   ref,
 ) {
-  // The workspace rebuilds both line handlers on every render, so the rows
-  // reach them through a ref instead: memoized rows that only ever see stable
-  // callbacks sit out the scroll frames and keystrokes above them.
-  const lineHandlersRef = useRef({ onAskReviewLine, onSelectReviewLine });
+  // The workspace rebuilds the line handler on every render, so the rows reach
+  // it through a ref: memoized rows can then sit out unrelated updates.
+  const lineHandlerRef = useRef(onSelectReviewLine);
   useEffect(() => {
-    lineHandlersRef.current = { onAskReviewLine, onSelectReviewLine };
-  }, [onAskReviewLine, onSelectReviewLine]);
+    lineHandlerRef.current = onSelectReviewLine;
+  }, [onSelectReviewLine]);
+  const commentOpenRef = useRef(onOpenLineComment);
+  useEffect(() => {
+    commentOpenRef.current = onOpenLineComment;
+  }, [onOpenLineComment]);
+  const openLineComment = useCallback((threadExternalId: string) => {
+    commentOpenRef.current?.(threadExternalId);
+  }, []);
   // One subscription for the whole diff: the rows below read the breakpoint
   // from it instead of each mounting a wide and a narrow copy of itself.
   const sideBySide = useSyncExternalStore(
@@ -799,8 +875,8 @@ export const SideBySideUnitDiff = forwardRef<
   const previousLines = useHighlightedSource(previousSource, language);
   const currentLines = useHighlightedSource(currentSource, language);
   const rows = useMemo(
-    () => sideBySideDiff(previousSource, currentSource),
-    [currentSource, previousSource],
+    () => sideBySideDiff(previousSource, currentSource, ignoreWhitespace),
+    [currentSource, previousSource, ignoreWhitespace],
   );
   const focusRange = useMemo(() => {
     const previousRanges =
@@ -952,18 +1028,27 @@ export const SideBySideUnitDiff = forwardRef<
     visibleRowStart,
     visibleRows,
   ]);
-  const [revealedGapLines, setRevealedGapLines] = useState<Map<string, number>>(
-    () => new Map(),
+  const [revealedGapLines, setRevealedGapLines] = useState<
+    Map<string, RevealedGapLines>
+  >(() => new Map());
+  const revealCollapsedGap = useCallback(
+    (key: string, count: number, direction: -1 | 1) => {
+      setRevealedGapLines((current) => {
+        const revealed = current.get(key) ?? { fromEnd: 0, fromStart: 0 };
+        const revealedTotal = revealed.fromStart + revealed.fromEnd;
+        if (revealedTotal >= count) return current;
+        const pageSize = Math.min(CONTEXT_PAGE_LINES, count - revealedTotal);
+        const nextRevealed =
+          direction === 1
+            ? { ...revealed, fromStart: revealed.fromStart + pageSize }
+            : { ...revealed, fromEnd: revealed.fromEnd + pageSize };
+        const next = new Map(current);
+        next.set(key, nextRevealed);
+        return next;
+      });
+    },
+    [],
   );
-  const revealCollapsedGap = useCallback((key: string, count: number) => {
-    setRevealedGapLines((current) => {
-      const revealed = current.get(key) ?? 0;
-      if (revealed >= count) return current;
-      const next = new Map(current);
-      next.set(key, Math.min(count, revealed + CONTEXT_PAGE_LINES));
-      return next;
-    });
-  }, []);
   const revealEdge = useCallback(
     (direction: -1 | 1) => {
       const collapsedGaps = compactRows.filter(
@@ -979,9 +1064,12 @@ export const SideBySideUnitDiff = forwardRef<
       const gap = direction === -1 ? collapsedGaps[0] : collapsedGaps.at(-1);
       if (gap) {
         const key = `${visibleRowStart + gap.rowStart}-${visibleRowStart + gap.rowEnd}`;
-        const revealed = revealedGapLines.get(key) ?? 0;
-        if (revealed < gap.count) {
-          revealCollapsedGap(key, gap.count);
+        const revealed = revealedGapLines.get(key) ?? {
+          fromEnd: 0,
+          fromStart: 0,
+        };
+        if (revealed.fromStart + revealed.fromEnd < gap.count) {
+          revealCollapsedGap(key, gap.count, direction);
           return true;
         }
       }
@@ -1027,9 +1115,16 @@ export const SideBySideUnitDiff = forwardRef<
       compactRows.flatMap((item) => {
         if (item.kind === "row") return [item];
         const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
-        const revealed = Math.min(revealedGapLines.get(key) ?? 0, item.count);
-        if (revealed === 0) return [item];
-        if (revealed === item.count) {
+        const revealed = revealedGapLines.get(key) ?? {
+          fromEnd: 0,
+          fromStart: 0,
+        };
+        const revealedTotal = Math.min(
+          revealed.fromStart + revealed.fromEnd,
+          item.count,
+        );
+        if (revealedTotal === 0) return [item];
+        if (revealedTotal === item.count) {
           return visibleRows
             .slice(item.rowStart, item.rowEnd)
             .map((row, index) => ({
@@ -1039,18 +1134,14 @@ export const SideBySideUnitDiff = forwardRef<
             }));
         }
 
-        // Expand from the side nearest the change neighborhood defaults
-        // kept: reveal symmetrically inside unit interior collapses.
-        const revealedBefore = Math.ceil(revealed / 2);
-        const revealedAfter = Math.floor(revealed / 2);
         const before = visibleRows
-          .slice(item.rowStart, item.rowStart + revealedBefore)
+          .slice(item.rowStart, item.rowStart + revealed.fromStart)
           .map((row, index) => ({
             kind: "row" as const,
             row,
             rowIndex: item.rowStart + index,
           }));
-        const afterStart = item.rowEnd - revealedAfter;
+        const afterStart = item.rowEnd - revealed.fromEnd;
         const after = visibleRows
           .slice(afterStart, item.rowEnd)
           .map((row, index) => ({
@@ -1097,9 +1188,36 @@ export const SideBySideUnitDiff = forwardRef<
       : undefined;
   }
 
-  /** Opens a comment unless the pointer click completed a text selection. */
+  const [historyRange, setHistoryRange] = useState<{
+    start: number;
+    end: number;
+  }>();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [hoveredCommit, setHoveredCommit] = useState<string>();
+  const historyAnchorRef = useRef<number | undefined>(undefined);
+  const historyDragRef = useRef<{
+    start: number;
+    pointerId: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressHistoryClick = useRef(false);
+  useEffect(() => {
+    if (historyRange) lineHistory?.onRequest();
+  }, [historyRange, lineHistory]);
+  /** Opens the line actions unless the click selects commit history. */
   const selectReviewLine = useCallback(
-    (event: ReactMouseEvent<HTMLElement>, line: number) => {
+    (event: ReactMouseEvent<HTMLElement>, line: number, rowIndex: number) => {
+      if (suppressHistoryClick.current) {
+        suppressHistoryClick.current = false;
+        return;
+      }
+      if (lineHistory && event.shiftKey && rowIndex >= 0) {
+        const anchor = historyAnchorRef.current ?? rowIndex;
+        historyAnchorRef.current = anchor;
+        setHistoryRange({ start: anchor, end: rowIndex });
+        setHistoryOpen(false);
+        return;
+      }
       if (
         event.detail > 0 &&
         typeof window !== "undefined" &&
@@ -1107,15 +1225,184 @@ export const SideBySideUnitDiff = forwardRef<
       ) {
         return;
       }
-      lineHandlersRef.current.onSelectReviewLine(line);
+      lineHandlerRef.current(line);
     },
-    [],
+    [lineHistory],
   );
+  /** Reads the diff row under a pointer when it lands in a line-number gutter. */
+  const historyRowAt = (clientX: number, clientY: number) => {
+    if (typeof document.elementFromPoint !== "function") return undefined;
+    const element = document.elementFromPoint(clientX, clientY);
+    if (!(element instanceof Element)) return undefined;
+    if (element.closest("[data-history-control]")) return undefined;
+    const row = element.closest("[data-history-row]");
+    if (!(row instanceof HTMLElement)) return undefined;
+    const bounds = row.getBoundingClientRect();
+    const x = clientX - bounds.left;
+    const columns = row.dataset.historyColumns;
+    const gutter = columns === "added" ? 82 : 56;
+    const inGutter =
+      columns === "split"
+        ? x <= gutter ||
+          (x >= bounds.width / 2 && x < bounds.width / 2 + gutter)
+        : x <= (columns === "narrow" ? 112 : gutter);
+    if (!inGutter) return undefined;
+    const index = Number(row.dataset.historyRow);
+    return Number.isInteger(index) ? index : undefined;
+  };
+  /** Starts a line-range drag from a gutter pointer. */
+  const beginHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    if (!lineHistory || event.button !== 0 || event.shiftKey) return;
+    const row = historyRowAt(event.clientX, event.clientY);
+    if (row === undefined) return;
+    historyDragRef.current = {
+      start: row,
+      pointerId: event.pointerId,
+      moved: false,
+    };
+  };
+  /** Extends the dragged line range as the pointer crosses gutters. */
+  const moveHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = historyDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const row = historyRowAt(event.clientX, event.clientY);
+    if (row === undefined || row === drag.start) return;
+    if (!drag.moved) event.currentTarget.setPointerCapture(event.pointerId);
+    drag.moved = true;
+    historyAnchorRef.current = drag.start;
+    setHistoryRange({ start: drag.start, end: row });
+  };
+  /** Keeps a finished drag from also opening the line actions. */
+  const endHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = historyDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    historyDragRef.current = null;
+    if (!drag.moved) return;
+    suppressHistoryClick.current = true;
+    window.setTimeout(() => {
+      suppressHistoryClick.current = false;
+    }, 0);
+  };
 
-  /** Opens the inline AI conversation on the line a row stands for. */
-  const askReviewLine = useCallback((line: number) => {
-    lineHandlersRef.current.onAskReviewLine?.(line);
-  }, []);
+  const historySelection = useMemo(() => {
+    if (!historyRange) return undefined;
+    const start = Math.min(historyRange.start, historyRange.end);
+    const end = Math.max(historyRange.start, historyRange.end);
+    const selection: LineHistorySelection = {
+      baseLines: [],
+      headLines: [],
+      removedBaseLines: [],
+      addedHeadLines: [],
+      changedBaseLines: [],
+      changedHeadLines: [],
+    };
+    for (let index = start; index <= end; index += 1) {
+      const row = rows[index];
+      if (!row) continue;
+      const base =
+        row.previousIndex === undefined
+          ? undefined
+          : previousStartLine + row.previousIndex;
+      const head =
+        row.currentIndex === undefined
+          ? undefined
+          : currentStartLine + row.currentIndex;
+      if (base !== undefined) selection.baseLines.push(base);
+      if (head !== undefined) selection.headLines.push(head);
+      if (base !== undefined && head === undefined) {
+        selection.removedBaseLines.push(base);
+      } else if (head !== undefined && base === undefined) {
+        selection.addedHeadLines.push(head);
+      } else if (
+        base !== undefined &&
+        head !== undefined &&
+        row.kind !== "unchanged"
+      ) {
+        selection.changedBaseLines.push(base);
+        selection.changedHeadLines.push(head);
+      }
+    }
+    return selection;
+  }, [currentStartLine, historyRange, previousStartLine, rows]);
+  const hoveredHistory = lineHistory?.commits.find(
+    (commit) => commit.sha === hoveredCommit,
+  );
+  /** Builds the selection chrome for one absolute diff row. */
+  const historyForRow = (index: number) => {
+    if (!lineHistory) return {};
+    const start =
+      historyRange === undefined
+        ? undefined
+        : Math.min(historyRange.start, historyRange.end);
+    const end =
+      historyRange === undefined
+        ? undefined
+        : Math.max(historyRange.start, historyRange.end);
+    let tone: "selected" | "added" | "removed" | "dim" | undefined;
+    if (
+      start !== undefined &&
+      end !== undefined &&
+      index >= start &&
+      index <= end
+    ) {
+      const row = rows[index];
+      const base =
+        row?.previousIndex === undefined
+          ? undefined
+          : previousStartLine + row.previousIndex;
+      const head =
+        row?.currentIndex === undefined
+          ? undefined
+          : currentStartLine + row.currentIndex;
+      const ownsBase =
+        base !== undefined && hoveredHistory?.baseLines.includes(base);
+      const ownsHead =
+        head !== undefined && hoveredHistory?.headLines.includes(head);
+      tone = !hoveredHistory
+        ? "selected"
+        : ownsHead
+          ? "added"
+          : ownsBase
+            ? "removed"
+            : "dim";
+    }
+    return {
+      historyRow: index,
+      historyClassName: historyRowClass(tone),
+      historyControl:
+        lineHistory && historySelection && index === end ? (
+          <LineHistoryControl
+            commits={commitsForSelection(lineHistory.commits, historySelection)}
+            history={
+              lineHistory.status === "idle"
+                ? { ...lineHistory, status: "loading" }
+                : lineHistory
+            }
+            onClear={() => {
+              historyAnchorRef.current = undefined;
+              setHistoryRange(undefined);
+              setHistoryOpen(false);
+              setHoveredCommit(undefined);
+            }}
+            onHoverCommit={setHoveredCommit}
+            onOpenChange={(next) => {
+              setHistoryOpen(next);
+              if (!next) setHoveredCommit(undefined);
+            }}
+            open={historyOpen}
+            selection={historySelection}
+          />
+        ) : undefined,
+    };
+  };
+  const historyPointer = lineHistory
+    ? {
+        onPointerDown: beginHistoryDrag,
+        onPointerMove: moveHistoryDrag,
+        onPointerUp: endHistoryDrag,
+        onPointerCancel: endHistoryDrag,
+      }
+    : {};
   const renderedDetailLines = new Set<number>();
   const renderedBeforeLines = new Set<number>();
 
@@ -1123,7 +1410,11 @@ export const SideBySideUnitDiff = forwardRef<
     return (
       <section
         aria-label="Added code diff"
-        className="overflow-hidden rounded-b-xl border border-line"
+        className={cn(
+          "overflow-hidden rounded-b-xl border border-line",
+          className,
+        )}
+        {...historyPointer}
       >
         {visibleRowStart > 0 || leadingCollapsedRemaining > 0 ? (
           <DiffEdgeRevealButton
@@ -1140,13 +1431,19 @@ export const SideBySideUnitDiff = forwardRef<
             const absoluteStart = visibleRowStart + item.rowStart;
             const absoluteEnd = visibleRowStart + item.rowEnd;
             const key = `${absoluteStart}-${absoluteEnd}`;
-            const revealed = revealedGapLines.get(key) ?? 0;
+            const revealed = revealedGapLines.get(key) ?? {
+              fromEnd: 0,
+              fromStart: 0,
+            };
             return (
               <DiffCollapsedContextButton
                 key={`gap-${key}`}
                 count={item.count}
-                revealed={revealed}
-                onReveal={() => revealCollapsedGap(key, item.count)}
+                revealedFromEnd={revealed.fromEnd}
+                revealedFromStart={revealed.fromStart}
+                onReveal={(direction) =>
+                  revealCollapsedGap(key, item.count, direction)
+                }
               />
             );
           }
@@ -1166,6 +1463,8 @@ export const SideBySideUnitDiff = forwardRef<
           const rendersBeforeLine =
             reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
           if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
+          const lineCollapsed =
+            reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
           const absoluteRowIndex = visibleRowStart + item.rowIndex;
           const startsScope =
             showsContextBefore &&
@@ -1183,20 +1482,32 @@ export const SideBySideUnitDiff = forwardRef<
                 <ReviewScopeMarker edge="start" line={scopeStartLine} />
               )}
               {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
-              <AddedUnitDiffRow
-                added={row.kind === "added"}
-                anchored={rendersLineDetails}
-                canAsk={onAskReviewLine !== undefined}
-                isFinding={highlightsReviewLine(findingLine, reviewLine)}
-                keyboardFocused={highlightsReviewLine(keyboardLine, reviewLine)}
-                line={line}
-                lineNumber={lineNumber}
-                onAsk={askReviewLine}
-                onSelect={selectReviewLine}
-                reviewLine={reviewLine}
-                selected={highlightsReviewLine(selectedLine, reviewLine)}
-              />
-              {rendersLineDetails && renderLineDetails?.(reviewLine)}
+              {!lineCollapsed && (
+                <>
+                  <AddedUnitDiffRow
+                    added={row.kind === "added"}
+                    anchored={emitReviewLineAnchors && rendersLineDetails}
+                    isFinding={highlightsReviewLine(findingLine, reviewLine)}
+                    keyboardFocused={highlightsReviewLine(
+                      keyboardLine,
+                      reviewLine,
+                    )}
+                    line={line}
+                    lineNumber={lineNumber}
+                    markers={
+                      lineNumber === undefined
+                        ? undefined
+                        : rightLineCommentMarkers?.get(lineNumber)
+                    }
+                    onOpenLineComment={openLineComment}
+                    onSelect={selectReviewLine}
+                    reviewLine={reviewLine}
+                    selected={highlightsReviewLine(selectedLine, reviewLine)}
+                    {...historyForRow(absoluteRowIndex)}
+                  />
+                  {rendersLineDetails && renderLineDetails?.(reviewLine)}
+                </>
+              )}
               {endsScope && (
                 <ReviewScopeMarker edge="end" line={scopeEndLine} />
               )}
@@ -1220,7 +1531,11 @@ export const SideBySideUnitDiff = forwardRef<
   return (
     <section
       aria-label="Side-by-side code diff"
-      className="overflow-hidden rounded-b-xl border border-line"
+      className={cn(
+        "overflow-hidden rounded-b-xl border border-line",
+        className,
+      )}
+      {...historyPointer}
     >
       <div className="text-fog sticky top-0 z-10 hidden grid-cols-2 border-b border-line bg-panel/95 font-sans text-[9px] font-semibold tracking-[.12em] uppercase backdrop-blur sm:grid">
         <div className="border-r border-line px-4 py-2">Base</div>
@@ -1242,13 +1557,19 @@ export const SideBySideUnitDiff = forwardRef<
       {displayItems.map((item) => {
         if (item.kind === "collapsed") {
           const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
-          const revealed = revealedGapLines.get(key) ?? 0;
+          const revealed = revealedGapLines.get(key) ?? {
+            fromEnd: 0,
+            fromStart: 0,
+          };
           return (
             <DiffCollapsedContextButton
               key={`gap-${key}`}
               count={item.count}
-              revealed={revealed}
-              onReveal={() => revealCollapsedGap(key, item.count)}
+              revealedFromEnd={revealed.fromEnd}
+              revealedFromStart={revealed.fromStart}
+              onReveal={(direction) =>
+                revealCollapsedGap(key, item.count, direction)
+              }
             />
           );
         }
@@ -1276,6 +1597,8 @@ export const SideBySideUnitDiff = forwardRef<
         const rendersBeforeLine =
           reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
         if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
+        const lineCollapsed =
+          reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
         const currentIsReviewLine =
           reviewLine !== undefined &&
           currentLineNumber !== undefined &&
@@ -1305,30 +1628,54 @@ export const SideBySideUnitDiff = forwardRef<
               <ReviewScopeMarker edge="start" line={scopeStartLine} />
             )}
             {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
-            {rendersLineDetails && (
-              <span
-                id={`review-line-${reviewLine}`}
-                className="block h-0"
-                aria-hidden="true"
-              />
+            {!lineCollapsed && (
+              <>
+                {rendersLineDetails && emitReviewLineAnchors && (
+                  <span
+                    id={`review-line-${reviewLine}`}
+                    className="block h-0"
+                    aria-hidden="true"
+                  />
+                )}
+                <SplitUnitDiffRow
+                  currentLine={currentLine}
+                  currentLineNumber={currentLineNumber}
+                  currentMarkers={
+                    currentLineNumber === undefined
+                      ? undefined
+                      : rightLineCommentMarkers?.get(currentLineNumber)
+                  }
+                  currentReviewLine={
+                    currentIsReviewLine ? reviewLine : undefined
+                  }
+                  isFinding={highlightsReviewLine(findingLine, reviewLine)}
+                  keyboardFocused={highlightsReviewLine(
+                    keyboardLine,
+                    reviewLine,
+                  )}
+                  kind={row.kind}
+                  onOpenLineComment={openLineComment}
+                  onSelect={selectReviewLine}
+                  previousLine={previousLine}
+                  previousLineNumber={previousLineNumber}
+                  previousMarkers={
+                    previousLineNumber === undefined
+                      ? undefined
+                      : leftLineCommentMarkers?.get(previousLineNumber)
+                  }
+                  previousReviewLine={
+                    previousIsReviewLine ? reviewLine : undefined
+                  }
+                  selected={highlightsReviewLine(selectedLine, reviewLine)}
+                  sideBySide={sideBySide}
+                  {...historyForRow(absoluteRowIndex)}
+                />
+                {previousLineNumber !== undefined &&
+                  previousLineNumber !== reviewLine &&
+                  renderPreviousLineDetails?.(previousLineNumber)}
+                {rendersLineDetails && renderLineDetails?.(reviewLine)}
+              </>
             )}
-            <SplitUnitDiffRow
-              canAsk={onAskReviewLine !== undefined}
-              currentLine={currentLine}
-              currentLineNumber={currentLineNumber}
-              currentReviewLine={currentIsReviewLine ? reviewLine : undefined}
-              isFinding={highlightsReviewLine(findingLine, reviewLine)}
-              keyboardFocused={highlightsReviewLine(keyboardLine, reviewLine)}
-              kind={row.kind}
-              onAsk={askReviewLine}
-              onSelect={selectReviewLine}
-              previousLine={previousLine}
-              previousLineNumber={previousLineNumber}
-              previousReviewLine={previousIsReviewLine ? reviewLine : undefined}
-              selected={highlightsReviewLine(selectedLine, reviewLine)}
-              sideBySide={sideBySide}
-            />
-            {rendersLineDetails && renderLineDetails?.(reviewLine)}
             {endsScope && <ReviewScopeMarker edge="end" line={scopeEndLine} />}
           </Fragment>
         );
