@@ -147,6 +147,7 @@ export const releaseReviewWaitsSchema = z.object({
 
 export const importTargetSchema = z.object({
   pullRequestId: z.string().uuid(),
+  snapshotId: z.string().uuid().optional(),
   sourcePath: z.string().trim().min(1).max(2_000),
   sourceLanguage: z.enum(supportedLanguages),
   specifier: z.string().trim().min(1).max(500),
@@ -156,6 +157,7 @@ export const importTargetSchema = z.object({
 
 export const symbolDefinitionSchema = z.object({
   pullRequestId: z.string().uuid(),
+  snapshotId: z.string().uuid().optional(),
   sourcePath: z.string().trim().min(1).max(2_000),
   sourceLanguage: z.enum(supportedLanguages),
   symbol: z
