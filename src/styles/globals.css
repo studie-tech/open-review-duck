@@ -238,6 +238,61 @@ button:not(:disabled),
 .navigation-progress-bar {
   animation: navigation-progress-slide 1.1s ease-in-out infinite;
 }
+/* GitHub IssueLabel light/dark mixing, so provider colors match the source. */
+.pull-request-label {
+  --perceived-lightness: calc(
+    (
+      (var(--label-r) * 0.2126) +
+      (var(--label-g) * 0.7152) +
+      (var(--label-b) * 0.0722)
+    ) /
+    255
+  );
+  --lightness-threshold: 0.453;
+  --lightness-switch: max(
+    0,
+    min(calc(1 / (var(--lightness-threshold) - var(--perceived-lightness))), 1)
+  );
+  --border-threshold: 0.96;
+  --border-alpha: max(
+    0,
+    min(calc((var(--perceived-lightness) - var(--border-threshold)) * 100), 1)
+  );
+  background: rgb(var(--label-r), var(--label-g), var(--label-b));
+  color: hsl(0deg, 0%, calc(var(--lightness-switch) * 100%));
+  border-color: hsl(
+    var(--label-h),
+    calc(var(--label-s) * 1%),
+    calc((var(--label-l) - 25) * 1%),
+    var(--border-alpha)
+  );
+}
+.dark .pull-request-label {
+  --lightness-threshold: 0.6;
+  --background-alpha: 0.18;
+  --border-alpha: 0.3;
+  --lighten-by: calc(
+    ((var(--lightness-threshold) - var(--perceived-lightness)) * 100) *
+    var(--lightness-switch)
+  );
+  background: rgb(
+    var(--label-r),
+    var(--label-g),
+    var(--label-b),
+    var(--background-alpha)
+  );
+  color: hsl(
+    var(--label-h),
+    calc(var(--label-s) * 1%),
+    calc((var(--label-l) + var(--lighten-by)) * 1%)
+  );
+  border-color: hsl(
+    var(--label-h),
+    calc(var(--label-s) * 1%),
+    calc((var(--label-l) + var(--lighten-by)) * 1%),
+    var(--border-alpha)
+  );
+}
 :focus-visible {
   outline-color: var(--app-accent);
 }

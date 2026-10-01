@@ -94,11 +94,13 @@ function RunStatus({ status, progress }: { status: string; progress: number }) {
 
 /** Renders the repository review cockpit and its action workflows. */
 export function RepoReviewsContent({
+  canEvaluate = false,
   initialMonitors,
   initialRepositories,
   initialMonitorId,
   fetchedAt,
 }: {
+  canEvaluate?: boolean;
   initialMonitors: Monitors;
   initialRepositories: Repositories;
   initialMonitorId?: string;
@@ -371,6 +373,7 @@ export function RepoReviewsContent({
 
           {selectedMonitor && (
             <RepositoryCockpit
+              canEvaluate={canEvaluate}
               key={selectedMonitor.id}
               monitor={selectedMonitor}
               section={section}
@@ -436,12 +439,14 @@ function EmptyState({
 
 /** Renders the selected monitored branch and its cockpit sections. */
 function RepositoryCockpit({
+  canEvaluate,
   monitor,
   section,
   onSection,
   onRemoved,
   now,
 }: {
+  canEvaluate?: boolean;
   monitor: Monitors[number];
   section: Section;
   onSection: (section: Section) => void;
@@ -696,7 +701,11 @@ function RepositoryCockpit({
           />
         )}
         {section === "findings" && (
-          <Findings monitor={monitor} requestedJobId={findingJobId} />
+          <Findings
+            canEvaluate={canEvaluate}
+            monitor={monitor}
+            requestedJobId={findingJobId}
+          />
         )}
         {section === "rules" && <Rules monitor={monitor} />}
         {section === "history" && (
@@ -988,9 +997,11 @@ function ActionCard({
 
 /** Renders run findings and composes a selected fixing report. */
 function Findings({
+  canEvaluate,
   monitor,
   requestedJobId,
 }: {
+  canEvaluate?: boolean;
   monitor: Monitors[number];
   requestedJobId?: string;
 }) {
@@ -1316,6 +1327,14 @@ function Findings({
                 <h3 className="mt-3 text-sm font-semibold text-cloud">
                   {finding.title}
                 </h3>
+                {canEvaluate && (
+                  <Link
+                    className="text-cyan mt-2 inline-block text-xs hover:underline"
+                    href={`/evaluations?finding=${encodeURIComponent(finding.id)}`}
+                  >
+                    Save to evals
+                  </Link>
+                )}
                 <p className="mt-1 text-xs leading-5 text-mist">
                   {finding.body}
                 </p>

@@ -1,5 +1,8 @@
 export type ReviewMode = "path" | "files";
 
+/** How a Markdown review file is presented: rendered document or source. */
+export type MarkdownReviewView = "preview" | "raw";
+
 export type ReviewFileFilter =
   | "all"
   | "needs_review"
@@ -52,7 +55,114 @@ export interface ReviewFileTreeFile {
   file: ReviewFileEntry;
 }
 
-export type ReviewFileTreeNode = ReviewFileTreeDirectory | ReviewFileTreeFile;
+/**
+ * One row standing in for every file a folder received by a move that
+ * changed nothing, so the tree lists work rather than relocation.
+ */
+export interface ReviewFileTreeMoves {
+  kind: "moves";
+  /** The folder the files now live in; empty at the repository root. */
+  directory: string;
+  /** A key that cannot collide with a repository path. */
+  path: string;
+  files: ReviewFileEntry[];
+  /** The one folder every file came from, when they share one. */
+  origin: string | null;
+}
+
+export type ReviewFileTreeNode =
+  | ReviewFileTreeDirectory
+  | ReviewFileTreeFile
+  | ReviewFileTreeMoves;
+
+/**
+ * Whether a revision moved a file without changing a line of it.
+ *
+ * Such a file has nothing to sign off: analysis scopes a move to the lines it
+ * changed, so an unchanged move has no units, and the line counts confirm the
+ * two sides match. A snapshot analyzed before moves were scoped still carries
+ * units for one, and keeps its ordinary row until it is refreshed.
+ */
+export function isUnchangedMove(
+  file: Pick<
+    ReviewFileEntry,
+    | "additions"
+    | "changeType"
+    | "deletions"
+    | "isBinary"
+    | "previousPath"
+    | "skipReason"
+    | "totalUnits"
+  >,
+) {
+  return (
+    file.changeType === "renamed" &&
+    file.previousPath !== null &&
+    !file.isBinary &&
+    !file.skipReason &&
+    file.additions === 0 &&
+    file.deletions === 0 &&
+    file.totalUnits === 0
+  );
+}
+
+/** The folder part of a repository path; empty at the root. */
+function parentDirectory(path: string) {
+  const separator = path.lastIndexOf("/");
+  return separator < 0 ? "" : path.slice(0, separator);
+}
+
+/** The deepest folder every path sits under; null when they share none. */
+export function commonDirectory(paths: readonly string[]) {
+  const [first, ...rest] = paths;
+  if (first === undefined) return null;
+  let common = parentDirectory(first).split("/").filter(Boolean);
+  for (const path of rest) {
+    const segments = parentDirectory(path).split("/").filter(Boolean);
+    let length = 0;
+    while (
+      length < common.length &&
+      length < segments.length &&
+      common[length] === segments[length]
+    ) {
+      length += 1;
+    }
+    common = common.slice(0, length);
+    if (common.length === 0) return null;
+  }
+  return common.length > 0 ? common.join("/") : null;
+}
+
+/** Groups changed files by how the revision arrived at them. */
+export interface ReviewChangeComposition {
+  movedUnchanged: number;
+  movedEdited: number;
+  modified: number;
+  added: number;
+  deleted: number;
+}
+
+/** Counts how many changed files each kind of revision accounts for. */
+export function reviewChangeComposition(
+  files: readonly ReviewFileEntry[],
+): ReviewChangeComposition {
+  const composition: ReviewChangeComposition = {
+    movedUnchanged: 0,
+    movedEdited: 0,
+    modified: 0,
+    added: 0,
+    deleted: 0,
+  };
+  for (const file of files) {
+    if (file.changeType === "renamed") {
+      if (isUnchangedMove(file)) composition.movedUnchanged += 1;
+      else composition.movedEdited += 1;
+    } else if (file.changeType === "added") composition.added += 1;
+    else if (file.changeType === "deleted") composition.deleted += 1;
+    else composition.modified += 1;
+  }
+  return composition;
+}
 
 /** Derives file progress from the atomic review ledger. */
 export function reviewFileEntries<Unit extends FileReviewUnit>(
@@ -126,7 +236,11 @@ export function flattenReviewFileTree(
   nodes: readonly ReviewFileTreeNode[],
 ): ReviewFileEntry[] {
   return nodes.flatMap((node) =>
-    node.kind === "file" ? [node.file] : flattenReviewFileTree(node.children),
+    node.kind === "file"
+      ? [node.file]
+      : node.kind === "moves"
+        ? []
+        : flattenReviewFileTree(node.children),
   );
 }
 
@@ -173,7 +287,7 @@ export function initialReviewFileTreeDirectoryPaths(
   nodes: readonly ReviewFileTreeNode[],
 ): string[] {
   return nodes.flatMap((node) => {
-    if (node.kind === "file") return [];
+    if (node.kind !== "directory") return [];
     const fullyReviewed = flattenReviewFileTree(node.children).every(
       (file) => file.state === "reviewed",
     );
@@ -185,7 +299,10 @@ export function initialReviewFileTreeDirectoryPaths(
 
 /** How many file cards sit on each side of the selected file in Files mode. */
 export const FILES_VIEWER_PAGE_SIZE = 40;
-/** How many neighboring cards render full source instead of a header. */
+/**
+ * How many neighboring cards to hydrate so their diffs can paint while
+ * scrolling. Kept inside the private source store's ready-file budget.
+ */
 export const FILES_VIEWER_PREVIEW_RADIUS = 2;
 /** Extra tree neighbors to hydrate and syntax-preload beyond the visible window. */
 export const FILES_VIEWER_PREFETCH_RADIUS = 4;
@@ -265,7 +382,13 @@ export function filterReviewFiles(
 ) {
   const query = search.trim().toLowerCase();
   return files.filter((file) => {
-    if (query && !file.path.toLowerCase().includes(query)) return false;
+    if (
+      query &&
+      !file.path.toLowerCase().includes(query) &&
+      !file.previousPath?.toLowerCase().includes(query)
+    ) {
+      return false;
+    }
     if (filter === "needs_review") {
       return file.state !== "reviewed" && file.totalUnits > 0;
     }
@@ -279,7 +402,8 @@ export function filterReviewFiles(
 /** One visible tree row the Files sidebar can move keyboard focus across. */
 export type ReviewFileTreeFocus =
   | { kind: "directory"; path: string }
-  | { kind: "file"; path: string; file: ReviewFileEntry };
+  | { kind: "file"; path: string; file: ReviewFileEntry }
+  | { kind: "moves"; path: string };
 
 /** Lists every folder path in a changed-file tree, in render order. */
 export function reviewFileTreeDirectoryPaths(
@@ -300,6 +424,9 @@ export function visibleReviewFileTreeItems(
   return nodes.flatMap((node) => {
     if (node.kind === "file") {
       return [{ kind: "file" as const, path: node.path, file: node.file }];
+    }
+    if (node.kind === "moves") {
+      return [{ kind: "moves" as const, path: node.path }];
     }
     const row: ReviewFileTreeFocus = {
       kind: "directory",
@@ -346,58 +473,107 @@ export function buildReviewFileTree(
     directory.files.push(file);
   }
 
-  /** Converts the mutable assembly trie into immutable display nodes. */
+  /**
+   * Converts the mutable assembly trie into immutable display nodes.
+   *
+   * Files a move left unchanged fold into one row per folder. A folder whose
+   * every descendant is such a file folds along with them into its parent's
+   * row, so a subtree that only relocated is one line wherever it landed
+   * rather than a folder for each stop along the way.
+   */
   function materialize(directory: MutableDirectory): ReviewFileTreeNode[] {
+    const movedFiles: ReviewFileEntry[] = [];
     const directories = [...directory.directories.values()]
       .sort((left, right) => left.name.localeCompare(right.name))
-      .map((child): ReviewFileTreeDirectory => {
+      .flatMap((child): ReviewFileTreeDirectory[] => {
         const children = materialize(child);
-        return {
-          kind: "directory",
-          name: child.name,
-          path: child.path,
-          children,
-          reviewedUnits: children.reduce(
-            (total, node) =>
-              total +
-              (node.kind === "file"
-                ? node.file.reviewedUnits
-                : node.reviewedUnits),
-            0,
-          ),
-          totalUnits: children.reduce(
-            (total, node) =>
-              total +
-              (node.kind === "file" ? node.file.totalUnits : node.totalUnits),
-            0,
-          ),
-          attentionUnits: children.reduce(
-            (total, node) =>
-              total +
-              (node.kind === "file"
-                ? node.file.newUnits + node.file.updatedUnits
-                : node.attentionUnits),
-            0,
-          ),
-        };
+        const [only] = children;
+        if (children.length === 1 && only?.kind === "moves") {
+          movedFiles.push(...only.files);
+          return [];
+        }
+        return [
+          {
+            kind: "directory",
+            name: child.name,
+            path: child.path,
+            children,
+            reviewedUnits: children.reduce(
+              (total, node) =>
+                total +
+                (node.kind === "file"
+                  ? node.file.reviewedUnits
+                  : node.kind === "moves"
+                    ? 0
+                    : node.reviewedUnits),
+              0,
+            ),
+            totalUnits: children.reduce(
+              (total, node) =>
+                total +
+                (node.kind === "file"
+                  ? node.file.totalUnits
+                  : node.kind === "moves"
+                    ? 0
+                    : node.totalUnits),
+              0,
+            ),
+            attentionUnits: children.reduce(
+              (total, node) =>
+                total +
+                (node.kind === "file"
+                  ? node.file.newUnits + node.file.updatedUnits
+                  : node.kind === "moves"
+                    ? 0
+                    : node.attentionUnits),
+              0,
+            ),
+          },
+        ];
       });
     const fileNodes = directory.files
       .sort((left, right) => left.path.localeCompare(right.path))
-      .map(
-        (file): ReviewFileTreeFile => ({
-          kind: "file",
-          name: file.path.split("/").at(-1) ?? file.path,
-          path: file.path,
-          file,
-        }),
-      );
-    return [...directories, ...fileNodes];
+      .flatMap((file): ReviewFileTreeFile[] => {
+        if (isUnchangedMove(file)) {
+          movedFiles.push(file);
+          return [];
+        }
+        return [
+          {
+            kind: "file",
+            name: file.path.split("/").at(-1) ?? file.path,
+            path: file.path,
+            file,
+          },
+        ];
+      });
+    const moves: ReviewFileTreeMoves[] =
+      movedFiles.length > 0
+        ? [
+            {
+              kind: "moves",
+              directory: directory.path,
+              path: reviewFileTreeMovesPath(directory.path),
+              files: sortByReviewFileTreeOrder(movedFiles),
+              origin: commonDirectory(
+                movedFiles.map((file) => file.previousPath ?? file.path),
+              ),
+            },
+          ]
+        : [];
+    return [...directories, ...fileNodes, ...moves];
   }
 
   return materialize(root);
 }
 
+/** The tree key of the row folding a folder's unchanged moves. */
+export function reviewFileTreeMovesPath(directory: string) {
+  return `${directory}//moved`;
+}
+
 const REVIEW_MODE_STORAGE_KEY = "reviewduck:review-mode";
+const MARKDOWN_REVIEW_VIEW_STORAGE_KEY = "reviewduck:markdown-view";
 
 /** Reads the reviewer's preferred navigation projection, defaulting to Files. */
 export function storedReviewMode(storage: Pick<Storage, "getItem">) {
@@ -417,6 +593,29 @@ export function rememberReviewMode(
 ) {
   try {
     storage.setItem(REVIEW_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Browser privacy settings can make local storage unavailable.
+  }
+}
+
+/** Reads whether Markdown files open rendered or as source, defaulting to preview. */
+export function storedMarkdownReviewView(storage: Pick<Storage, "getItem">) {
+  try {
+    return storage.getItem(MARKDOWN_REVIEW_VIEW_STORAGE_KEY) === "raw"
+      ? ("raw" as const)
+      : ("preview" as const);
+  } catch {
+    return "preview" as const;
+  }
+}
+
+/** Remembers whether Markdown files should open rendered or as source. */
+export function rememberMarkdownReviewView(
+  storage: Pick<Storage, "setItem">,
+  view: MarkdownReviewView,
+) {
+  try {
+    storage.setItem(MARKDOWN_REVIEW_VIEW_STORAGE_KEY, view);
   } catch {
     // Browser privacy settings can make local storage unavailable.
   }

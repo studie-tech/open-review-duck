@@ -21,5 +21,14 @@
       "path": "/api/internal/maintenance",
       "schedule": "17 2 * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "reviewduck-preview/*": true,
+      "reviewduck-preview/**": true,
+      "*": false,
+      "**": false
+    }
+  }
 }

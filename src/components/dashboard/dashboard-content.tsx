@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { InvolvementFilter } from "~/components/dashboard/involvement-filter";
 import { PullRequestList } from "~/components/dashboard/pull-request-list";
 import { RepositoryFilter } from "~/components/dashboard/repository-filter";
 import { ReviewPreparationList } from "~/components/dashboard/review-preparation-list";
@@ -38,6 +39,10 @@ import {
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
 import { PROVIDER_NAMES, providerLabel } from "~/lib/provider-labels";
+import {
+  type InboxInvolvement,
+  inboxInvolvementEmptyDetail,
+} from "~/lib/pull-request-involvement";
 import { filterReviewPreparations } from "~/lib/review-preparation";
 import { partitionReviewQueue } from "~/lib/review-queue";
 import { followActiveReviewJobs } from "~/lib/sync-progress";
@@ -62,6 +67,7 @@ type UnimportedInboxSectionProps = {
   }>;
   filtersActive: boolean;
   heading?: boolean;
+  involvement: InboxInvolvement;
   isError: boolean;
   isLoading: boolean;
   onClearFilters: () => void;
@@ -80,30 +86,15 @@ type WorkView =
   | "unimported";
 
 const workCopy = {
-  all: [
-    "Your priority inbox",
-    "Grouped by the next useful action, then repository.",
-  ],
-  continue: ["In progress", "Pick up where you left off."],
-  ready: ["Ready to start", "Prepared changes waiting for a first pass."],
-  unreviewable: [
-    "Not reviewable here",
-    "Open on the provider or synchronize if supported files landed.",
-  ],
-  reviewed: [
-    "Reviewed, awaiting merge",
-    "Fully reviewed at the current provider revision.",
-  ],
-  closed: ["Closed history", "Merged and closed pull requests."],
-  removed: [
-    "Removed from my queue",
-    "Hidden until restored or a new revision arrives.",
-  ],
-  unimported: [
-    "Un-imported PRs",
-    "Open changes from repositories you prepare by hand.",
-  ],
-} satisfies Record<WorkView, readonly [string, string]>;
+  all: "Your priority inbox",
+  continue: "In progress",
+  ready: "Ready to start",
+  unreviewable: "Not reviewable here",
+  reviewed: "Reviewed, awaiting merge",
+  closed: "Closed history",
+  removed: "Removed from my queue",
+  unimported: "Un-imported PRs",
+} satisfies Record<WorkView, string>;
 
 /** Returns whether the selected My work tab shows history instead of the inbox. */
 function isHistoryView(
@@ -129,6 +120,7 @@ export function PullRequestsContent({
   const [repositoryFilter, setRepositoryFilter] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showDrafts, setShowDrafts] = useState(true);
+  const [involvement, setInvolvement] = useState<InboxInvolvement>("all");
   const [filtersReady, setFiltersReady] = useState(false);
   const activeSyncs = api.review.activeSyncs.useQuery(undefined, {
     refetchOnMount: "always",
@@ -149,6 +141,9 @@ export function PullRequestsContent({
       retry: false,
       refetchOnWindowFocus: false,
     });
+  const aiConfiguration = api.ai.configuration.useQuery();
+  const canStartAiReview = aiConfiguration.data?.deepReviewAvailable ?? false;
+  const aiReviewDisabled = aiConfiguration.data?.mode === "off";
   const [pendingPreparationKeys, setPendingPreparationKeys] = useState(
     () => new Set<string>(),
   );
@@ -315,6 +310,15 @@ export function PullRequestsContent({
     }),
     [providerFilter, repositoryFilter, searchQuery],
   );
+  const inboxFilters = useMemo(
+    () => ({
+      involvement,
+      provider: providerFilter,
+      repositories: repositoryFilter,
+      search: searchQuery,
+    }),
+    [involvement, providerFilter, repositoryFilter, searchQuery],
+  );
   const actionableFailedSyncs = useMemo(
     () =>
       failedSyncs.filter(
@@ -346,12 +350,10 @@ export function PullRequestsContent({
     () =>
       filterPriorityInbox(sourceItems, {
         view: "all",
-        provider: providerFilter,
-        repositories: repositoryFilter,
-        search: searchQuery,
+        ...inboxFilters,
         includeDrafts: showDrafts,
       }),
-    [providerFilter, repositoryFilter, searchQuery, showDrafts, sourceItems],
+    [inboxFilters, showDrafts, sourceItems],
   );
   const visibleItems = useMemo(
     () =>
@@ -366,17 +368,9 @@ export function PullRequestsContent({
     () =>
       filterUnimportedPullRequests(availableUnimported, {
         includeDrafts: showDrafts,
-        provider: providerFilter,
-        repositories: repositoryFilter,
-        search: searchQuery,
+        ...inboxFilters,
       }),
-    [
-      availableUnimported,
-      providerFilter,
-      repositoryFilter,
-      searchQuery,
-      showDrafts,
-    ],
+    [availableUnimported, inboxFilters, showDrafts],
   );
   /** Applies the current provider, repository, and search filters to one list. */
   const applySharedFilters = (
@@ -385,9 +379,7 @@ export function PullRequestsContent({
   ) =>
     filterPriorityInbox(items, {
       view,
-      provider: providerFilter,
-      repositories: repositoryFilter,
-      search: searchQuery,
+      ...inboxFilters,
       includeDrafts: showDrafts,
     });
   const workCounts = {
@@ -462,17 +454,26 @@ export function PullRequestsContent({
     setRepositoryFilter(stored.repositories);
     setSearchQuery(stored.search);
     setShowDrafts(stored.showDrafts);
+    setInvolvement(stored.involvement);
     setFiltersReady(true);
   }, []);
   useEffect(() => {
     if (!filtersReady) return;
     rememberDashboardFilters(window.localStorage, {
+      involvement,
       provider: providerFilter,
       repositories: repositoryFilter,
       search: searchQuery,
       showDrafts,
     });
-  }, [filtersReady, providerFilter, repositoryFilter, searchQuery, showDrafts]);
+  }, [
+    filtersReady,
+    involvement,
+    providerFilter,
+    repositoryFilter,
+    searchQuery,
+    showDrafts,
+  ]);
   useEffect(() => {
     if (unimportedPullRequests.isFetched === false) return;
     const available = new Set(repositories.map((repository) => repository.key));
@@ -484,7 +485,8 @@ export function PullRequestsContent({
     workView !== "all" ||
     providerFilter !== "all" ||
     repositoryFilter.length > 0 ||
-    searchQuery.trim().length > 0;
+    searchQuery.trim().length > 0 ||
+    involvement !== "all";
   const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
   const hasUnimportedQueryError = unimportedPullRequests.isError;
@@ -510,7 +512,7 @@ export function PullRequestsContent({
         hasPreparationWork ||
         availableUnimported.length > 0;
   const listKind = isHistoryView(workView) ? workView : "active";
-  const [sectionTitle, sectionDetail] = workCopy[workView];
+  const sectionTitle = workCopy[workView];
   const listedCount =
     workView === "unimported"
       ? visibleUnimported.length
@@ -527,16 +529,12 @@ export function PullRequestsContent({
     if (workView === "unimported") {
       return filterUnimportedPullRequests(availableUnimported, {
         includeDrafts: true,
-        provider: providerFilter,
-        repositories: repositoryFilter,
-        search: searchQuery,
+        ...inboxFilters,
       });
     }
     const matching = filterPriorityInbox(sourceItems, {
       view: "all",
-      provider: providerFilter,
-      repositories: repositoryFilter,
-      search: searchQuery,
+      ...inboxFilters,
       includeDrafts: true,
     });
     return isHistoryView(workView) || workView === "all"
@@ -544,14 +542,7 @@ export function PullRequestsContent({
       : matching.filter(
           (pullRequest) => priorityInboxGroup(pullRequest).id === workView,
         );
-  }, [
-    availableUnimported,
-    providerFilter,
-    repositoryFilter,
-    searchQuery,
-    sourceItems,
-    workView,
-  ]);
+  }, [availableUnimported, inboxFilters, sourceItems, workView]);
   const draftsHidden =
     !showDrafts &&
     (workView === "unimported"
@@ -560,9 +551,7 @@ export function PullRequestsContent({
         (workView === "all" &&
           filterUnimportedPullRequests(availableUnimported, {
             includeDrafts: true,
-            provider: providerFilter,
-            repositories: repositoryFilter,
-            search: searchQuery,
+            ...inboxFilters,
           }).some((pullRequest) => pullRequest.state === "draft")));
 
   /** Resets My work to the full inbox and clears search filters. */
@@ -571,6 +560,7 @@ export function PullRequestsContent({
     setProviderFilter("all");
     setRepositoryFilter([]);
     setSearchQuery("");
+    setInvolvement("all");
   }
 
   const unimportedSectionProps = {
@@ -578,6 +568,7 @@ export function PullRequestsContent({
     errorMessage: unimportedPullRequests.error?.message,
     errors: unimportedPullRequests.data?.errors ?? [],
     filtersActive,
+    involvement,
     isError: unimportedPullRequests.isError,
     isLoading: unimportedPullRequests.isLoading,
     onClearFilters: clearFilters,
@@ -603,11 +594,6 @@ export function PullRequestsContent({
           <h1 className="font-editorial mt-2 text-3xl font-medium tracking-[-.04em] sm:text-4xl">
             What needs your attention.
           </h1>
-          <p className="text-mist mt-2 max-w-xl text-sm leading-6">
-            Continue an active review first, then pick up the next prepared
-            change — or add an un-imported pull request from a manual
-            repository.
-          </p>
         </div>
         <Button asChild>
           <Link href="/settings/providers">
@@ -710,10 +696,7 @@ export function PullRequestsContent({
 
           <div className="min-w-0">
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 className="text-base font-medium">{sectionTitle}</h2>
-                <p className="text-mist mt-1 text-xs">{sectionDetail}</p>
-              </div>
+              <h2 className="text-base font-medium">{sectionTitle}</h2>
               <span
                 aria-live="polite"
                 className="text-fog text-xs tabular-nums"
@@ -760,91 +743,97 @@ export function PullRequestsContent({
             ) : (
               <>
                 {showListFilters && (
-                  <div className="bg-surface/55 mb-3 flex flex-col gap-2 rounded-2xl border border-line p-3 sm:flex-row sm:items-center">
-                    <label className="relative min-w-0 flex-1">
-                      <span className="sr-only">Search pull requests</span>
-                      <Search className="text-fog pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
-                      <input
-                        type="search"
-                        value={searchQuery}
-                        onChange={(event) =>
-                          setSearchQuery(event.currentTarget.value)
-                        }
-                        placeholder="Search PRs, repos, authors…"
-                        className="bg-ink/35 placeholder:text-fog h-9 w-full rounded-xl border border-line py-2 pr-3 pl-9 text-xs outline-none transition focus:border-line-strong"
-                      />
-                    </label>
-                    <select
-                      aria-label="Filter by provider"
-                      value={providerFilter}
-                      onChange={(event) => {
-                        setProviderFilter(
-                          event.currentTarget.value as
-                            | "all"
-                            | PriorityInboxItem["provider"],
-                        );
-                      }}
-                      className="bg-ink/35 h-9 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-36"
-                    >
-                      <option value="all">All providers</option>
-                      {PROVIDER_NAMES.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {providerLabel(provider)}
-                        </option>
-                      ))}
-                    </select>
-                    <RepositoryFilter
-                      onChange={setRepositoryFilter}
-                      providerFilter={providerFilter}
-                      repositories={repositories}
-                      selected={repositoryFilter}
+                  <div className="bg-surface/55 mb-3 flex flex-col gap-2 rounded-2xl border border-line p-3">
+                    <InvolvementFilter
+                      onChange={setInvolvement}
+                      value={involvement}
                     />
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={showDrafts}
-                      aria-label="Show draft pull requests"
-                      title={
-                        showDrafts
-                          ? "Hide draft pull requests"
-                          : "Show draft pull requests"
-                      }
-                      onClick={() => setShowDrafts((current) => !current)}
-                      className="bg-ink/35 flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-xl border border-line px-3 text-xs outline-none transition hover:border-line-strong focus-visible:border-line-strong"
-                    >
-                      <span className="text-mist pointer-events-none">
-                        Drafts
-                      </span>
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "pointer-events-none relative block h-5 w-9 rounded-full border transition",
-                          showDrafts
-                            ? "border-lime bg-lime"
-                            : "border-line bg-surface-subtle",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "absolute top-1/2 size-3.5 -translate-y-1/2 rounded-full shadow-sm transition-[left]",
-                            showDrafts
-                              ? "left-[1.125rem] bg-accent-foreground"
-                              : "left-0.5 bg-cloud",
-                          )}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <label className="relative min-w-0 flex-1">
+                        <span className="sr-only">Search pull requests</span>
+                        <Search className="text-fog pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
+                        <input
+                          type="search"
+                          value={searchQuery}
+                          onChange={(event) =>
+                            setSearchQuery(event.currentTarget.value)
+                          }
+                          placeholder="Search PRs, repos, authors…"
+                          className="bg-ink/35 placeholder:text-fog h-9 w-full rounded-xl border border-line py-2 pr-3 pl-9 text-xs outline-none transition focus:border-line-strong"
                         />
-                      </span>
-                    </button>
-                    {filtersActive && (
+                      </label>
+                      <select
+                        aria-label="Filter by provider"
+                        value={providerFilter}
+                        onChange={(event) => {
+                          setProviderFilter(
+                            event.currentTarget.value as
+                              | "all"
+                              | PriorityInboxItem["provider"],
+                          );
+                        }}
+                        className="bg-ink/35 h-9 rounded-xl border border-line px-3 text-xs outline-none transition focus:border-line-strong sm:max-w-36"
+                      >
+                        <option value="all">All providers</option>
+                        {PROVIDER_NAMES.map((provider) => (
+                          <option key={provider} value={provider}>
+                            {providerLabel(provider)}
+                          </option>
+                        ))}
+                      </select>
+                      <RepositoryFilter
+                        onChange={setRepositoryFilter}
+                        providerFilter={providerFilter}
+                        repositories={repositories}
+                        selected={repositoryFilter}
+                      />
                       <button
                         type="button"
-                        aria-label="Clear inbox filters"
-                        title="Clear filters"
-                        onClick={clearFilters}
-                        className="text-mist hover:bg-surface-subtle hover:text-cloud grid size-9 shrink-0 place-items-center self-end rounded-xl transition sm:self-auto"
+                        role="switch"
+                        aria-checked={showDrafts}
+                        aria-label="Show draft pull requests"
+                        title={
+                          showDrafts
+                            ? "Hide draft pull requests"
+                            : "Show draft pull requests"
+                        }
+                        onClick={() => setShowDrafts((current) => !current)}
+                        className="bg-ink/35 flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-xl border border-line px-3 text-xs outline-none transition hover:border-line-strong focus-visible:border-line-strong"
                       >
-                        <X className="size-4" />
+                        <span className="text-mist pointer-events-none">
+                          Drafts
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "pointer-events-none relative block h-5 w-9 rounded-full border transition",
+                            showDrafts
+                              ? "border-lime bg-lime"
+                              : "border-line bg-surface-subtle",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "absolute top-1/2 size-3.5 -translate-y-1/2 rounded-full shadow-sm transition-[left]",
+                              showDrafts
+                                ? "left-[1.125rem] bg-accent-foreground"
+                                : "left-0.5 bg-cloud",
+                            )}
+                          />
+                        </span>
                       </button>
-                    )}
+                      {filtersActive && (
+                        <button
+                          type="button"
+                          aria-label="Clear inbox filters"
+                          title="Clear filters"
+                          onClick={clearFilters}
+                          className="text-mist hover:bg-surface-subtle hover:text-cloud grid size-9 shrink-0 place-items-center self-end rounded-xl transition sm:self-auto"
+                        >
+                          <X className="size-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -875,7 +864,7 @@ export function PullRequestsContent({
                           ? "This history stays here so you can return to it later."
                           : draftsHidden
                             ? "Turn on Drafts to include them in this list."
-                            : "Try another repository, provider, or search."}
+                            : inboxInvolvementEmptyDetail(involvement)}
                       </p>
                       {draftsHidden ? (
                         <button
@@ -919,6 +908,8 @@ export function PullRequestsContent({
                         kind={listKind}
                         showPriorityGroups={!isHistoryView(workView)}
                         pendingPullRequestId={pendingPullRequestId}
+                        canStartAiReview={canStartAiReview}
+                        aiReviewDisabled={aiReviewDisabled}
                         onRemove={
                           listKind === "active" || listKind === "reviewed"
                             ? (pullRequest) =>
@@ -965,6 +956,7 @@ function UnimportedInboxSection({
   errors,
   filtersActive,
   heading = false,
+  involvement,
   isError,
   isLoading,
   onClearFilters,
@@ -979,12 +971,7 @@ function UnimportedInboxSection({
     <div className="space-y-3">
       {heading && (
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h3 className="text-base font-medium">Un-imported PRs</h3>
-            <p className="text-mist mt-1 text-xs">
-              Open changes from repositories you prepare by hand.
-            </p>
-          </div>
+          <h3 className="text-base font-medium">Un-imported PRs</h3>
           <span className="text-fog text-xs tabular-nums">
             {pullRequests.length === totalCount
               ? `${totalCount} pull requests`
@@ -1051,7 +1038,7 @@ function UnimportedInboxSection({
                 ? "Every open pull request from your manual repositories is already in the inbox."
                 : draftsHidden
                   ? "Turn on Drafts to include them in this list."
-                  : "Try another repository, provider, or search."}
+                  : inboxInvolvementEmptyDetail(involvement)}
             </p>
             {draftsHidden ? (
               <button

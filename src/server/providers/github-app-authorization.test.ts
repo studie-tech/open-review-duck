@@ -1,8 +1,10 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
+  exchangeGitHubUserAuthorization,
   exchangeGitHubUserCode,
   githubAppPrivateKey,
+  refreshGitHubUserToken,
   revokeGitHubUserToken,
   verifyGitHubInstallationOwnership,
 } from "./github-app-authorization";
@@ -40,6 +42,65 @@ describe("GitHub App user authorization", () => {
     );
     expect(String(url)).not.toContain("secret");
     expect(init.redirect).toBe("error");
+  });
+
+  it("keeps the refresh token when exchanging a user-to-server grant", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "ghu_publish",
+          refresh_token: "ghr_refresh",
+          expires_in: 28_800,
+        }),
+        { status: 200 },
+      ),
+    );
+    await expect(
+      exchangeGitHubUserAuthorization(
+        {
+          clientId: "Iv1.client",
+          clientSecret: "secret",
+          code: "one-time-code",
+          codeVerifier: "verifier",
+          redirectUri: "https://reviewduck.example/github/complete",
+        },
+        fetcher,
+      ),
+    ).resolves.toEqual({
+      accessToken: "ghu_publish",
+      refreshToken: "ghr_refresh",
+      expiresIn: 28_800,
+    });
+  });
+
+  it("refreshes a stored GitHub user-to-server token", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "ghu_rotated",
+          refresh_token: "ghr_rotated",
+          expires_in: 28_800,
+        }),
+        { status: 200 },
+      ),
+    );
+    await expect(
+      refreshGitHubUserToken(
+        {
+          clientId: "Iv1.client",
+          clientSecret: "secret",
+          refreshToken: "ghr_refresh",
+        },
+        fetcher,
+      ),
+    ).resolves.toEqual({
+      accessToken: "ghu_rotated",
+      refreshToken: "ghr_rotated",
+      expiresIn: 28_800,
+    });
+    expect(String(fetcher.mock.calls[0]?.[1]?.body)).toContain(
+      "grant_type=refresh_token",
+    );
   });
 
   it("fails closed when GitHub does not return a user token", async () => {

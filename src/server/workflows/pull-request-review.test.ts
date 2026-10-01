@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
   ensureDeepReviewSurveyItem: vi.fn(async () => "survey-item"),
   runDeepReviewDedupe: vi.fn(async () => ({ mergedCount: 0, rejected: false })),
   finalizeDeepReview: vi.fn(),
+  autoPublishDeepReviewFindings: vi.fn(async () => ({
+    published: 0,
+    failed: 0,
+  })),
   failAiJob: vi.fn(async () => undefined),
   ensureWorkflowRunLink: vi.fn(async () => ({ id: "workflow-run" })),
   update: vi.fn(),
@@ -52,6 +56,9 @@ vi.mock("~/server/review/deep/dedupe", () => ({
 }));
 vi.mock("~/server/review/deep/finalize", () => ({
   finalizeDeepReview: mocks.finalizeDeepReview,
+}));
+vi.mock("~/server/review/deep/auto-publish", () => ({
+  autoPublishDeepReviewFindings: mocks.autoPublishDeepReviewFindings,
 }));
 vi.mock("./run-link", () => ({
   ensureWorkflowRunLink: mocks.ensureWorkflowRunLink,
@@ -146,6 +153,10 @@ describe("pullRequestReviewWorkflow", () => {
       expect.objectContaining({ expectedItemCount: 10 }),
     );
     expect(result.terminalState).toBe("complete");
+    expect(mocks.autoPublishDeepReviewFindings).toHaveBeenCalledWith(
+      expect.anything(),
+      parentJobId,
+    );
   });
 
   it("takes every turn one file needs before moving on", async () => {

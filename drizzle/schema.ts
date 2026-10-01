@@ -16,6 +16,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import type { PullRequestLabel } from "../src/lib/pull-request-labels";
 
 export const createTable = pgTableCreator((name) => `open_review_duck_${name}`);
 
@@ -237,6 +238,7 @@ export const workspaceMembers = createTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     role: varchar({ length: 24 }).notNull().default("member"),
+    publishAsSelf: boolean().notNull().default(false),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -381,6 +383,39 @@ export const providerPatCredentials = createTable("provider_pat_credential", {
     .$onUpdate(() => new Date()),
 });
 
+export const userProviderCredentials = createTable(
+  "user_provider_credential",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectionId: uuid()
+      .notNull()
+      .references(() => providerConnections.id, { onDelete: "cascade" }),
+    provider: providerEnum().notNull(),
+    credentialKind: varchar({ length: 32 }).notNull(),
+    encryptedAccessToken: text().notNull(),
+    encryptedRefreshToken: text(),
+    expiresAt: timestamp({ withTimezone: true }),
+    refreshVersion: integer().notNull().default(0),
+    displayLogin: varchar({ length: 160 }).notNull(),
+    externalAccountId: text().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("user_provider_credential_user_connection_idx").on(
+      t.userId,
+      t.connectionId,
+    ),
+    index("user_provider_credential_connection_idx").on(t.connectionId),
+  ],
+);
+
 export const oauthStates = createTable("oauth_state", {
   id: uuid().primaryKey().defaultRandom(),
   workspaceId: uuid()
@@ -494,6 +529,15 @@ export const pullRequests = createTable(
     description: text(),
     authorLogin: varchar({ length: 255 }).notNull(),
     authorAvatarUrl: text(),
+    authorExternalId: text(),
+    reviewerExternalIds: jsonb()
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    assigneeExternalIds: jsonb()
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     sourceBranch: varchar({ length: 255 }).notNull(),
     targetBranch: varchar({ length: 255 }).notNull(),
     headSha: varchar({ length: 64 }).notNull(),
@@ -503,6 +547,10 @@ export const pullRequests = createTable(
     additions: integer().notNull().default(0),
     deletions: integer().notNull().default(0),
     changedFiles: integer().notNull().default(0),
+    labels: jsonb()
+      .$type<PullRequestLabel[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     lastSyncedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp({ withTimezone: true })
@@ -977,6 +1025,7 @@ export const aiPreferences = createTable("ai_preference", {
   selectedModel: varchar({ length: 255 }).notNull().default(""),
   mode: aiModeEnum().notNull().default("on_demand"),
   reviewPullRequests: boolean().notNull().default(false),
+  autoPublishFindings: boolean().notNull().default(false),
   maxReviewTokens: integer(),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp({ withTimezone: true })
@@ -1676,6 +1725,14 @@ export const reviewComments = createTable(
     body: text().notNull(),
     line: integer().notNull(),
     status: reviewCommentStatusEnum().notNull().default("publishing"),
+    /**
+     * Which provider identity opened this ledger row.
+     *
+     * `workspace` is the shared connection (the GitHub App, or the PAT/OAuth
+     * that connected the repository). `reviewer` is the reviewer's own
+     * stored credential. Edit and delete have to reuse that same identity.
+     */
+    publishedAs: varchar({ length: 24 }).notNull().default("workspace"),
     providerExternalId: text(),
     /**
      * The provider's identifier for this comment on its own.
@@ -1817,6 +1874,19 @@ export const workspaceMemberRelations = relations(
     }),
   }),
 );
+export const userProviderCredentialRelations = relations(
+  userProviderCredentials,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [userProviderCredentials.userId],
+      references: [users.id],
+    }),
+    connection: one(providerConnections, {
+      fields: [userProviderCredentials.connectionId],
+      references: [providerConnections.id],
+    }),
+  }),
+);
 export const snapshotRelations = relations(
   reviewSnapshots,
   ({ one, many }) => ({
@@ -1903,3 +1973,63 @@ export const conceptMemberRelations = relations(
 
 /** Creates a SQL expression used to atomically increment a numeric column. */
 export const increment = (value: number) => sql`${value}`;
+
+/** Human-curated evaluation collections, isolated to their owning workspace. */
+export const evalDatasets = createTable(
+  "eval_dataset",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    workspaceId: uuid()
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar({ length: 120 }).notNull(),
+    description: text().notNull().default(""),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("eval_dataset_workspace_idx").on(t.workspaceId)],
+);
+
+/** Frozen source and human annotations survive deletion of the original review. */
+export const evalCases = createTable(
+  "eval_case",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    datasetId: uuid()
+      .notNull()
+      .references(() => evalDatasets.id, { onDelete: "cascade" }),
+    encryptedContent: text().notNull(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("eval_case_dataset_idx").on(t.datasetId)],
+);
+
+/** Immutable experiment inputs; lifecycle fields never change the captured data. */
+export const evalRuns = createTable(
+  "eval_run",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    datasetId: uuid()
+      .notNull()
+      .references(() => evalDatasets.id, { onDelete: "cascade" }),
+    name: varchar({ length: 120 }).notNull(),
+    encryptedSnapshot: text().notNull(),
+    status: varchar({ length: 24 }).notNull().default("running"),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [index("eval_run_dataset_idx").on(t.datasetId)],
+);
+
+/** One independently persisted result per captured case, including failures. */
+export const evalResults = createTable(
+  "eval_result",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    runId: uuid()
+      .notNull()
+      .references(() => evalRuns.id, { onDelete: "cascade" }),
+    caseId: uuid().notNull(),
+    encryptedOutput: text().notNull(),
+  },
+  (t) => [uniqueIndex("eval_result_run_case_idx").on(t.runId, t.caseId)],
+);

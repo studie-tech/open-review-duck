@@ -237,3 +237,24 @@ More information:
 ReviewDuck is licensed under the
 [GNU Affero General Public License v3.0](./LICENSE), version 3 only. Commercial
 licenses with alternative terms may be offered separately.
+
+### On-demand PR previews
+
+Vercel builds production from `main`. Ordinary PR branches do not deploy.
+A collaborator with write, maintain, or admin access can comment
+`/create-preview` as the first line of a PR comment to build its current head.
+The workflow posts the result URL. Later pushes do not refresh the preview;
+repeat the command when an updated preview is needed. Closing the PR deletes
+its `reviewduck-preview/pr-N` snapshot branch.
+
+Configure the `PREVIEW_PUSH_TOKEN` Actions secret with a GitHub credential that
+can write repository contents. Like TheNinjaRPG's preview workflow, the snapshot
+push uses a separate credential so integrations receive the push event. Keep
+the Vercel Git integration connected and reserve `reviewduck-preview/` for this
+workflow. The command workflow becomes available once it lands on `main`.
+
+Comment composers accept pasted PNG, JPEG, GIF, and WebP images up to 2 MB.
+Images upload to the code provider and their Markdown links enter the draft.
+GitHub uploads require a personal GitHub.com connection with repository write
+access; GitHub App installation tokens and Enterprise Server are unsupported.
+For those connections, attach the image on the provider and paste its link.

@@ -4,6 +4,7 @@ import { aiJobs, workflowRuns } from "@/drizzle/schema";
 import { env } from "~/env";
 import { failAiJob } from "~/server/ai/agent-loop";
 import { db } from "~/server/db";
+import { autoPublishDeepReviewFindings } from "~/server/review/deep/auto-publish";
 import { runDeepReviewDedupe } from "~/server/review/deep/dedupe";
 import {
   DEEP_REVIEW_FILE_MAX_TURNS,
@@ -96,7 +97,7 @@ export async function pullRequestReviewWorkflow(
   const plan = await sealDeepReviewPlan(parentJobId, workflowRunId, startToken);
   if (!plan) return { superseded: true as const };
   if (plan.files.length === 0 && !plan.surveyJobId) {
-    return await finalizeDeepReviewRun(parentJobId, workflowRunId, {
+    return await completeDeepReviewRun(parentJobId, workflowRunId, {
       expectedItemCount: plan.itemCount,
     });
   }
@@ -138,10 +139,37 @@ export async function pullRequestReviewWorkflow(
     runFailure = cause instanceof Error ? cause.message : "Deep review failed";
   }
 
-  return await finalizeDeepReviewRun(parentJobId, workflowRunId, {
+  return await completeDeepReviewRun(parentJobId, workflowRunId, {
     expectedItemCount: plan.itemCount,
     runFailure,
   });
+}
+
+/**
+ * Finalizes the run, then posts findings if the workspace asked for that.
+ *
+ * Finalize is what makes a finding publishable. Auto-publish is a separate
+ * step so a provider refusal cannot rewind the completed review.
+ */
+async function completeDeepReviewRun(
+  parentJobId: string,
+  providerRunId: string,
+  options: { expectedItemCount: number; runFailure?: string },
+) {
+  const result = await finalizeDeepReviewRun(
+    parentJobId,
+    providerRunId,
+    options,
+  );
+  await publishCompletedDeepReviewFindings(parentJobId);
+  return result;
+}
+
+/** Posts remaining publishable findings when the preference is on. */
+async function publishCompletedDeepReviewFindings(parentJobId: string) {
+  "use step";
+
+  return await autoPublishDeepReviewFindings(db, parentJobId);
 }
 
 /**

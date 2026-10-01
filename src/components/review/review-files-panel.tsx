@@ -6,9 +6,11 @@ import {
   ChevronRight,
   CircleDot,
   Clock3,
+  CornerDownRight,
   FileCode2,
   FileDiff,
   FileImage,
+  FileX2,
   Folder,
   FolderOpen,
   FoldVertical,
@@ -31,6 +33,7 @@ import {
   outstandingReviewFileUnits,
   type ReviewFileEntry,
   type ReviewFileFilter,
+  type ReviewFileTreeMoves,
   type ReviewFileTreeNode,
   reviewFileTreeDirectoryPaths,
   visibleReviewFileTreeItems,
@@ -151,14 +154,19 @@ function ReviewFileRow({
 }) {
   const name = file.path.split("/").at(-1) ?? file.path;
   const waitLabel = `${file.waitingUnits} waiting ${file.waitingUnits === 1 ? "unit" : "units"}`;
+  const deleted = file.changeType === "deleted";
   return (
     <li
       data-review-file-path={file.path}
       aria-current={selected ? "page" : undefined}
-      aria-label={`${file.path}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
+      aria-label={`${file.path}${deleted ? ", deleted" : ""}, ${file.reviewedUnits} of ${file.totalUnits} review units reviewed`}
       className={cn(
         "group flex min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 transition",
-        selected ? "bg-cyan/[.075]" : "hover:bg-surface-subtle",
+        selected
+          ? deleted
+            ? "bg-coral/[.08]"
+            : "bg-cyan/[.075]"
+          : "hover:bg-surface-subtle",
       )}
       style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
     >
@@ -173,18 +181,32 @@ function ReviewFileRow({
         id={reviewFileTreeControlId(file.path)}
         onClick={() => onSelect(file)}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-        title={file.path}
+        title={deleted ? `${file.path} (deleted)` : file.path}
       >
-        {isPreviewableReviewImage(file.path) ? (
+        {deleted ? (
+          <FileX2 className="text-coral size-3 shrink-0" />
+        ) : isPreviewableReviewImage(file.path) ? (
           <FileImage className="text-fog size-3 shrink-0" />
         ) : file.isBinary ? (
           <FileCode2 className="text-fog size-3 shrink-0" />
         ) : (
           <FileDiff className="text-fog size-3 shrink-0" />
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-cloud">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate font-mono text-[10px]",
+            deleted
+              ? "text-coral/90 line-through decoration-coral/40"
+              : "text-cloud",
+          )}
+        >
           {name}
         </span>
+        {deleted && (
+          <span className="border-coral/25 bg-coral/10 text-coral shrink-0 rounded border px-1 py-px text-[8px] font-medium tracking-wide uppercase">
+            Deleted
+          </span>
+        )}
         {file.waitingUnits > 0 && !onResumeWaiting && (
           <span className="text-cyan flex shrink-0 items-center gap-0.5 text-[8px]">
             <Clock3 className="size-2.5" />
@@ -214,6 +236,108 @@ function ReviewFileRow({
           <Clock3 className="size-2.5" />
           {file.waitingUnits}
         </button>
+      )}
+    </li>
+  );
+}
+
+/** The path of a moved file relative to the folder its row folds into. */
+function pathWithinDirectory(path: string, directory: string | null) {
+  return directory && path.startsWith(`${directory}/`)
+    ? path.slice(directory.length + 1)
+    : path;
+}
+
+/**
+ * Renders the files a folder received by a move that changed nothing.
+ *
+ * The row says how many files only relocated and where they came from, so
+ * the reviewer can trust the fold without opening it; opening it lists each
+ * file beside its previous path as the ledger of what the fold covers.
+ */
+function ReviewMovesRow({
+  node,
+  open,
+  level,
+  onExpandedChange,
+}: {
+  node: ReviewFileTreeMoves;
+  open: boolean;
+  level: number;
+  onExpandedChange: (path: string) => void;
+}) {
+  const count = node.files.length;
+  const summary = `${count} ${count === 1 ? "file" : "files"} moved unchanged`;
+  const origin =
+    node.origin === null
+      ? `${count === 1 ? "its" : "their"} previous ${count === 1 ? "path" : "paths"}`
+      : `${node.origin}/`;
+  return (
+    <li data-review-file-path={node.path}>
+      <button
+        type="button"
+        id={reviewFileTreeControlId(node.path)}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${summary} from ${origin}`}
+        title={`Moved from ${origin} with no line changed. Nothing here needs a sign-off.`}
+        onClick={() => onExpandedChange(node.path)}
+        className="text-fog hover:bg-surface-subtle flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 text-left transition"
+        style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
+      >
+        {open ? (
+          <ChevronDown className="size-3 shrink-0" />
+        ) : (
+          <ChevronRight className="size-3 shrink-0" />
+        )}
+        <CornerDownRight className="size-3.5 shrink-0" />
+        <span className="flex min-w-0 flex-1 flex-col font-mono">
+          <span className="text-mist truncate text-[10px]">{summary}</span>
+          {node.origin !== null && (
+            <span className="truncate text-[9px] leading-3">
+              from {node.origin}/
+            </span>
+          )}
+        </span>
+      </button>
+      {open && (
+        <ul
+          aria-label={`Files moved unchanged into ${node.directory || "the repository root"}`}
+          className="m-0 list-none p-0"
+        >
+          {node.files.map((file) => {
+            const name = pathWithinDirectory(file.path, node.directory);
+            const from = pathWithinDirectory(
+              file.previousPath ?? "",
+              node.origin,
+            );
+            return (
+              <li
+                key={file.path}
+                title={`${file.previousPath} → ${file.path}`}
+                className="text-fog flex min-w-0 items-center gap-1.5 py-1 pr-2 font-mono text-[10px]"
+                style={{
+                  paddingLeft: `${8 + Math.min(level + 1, 7) * 12}px`,
+                }}
+              >
+                <FileDiff className="size-3 shrink-0 opacity-70" />
+                <span className="text-mist min-w-0 shrink truncate">
+                  {name}
+                </span>
+                {/* The same name under the shared origin says nothing the
+                    row above has not; only a path that changed shape is
+                    worth the reviewer's eye. */}
+                {from !== name && (
+                  <>
+                    <span aria-hidden="true" className="shrink-0">
+                      ←
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{from}</span>
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </li>
   );
@@ -253,6 +377,17 @@ function ReviewFileTreeRows({
           onSelect={onSelect}
           onToggle={onToggle}
           onResumeWaiting={onResumeWaiting}
+        />
+      );
+    }
+    if (node.kind === "moves") {
+      return (
+        <ReviewMovesRow
+          key={node.path}
+          node={node}
+          level={level}
+          open={expanded.has(node.path)}
+          onExpandedChange={onExpandedChange}
         />
       );
     }
@@ -472,9 +607,12 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
     const focusPath = (path: string) => {
       document.getElementById(reviewFileTreeControlId(path))?.focus();
     };
-    const parentPath = current.path.includes("/")
-      ? current.path.slice(0, current.path.lastIndexOf("/"))
-      : undefined;
+    const parentPath =
+      current.kind === "moves"
+        ? current.path.slice(0, current.path.indexOf("//")) || undefined
+        : current.path.includes("/")
+          ? current.path.slice(0, current.path.lastIndexOf("/"))
+          : undefined;
 
     if (event.key === "Home") {
       event.preventDefault();
@@ -488,15 +626,16 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
       if (last) focusPath(last.path);
       return;
     }
+    const expandable = current.kind !== "file";
     if (event.key === "ArrowRight") {
-      if (current.kind === "directory" && !openPaths.has(current.path)) {
+      if (expandable && !openPaths.has(current.path)) {
         event.preventDefault();
         onExpandedChange(current.path);
       }
       return;
     }
     if (event.key === "ArrowLeft") {
-      if (current.kind === "directory" && openPaths.has(current.path)) {
+      if (expandable && openPaths.has(current.path)) {
         event.preventDefault();
         onExpandedChange(current.path);
         return;

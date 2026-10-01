@@ -31,6 +31,10 @@ export const reviewWorkspaceSchema = z.object({
   pullRequestId: z.string().uuid(),
 });
 
+export const fileLineHistorySchema = reviewWorkspaceSchema.extend({
+  path: z.string().trim().min(1).max(1_024),
+});
+
 export const providerReviewDecisionSchema = reviewWorkspaceSchema.extend({
   action: z.enum(["approve", "request_changes", "clear"]),
   body: z.string().trim().max(10_000).optional(),
