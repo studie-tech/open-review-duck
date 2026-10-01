@@ -20,6 +20,7 @@ import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
@@ -2941,6 +2942,57 @@ describe("ProviderConversation", () => {
 });
 
 describe("SideBySideUnitDiff", () => {
+  it("filters whitespace changes without changing source text or comment line numbers", async () => {
+    const onChange = vi.fn();
+    const selectLine = vi.fn();
+    const props = {
+      previousSource: "  return value;\n  const count = 1;",
+      currentSource: "    return value;\n    const count = 2;",
+      language: "typescript",
+      previousStartLine: 10,
+      currentStartLine: 20,
+      onSelectReviewLine: selectLine,
+      expanded: true,
+    };
+    const { rerender } = render(
+      <>
+        <ReviewWhitespaceToggle checked={false} onChange={onChange} />
+        <SideBySideUnitDiff {...props} />
+      </>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    );
+    expect(onChange).toHaveBeenCalledWith(true);
+    rerender(
+      <>
+        <ReviewWhitespaceToggle checked onChange={onChange} />
+        <SideBySideUnitDiff {...props} ignoreWhitespace />
+      </>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const line = screen.getByRole("button", {
+      name: "Open actions for current line 20",
+    });
+    expect(line.textContent).toContain("    return value;");
+    expect(line.className).not.toContain("bg-addition/15");
+    expect(
+      screen.getByRole("button", { name: "Open actions for current line 21" })
+        .className,
+    ).toContain("bg-addition/15");
+    await userEvent.click(line);
+    expect(selectLine).toHaveBeenCalledWith(20);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    );
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows aligned base and pull-request lines and opens current comments", async () => {
     const selectLine = vi.fn();
     const user = userEvent.setup();

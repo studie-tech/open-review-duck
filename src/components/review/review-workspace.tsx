@@ -229,6 +229,7 @@ import {
 } from "./review-sync-status";
 import { ReviewToolbar, ReviewToolbarTooltip } from "./review-toolbar-tooltip";
 import { ReviewWaitingCompletion } from "./review-waiting-completion";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   aiConversationVisibility,
   InlineAiQuestion,
@@ -509,6 +510,7 @@ export function ReviewWorkspace({
   );
   const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
   const [markdownView, setMarkdownView] =
     useState<MarkdownReviewView>("preview");
   /** Changes only the Markdown presentation and remembers it for later reviews. */
@@ -1406,9 +1408,13 @@ export function ReviewWorkspace({
   const overviewRows = useMemo(
     () =>
       overviewEnabled
-        ? sideBySideDiff(diffPreviousSource, diffCurrentSource)
+        ? sideBySideDiff(
+            diffPreviousSource,
+            diffCurrentSource,
+            ignoreWhitespace,
+          )
         : [],
-    [diffCurrentSource, diffPreviousSource, overviewEnabled],
+    [diffCurrentSource, diffPreviousSource, overviewEnabled, ignoreWhitespace],
   );
   const overviewMarks = useMemo(
     () => overviewMarksFromDiffRows(overviewRows),
@@ -3045,6 +3051,7 @@ export function ReviewWorkspace({
             sourceAvailable={fileContext !== undefined}
             previousFileSource={fileContext?.previousSource ?? ""}
             diffVisible={showDiff}
+            ignoreWhitespace={ignoreWhitespace}
             itemLabel={itemLabel}
             onSelect={openCard}
             onCommentLine={commentOnMemberLine}
@@ -3073,6 +3080,7 @@ export function ReviewWorkspace({
       unitIndexById,
       viewerCardWindow.cards,
       viewerCardWindow.start,
+      ignoreWhitespace,
     ],
   );
   const manualSyncPending = reviewSession === "synchronizing";
@@ -6689,6 +6697,12 @@ export function ReviewWorkspace({
                       }}
                     />
                   )}
+                  {sideBySideVisible && (
+                    <ReviewWhitespaceToggle
+                      checked={ignoreWhitespace}
+                      onChange={setIgnoreWhitespace}
+                    />
+                  )}
                   <button
                     type="button"
                     aria-label="Show AI assistance"
@@ -6976,6 +6990,7 @@ export function ReviewWorkspace({
                     !markdownPreviewVisible &&
                     sideBySideVisible && (
                       <ReviewDiffWithLineHistory
+                        ignoreWhitespace={ignoreWhitespace}
                         key={activeUnit.id}
                         ref={diffContextRef}
                         pullRequestId={initialData.pullRequest.id}

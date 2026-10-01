@@ -389,6 +389,7 @@ export function ReviewConceptFileCardPreview({
   sourceAvailable = true,
   previousFileSource = "",
   diffVisible = true,
+  ignoreWhitespace = false,
   onSelect,
   onCommentLine,
   onOpenLineComment,
@@ -406,6 +407,7 @@ export function ReviewConceptFileCardPreview({
   sourceAvailable?: boolean;
   previousFileSource?: string;
   diffVisible?: boolean;
+  ignoreWhitespace?: boolean;
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
   onOpenLineComment?: (threadExternalId: string) => void;
@@ -559,6 +561,7 @@ export function ReviewConceptFileCardPreview({
         ) : expanded ? (
           canShowDiff && first ? (
             <ReviewConceptFileDiff
+              ignoreWhitespace={ignoreWhitespace}
               pullRequestId={pullRequestId}
               path={first.path}
               previousSource={previousFileSource}
