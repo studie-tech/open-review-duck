@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
@@ -9,9 +9,14 @@ export function useStagedReviewWorkspace(incoming: Workspace) {
   const loadRequested = useRef(false);
   const available = incoming.snapshot?.id !== displayed.snapshot?.id;
   if (incoming !== displayed && (!available || loadRequested.current)) {
-    loadRequested.current = false;
     setDisplayed(incoming);
   }
+  const committedDisplayed = useRef(displayed);
+  useLayoutEffect(() => {
+    if (committedDisplayed.current === displayed) return;
+    committedDisplayed.current = displayed;
+    loadRequested.current = false;
+  }, [displayed]);
   return {
     displayed,
     available,
