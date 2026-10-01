@@ -236,6 +236,11 @@ describe("provider normalization", () => {
     });
 
     expect(pulls.map((pull) => pull.number)).toEqual([7]);
+    expect(pulls[0]).toMatchObject({
+      authorExternalId: "1",
+      reviewerExternalIds: ["42"],
+      assigneeExternalIds: [],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -701,6 +706,68 @@ describe("provider normalization", () => {
     expect(
       fetchMock.mock.calls.some(([url]) =>
         requestUrl(url).includes("ref=base-sha"),
+      ),
+    ).toBe(true);
+  });
+
+  it("records where a renamed GitHub file came from", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url.includes("/compare/")) {
+        return jsonResponse({ merge_base_commit: { sha: "base-sha" } });
+      }
+      if (url.includes("/files?")) {
+        return jsonResponse([
+          {
+            filename: "app/[shell]/academy/layout.tsx",
+            previous_filename: "app/academy/layout.tsx",
+            status: "renamed",
+          },
+          {
+            filename: "app/academy/page.tsx",
+            previous_filename: "app/academy/page.tsx",
+            status: "modified",
+          },
+        ]);
+      }
+      if (url.includes("/contents/")) {
+        return new Response("export default function Layout() {}");
+      }
+      return jsonResponse({
+        id: 12,
+        number: 8,
+        title: "Move the academy under the shell",
+        body: null,
+        state: "open",
+        html_url: "https://github.com/acme/review/pull/8",
+        user: { login: "reviewer", avatar_url: "" },
+        head: { ref: "shell", sha: "head-sha" },
+        base: { ref: "main", sha: "target-sha" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await new GitHubProvider("token").getChangedFiles("42", 8);
+
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: "app/[shell]/academy/layout.tsx",
+        previousPath: "app/academy/layout.tsx",
+        changeType: "renamed",
+        content: "export default function Layout() {}",
+        previousContent: "export default function Layout() {}",
+      }),
+      expect.objectContaining({
+        path: "app/academy/page.tsx",
+        changeType: "modified",
+      }),
+    ]);
+    expect(files[1]).not.toHaveProperty("previousPath", expect.any(String));
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) =>
+          requestUrl(url).includes("/contents/app/academy/layout.tsx") &&
+          requestUrl(url).includes("ref=base-sha"),
       ),
     ).toBe(true);
   });
@@ -1204,6 +1271,7 @@ describe("provider normalization", () => {
     expect(files).toEqual([
       expect.objectContaining({
         path: "src/new.ts",
+        previousPath: "src/old.ts",
         content: "after",
         previousContent: "before",
         changeType: "renamed",
@@ -1572,6 +1640,7 @@ describe("provider normalization", () => {
     ).resolves.toEqual([
       expect.objectContaining({
         path: "shared/worker/worker-messages.ts",
+        previousPath: "app/_shared/utils/worker/worker-messages.ts",
         content: "afterRename()",
         previousContent: "beforeRename()",
         changeType: "renamed",
@@ -3333,5 +3402,68 @@ describe("native comment attachments", () => {
       ).uploadCommentImage(input),
     ).rejects.toThrow("personal GitHub.com connection");
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pull request file commits", () => {
+  it("keeps GitHub patches for commits that belong to the pull request", async () => {
+    const listedCommit = {
+      sha: "aaa1111",
+      html_url: "https://github.com/acme/review-duck/commit/aaa1111",
+      commit: {
+        message: "Add flag\n\nBody",
+        author: { name: "Ada", date: "2026-09-01T00:00:00Z" },
+      },
+      author: { login: "ada" },
+      parents: [{ sha: "base" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.includes("/pulls/7/commits"))
+          return jsonResponse([listedCommit]);
+        if (url.includes("/commits?")) {
+          return jsonResponse([
+            listedCommit,
+            {
+              ...listedCommit,
+              sha: "not-in-pr",
+              parents: [{ sha: "older" }],
+            },
+          ]);
+        }
+        return jsonResponse({
+          files: [
+            {
+              filename: "src/auth/session.ts",
+              patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+            },
+          ],
+        });
+      }),
+    );
+
+    const listed = await new GitHubProvider("token").listPullRequestFileCommits(
+      {
+        repositoryExternalId: "42",
+        pullRequestNumber: 7,
+        path: "src/auth/session.ts",
+        headSha: "headsha",
+      },
+    );
+
+    expect(listed.truncated).toBe(false);
+    expect(listed.commits).toEqual([
+      {
+        sha: "aaa1111",
+        author: "ada",
+        authoredAt: "2026-09-01T00:00:00Z",
+        message: "Add flag\n\nBody",
+        url: "https://github.com/acme/review-duck/commit/aaa1111",
+        patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+        merge: false,
+      },
+    ]);
   });
 });

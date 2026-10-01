@@ -3,6 +3,7 @@ import "server-only";
 import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { pullRequests, repositories } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { pullRequestParticipantColumns } from "~/lib/pull-request-involvement";
 import type { db as database } from "~/server/db";
 import { startPullRequestSync } from "~/server/workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
@@ -144,6 +145,7 @@ export async function refreshRepositoryPullRequestStates(
         description: remote.description,
         authorLogin: remote.authorLogin,
         authorAvatarUrl: remote.authorAvatarUrl,
+        ...pullRequestParticipantColumns(remote),
         sourceBranch: remote.sourceBranch,
         targetBranch: remote.targetBranch,
         headSha: remote.headSha,

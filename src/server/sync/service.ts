@@ -11,10 +11,12 @@ import {
   snapshotFiles,
 } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { pullRequestParticipantColumns } from "~/lib/pull-request-involvement";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
+  changedFileLineCounts,
   reconcileSignOffs,
 } from "~/server/analysis/engine";
 import { languageAdapterForFile } from "~/server/analysis/parsers";
@@ -116,6 +118,7 @@ export async function syncPullRequest(
           description: remote.description,
           authorLogin: remote.authorLogin,
           authorAvatarUrl: remote.authorAvatarUrl,
+          ...pullRequestParticipantColumns(remote),
           sourceBranch: remote.sourceBranch,
           targetBranch: remote.targetBranch,
           state: remote.state,
@@ -262,6 +265,7 @@ export async function syncPullRequest(
         description: confirmedRemote.description,
         authorLogin: confirmedRemote.authorLogin,
         authorAvatarUrl: confirmedRemote.authorAvatarUrl,
+        ...pullRequestParticipantColumns(confirmedRemote),
         sourceBranch: confirmedRemote.sourceBranch,
         targetBranch: confirmedRemote.targetBranch,
         headSha: confirmedRemote.headSha,
@@ -282,6 +286,7 @@ export async function syncPullRequest(
           description: confirmedRemote.description,
           authorLogin: confirmedRemote.authorLogin,
           authorAvatarUrl: confirmedRemote.authorAvatarUrl,
+          ...pullRequestParticipantColumns(confirmedRemote),
           sourceBranch: confirmedRemote.sourceBranch,
           targetBranch: confirmedRemote.targetBranch,
           headSha: confirmedRemote.headSha,
@@ -424,22 +429,7 @@ export async function syncPullRequest(
             changeType: file.changeType ?? "modified",
             currentBlobId: currentBlob?.id,
             previousBlobId: previousBlob?.id,
-            additions:
-              file.changeType === "deleted"
-                ? 0
-                : Math.max(
-                    0,
-                    file.content.split("\n").length -
-                      (file.previousContent?.split("\n").length ?? 0),
-                  ),
-            deletions:
-              file.changeType === "deleted"
-                ? file.content.split("\n").length
-                : Math.max(
-                    0,
-                    (file.previousContent?.split("\n").length ?? 0) -
-                      file.content.split("\n").length,
-                  ),
+            ...changedFileLineCounts(file),
             isBinary: file.isBinary ?? false,
             skipReason: file.skipReason,
           };

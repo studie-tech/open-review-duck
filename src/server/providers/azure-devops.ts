@@ -1,9 +1,16 @@
+import { mapWithLimit } from "~/lib/concurrency";
+import {
+  oldestFirstByParent,
+  pullRequestFileCommitShas,
+  unifiedPatch,
+} from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   type AzurePolicyEvaluationGate,
   azureMergeGate,
   azurePolicyCheckState,
 } from "~/lib/provider-merge-gate";
+import { providerAccountIds } from "~/lib/pull-request-involvement";
 import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
@@ -14,20 +21,21 @@ import {
   providerVoid,
 } from "./http";
 import { collectProviderSourceFiles, loadChangedSource } from "./source-budget";
-import type {
-  ChangedFilesOptions,
-  ProviderCheckState,
-  ProviderPullRequestCheck,
-  ProviderPullRequestLifecycle,
-  ProviderPullRequestReviewState,
-  ProviderReviewAction,
-  PullRequestListOptions,
-  PullRequestProvider,
-  PullRequestSummary,
-  RepositoryBranch,
-  RepositoryIdentity,
+import {
+  type ChangedFilesOptions,
+  type ProviderCheckState,
+  ProviderError,
+  type ProviderFileCommit,
+  type ProviderPullRequestCheck,
+  type ProviderPullRequestLifecycle,
+  type ProviderPullRequestReviewState,
+  type ProviderReviewAction,
+  type PullRequestListOptions,
+  type PullRequestProvider,
+  type PullRequestSummary,
+  type RepositoryBranch,
+  type RepositoryIdentity,
 } from "./types";
-import { ProviderError } from "./types";
 
 interface AzureRepository {
   id: string;
@@ -63,6 +71,7 @@ interface AzurePull {
     uniqueName?: string;
     imageUrl?: string;
   };
+  reviewers?: Array<{ id?: string | null }>;
   labels?: Array<{
     id?: string;
     name?: string;
@@ -94,6 +103,13 @@ interface AzureReviewer {
   displayName?: string;
   uniqueName?: string;
   vote: number;
+}
+interface AzureListedCommit {
+  commitId: string;
+  comment?: string;
+  author?: { name?: string; date?: string };
+  parents?: string[];
+  remoteUrl?: string;
 }
 interface AzureChange {
   item?: {
@@ -618,6 +634,10 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         const oversizedHash = change.item.objectId ?? `${ref}:${path}`;
         return loadChangedSource({
           path,
+          previousPath:
+            deleted || change.originalPath === undefined
+              ? undefined
+              : change.originalPath.replace(/^\//, ""),
           fetchPath: change.item.path,
           previousFetchPath: change.originalPath ?? change.item.path,
           ref,
@@ -976,6 +996,107 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     }));
   }
 
+  /**
+   * Lists pull-request commits that touched one file, with a reconstructed patch.
+   *
+   * Azure does not return unified diffs per commit, so each commit is compared
+   * to its first parent. Histories past the line-map limit omit those patches.
+   */
+  async listPullRequestFileCommits(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    path: string;
+    headSha: string;
+  }) {
+    const root = `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}`;
+    const itemPath = `/${input.path.replace(/^\/+/, "")}`;
+    const [pullCommits, pathCommits] = await Promise.all([
+      this.getAllPages<AzureListedCommit>(
+        `${root}/pullRequests/${input.pullRequestNumber}/commits?api-version=7.1`,
+      ),
+      this.getAllPages<AzureListedCommit>(
+        `${root}/commits?searchCriteria.itemPath=${encodeURIComponent(itemPath)}&searchCriteria.itemVersion.version=${encodeURIComponent(input.headSha)}&searchCriteria.itemVersion.versionType=commit&api-version=7.1`,
+      ),
+    ]);
+    const orderedPull = oldestFirstByParent(
+      pullCommits.map((commit) => ({
+        sha: commit.commitId,
+        parents: commit.parents ?? [],
+      })),
+    );
+    const chosen = pullRequestFileCommitShas(
+      orderedPull.map((commit) => commit.sha),
+      new Set(pathCommits.map((commit) => commit.commitId)),
+    );
+    const bySha = new Map(
+      [...pullCommits, ...pathCommits].map((commit) => [
+        commit.commitId,
+        commit,
+      ]),
+    );
+    const commits = await mapWithLimit(chosen.shas, 4, async (sha) => {
+      const listed = bySha.get(sha);
+      if (chosen.truncated) {
+        return this.fileCommitFromAzure(listed, sha, {
+          merge: false,
+          patch: null,
+        });
+      }
+      const detail = await providerFetch<AzureListedCommit>(
+        this.name,
+        `${root}/commits/${sha}?api-version=7.1`,
+        { headers: this.headers },
+      );
+      const merge = (detail.parents?.length ?? 0) > 1;
+      if (merge) {
+        return this.fileCommitFromAzure(detail, sha, { merge, patch: null });
+      }
+      const parent = detail.parents?.[0];
+      const [previous, current] = await Promise.all([
+        parent
+          ? this.fileTextOrEmpty(input.repositoryExternalId, input.path, parent)
+          : Promise.resolve(""),
+        this.fileTextOrEmpty(input.repositoryExternalId, input.path, sha),
+      ]);
+      return this.fileCommitFromAzure(detail, sha, {
+        merge: false,
+        patch: unifiedPatch(previous, current),
+      });
+    });
+    return { commits, truncated: chosen.truncated };
+  }
+
+  /** Reads one file revision, treating a missing path as an empty file. */
+  private async fileTextOrEmpty(
+    repositoryExternalId: string,
+    path: string,
+    ref: string,
+  ) {
+    try {
+      return (await this.getFileContent(repositoryExternalId, path, ref)) ?? "";
+    } catch (cause) {
+      if (cause instanceof ProviderError && cause.status === 404) return "";
+      throw cause;
+    }
+  }
+
+  /** Normalizes one Azure commit into the shared file-history shape. */
+  private fileCommitFromAzure(
+    listed: AzureListedCommit | undefined,
+    sha: string,
+    input: { merge: boolean; patch: string | null },
+  ): ProviderFileCommit {
+    return {
+      sha,
+      author: listed?.author?.name ?? sha.slice(0, 7),
+      authoredAt: listed?.author?.date ?? "",
+      message: listed?.comment ?? "",
+      url: listed?.remoteUrl,
+      patch: input.patch,
+      merge: input.merge,
+    };
+  }
+
   /** Maps an Azure PR status onto the shared check model. */
   private statusState(state: string): ProviderCheckState {
     if (state === "succeeded") return "success";
@@ -1000,6 +1121,9 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       description: item.description,
       authorLogin: item.createdBy.uniqueName ?? item.createdBy.displayName,
       authorAvatarUrl: item.createdBy.imageUrl,
+      authorExternalId: item.createdBy.id || undefined,
+      reviewerExternalIds: providerAccountIds(item.reviewers),
+      assigneeExternalIds: [],
       sourceBranch: item.sourceRefName.replace("refs/heads/", ""),
       targetBranch: item.targetRefName.replace("refs/heads/", ""),
       headSha: item.lastMergeSourceCommit.commitId,

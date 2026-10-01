@@ -41,6 +41,7 @@ import {
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
+import { attributeFileCommits } from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { providerConnectionRecovery } from "~/lib/provider-permission-recovery";
 import {
@@ -128,6 +129,7 @@ import {
   uploadCommentImage,
   uploadCommentImageSchema,
 } from "~/server/review/upload-comment-image";
+import { withViewerInvolvement } from "~/server/review/viewer-involvement";
 import {
   assignProviderThreadsToUnits,
   hasNewProviderActivity,
@@ -146,6 +148,7 @@ import {
 } from "~/server/workflows/service";
 import {
   editReviewThreadCommentSchema,
+  fileLineHistorySchema,
   importTargetSchema,
   improveConceptGroupingSchema,
   providerReviewDecisionSchema,
@@ -180,6 +183,12 @@ export const reviewRouter = createTRPCRouter({
         title: pullRequests.title,
         authorLogin: pullRequests.authorLogin,
         authorAvatarUrl: pullRequests.authorAvatarUrl,
+        authorExternalId: pullRequests.authorExternalId,
+        reviewerExternalIds: pullRequests.reviewerExternalIds,
+        assigneeExternalIds: pullRequests.assigneeExternalIds,
+        connectionId: providerConnections.id,
+        connectionAccountId: providerConnections.externalAccountId,
+        connectionDisplayName: providerConnections.displayName,
         state: pullRequests.state,
         webUrl: pullRequests.webUrl,
         updatedAt: pullRequests.updatedAt,
@@ -226,13 +235,17 @@ export const reviewRouter = createTRPCRouter({
         ),
       )
       .orderBy(reviewSnapshots.pullRequestId, desc(reviewSnapshots.version));
-    if (snapshots.length === 0) {
-      return rows.map((row) => ({
-        ...row,
-        totalUnits: 0,
-        signedUnits: 0,
-        carriedSignOffs: 0,
-      }));
+    const listed =
+      snapshots.length === 0
+        ? rows.map((row) => ({
+            ...row,
+            totalUnits: 0,
+            signedUnits: 0,
+            carriedSignOffs: 0,
+          }))
+        : null;
+    if (listed) {
+      return withViewerInvolvement(ctx.db, ctx.auth.userId, listed);
     }
     const progress = await ctx.db
       .select({
@@ -266,17 +279,21 @@ export const reviewRouter = createTRPCRouter({
     const snapshotByPullRequest = new Map(
       snapshots.map((snapshot) => [snapshot.pullRequestId, snapshot.id]),
     );
-    return rows.map((row) => {
-      const counts = progressBySnapshot.get(
-        snapshotByPullRequest.get(row.id) ?? "",
-      );
-      return {
-        ...row,
-        totalUnits: Number(counts?.totalUnits ?? 0),
-        signedUnits: Number(counts?.signedUnits ?? 0),
-        carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
-      };
-    });
+    return withViewerInvolvement(
+      ctx.db,
+      ctx.auth.userId,
+      rows.map((row) => {
+        const counts = progressBySnapshot.get(
+          snapshotByPullRequest.get(row.id) ?? "",
+        );
+        return {
+          ...row,
+          totalUnits: Number(counts?.totalUnits ?? 0),
+          signedUnits: Number(counts?.signedUnits ?? 0),
+          carriedSignOffs: Number(counts?.carriedSignOffs ?? 0),
+        };
+      }),
+    );
   }),
 
   removeFromQueue: protectedProcedure
@@ -1880,6 +1897,57 @@ export const reviewRouter = createTRPCRouter({
         return { kind: "unresolved" as const, reason: "self" as const };
       }
       return found;
+    }),
+
+  fileLineHistory: protectedProcedure
+    .input(fileLineHistorySchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `file-line-history:${ctx.auth.userId}:${input.pullRequestId}`,
+        20,
+        60_000,
+      );
+      if (!scope.snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      const [file] = await ctx.db
+        .select({ path: snapshotFiles.path })
+        .from(snapshotFiles)
+        .where(
+          and(
+            eq(snapshotFiles.snapshotId, scope.snapshot.id),
+            or(
+              eq(snapshotFiles.path, input.path),
+              eq(snapshotFiles.previousPath, input.path),
+            ),
+          ),
+        )
+        .limit(1);
+      if (!file) throw new TRPCError({ code: "NOT_FOUND" });
+      try {
+        const provider = await providerForReviewerRead(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
+        const listed = await provider.listPullRequestFileCommits({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          path: input.path,
+          headSha: scope.snapshot.headSha,
+        });
+        return attributeFileCommits(listed);
+      } catch (cause) {
+        if (cause instanceof TRPCError) throw cause;
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: "Commit history for this file could not be loaded",
+        });
+      }
     }),
 
   unitDiscussion: protectedProcedure

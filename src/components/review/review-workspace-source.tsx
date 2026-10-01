@@ -19,9 +19,11 @@ import {
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
+import type { MarkdownReviewView } from "~/lib/review-files";
 import {
   formatReviewSourceBytes,
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceKindLabel,
@@ -42,7 +44,12 @@ import {
   ReviewLineCommentMarkers,
   reviewLineCommentMarkersBySide,
 } from "./review-line-comment-markers";
-import { SideBySideUnitDiff } from "./review-workspace-diff";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
+import {
+  SideBySideUnitDiff,
+  type SideBySideUnitDiffProps,
+} from "./review-workspace-diff";
+import { ReviewMarkdownPreview } from "./review-workspace-markdown";
 import {
   SourceLineWindow,
   WORKSPACE_SOURCE_ROW_HEIGHT_PX,
@@ -352,6 +359,27 @@ function ReviewConceptFileCardSource({
   );
 }
 
+/**
+ * Uses commit history on a neighbor card only when the card knows its pull request.
+ *
+ * Tests and callers without that id keep the plain diff, so they do not ask
+ * the provider for commits.
+ */
+function ReviewConceptFileDiff({
+  path,
+  pullRequestId,
+  ...diff
+}: SideBySideUnitDiffProps & { path: string; pullRequestId?: string }) {
+  if (!pullRequestId) return <SideBySideUnitDiff {...diff} />;
+  return (
+    <ReviewDiffWithLineHistory
+      path={path}
+      pullRequestId={pullRequestId}
+      {...diff}
+    />
+  );
+}
+
 /** Neighbor file card that uses the same source body as the selected card. */
 export function ReviewConceptFileCardPreview({
   members,
@@ -361,13 +389,16 @@ export function ReviewConceptFileCardPreview({
   sourceAvailable = true,
   previousFileSource = "",
   diffVisible = true,
+  ignoreWhitespace = false,
   onSelect,
   onCommentLine,
   onOpenLineComment,
   commentThreads,
   itemLabel = "Card",
   sourceBytes,
+  markdownView = "preview",
   onSourceNeeded,
+  pullRequestId,
 }: {
   members: readonly ReviewUnit[];
   index: number;
@@ -376,13 +407,16 @@ export function ReviewConceptFileCardPreview({
   sourceAvailable?: boolean;
   previousFileSource?: string;
   diffVisible?: boolean;
+  ignoreWhitespace?: boolean;
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
   onOpenLineComment?: (threadExternalId: string) => void;
   commentThreads?: Parameters<typeof reviewLineCommentMarkersBySide>[0];
   itemLabel?: "Card" | "File";
   sourceBytes?: number;
+  markdownView?: MarkdownReviewView;
   onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
+  pullRequestId?: string;
 }) {
   const first = members[0];
   const articleRef = useRef<HTMLElement>(null);
@@ -449,7 +483,13 @@ export function ReviewConceptFileCardPreview({
   }
   const fileBytes =
     sourceBytes ?? reviewSourceByteLength({ source: fileSource });
+  const markdownFile =
+    first !== undefined &&
+    first.kind !== "binary" &&
+    isReviewMarkdownFile({ language: first.language, path: first.path });
+  const showMarkdownPreview = markdownFile && markdownView === "preview";
   const canShowDiff =
+    !showMarkdownPreview &&
     diffVisible &&
     first?.kind !== "binary" &&
     Boolean(fileSource || previousFileSource);
@@ -503,9 +543,27 @@ export function ReviewConceptFileCardPreview({
           <div className="px-4 py-5 text-fog" role="status">
             Loading source…
           </div>
+        ) : expanded && showMarkdownPreview && first ? (
+          <ReviewMarkdownPreview
+            path={first.path}
+            currentSource={
+              fileSource || members.map((member) => member.source).join("\n\n")
+            }
+            previousSource={
+              previousFileSource ||
+              members
+                .flatMap((member) =>
+                  member.previousSource ? [member.previousSource] : [],
+                )
+                .join("\n\n")
+            }
+          />
         ) : expanded ? (
           canShowDiff && first ? (
-            <SideBySideUnitDiff
+            <ReviewConceptFileDiff
+              ignoreWhitespace={ignoreWhitespace}
+              pullRequestId={pullRequestId}
+              path={first.path}
               previousSource={previousFileSource}
               currentSource={fileSource}
               language={first.language ?? "text"}

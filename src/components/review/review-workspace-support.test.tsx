@@ -20,6 +20,7 @@ import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   AI_QUICK_QUESTIONS,
   aiConversationVisibility,
@@ -846,6 +847,95 @@ describe("same-file concept cards", () => {
       screen.getByText(/Hidden so the review stays responsive/),
     ).toBeInTheDocument();
     expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it("renders Markdown neighbor cards as a document until Raw is chosen", async () => {
+    const highlight = vi.mocked(useHighlightedSource);
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "readme",
+              path: "README.md",
+              name: "README.md",
+              changedLineCount: 2,
+              changeType: "modified",
+              previousSource: ["# Old pond", "", "Ducks."].join("\n"),
+              source: ["# ReviewDuck", "", "Read the **docs**."].join("\n"),
+              startLine: 1,
+              endLine: 3,
+              language: "markdown",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={["# Old pond", "", "Ducks."].join("\n")}
+        fileSource={["# ReviewDuck", "", "Read the **docs**."].join("\n")}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Rendered Markdown. Switch to Raw to comment on lines or read the diff.",
+        ),
+      ).toBeVisible();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("heading", { name: "ReviewDuck" }),
+      ).not.toHaveLength(0);
+    });
+    expect(highlight).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("region", { name: "Side-by-side code diff" }),
+    ).not.toBeInTheDocument();
+
+    cleanup();
+    highlight.mockClear();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              id: "readme",
+              path: "README.md",
+              name: "README.md",
+              changedLineCount: 2,
+              changeType: "modified",
+              previousSource: ["# Old pond", "", "Ducks."].join("\n"),
+              source: ["# ReviewDuck", "", "Read the **docs**."].join("\n"),
+              startLine: 1,
+              endLine: 3,
+              language: "markdown",
+              kind: "module",
+              status: "pending",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={["# Old pond", "", "Ducks."].join("\n")}
+        fileSource={["# ReviewDuck", "", "Read the **docs**."].join("\n")}
+        markdownView="raw"
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Side-by-side code diff" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "ReviewDuck" }),
+    ).not.toBeInTheDocument();
   });
 
   it("lets the reviewer fold a file card back up after opening it", async () => {
@@ -2852,6 +2942,57 @@ describe("ProviderConversation", () => {
 });
 
 describe("SideBySideUnitDiff", () => {
+  it("filters whitespace changes without changing source text or comment line numbers", async () => {
+    const onChange = vi.fn();
+    const selectLine = vi.fn();
+    const props = {
+      previousSource: "  return value;\n  const count = 1;",
+      currentSource: "    return value;\n    const count = 2;",
+      language: "typescript",
+      previousStartLine: 10,
+      currentStartLine: 20,
+      onSelectReviewLine: selectLine,
+      expanded: true,
+    };
+    const { rerender } = render(
+      <>
+        <ReviewWhitespaceToggle checked={false} onChange={onChange} />
+        <SideBySideUnitDiff {...props} />
+      </>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    );
+    expect(onChange).toHaveBeenCalledWith(true);
+    rerender(
+      <>
+        <ReviewWhitespaceToggle checked onChange={onChange} />
+        <SideBySideUnitDiff {...props} ignoreWhitespace />
+      </>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const line = screen.getByRole("button", {
+      name: "Open actions for current line 20",
+    });
+    expect(line.textContent).toContain("    return value;");
+    expect(line.className).not.toContain("bg-addition/15");
+    expect(
+      screen.getByRole("button", { name: "Open actions for current line 21" })
+        .className,
+    ).toContain("bg-addition/15");
+    await userEvent.click(line);
+    expect(selectLine).toHaveBeenCalledWith(20);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ignore whitespace" }),
+    );
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows aligned base and pull-request lines and opens current comments", async () => {
     const selectLine = vi.fn();
     const user = userEvent.setup();
@@ -3375,6 +3516,65 @@ describe("SideBySideUnitDiff", () => {
     expect(deletedLine).toHaveTextContent("const removed = true;");
     await user.click(deletedLine);
     expect(selectLine).toHaveBeenCalledWith(8);
+  });
+
+  it("shows pull-request commits for a shift-clicked line range", async () => {
+    const selectLine = vi.fn();
+    const onRequest = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SideBySideUnitDiff
+        previousSource={"const removed = true;\nconst retained = true;"}
+        currentSource={"const retained = true;"}
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={1}
+        previousFocusEndLine={1}
+        currentFocusStartLine={null}
+        currentFocusEndLine={null}
+        onSelectReviewLine={selectLine}
+        lineHistory={{
+          status: "ready",
+          truncated: false,
+          unmapped: false,
+          onRequest,
+          commits: [
+            {
+              sha: "c4e91a2abcdef",
+              shortSha: "c4e91a2",
+              author: "reviewer",
+              authoredAt: "2026-09-30T12:00:00.000Z",
+              subject: "Stop writing tutorial flags during sign-in",
+              body: "The tutorial service already covers this.",
+              baseLines: [1],
+              headLines: [],
+              mapped: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const deletedLine = screen.getAllByRole("button", {
+      name: "Open actions for deleted line 1",
+    })[0];
+    if (!deletedLine) throw new Error("Expected a deleted-line action");
+    fireEvent.click(deletedLine, { shiftKey: true });
+
+    expect(selectLine).not.toHaveBeenCalled();
+    await waitFor(() => expect(onRequest).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "Show 1 commit" }));
+    expect(
+      screen.getByText("Stop writing tutorial flags during sign-in"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The tutorial service already covers this."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed lines 1")).toBeInTheDocument();
+
+    fireEvent.click(deletedLine);
+    expect(selectLine).toHaveBeenCalledWith(1);
   });
 
   it("keeps gaps between related ranges visible but non-commentable", async () => {

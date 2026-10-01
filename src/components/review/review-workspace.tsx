@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  CornerDownRight,
   CornerUpLeft,
   ExternalLink,
   FileCode2,
@@ -83,14 +84,17 @@ import {
   FILES_VIEWER_PREFETCH_RADIUS,
   FILES_VIEWER_PREVIEW_RADIUS,
   firstReviewFileUnitIndex,
+  type MarkdownReviewView,
   nearbyReviewFilePaths,
   nextOutstandingReviewFile,
   outstandingReviewFileUnits,
   type ReviewFileEntry,
   type ReviewMode,
+  rememberMarkdownReviewView,
   rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
+  storedMarkdownReviewView,
   storedReviewMode,
   waitingReviewFileUnits,
   windowReviewFileCards,
@@ -121,6 +125,7 @@ import {
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceLineCount,
@@ -175,6 +180,7 @@ import {
 import { HighlightedTokens } from "./highlighted-tokens";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
+import { ReviewChangeComposition } from "./review-change-composition";
 import { findNextReview, ReviewCompletion } from "./review-completion";
 import {
   isOpenProviderDiscussion,
@@ -199,6 +205,8 @@ import {
   reviewLineCommentMarkersBySide,
   reviewLineCommentMarkersForLine,
 } from "./review-line-comment-markers";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
+import { ReviewMarkdownViewSwitch } from "./review-markdown-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
   REVIEW_INSIGHTS_PANEL_WIDTHS,
@@ -221,6 +229,7 @@ import {
 } from "./review-sync-status";
 import { ReviewToolbar, ReviewToolbarTooltip } from "./review-toolbar-tooltip";
 import { ReviewWaitingCompletion } from "./review-waiting-completion";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   aiConversationVisibility,
   InlineAiQuestion,
@@ -250,7 +259,6 @@ import {
 import {
   ReviewPathUnit,
   ReviewScopeMarker,
-  SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
   showAiStartError,
 } from "./review-workspace-diff";
@@ -261,7 +269,10 @@ import {
   useReviewFileAdvance,
   useTerminalReviewRefetch,
 } from "./review-workspace-hooks";
-import { ProviderCommentBody } from "./review-workspace-markdown";
+import {
+  ProviderCommentBody,
+  ReviewMarkdownPreview,
+} from "./review-workspace-markdown";
 import {
   CopyRepositoryUrlButton,
   ProviderConversation,
@@ -443,6 +454,7 @@ export function ReviewWorkspace({
     );
     const mode = storedReviewMode(window.localStorage);
     setReviewMode(mode);
+    setMarkdownView(storedMarkdownReviewView(window.localStorage));
     setActiveIndex(
       rememberedIndex >= 0
         ? rememberedIndex
@@ -498,6 +510,14 @@ export function ReviewWorkspace({
   );
   const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
+  const [markdownView, setMarkdownView] =
+    useState<MarkdownReviewView>("preview");
+  /** Changes only the Markdown presentation and remembers it for later reviews. */
+  const changeMarkdownView = useCallback((view: MarkdownReviewView) => {
+    setMarkdownView(view);
+    rememberMarkdownReviewView(window.localStorage, view);
+  }, []);
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
   );
@@ -1026,6 +1046,13 @@ export function ReviewWorkspace({
   const activeReviewFile = activeUnit
     ? reviewFiles.find(({ path }) => path === activeUnit.path)
     : undefined;
+  /** Where the open file lived before this revision moved it, if it moved. */
+  const activeFileMovedFrom =
+    activeReviewFile?.changeType === "renamed" &&
+    activeReviewFile.previousPath &&
+    activeReviewFile.previousPath !== activeReviewFile.path
+      ? activeReviewFile.previousPath
+      : undefined;
   const activeFileOutstandingUnits = activeReviewFile
     ? activeReviewFile.totalUnits -
       activeReviewFile.reviewedUnits -
@@ -1249,7 +1276,20 @@ export function ReviewWorkspace({
         activeUnit.changeType === "added" ||
         Boolean(activeModule?.previousSource)),
   );
-  const sideBySideVisible = showDiff && diffAvailable;
+  const activeFileIsMarkdown = Boolean(
+    activeUnit &&
+      isReviewMarkdownFile({
+        language: activeUnit.language,
+        path: activeUnit.path,
+      }),
+  );
+  const markdownPreviewVisible = Boolean(
+    activeFileIsMarkdown &&
+      markdownView === "preview" &&
+      activeUnit?.kind !== "binary",
+  );
+  const sideBySideVisible =
+    !markdownPreviewVisible && showDiff && diffAvailable;
   const importsVisible = activeUnit
     ? importContextUnitIds.has(activeUnit.id)
     : false;
@@ -1368,9 +1408,13 @@ export function ReviewWorkspace({
   const overviewRows = useMemo(
     () =>
       overviewEnabled
-        ? sideBySideDiff(diffPreviousSource, diffCurrentSource)
+        ? sideBySideDiff(
+            diffPreviousSource,
+            diffCurrentSource,
+            ignoreWhitespace,
+          )
         : [],
-    [diffCurrentSource, diffPreviousSource, overviewEnabled],
+    [diffCurrentSource, diffPreviousSource, overviewEnabled, ignoreWhitespace],
   );
   const overviewMarks = useMemo(
     () => overviewMarksFromDiffRows(overviewRows),
@@ -1586,16 +1630,20 @@ export function ReviewWorkspace({
     );
   }, []);
   /** Scrolls the source to one AI walkthrough note, mounting its block first. */
-  const revealExplanation = useCallback((endLine: number, index: number) => {
-    setExplanationLine(endLine);
-    window.requestAnimationFrame(() =>
+  const revealExplanation = useCallback(
+    (endLine: number, index: number) => {
+      changeMarkdownView("raw");
+      setExplanationLine(endLine);
       window.requestAnimationFrame(() =>
-        document
-          .getElementById(`ai-explanation-${index}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-      ),
-    );
-  }, []);
+        window.requestAnimationFrame(() =>
+          document
+            .getElementById(`ai-explanation-${index}`)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        ),
+      );
+    },
+    [changeMarkdownView],
+  );
   /** Commits a prepared review-unit selection without exposing an empty card. */
   const commitUnitSelection = useCallback(
     (
@@ -2926,6 +2974,14 @@ export function ReviewWorkspace({
         return next;
       });
       if (thread.side === "left") setShowDiff(true);
+      if (
+        isReviewMarkdownFile({
+          language: targetUnit.language,
+          path: targetUnit.path,
+        })
+      ) {
+        changeMarkdownView("raw");
+      }
       setPendingProviderThread({
         externalId: thread.externalId,
         line: thread.line,
@@ -2934,7 +2990,7 @@ export function ReviewWorkspace({
       selectUnit(index);
       setFocusedProviderThreadId(thread.externalId);
     },
-    [selectUnit, unitIndexById, units],
+    [changeMarkdownView, selectUnit, unitIndexById, units],
   );
   const commentThreadsByPath = useMemo(() => {
     const byPath = new Map<string, ProviderDiscussionThread[]>();
@@ -2995,22 +3051,27 @@ export function ReviewWorkspace({
             sourceAvailable={fileContext !== undefined}
             previousFileSource={fileContext?.previousSource ?? ""}
             diffVisible={showDiff}
+            ignoreWhitespace={ignoreWhitespace}
             itemLabel={itemLabel}
             onSelect={openCard}
             onCommentLine={commentOnMemberLine}
             onOpenLineComment={openLineCommentThread}
             commentThreads={commentThreadsByPath.get(card.path)}
             sourceBytes={sourceBytes}
+            markdownView={markdownView}
             onSourceNeeded={prepareSourcePath}
+            pullRequestId={initialData.pullRequest.id}
           />
         );
       }),
     [
       activeConceptFileCards.length,
+      initialData.pullRequest.id,
       commentOnMemberLine,
       commentThreadsByPath,
       fileContexts,
       inspectReviewFile,
+      markdownView,
       openLineCommentThread,
       prepareSourcePath,
       reviewMode,
@@ -3019,6 +3080,7 @@ export function ReviewWorkspace({
       unitIndexById,
       viewerCardWindow.cards,
       viewerCardWindow.start,
+      ignoreWhitespace,
     ],
   );
   const manualSyncPending = reviewSession === "synchronizing";
@@ -4372,6 +4434,7 @@ export function ReviewWorkspace({
   /** Opens an inline question at the visible in-scope line nearest the reader. */
   function openAiQuestion() {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     openAiQuestionAt(centredReviewLine());
   }
 
@@ -4413,6 +4476,7 @@ export function ReviewWorkspace({
   /** Opens the provider comment composer on the line the reviewer is reading. */
   function openCentredInlineComment() {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     commentOnCardLine(
       closestReviewLine(
         centredReviewLine(),
@@ -4870,6 +4934,7 @@ export function ReviewWorkspace({
   /** Opens inline commenting at the first eligible source line. */
   function beginKeyboardComment() {
     if (!activeUnit) return;
+    if (markdownPreviewVisible) changeMarkdownView("raw");
     const firstChangedLine = [...changedCurrentLines]
       .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];
@@ -5905,6 +5970,9 @@ export function ReviewWorkspace({
                 style={{ width: `${progress}%` }}
               />
             </div>
+            {reviewMode === "files" && (
+              <ReviewChangeComposition files={reviewFiles} className="mt-3" />
+            )}
             <div className="relative mt-3">
               <input
                 ref={pathSearchRef}
@@ -6458,6 +6526,18 @@ export function ReviewWorkspace({
                         <FileX2 className="size-3" aria-hidden />
                         File deleted
                       </Badge>
+                    ) : activeFileMovedFrom ? (
+                      <Badge
+                        title={`Moved from ${activeFileMovedFrom}. The diff compares the file with its previous path, so only the edits inside the move show.`}
+                      >
+                        <CornerDownRight className="size-3" aria-hidden />
+                        {activeReviewFile &&
+                        activeReviewFile.additions +
+                          activeReviewFile.deletions >
+                          0
+                          ? "Moved + edited"
+                          : "Moved"}
+                      </Badge>
                     ) : (
                       activeUnit.changeType !== "modified" && (
                         <Badge className="capitalize">
@@ -6477,6 +6557,24 @@ export function ReviewWorkspace({
                     >
                       {activeUnit.path}
                     </span>
+                    {activeFileMovedFrom && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="flex min-w-0 shrink items-center gap-1"
+                          title={`Moved from ${activeFileMovedFrom}`}
+                        >
+                          <CornerDownRight
+                            className="size-3 shrink-0"
+                            aria-hidden
+                          />
+                          <span className="sr-only">Moved from </span>
+                          <span className="truncate font-mono">
+                            {activeFileMovedFrom}
+                          </span>
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     <span className="shrink-0">
                       {reviewMode === "files"
@@ -6582,7 +6680,13 @@ export function ReviewWorkspace({
                   >
                     <GitBranch className="size-3.5" />
                   </button>
-                  {diffAvailable && (
+                  {activeFileIsMarkdown && (
+                    <ReviewMarkdownViewSwitch
+                      view={markdownView}
+                      onChange={changeMarkdownView}
+                    />
+                  )}
+                  {diffAvailable && !markdownPreviewVisible && (
                     <ReviewCodeViewSwitch
                       diffVisible={sideBySideVisible}
                       onChange={(diffVisible) => {
@@ -6591,6 +6695,12 @@ export function ReviewWorkspace({
                         setContextBefore(0);
                         setContextAfter(0);
                       }}
+                    />
+                  )}
+                  {sideBySideVisible && (
+                    <ReviewWhitespaceToggle
+                      checked={ignoreWhitespace}
+                      onChange={setIgnoreWhitespace}
                     />
                   )}
                   <button
@@ -6785,7 +6895,8 @@ export function ReviewWorkspace({
                       }}
                       actions={
                         selectedFileSourceExpanded &&
-                        activeUnit.kind !== "binary" ? (
+                        activeUnit.kind !== "binary" &&
+                        !markdownPreviewVisible ? (
                           <ReviewUnitViewOptions
                             importsVisible={importsVisible}
                             fullFileVisible={fullFileVisible}
@@ -6813,20 +6924,22 @@ export function ReviewWorkspace({
                         ) : undefined
                       }
                     />
-                    <ReviewScrollOverviewStrip
-                      className="px-3 py-2 sm:px-3 lg:px-3"
-                      label={
-                        activeUnit
-                          ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
-                          : undefined
-                      }
-                      marks={overviewMarks}
-                      rows={overviewRows}
-                      revealWholeFile={fullFileVisible}
-                      unitRange={overviewUnitRange}
-                      viewport={overviewViewport}
-                      onSeek={seekCodeOverview}
-                    />
+                    {!markdownPreviewVisible && (
+                      <ReviewScrollOverviewStrip
+                        className="px-3 py-2 sm:px-3 lg:px-3"
+                        label={
+                          activeUnit
+                            ? `L${activeUnit.startLine}–${activeUnit.endLine} · ${overviewLineCount} lines`
+                            : undefined
+                        }
+                        marks={overviewMarks}
+                        rows={overviewRows}
+                        revealWholeFile={fullFileVisible}
+                        unitRange={overviewUnitRange}
+                        viewport={overviewViewport}
+                        onSeek={seekCodeOverview}
+                      />
+                    )}
                   </div>
                 </div>
                 <div
@@ -6856,56 +6969,80 @@ export function ReviewWorkspace({
                       sourceBytes={reviewSourceByteLength(activeModule)}
                     />
                   ) : null}
-                  {selectedFileSourceExpanded && sideBySideVisible && (
-                    <SideBySideUnitDiff
-                      key={activeUnit.id}
-                      ref={diffContextRef}
-                      className="rounded-none border-0"
-                      previousSource={diffPreviousSource}
-                      currentSource={diffCurrentSource}
-                      language={activeUnit.language}
-                      previousStartLine={1}
-                      currentStartLine={1}
-                      previousFocusRanges={previousCardRanges}
-                      currentFocusRanges={currentCardRanges}
-                      previousFocusStartLine={
-                        activeUnit.changeType === "added"
-                          ? null
-                          : (previousCardRanges.at(0)?.startLine ??
-                            previousUnitStartLine)
-                      }
-                      previousFocusEndLine={
-                        activeUnit.changeType === "added"
-                          ? null
-                          : (previousCardRanges.at(-1)?.endLine ??
-                            previousUnitEndLine)
-                      }
-                      currentFocusStartLine={
-                        activeUnit.changeType === "deleted"
-                          ? null
-                          : (cardStartLine ?? activeUnit.startLine)
-                      }
-                      currentFocusEndLine={
-                        activeUnit.changeType === "deleted"
-                          ? null
-                          : (cardEndLine ?? activeUnit.endLine)
-                      }
-                      selectedLine={selectedLine}
-                      keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
-                      findingLine={findingLine}
-                      expanded={fullFileVisible}
-                      isReviewLineCollapsed={isFileUnitLineCollapsed}
-                      onSelectReviewLine={commentOnCardLine}
-                      leftLineCommentMarkers={visibleLineCommentMarkers.left}
-                      rightLineCommentMarkers={visibleLineCommentMarkers.right}
-                      onOpenLineComment={openLineCommentThread}
-                      renderBeforeLine={renderFileUnitMarkers}
-                      renderLineDetails={renderReviewLineDetails}
-                      renderPreviousLineDetails={
-                        renderPreviousSideConversations
-                      }
-                    />
-                  )}
+                  {selectedFileSourceExpanded &&
+                    markdownPreviewVisible &&
+                    activeFileCardSourceAvailable &&
+                    activeUnit && (
+                      <ReviewMarkdownPreview
+                        key={activeUnit.path}
+                        path={activeUnit.path}
+                        currentSource={
+                          activeModule?.source ?? activeUnit.source
+                        }
+                        previousSource={
+                          activeModule?.previousSource ??
+                          activeUnit.previousSource ??
+                          ""
+                        }
+                      />
+                    )}
+                  {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
+                    sideBySideVisible && (
+                      <ReviewDiffWithLineHistory
+                        ignoreWhitespace={ignoreWhitespace}
+                        key={activeUnit.id}
+                        ref={diffContextRef}
+                        pullRequestId={initialData.pullRequest.id}
+                        path={activeUnit.path}
+                        className="rounded-none border-0"
+                        previousSource={diffPreviousSource}
+                        currentSource={diffCurrentSource}
+                        language={activeUnit.language}
+                        previousStartLine={1}
+                        currentStartLine={1}
+                        previousFocusRanges={previousCardRanges}
+                        currentFocusRanges={currentCardRanges}
+                        previousFocusStartLine={
+                          activeUnit.changeType === "added"
+                            ? null
+                            : (previousCardRanges.at(0)?.startLine ??
+                              previousUnitStartLine)
+                        }
+                        previousFocusEndLine={
+                          activeUnit.changeType === "added"
+                            ? null
+                            : (previousCardRanges.at(-1)?.endLine ??
+                              previousUnitEndLine)
+                        }
+                        currentFocusStartLine={
+                          activeUnit.changeType === "deleted"
+                            ? null
+                            : (cardStartLine ?? activeUnit.startLine)
+                        }
+                        currentFocusEndLine={
+                          activeUnit.changeType === "deleted"
+                            ? null
+                            : (cardEndLine ?? activeUnit.endLine)
+                        }
+                        selectedLine={selectedLine}
+                        keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
+                        findingLine={findingLine}
+                        expanded={fullFileVisible}
+                        isReviewLineCollapsed={isFileUnitLineCollapsed}
+                        onSelectReviewLine={commentOnCardLine}
+                        leftLineCommentMarkers={visibleLineCommentMarkers.left}
+                        rightLineCommentMarkers={
+                          visibleLineCommentMarkers.right
+                        }
+                        onOpenLineComment={openLineCommentThread}
+                        renderBeforeLine={renderFileUnitMarkers}
+                        renderLineDetails={renderReviewLineDetails}
+                        renderPreviousLineDetails={
+                          renderPreviousSideConversations
+                        }
+                      />
+                    )}
                   {activeFileCardHydrationPending &&
                     !activeFileCardSourceAvailable && (
                       <div
@@ -6960,6 +7097,7 @@ export function ReviewWorkspace({
                     )}
                   {selectedFileSourceExpanded &&
                     importsVisible &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeModule && (
@@ -6981,6 +7119,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     contextAvailable &&
@@ -7003,6 +7142,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeUnit.kind !== "binary" && (
@@ -7244,6 +7384,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
+                    !markdownPreviewVisible &&
                     !sideBySideVisible &&
                     contextAvailable &&
                     !fullFileVisible && (
