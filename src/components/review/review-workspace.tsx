@@ -205,6 +205,7 @@ import {
   reviewLineCommentMarkersBySide,
   reviewLineCommentMarkersForLine,
 } from "./review-line-comment-markers";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
 import { ReviewMarkdownViewSwitch } from "./review-markdown-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
 import {
@@ -228,6 +229,7 @@ import {
 } from "./review-sync-status";
 import { ReviewToolbar, ReviewToolbarTooltip } from "./review-toolbar-tooltip";
 import { ReviewWaitingCompletion } from "./review-waiting-completion";
+import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   aiConversationVisibility,
   InlineAiQuestion,
@@ -257,7 +259,6 @@ import {
 import {
   ReviewPathUnit,
   ReviewScopeMarker,
-  SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
   showAiStartError,
 } from "./review-workspace-diff";
@@ -509,6 +510,7 @@ export function ReviewWorkspace({
   );
   const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
   const [markdownView, setMarkdownView] =
     useState<MarkdownReviewView>("preview");
   /** Changes only the Markdown presentation and remembers it for later reviews. */
@@ -1406,9 +1408,13 @@ export function ReviewWorkspace({
   const overviewRows = useMemo(
     () =>
       overviewEnabled
-        ? sideBySideDiff(diffPreviousSource, diffCurrentSource)
+        ? sideBySideDiff(
+            diffPreviousSource,
+            diffCurrentSource,
+            ignoreWhitespace,
+          )
         : [],
-    [diffCurrentSource, diffPreviousSource, overviewEnabled],
+    [diffCurrentSource, diffPreviousSource, overviewEnabled, ignoreWhitespace],
   );
   const overviewMarks = useMemo(
     () => overviewMarksFromDiffRows(overviewRows),
@@ -3045,6 +3051,7 @@ export function ReviewWorkspace({
             sourceAvailable={fileContext !== undefined}
             previousFileSource={fileContext?.previousSource ?? ""}
             diffVisible={showDiff}
+            ignoreWhitespace={ignoreWhitespace}
             itemLabel={itemLabel}
             onSelect={openCard}
             onCommentLine={commentOnMemberLine}
@@ -3053,11 +3060,13 @@ export function ReviewWorkspace({
             sourceBytes={sourceBytes}
             markdownView={markdownView}
             onSourceNeeded={prepareSourcePath}
+            pullRequestId={initialData.pullRequest.id}
           />
         );
       }),
     [
       activeConceptFileCards.length,
+      initialData.pullRequest.id,
       commentOnMemberLine,
       commentThreadsByPath,
       fileContexts,
@@ -3071,6 +3080,7 @@ export function ReviewWorkspace({
       unitIndexById,
       viewerCardWindow.cards,
       viewerCardWindow.start,
+      ignoreWhitespace,
     ],
   );
   const manualSyncPending = reviewSession === "synchronizing";
@@ -6687,6 +6697,12 @@ export function ReviewWorkspace({
                       }}
                     />
                   )}
+                  {sideBySideVisible && (
+                    <ReviewWhitespaceToggle
+                      checked={ignoreWhitespace}
+                      onChange={setIgnoreWhitespace}
+                    />
+                  )}
                   <button
                     type="button"
                     aria-label="Show AI assistance"
@@ -6973,9 +6989,12 @@ export function ReviewWorkspace({
                   {selectedFileSourceExpanded &&
                     !markdownPreviewVisible &&
                     sideBySideVisible && (
-                      <SideBySideUnitDiff
+                      <ReviewDiffWithLineHistory
+                        ignoreWhitespace={ignoreWhitespace}
                         key={activeUnit.id}
                         ref={diffContextRef}
+                        pullRequestId={initialData.pullRequest.id}
+                        path={activeUnit.path}
                         className="rounded-none border-0"
                         previousSource={diffPreviousSource}
                         currentSource={diffCurrentSource}

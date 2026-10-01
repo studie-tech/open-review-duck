@@ -251,6 +251,8 @@ describe("PullRequestsContent", () => {
       repositoryOwner: "acme",
       repositoryName: "web",
       provider: "github",
+      assignedToViewer: false,
+      authoredByViewer: false,
       queueState: "active",
       queueSource: "manual",
       removedAt: null,
@@ -638,6 +640,7 @@ describe("PullRequestsContent", () => {
       "sonia",
     );
     expect(dashboardFilters(localStorage)).toEqual({
+      involvement: "all",
       provider: "gitlab",
       repositories: ["gitlab:payments/api"],
       search: "sonia",
@@ -1114,5 +1117,59 @@ describe("PullRequestsContent", () => {
         name: "Review with AI: Inventory improvements",
       }),
     ).not.toBeInTheDocument();
+  });
+
+  it("filters the inbox by who opened or is assigned the pull request", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    render(
+      <PullRequestsContent
+        fetchedAt={Date.now()}
+        initialPullRequests={[
+          pullRequest({
+            authoredByViewer: true,
+            id: "mine",
+            title: "My change",
+          }),
+          pullRequest({
+            assignedToViewer: true,
+            id: "review",
+            number: 43,
+            title: "Needs my review",
+          }),
+          pullRequest({
+            assignedToViewer: true,
+            authoredByViewer: true,
+            id: "both",
+            number: 44,
+            title: "My assigned change",
+          }),
+          pullRequest({
+            id: "other",
+            number: 45,
+            title: "Someone else's change",
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Someone else's change")).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: "Created by me" }));
+    expect(screen.getByText("My change")).toBeVisible();
+    expect(screen.getByText("My assigned change")).toBeVisible();
+    expect(screen.queryByText("Needs my review")).not.toBeInTheDocument();
+    expect(screen.queryByText("Someone else's change")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Both" }));
+    expect(screen.getByText("My assigned change")).toBeVisible();
+    expect(screen.queryByText("My change")).not.toBeInTheDocument();
+    expect(dashboardFilters(localStorage).involvement).toBe("both");
+
+    await user.click(screen.getByRole("radio", { name: "Assigned to me" }));
+    expect(screen.getByText("Needs my review")).toBeVisible();
+    expect(screen.queryByText("My change")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Anyone" }));
+    expect(screen.getByText("Someone else's change")).toBeVisible();
   });
 });

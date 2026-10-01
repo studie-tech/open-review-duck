@@ -236,6 +236,11 @@ describe("provider normalization", () => {
     });
 
     expect(pulls.map((pull) => pull.number)).toEqual([7]);
+    expect(pulls[0]).toMatchObject({
+      authorExternalId: "1",
+      reviewerExternalIds: ["42"],
+      assigneeExternalIds: [],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3397,5 +3402,68 @@ describe("native comment attachments", () => {
       ).uploadCommentImage(input),
     ).rejects.toThrow("personal GitHub.com connection");
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pull request file commits", () => {
+  it("keeps GitHub patches for commits that belong to the pull request", async () => {
+    const listedCommit = {
+      sha: "aaa1111",
+      html_url: "https://github.com/acme/review-duck/commit/aaa1111",
+      commit: {
+        message: "Add flag\n\nBody",
+        author: { name: "Ada", date: "2026-09-01T00:00:00Z" },
+      },
+      author: { login: "ada" },
+      parents: [{ sha: "base" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.includes("/pulls/7/commits"))
+          return jsonResponse([listedCommit]);
+        if (url.includes("/commits?")) {
+          return jsonResponse([
+            listedCommit,
+            {
+              ...listedCommit,
+              sha: "not-in-pr",
+              parents: [{ sha: "older" }],
+            },
+          ]);
+        }
+        return jsonResponse({
+          files: [
+            {
+              filename: "src/auth/session.ts",
+              patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+            },
+          ],
+        });
+      }),
+    );
+
+    const listed = await new GitHubProvider("token").listPullRequestFileCommits(
+      {
+        repositoryExternalId: "42",
+        pullRequestNumber: 7,
+        path: "src/auth/session.ts",
+        headSha: "headsha",
+      },
+    );
+
+    expect(listed.truncated).toBe(false);
+    expect(listed.commits).toEqual([
+      {
+        sha: "aaa1111",
+        author: "ada",
+        authoredAt: "2026-09-01T00:00:00Z",
+        message: "Add flag\n\nBody",
+        url: "https://github.com/acme/review-duck/commit/aaa1111",
+        patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+        merge: false,
+      },
+    ]);
   });
 });
