@@ -18,6 +18,10 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
+import {
+  commitsForSelection,
+  type LineHistorySelection,
+} from "~/lib/line-commit-history";
 import type { IndexedReviewUnit } from "~/lib/review-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
@@ -39,6 +43,10 @@ import {
   type ReviewLineCommentMarker,
   ReviewLineCommentMarkers,
 } from "./review-line-comment-markers";
+import {
+  LineHistoryControl,
+  type LineHistoryView,
+} from "./review-line-history-panel";
 import { CONTEXT_PAGE_LINES } from "./review-workspace-constants";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -211,6 +219,17 @@ export interface SideBySideUnitDiffHandle {
 const FINDING_LINE_HIGHLIGHT =
   "bg-amber-400/[.09] shadow-[inset_2px_0_0_rgb(245_158_11/.85)]";
 
+/** Paints a selected row, the commit under the pointer, or the rest dimmed. */
+function historyRowClass(
+  tone: "selected" | "added" | "removed" | "dim" | undefined,
+) {
+  if (tone === "dim") return "opacity-40";
+  if (tone === "selected") return "shadow-[inset_2px_0_0_var(--app-cyan)]";
+  if (tone === "added") return "shadow-[inset_2px_0_0_var(--app-addition)]";
+  if (tone === "removed") return "shadow-[inset_2px_0_0_var(--app-coral)]";
+  return undefined;
+}
+
 /**
  * Reports whether a highlighted line is the review line a row stands for.
  */
@@ -223,7 +242,8 @@ function highlightsReviewLine(
   return highlightedLine !== undefined && highlightedLine === reviewLine;
 }
 
-interface SideBySideUnitDiffProps {
+export interface SideBySideUnitDiffProps {
+  ignoreWhitespace?: boolean;
   previousSource: string;
   currentSource: string;
   language: string;
@@ -257,6 +277,8 @@ interface SideBySideUnitDiffProps {
     readonly ReviewLineCommentMarker[]
   >;
   onOpenLineComment?: (threadExternalId: string) => void;
+  /** Pull-request commits for this file, loaded after a line range is selected. */
+  lineHistory?: LineHistoryView;
 }
 
 /** Pins conversation avatars to the left of a line number without nesting buttons. */
@@ -314,7 +336,18 @@ interface DiffRowHighlightProps {
 }
 
 interface DiffRowActionProps {
-  onSelect: (event: ReactMouseEvent<HTMLElement>, line: number) => void;
+  onSelect: (
+    event: ReactMouseEvent<HTMLElement>,
+    line: number,
+    rowIndex: number,
+  ) => void;
+}
+
+interface HistoryRowProps {
+  historyRow?: number;
+  historyClassName?: string;
+  historyColumns?: "added" | "split" | "narrow";
+  historyControl?: ReactNode;
 }
 
 /**
@@ -333,12 +366,17 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   line,
   lineNumber,
   markers,
+  historyClassName,
+  historyColumns = "added",
+  historyControl,
+  historyRow,
   onOpenLineComment,
   onSelect,
   reviewLine,
   selected,
 }: DiffRowHighlightProps &
-  DiffRowActionProps & {
+  DiffRowActionProps &
+  HistoryRowProps & {
     added: boolean;
     anchored: boolean;
     line: HighlightedLine | undefined;
@@ -349,7 +387,13 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   }) {
   const LineContainer = reviewLine === undefined ? "div" : "button";
   return (
-    <div className="group relative">
+    <div
+      data-history-row={historyRow}
+      data-history-columns={
+        historyRow === undefined ? undefined : historyColumns
+      }
+      className={cn("group relative", historyClassName)}
+    >
       <LineCommentGutter
         className="left-1"
         markers={markers}
@@ -361,7 +405,7 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
               type: "button" as const,
               "aria-label": `Open actions for current line ${reviewLine}`,
               onClick: (event: ReactMouseEvent<HTMLElement>) =>
-                onSelect(event, reviewLine),
+                onSelect(event, reviewLine, historyRow ?? -1),
             }
           : {})}
         id={anchored ? `review-line-${reviewLine}` : undefined}
@@ -386,6 +430,7 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
           <HighlightedDiffTokens line={line} lineNumber={lineNumber} />
         </span>
       </LineContainer>
+      {historyControl}
     </div>
   );
 });
@@ -428,6 +473,10 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   isFinding,
   keyboardFocused,
   kind,
+  historyClassName,
+  historyColumns,
+  historyControl,
+  historyRow,
   onOpenLineComment,
   onSelect,
   previousLine,
@@ -437,7 +486,8 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   selected,
   sideBySide,
 }: DiffRowHighlightProps &
-  DiffRowActionProps & {
+  DiffRowActionProps &
+  HistoryRowProps & {
     currentLine: HighlightedLine | undefined;
     currentLineNumber: number | undefined;
     currentMarkers?: readonly ReviewLineCommentMarker[];
@@ -453,14 +503,23 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   // A row commentable on both sides is commented through the head line, so at
   // most one side carries the provider line and the other is always unset.
   const reviewLine = currentReviewLine ?? previousReviewLine;
+  const historyAttributes = {
+    "data-history-row": historyRow,
+    "data-history-columns":
+      historyRow === undefined
+        ? undefined
+        : (historyColumns ?? (sideBySide ? "split" : "narrow")),
+  };
   if (sideBySide) {
     return (
       <div
+        {...historyAttributes}
         data-review-scope={reviewLine === undefined ? "context" : "unit"}
         className={cn(
           "group relative grid grid-cols-[56px_minmax(0,1fr)_56px_minmax(0,1fr)]",
           reviewLine === undefined &&
             "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
+          historyClassName,
         )}
       >
         <LineCommentGutter
@@ -477,7 +536,9 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
           <button
             type="button"
             aria-label={`Open actions for deleted line ${previousReviewLine}`}
-            onClick={(event) => onSelect(event, previousReviewLine)}
+            onClick={(event) =>
+              onSelect(event, previousReviewLine, historyRow ?? -1)
+            }
             className={cn(
               "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               isFinding && FINDING_LINE_HIGHLIGHT,
@@ -541,7 +602,9 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
           <button
             type="button"
             aria-label={`Open actions for current line ${currentReviewLine}`}
-            onClick={(event) => onSelect(event, currentReviewLine)}
+            onClick={(event) =>
+              onSelect(event, currentReviewLine, historyRow ?? -1)
+            }
             className={cn(
               "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               (kind === "added" || kind === "modified") &&
@@ -569,16 +632,19 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             </span>
           </button>
         )}
+        {historyControl}
       </div>
     );
   }
   return (
     <div
+      {...historyAttributes}
       data-review-scope={reviewLine === undefined ? "context" : "unit"}
       className={cn(
         "group relative",
         reviewLine === undefined &&
           "bg-surface-subtle/15 opacity-55 transition-opacity hover:opacity-80",
+        historyClassName,
       )}
     >
       {kind === "unchanged" ? (
@@ -608,7 +674,9 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             <button
               type="button"
               aria-label={`Open actions for current line ${currentReviewLine}`}
-              onClick={(event) => onSelect(event, currentReviewLine)}
+              onClick={(event) =>
+                onSelect(event, currentReviewLine, historyRow ?? -1)
+              }
               className="group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan"
             >
               <span className="flex items-center justify-end border-r border-line/60 px-2 transition select-none group-hover:text-cyan">
@@ -648,7 +716,9 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                 <button
                   type="button"
                   aria-label={`Open actions for deleted line ${previousReviewLine}`}
-                  onClick={(event) => onSelect(event, previousReviewLine)}
+                  onClick={(event) =>
+                    onSelect(event, previousReviewLine, historyRow ?? -1)
+                  }
                   className={cn(
                     "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                     isFinding && FINDING_LINE_HIGHLIGHT,
@@ -693,7 +763,9 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                 <button
                   type="button"
                   aria-label={`Open actions for current line ${currentReviewLine}`}
-                  onClick={(event) => onSelect(event, currentReviewLine)}
+                  onClick={(event) =>
+                    onSelect(event, currentReviewLine, historyRow ?? -1)
+                  }
                   className={cn(
                     "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
                     isFinding && FINDING_LINE_HIGHLIGHT,
@@ -739,6 +811,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             ))}
         </>
       )}
+      {historyControl}
     </div>
   );
 });
@@ -763,6 +836,7 @@ export const SideBySideUnitDiff = forwardRef<
     selectedLine,
     keyboardLine,
     findingLine,
+    ignoreWhitespace = false,
     expanded = false,
     onSelectReviewLine,
     isReviewLineCollapsed,
@@ -774,6 +848,7 @@ export const SideBySideUnitDiff = forwardRef<
     leftLineCommentMarkers,
     rightLineCommentMarkers,
     onOpenLineComment,
+    lineHistory,
   },
   ref,
 ) {
@@ -800,8 +875,8 @@ export const SideBySideUnitDiff = forwardRef<
   const previousLines = useHighlightedSource(previousSource, language);
   const currentLines = useHighlightedSource(currentSource, language);
   const rows = useMemo(
-    () => sideBySideDiff(previousSource, currentSource),
-    [currentSource, previousSource],
+    () => sideBySideDiff(previousSource, currentSource, ignoreWhitespace),
+    [currentSource, previousSource, ignoreWhitespace],
   );
   const focusRange = useMemo(() => {
     const previousRanges =
@@ -1113,9 +1188,36 @@ export const SideBySideUnitDiff = forwardRef<
       : undefined;
   }
 
-  /** Opens the line actions unless the click completed a text selection. */
+  const [historyRange, setHistoryRange] = useState<{
+    start: number;
+    end: number;
+  }>();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [hoveredCommit, setHoveredCommit] = useState<string>();
+  const historyAnchorRef = useRef<number | undefined>(undefined);
+  const historyDragRef = useRef<{
+    start: number;
+    pointerId: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressHistoryClick = useRef(false);
+  useEffect(() => {
+    if (historyRange) lineHistory?.onRequest();
+  }, [historyRange, lineHistory]);
+  /** Opens the line actions unless the click selects commit history. */
   const selectReviewLine = useCallback(
-    (event: ReactMouseEvent<HTMLElement>, line: number) => {
+    (event: ReactMouseEvent<HTMLElement>, line: number, rowIndex: number) => {
+      if (suppressHistoryClick.current) {
+        suppressHistoryClick.current = false;
+        return;
+      }
+      if (lineHistory && event.shiftKey && rowIndex >= 0) {
+        const anchor = historyAnchorRef.current ?? rowIndex;
+        historyAnchorRef.current = anchor;
+        setHistoryRange({ start: anchor, end: rowIndex });
+        setHistoryOpen(false);
+        return;
+      }
       if (
         event.detail > 0 &&
         typeof window !== "undefined" &&
@@ -1125,9 +1227,182 @@ export const SideBySideUnitDiff = forwardRef<
       }
       lineHandlerRef.current(line);
     },
-    [],
+    [lineHistory],
   );
+  /** Reads the diff row under a pointer when it lands in a line-number gutter. */
+  const historyRowAt = (clientX: number, clientY: number) => {
+    if (typeof document.elementFromPoint !== "function") return undefined;
+    const element = document.elementFromPoint(clientX, clientY);
+    if (!(element instanceof Element)) return undefined;
+    if (element.closest("[data-history-control]")) return undefined;
+    const row = element.closest("[data-history-row]");
+    if (!(row instanceof HTMLElement)) return undefined;
+    const bounds = row.getBoundingClientRect();
+    const x = clientX - bounds.left;
+    const columns = row.dataset.historyColumns;
+    const gutter = columns === "added" ? 82 : 56;
+    const inGutter =
+      columns === "split"
+        ? x <= gutter ||
+          (x >= bounds.width / 2 && x < bounds.width / 2 + gutter)
+        : x <= (columns === "narrow" ? 112 : gutter);
+    if (!inGutter) return undefined;
+    const index = Number(row.dataset.historyRow);
+    return Number.isInteger(index) ? index : undefined;
+  };
+  /** Starts a line-range drag from a gutter pointer. */
+  const beginHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    if (!lineHistory || event.button !== 0 || event.shiftKey) return;
+    const row = historyRowAt(event.clientX, event.clientY);
+    if (row === undefined) return;
+    historyDragRef.current = {
+      start: row,
+      pointerId: event.pointerId,
+      moved: false,
+    };
+  };
+  /** Extends the dragged line range as the pointer crosses gutters. */
+  const moveHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = historyDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const row = historyRowAt(event.clientX, event.clientY);
+    if (row === undefined || row === drag.start) return;
+    if (!drag.moved) event.currentTarget.setPointerCapture(event.pointerId);
+    drag.moved = true;
+    historyAnchorRef.current = drag.start;
+    setHistoryRange({ start: drag.start, end: row });
+  };
+  /** Keeps a finished drag from also opening the line actions. */
+  const endHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = historyDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    historyDragRef.current = null;
+    if (!drag.moved) return;
+    suppressHistoryClick.current = true;
+    window.setTimeout(() => {
+      suppressHistoryClick.current = false;
+    }, 0);
+  };
 
+  const historySelection = useMemo(() => {
+    if (!historyRange) return undefined;
+    const start = Math.min(historyRange.start, historyRange.end);
+    const end = Math.max(historyRange.start, historyRange.end);
+    const selection: LineHistorySelection = {
+      baseLines: [],
+      headLines: [],
+      removedBaseLines: [],
+      addedHeadLines: [],
+      changedBaseLines: [],
+      changedHeadLines: [],
+    };
+    for (let index = start; index <= end; index += 1) {
+      const row = rows[index];
+      if (!row) continue;
+      const base =
+        row.previousIndex === undefined
+          ? undefined
+          : previousStartLine + row.previousIndex;
+      const head =
+        row.currentIndex === undefined
+          ? undefined
+          : currentStartLine + row.currentIndex;
+      if (base !== undefined) selection.baseLines.push(base);
+      if (head !== undefined) selection.headLines.push(head);
+      if (base !== undefined && head === undefined) {
+        selection.removedBaseLines.push(base);
+      } else if (head !== undefined && base === undefined) {
+        selection.addedHeadLines.push(head);
+      } else if (
+        base !== undefined &&
+        head !== undefined &&
+        row.kind !== "unchanged"
+      ) {
+        selection.changedBaseLines.push(base);
+        selection.changedHeadLines.push(head);
+      }
+    }
+    return selection;
+  }, [currentStartLine, historyRange, previousStartLine, rows]);
+  const hoveredHistory = lineHistory?.commits.find(
+    (commit) => commit.sha === hoveredCommit,
+  );
+  /** Builds the selection chrome for one absolute diff row. */
+  const historyForRow = (index: number) => {
+    if (!lineHistory) return {};
+    const start =
+      historyRange === undefined
+        ? undefined
+        : Math.min(historyRange.start, historyRange.end);
+    const end =
+      historyRange === undefined
+        ? undefined
+        : Math.max(historyRange.start, historyRange.end);
+    let tone: "selected" | "added" | "removed" | "dim" | undefined;
+    if (
+      start !== undefined &&
+      end !== undefined &&
+      index >= start &&
+      index <= end
+    ) {
+      const row = rows[index];
+      const base =
+        row?.previousIndex === undefined
+          ? undefined
+          : previousStartLine + row.previousIndex;
+      const head =
+        row?.currentIndex === undefined
+          ? undefined
+          : currentStartLine + row.currentIndex;
+      const ownsBase =
+        base !== undefined && hoveredHistory?.baseLines.includes(base);
+      const ownsHead =
+        head !== undefined && hoveredHistory?.headLines.includes(head);
+      tone = !hoveredHistory
+        ? "selected"
+        : ownsHead
+          ? "added"
+          : ownsBase
+            ? "removed"
+            : "dim";
+    }
+    return {
+      historyRow: index,
+      historyClassName: historyRowClass(tone),
+      historyControl:
+        lineHistory && historySelection && index === end ? (
+          <LineHistoryControl
+            commits={commitsForSelection(lineHistory.commits, historySelection)}
+            history={
+              lineHistory.status === "idle"
+                ? { ...lineHistory, status: "loading" }
+                : lineHistory
+            }
+            onClear={() => {
+              historyAnchorRef.current = undefined;
+              setHistoryRange(undefined);
+              setHistoryOpen(false);
+              setHoveredCommit(undefined);
+            }}
+            onHoverCommit={setHoveredCommit}
+            onOpenChange={(next) => {
+              setHistoryOpen(next);
+              if (!next) setHoveredCommit(undefined);
+            }}
+            open={historyOpen}
+            selection={historySelection}
+          />
+        ) : undefined,
+    };
+  };
+  const historyPointer = lineHistory
+    ? {
+        onPointerDown: beginHistoryDrag,
+        onPointerMove: moveHistoryDrag,
+        onPointerUp: endHistoryDrag,
+        onPointerCancel: endHistoryDrag,
+      }
+    : {};
   const renderedDetailLines = new Set<number>();
   const renderedBeforeLines = new Set<number>();
 
@@ -1139,6 +1414,7 @@ export const SideBySideUnitDiff = forwardRef<
           "overflow-hidden rounded-b-xl border border-line",
           className,
         )}
+        {...historyPointer}
       >
         {visibleRowStart > 0 || leadingCollapsedRemaining > 0 ? (
           <DiffEdgeRevealButton
@@ -1227,6 +1503,7 @@ export const SideBySideUnitDiff = forwardRef<
                     onSelect={selectReviewLine}
                     reviewLine={reviewLine}
                     selected={highlightsReviewLine(selectedLine, reviewLine)}
+                    {...historyForRow(absoluteRowIndex)}
                   />
                   {rendersLineDetails && renderLineDetails?.(reviewLine)}
                 </>
@@ -1258,6 +1535,7 @@ export const SideBySideUnitDiff = forwardRef<
         "overflow-hidden rounded-b-xl border border-line",
         className,
       )}
+      {...historyPointer}
     >
       <div className="text-fog sticky top-0 z-10 hidden grid-cols-2 border-b border-line bg-panel/95 font-sans text-[9px] font-semibold tracking-[.12em] uppercase backdrop-blur sm:grid">
         <div className="border-r border-line px-4 py-2">Base</div>
@@ -1390,6 +1668,7 @@ export const SideBySideUnitDiff = forwardRef<
                   }
                   selected={highlightsReviewLine(selectedLine, reviewLine)}
                   sideBySide={sideBySide}
+                  {...historyForRow(absoluteRowIndex)}
                 />
                 {previousLineNumber !== undefined &&
                   previousLineNumber !== reviewLine &&

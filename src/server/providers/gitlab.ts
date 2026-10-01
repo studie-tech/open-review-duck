@@ -1,3 +1,8 @@
+import { mapWithLimit } from "~/lib/concurrency";
+import {
+  oldestFirstByParent,
+  pullRequestFileCommitShas,
+} from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { gitlabMergeGate } from "~/lib/provider-merge-gate";
 import { providerAccountIds } from "~/lib/pull-request-involvement";
@@ -14,6 +19,7 @@ import { collectProviderSourceFiles, loadChangedSource } from "./source-budget";
 import type {
   ChangedFilesOptions,
   ProviderCheckState,
+  ProviderFileCommit,
   ProviderPullRequestLifecycle,
   ProviderPullRequestReviewState,
   ProviderReviewAction,
@@ -37,6 +43,19 @@ interface GitLabUser {
   id: number;
   username: string;
   name: string;
+}
+interface GitLabListedCommit {
+  id: string;
+  message: string;
+  author_name: string;
+  authored_date: string;
+  web_url?: string;
+  parent_ids?: string[];
+}
+interface GitLabFileDiff {
+  old_path: string;
+  new_path: string;
+  diff: string;
 }
 interface GitLabMergeRequest {
   id: number;
@@ -799,6 +818,79 @@ export class GitLabProvider implements PullRequestProvider {
   ) {
     return `${this.apiUrl}/projects/${encodeURIComponent(repositoryExternalId)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`;
   }
+  /**
+   * Lists merge-request commits that touched one file, with that file's diff.
+   *
+   * Commits from before the merge request are dropped. Histories longer than
+   * the line-map limit come back without diffs.
+   */
+  async listPullRequestFileCommits(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    path: string;
+    headSha: string;
+  }) {
+    const project = encodeURIComponent(input.repositoryExternalId);
+    const root = `${this.apiUrl}/projects/${project}`;
+    const [pullCommits, pathCommits] = await Promise.all([
+      this.getAllPages<GitLabListedCommit>(
+        `${root}/merge_requests/${input.pullRequestNumber}/commits?per_page=100`,
+      ),
+      this.getAllPages<GitLabListedCommit>(
+        `${root}/repository/commits?ref_name=${encodeURIComponent(input.headSha)}&path=${encodeURIComponent(input.path)}&per_page=100`,
+      ),
+    ]);
+    const orderedPull = oldestFirstByParent(
+      pullCommits.map((commit) => ({
+        sha: commit.id,
+        parents: commit.parent_ids ?? [],
+      })),
+    );
+    const chosen = pullRequestFileCommitShas(
+      orderedPull.map((commit) => commit.sha),
+      new Set(pathCommits.map((commit) => commit.id)),
+    );
+    const bySha = new Map(
+      [...pullCommits, ...pathCommits].map((commit) => [commit.id, commit]),
+    );
+    const commits = await mapWithLimit(chosen.shas, 4, async (sha) => {
+      const listed = bySha.get(sha);
+      const merge = (listed?.parent_ids?.length ?? 0) > 1;
+      const diffs =
+        chosen.truncated || merge
+          ? []
+          : await this.getAllPages<GitLabFileDiff>(
+              `${root}/repository/commits/${encodeURIComponent(sha)}/diff?per_page=100`,
+            );
+      const file = diffs.find(
+        (entry) =>
+          entry.new_path === input.path || entry.old_path === input.path,
+      );
+      return this.fileCommitFromGitLab(listed, sha, {
+        merge,
+        patch: chosen.truncated || merge ? null : file ? file.diff : "",
+      });
+    });
+    return { commits, truncated: chosen.truncated };
+  }
+
+  /** Normalizes one GitLab commit into the shared file-history shape. */
+  private fileCommitFromGitLab(
+    listed: GitLabListedCommit | undefined,
+    sha: string,
+    input: { merge: boolean; patch: string | null },
+  ): ProviderFileCommit {
+    return {
+      sha,
+      author: listed?.author_name ?? sha.slice(0, 7),
+      authoredAt: listed?.authored_date ?? "",
+      message: listed?.message ?? "",
+      url: listed?.web_url,
+      patch: input.patch,
+      merge: input.merge,
+    };
+  }
+
   /** Keeps the newest pipeline for each named workflow. */
   private latestPipelines(pipelines: GitLabPipeline[]) {
     const latestByName = new Map<string, GitLabPipeline>();

@@ -41,6 +41,7 @@ import {
   findImportTargetUnit,
   importPathCandidates,
 } from "~/lib/import-navigation";
+import { attributeFileCommits } from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { providerConnectionRecovery } from "~/lib/provider-permission-recovery";
 import {
@@ -147,6 +148,7 @@ import {
 } from "~/server/workflows/service";
 import {
   editReviewThreadCommentSchema,
+  fileLineHistorySchema,
   importTargetSchema,
   improveConceptGroupingSchema,
   providerReviewDecisionSchema,
@@ -1895,6 +1897,57 @@ export const reviewRouter = createTRPCRouter({
         return { kind: "unresolved" as const, reason: "self" as const };
       }
       return found;
+    }),
+
+  fileLineHistory: protectedProcedure
+    .input(fileLineHistorySchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      await enforceRateLimit(
+        ctx.db,
+        `file-line-history:${ctx.auth.userId}:${input.pullRequestId}`,
+        20,
+        60_000,
+      );
+      if (!scope.snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      const [file] = await ctx.db
+        .select({ path: snapshotFiles.path })
+        .from(snapshotFiles)
+        .where(
+          and(
+            eq(snapshotFiles.snapshotId, scope.snapshot.id),
+            or(
+              eq(snapshotFiles.path, input.path),
+              eq(snapshotFiles.previousPath, input.path),
+            ),
+          ),
+        )
+        .limit(1);
+      if (!file) throw new TRPCError({ code: "NOT_FOUND" });
+      try {
+        const provider = await providerForReviewerRead(
+          ctx.db,
+          scope.connection,
+          ctx.auth.userId,
+        );
+        const listed = await provider.listPullRequestFileCommits({
+          repositoryExternalId: scope.repositoryExternalId,
+          pullRequestNumber: scope.pullRequestNumber,
+          path: input.path,
+          headSha: scope.snapshot.headSha,
+        });
+        return attributeFileCommits(listed);
+      } catch (cause) {
+        if (cause instanceof TRPCError) throw cause;
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: "Commit history for this file could not be loaded",
+        });
+      }
     }),
 
   unitDiscussion: protectedProcedure

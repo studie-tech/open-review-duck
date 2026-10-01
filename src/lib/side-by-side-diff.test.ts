@@ -11,6 +11,44 @@ import {
 } from "./side-by-side-diff";
 
 describe("sideBySideDiff", () => {
+  it("ignores horizontal whitespace while preserving real edits and source indexes", () => {
+    const previous = "  const value = 1;\r\n\treturn value;\n";
+    const current = "    const value = 2;\n  return  value;  \n";
+    expect(sideBySideDiff(previous, current, true)).toEqual([
+      { kind: "modified", previousIndex: 0, currentIndex: 0 },
+      { kind: "unchanged", previousIndex: 1, currentIndex: 1 },
+      { kind: "unchanged", previousIndex: 2, currentIndex: 2 },
+    ]);
+    expect(sideBySideDiff(previous, current)[1]?.kind).toBe("modified");
+  });
+
+  it("keeps inserted lines and blank-line changes when ignoring whitespace", () => {
+    expect(sideBySideDiff("  start\n  end", "start\nnew\n\nend", true)).toEqual(
+      [
+        { kind: "unchanged", previousIndex: 0, currentIndex: 0 },
+        { kind: "added", previousIndex: undefined, currentIndex: 1 },
+        { kind: "added", previousIndex: undefined, currentIndex: 2 },
+        { kind: "unchanged", previousIndex: 1, currentIndex: 3 },
+      ],
+    );
+  });
+
+  it("caches whitespace-sensitive and filtered browser diffs separately", () => {
+    vi.stubGlobal("window", {});
+    try {
+      const previous = "  return value;";
+      const current = "    return value;";
+      const exact = sideBySideDiff(previous, current);
+      const filtered = sideBySideDiff(previous, current, true);
+      expect(exact[0]?.kind).toBe("modified");
+      expect(filtered[0]?.kind).toBe("unchanged");
+      expect(sideBySideDiff(previous, current)).toBe(exact);
+      expect(sideBySideDiff(previous, current, true)).toBe(filtered);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("aligns replacements and preserves surrounding lines", () => {
     expect(sideBySideDiff("one\nold\nthree", "one\nnew\nextra\nthree")).toEqual(
       [
