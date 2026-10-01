@@ -198,6 +198,40 @@ describe("highlighted source surfaces", () => {
     expect(screen.getByText("const value = 1;")).toHaveClass("tok-keyword");
   });
 
+  it("keeps the complete definition available beyond the old 18-line limit", () => {
+    const source = Array.from({ length: 88 }, (_, index) =>
+      index === 12
+        ? "export function helper() {"
+        : `// definition line ${index + 1}`,
+    ).join("\n");
+    render(
+      <SymbolPeekCard
+        definition={{
+          endLine: 295,
+          focusLine: 220,
+          language: "typescript",
+          name: "helper",
+          path: "src/helper.ts",
+          source,
+          startLine: 208,
+          unitKind: "function",
+        }}
+        onClose={vi.fn()}
+        onHold={vi.fn()}
+        peeked={{
+          anchor: { bottom: 80, left: 100, top: 60 },
+          symbol: "helper",
+        }}
+      />,
+    );
+    expect(screen.getByText("// definition line 88")).toBeInTheDocument();
+    expect(screen.getByText("295")).toBeInTheDocument();
+    expect(screen.queryByText("70 more lines")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Source of helper" }),
+    ).toHaveAttribute("tabindex", "0");
+  });
+
   it("keeps symbol-peek line numbering and focus styling", () => {
     render(
       <SymbolPeekCard
