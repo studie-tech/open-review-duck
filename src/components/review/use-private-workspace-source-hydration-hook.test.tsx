@@ -24,7 +24,7 @@ function reviewUnit(index: number): Unit {
     id: `unit-${index}`,
     path,
     kind: "function",
-    status: "pending",
+    status: "pending" as const,
     revisionState: "initial",
     signOffOrigin: "none",
     changedSinceSignOff: false,
@@ -72,6 +72,63 @@ afterEach(() => {
 });
 
 describe("usePrivateWorkspaceSourceHydration", () => {
+  it("applies fresh review metadata without refetching source or losing optimistic decisions", async () => {
+    hydrate.mockImplementation(async (sources: Unit[]) => ({
+      failures: [],
+      successfulIndexes: sources.map((_unit, index) => index),
+      units: sources.map((unit) => ({ ...unit, source: "verified" })),
+    }));
+    const initial = workspace(2);
+    const { result, rerender } = renderHook(
+      ({ data }) => usePrivateWorkspaceSourceHydration(data, 0, "files"),
+      { initialProps: { data: initial } },
+    );
+    await waitFor(() =>
+      expect(result.current.sourceStatus("src/01.ts")).toBe("ready"),
+    );
+    const calls = hydrate.mock.calls.length;
+    act(() =>
+      result.current.setUnits((units) =>
+        units.map((unit, index) =>
+          index === 0 ? { ...unit, status: "signed_off" as const } : unit,
+        ),
+      ),
+    );
+    const refreshed = {
+      ...initial,
+      units: initial.units.map((unit, index) =>
+        index === 1
+          ? { ...unit, status: "waiting" as const, name: "renamed label" }
+          : { ...unit },
+      ),
+    } as Workspace;
+    rerender({ data: refreshed });
+    expect(result.current.units[0]?.status).toBe("signed_off");
+    expect(result.current.units[1]).toMatchObject({
+      status: "waiting",
+      name: "renamed label",
+      source: "verified",
+    });
+    expect(hydrate).toHaveBeenCalledTimes(calls);
+    const acknowledged = {
+      ...refreshed,
+      units: refreshed.units.map((unit, index) =>
+        index === 0 ? { ...unit, status: "signed_off" as const } : unit,
+      ),
+    } as Workspace;
+    rerender({ data: acknowledged });
+    rerender({
+      data: {
+        ...acknowledged,
+        units: acknowledged.units.map((unit) => ({
+          ...unit,
+          status: "pending" as const,
+        })),
+      } as Workspace,
+    });
+    expect(result.current.units[0]?.status).toBe("pending");
+  });
+
   it("keeps verified unit and context identities stable across unrelated renders and other file loads", async () => {
     hydrate.mockImplementation(async (sources: Unit[]) => ({
       failures: [],
@@ -219,7 +276,9 @@ describe("usePrivateWorkspaceSourceHydration", () => {
     act(() =>
       result.current.setUnits((units) =>
         units.map((unit) =>
-          unit.id === "unit-0" ? { ...unit, status: "signed_off" } : unit,
+          unit.id === "unit-0"
+            ? { ...unit, status: "signed_off" as const }
+            : unit,
         ),
       ),
     );

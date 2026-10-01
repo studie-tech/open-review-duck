@@ -8,6 +8,7 @@ import {
   replacePersonalConceptLayoutSchema,
   replyToReviewThreadSchema,
   signOffBatchSchema,
+  symbolDefinitionSchema,
   unreviewBatchSchema,
 } from "./review";
 
@@ -307,5 +308,34 @@ describe("wait release validation", () => {
     expect(releaseReviewWaitsSchema.safeParse({ unitIds: [] }).success).toBe(
       false,
     );
+  });
+});
+
+describe("snapshot-pinned related source", () => {
+  const input = {
+    pullRequestId: "399ea3a7-2860-4eb9-9243-28627e87898d",
+    snapshotId: "f2b6cc78-a865-4304-89ae-4b6b5c645e57",
+    sourcePath: "src/view.ts",
+    sourceLanguage: "typescript",
+    symbol: "helper",
+  };
+  it("keeps lookup cache inputs scoped to the displayed snapshot", () => {
+    expect(symbolDefinitionSchema.parse(input).snapshotId).toBe(
+      input.snapshotId,
+    );
+    expect(
+      importTargetSchema.parse({
+        ...input,
+        specifier: "./helper",
+        imported: "helper",
+        kind: "named",
+      }).snapshotId,
+    ).toBe(input.snapshotId);
+  });
+  it("rejects malformed snapshot identifiers", () => {
+    expect(
+      symbolDefinitionSchema.safeParse({ ...input, snapshotId: "invalid" })
+        .success,
+    ).toBe(false);
   });
 });

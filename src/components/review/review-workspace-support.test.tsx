@@ -300,6 +300,25 @@ describe("same-file concept cards", () => {
     },
   ] as const;
 
+  it("preserves an expanded preview when background review status changes", () => {
+    const props = {
+      members: [units[0]] as never,
+      index: 0,
+      count: 1,
+      fileSource: "const configuration = true;",
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ReviewConceptFileCardPreview {...props} />);
+    expect(screen.getByText("const configuration = true;")).toBeInTheDocument();
+    rerender(
+      <ReviewConceptFileCardPreview
+        {...props}
+        members={[{ ...units[0], status: "signed_off" }] as never}
+      />,
+    );
+    expect(screen.getByText("const configuration = true;")).toBeInTheDocument();
+  });
+
   it("keeps one card per file without disturbing first-seen reading order", () => {
     const cards = conceptFileCardsInReadingOrder(units);
 
