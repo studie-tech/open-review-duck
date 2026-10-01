@@ -271,19 +271,33 @@ export function SymbolPeekCard({
   const lines = useHighlightedSource(definition.source, definition.language);
   const sourceRef = useRef<HTMLElement>(null);
   const focusRef = useRef<HTMLDivElement>(null);
+  const scrolledDefinition = useRef<SymbolDefinition | undefined>(undefined);
 
   useLayoutEffect(() => {
+    const previous = scrolledDefinition.current;
+    if (
+      previous?.source === definition.source &&
+      previous.focusLine === definition.focusLine &&
+      previous.startLine === definition.startLine
+    )
+      return;
     const source = sourceRef.current;
     const focus =
       definition.focusLine >= definition.startLine ? focusRef.current : null;
-    if (!source || !definition.source) return;
+    if (
+      !source ||
+      !definition.source ||
+      lines.map((line) => line.text).join("\n") !== definition.source
+    )
+      return;
     // Start at the declaration, with two lines of lead-in. Documentation above
     // it remains reachable by scrolling up, and the complete body below it is
     // available in the same scroll region.
     source.scrollTop = focus
       ? Math.max(0, focus.offsetTop - source.offsetTop - focus.offsetHeight * 2)
       : 0;
-  }, [definition.source, definition.focusLine, definition.startLine]);
+    scrolledDefinition.current = definition;
+  }, [definition, lines]);
 
   return (
     <section
