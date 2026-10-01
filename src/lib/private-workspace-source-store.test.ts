@@ -243,6 +243,35 @@ describe("PrivateWorkspaceSourceStore", () => {
     store.dispose();
   });
 
+  it("retains visible previews through navigation and releases duplicate owners independently", async () => {
+    const store = new PrivateWorkspaceSourceStore({
+      snapshotId: "snapshot",
+      units: ["a", "b", "c", "d"].map((path) => source(path)),
+      contexts: [],
+      maximumReadyFiles: 2,
+      hydrate: vi.fn(async (sources: readonly TestSource[]) => ({
+        failures: [],
+        successfulIndexes: sources.map((_item, index) => index),
+        units: [...sources],
+      })) as never,
+    });
+    const release = store.retainPath("a");
+    const releaseOther = store.retainPath("a");
+    await store.request("a", "preview");
+    await store.request("b", "active");
+    store.protect(["b"]);
+    await store.prefetch(["c"], () => false);
+    expect(store.status("a")).toBe("ready");
+    release();
+    release();
+    await store.request("c", "active");
+    expect(store.status("a")).toBe("ready");
+    releaseOther();
+    await store.request("d", "active");
+    expect(store.status("a")).toBe("idle");
+    store.dispose();
+  });
+
   it.each<WorkspaceSourcePriority>(["active", "next", "preview"])(
     "deduplicates repeated %s requests for one path",
     async (priority) => {

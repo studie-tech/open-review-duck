@@ -171,7 +171,15 @@ function SourceLineBlock({
     const element = blockRef.current;
     if (!element) return;
     const observer = new IntersectionObserver(
-      (entries) => setNear(entries.some((entry) => entry.isIntersecting)),
+      (entries) => {
+        const visible = entries.some((entry) => entry.isIntersecting);
+        // Measure before React removes the rows, including any late image or
+        // inline conversation that changed height since the last render.
+        if (!visible && element.childNodes.length > 0) {
+          measuredHeight.current = element.offsetHeight;
+        }
+        setNear(visible);
+      },
       {
         root: scrollingAncestor(element),
         rootMargin: `${WINDOW_MOUNT_MARGIN_PX}px 0px`,
@@ -187,6 +195,15 @@ function SourceLineBlock({
     const element = blockRef.current;
     if (mounted && element) measuredHeight.current = element.offsetHeight;
   });
+  useEffect(() => {
+    const element = blockRef.current;
+    if (!mounted || !element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      measuredHeight.current = element.offsetHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [mounted]);
   return (
     <div
       ref={blockRef}
