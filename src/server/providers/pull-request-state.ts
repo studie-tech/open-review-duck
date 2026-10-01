@@ -3,6 +3,7 @@ import "server-only";
 import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { pullRequests, repositories } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { pullRequestParticipantColumns } from "~/lib/pull-request-involvement";
 import type { db as database } from "~/server/db";
 import { startPullRequestSync } from "~/server/workflows/service";
 import { providerConnectionErrorMessage } from "./connection-error";
@@ -45,12 +46,22 @@ function isPullRequestCurrent(
   stored: TrackedPullRequest,
   refreshed: Partial<TrackedPullRequest>,
 ) {
-  return Object.entries(refreshed).every(
-    ([column, value]) =>
-      // An undefined column is omitted from the statement, so it cannot differ.
-      value === undefined ||
-      stored[column as keyof TrackedPullRequest] === value,
+  return Object.entries(refreshed).every(([column, value]) =>
+    pullRequestColumnMatches(stored[column as keyof TrackedPullRequest], value),
   );
+}
+
+/** Reports whether one refreshed column already matches the stored row. */
+function pullRequestColumnMatches(
+  stored: TrackedPullRequest[keyof TrackedPullRequest],
+  value: unknown,
+) {
+  // An undefined column is omitted from the statement, so it cannot differ.
+  if (value === undefined || stored === value) return true;
+  if (Array.isArray(stored) || Array.isArray(value)) {
+    return JSON.stringify(stored ?? []) === JSON.stringify(value ?? []);
+  }
+  return false;
 }
 
 /** Refreshes tracked PR metadata and queues analysis only when an open revision changed. */
@@ -134,6 +145,7 @@ export async function refreshRepositoryPullRequestStates(
         description: remote.description,
         authorLogin: remote.authorLogin,
         authorAvatarUrl: remote.authorAvatarUrl,
+        ...pullRequestParticipantColumns(remote),
         sourceBranch: remote.sourceBranch,
         targetBranch: remote.targetBranch,
         headSha: remote.headSha,
@@ -149,6 +161,7 @@ export async function refreshRepositoryPullRequestStates(
         changedFiles: summaryOnly
           ? trackedPullRequest.changedFiles
           : remote.changedFiles,
+        labels: remote.labels,
       };
       // `lastSyncedAt` is bookkeeping no reader consults, so a row the provider
       // still agrees with is left alone rather than rewritten every pass.

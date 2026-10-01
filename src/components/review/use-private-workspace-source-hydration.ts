@@ -11,17 +11,17 @@ import {
 } from "react";
 import { toast } from "sonner";
 import {
+  PrivateWorkspaceSourceStore,
+  type WorkspaceSourcePriority,
+  type WorkspaceSourceStatus,
+} from "~/lib/private-workspace-source-store";
+import {
   FILES_VIEWER_PREVIEW_RADIUS,
   outstandingReviewFileUnits,
   type ReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
 } from "~/lib/review-files";
-import {
-  PrivateWorkspaceSourceStore,
-  type WorkspaceSourcePriority,
-  type WorkspaceSourceStatus,
-} from "~/lib/private-workspace-source-store";
 import type { RouterOutputs } from "~/trpc/react";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -40,15 +40,29 @@ function reviewUnitWithoutSource(unit: ReviewUnit): ReviewUnit {
   return { ...unit, source: "", previousSource: null };
 }
 
+const mergedSources = new WeakMap<
+  ReviewUnit,
+  WeakMap<ReviewUnit, ReviewUnit>
+>();
+
 /** Preserves live review decisions while applying one store-owned source slice. */
 function mergeReviewUnitSource(current: ReviewUnit, hydrated: ReviewUnit) {
-  return {
+  let versions = mergedSources.get(current);
+  if (!versions) {
+    versions = new WeakMap();
+    mergedSources.set(current, versions);
+  }
+  const existing = versions.get(hydrated);
+  if (existing) return existing;
+  const merged = {
     ...hydrated,
     status: current.status,
     changedSinceSignOff: current.changedSinceSignOff,
     waitingSince: current.waitingSince,
     signOffOrigin: current.signOffOrigin,
   };
+  versions.set(hydrated, merged);
+  return merged;
 }
 
 /** Returns unique paths without losing the navigation order that predicted them. */
@@ -255,19 +269,44 @@ export function usePrivateWorkspaceSourceHydration(
 
   useEffect(() => {
     if (!store || !intentReady) return;
+    store.protect([
+      ...(plan.activePath ? [plan.activePath] : []),
+      ...plan.nextPaths,
+      ...plan.previewPaths,
+    ]);
+    let cancelled = false;
+    const immediate: Promise<unknown>[] = [];
     /** Schedules intent without turning a prefetch failure into an unhandled rejection. */
     const request = (path: string, priority: WorkspaceSourcePriority) => {
-      void store.request(path, priority).catch(() => undefined);
+      immediate.push(store.request(path, priority).catch(() => undefined));
     };
     if (plan.activePath) request(plan.activePath, "active");
     for (const path of plan.nextPaths) request(path, "next");
     for (const path of plan.previewPaths) request(path, "preview");
-  }, [intentReady, plan, store]);
+    if (reviewMode === "files") {
+      const paths = reviewFileCardsInTreeOrder(
+        reviewFileEntries(initialData.files, reviewUnits),
+      ).map(({ path }) => path);
+      const index = paths.indexOf(plan.activePath ?? "");
+      const ahead = [
+        ...paths.slice(index + 1),
+        ...paths.slice(0, Math.max(0, index)),
+      ];
+      void Promise.all(immediate).then(() =>
+        store.prefetch(ahead, () => cancelled),
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [initialData.files, intentReady, plan, reviewMode, reviewUnits, store]);
 
   // Reading the external revision makes every store transition materialize a
   // fresh view below without coupling source ownership to React state.
-  void sourceRevision;
-  const units = materializeUnits(reviewUnits, store);
+  const units = useMemo(() => {
+    void sourceRevision;
+    return materializeUnits(reviewUnits, store);
+  }, [reviewUnits, store, sourceRevision]);
   const setUnits: Dispatch<SetStateAction<ReviewUnit[]>> = useCallback(
     (update) => {
       setReviewLedger((current) => {
@@ -283,9 +322,12 @@ export function usePrivateWorkspaceSourceHydration(
     },
     [initialData.units, snapshotId, store],
   );
-  const fileContexts = initialData.fileContexts.map(
-    (context) => store?.result(context.path)?.context ?? context,
-  );
+  const fileContexts = useMemo(() => {
+    void sourceRevision;
+    return initialData.fileContexts.map(
+      (context) => store?.result(context.path)?.context ?? context,
+    );
+  }, [initialData.fileContexts, store, sourceRevision]);
   const hydratedUnitIds = store
     ? new Set(
         units.flatMap((unit) =>

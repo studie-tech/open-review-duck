@@ -11,10 +11,12 @@ import {
   snapshotFiles,
 } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
+import { pullRequestParticipantColumns } from "~/lib/pull-request-involvement";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
+  changedFileLineCounts,
   reconcileSignOffs,
 } from "~/server/analysis/engine";
 import { languageAdapterForFile } from "~/server/analysis/parsers";
@@ -48,7 +50,10 @@ export async function syncPullRequest(
   db: Database,
   repositoryId: string,
   number: number,
-  options?: { onProgress?: (progress: number) => Promise<void> },
+  options?: {
+    onProgress?: (progress: number) => Promise<void>;
+    deferRetention?: boolean;
+  },
 ) {
   const repository = await db.query.repositories.findFirst({
     where: eq(repositories.id, repositoryId),
@@ -113,6 +118,7 @@ export async function syncPullRequest(
           description: remote.description,
           authorLogin: remote.authorLogin,
           authorAvatarUrl: remote.authorAvatarUrl,
+          ...pullRequestParticipantColumns(remote),
           sourceBranch: remote.sourceBranch,
           targetBranch: remote.targetBranch,
           state: remote.state,
@@ -120,6 +126,7 @@ export async function syncPullRequest(
           additions: remote.additions,
           deletions: remote.deletions,
           changedFiles: remote.changedFiles,
+          labels: remote.labels,
           lastSyncedAt: new Date(),
         })
         .where(
@@ -258,6 +265,7 @@ export async function syncPullRequest(
         description: confirmedRemote.description,
         authorLogin: confirmedRemote.authorLogin,
         authorAvatarUrl: confirmedRemote.authorAvatarUrl,
+        ...pullRequestParticipantColumns(confirmedRemote),
         sourceBranch: confirmedRemote.sourceBranch,
         targetBranch: confirmedRemote.targetBranch,
         headSha: confirmedRemote.headSha,
@@ -267,6 +275,7 @@ export async function syncPullRequest(
         additions: confirmedRemote.additions,
         deletions: confirmedRemote.deletions,
         changedFiles: changedFileCount,
+        labels: confirmedRemote.labels,
         lastSyncedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -277,6 +286,7 @@ export async function syncPullRequest(
           description: confirmedRemote.description,
           authorLogin: confirmedRemote.authorLogin,
           authorAvatarUrl: confirmedRemote.authorAvatarUrl,
+          ...pullRequestParticipantColumns(confirmedRemote),
           sourceBranch: confirmedRemote.sourceBranch,
           targetBranch: confirmedRemote.targetBranch,
           headSha: confirmedRemote.headSha,
@@ -286,6 +296,7 @@ export async function syncPullRequest(
           additions: confirmedRemote.additions,
           deletions: confirmedRemote.deletions,
           changedFiles: changedFileCount,
+          labels: confirmedRemote.labels,
           lastSyncedAt: new Date(),
         },
       })
@@ -418,22 +429,7 @@ export async function syncPullRequest(
             changeType: file.changeType ?? "modified",
             currentBlobId: currentBlob?.id,
             previousBlobId: previousBlob?.id,
-            additions:
-              file.changeType === "deleted"
-                ? 0
-                : Math.max(
-                    0,
-                    file.content.split("\n").length -
-                      (file.previousContent?.split("\n").length ?? 0),
-                  ),
-            deletions:
-              file.changeType === "deleted"
-                ? file.content.split("\n").length
-                : Math.max(
-                    0,
-                    (file.previousContent?.split("\n").length ?? 0) -
-                      file.content.split("\n").length,
-                  ),
+            ...changedFileLineCounts(file),
             isBinary: file.isBinary ?? false,
             skipReason: file.skipReason,
           };
@@ -482,6 +478,17 @@ export async function syncPullRequest(
       snapshotCreated: true,
     };
   });
+  if (!options?.deferRetention) {
+    await cleanupPullRequestSources(db, repositoryId);
+  }
+  return result;
+}
+
+/** Runs best-effort retention after a workflow has made its result available. */
+export async function cleanupPullRequestSources(
+  db: Database,
+  repositoryId: string,
+) {
   try {
     await pruneExpiredReviewSnapshots(db, repositoryId);
   } catch (cause) {
@@ -493,5 +500,4 @@ export async function syncPullRequest(
           : undefined,
     });
   }
-  return result;
 }

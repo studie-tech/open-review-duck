@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -76,6 +76,47 @@ describe("ReviewFilesPanel", () => {
         name: /Sign off 2 review units in src\/review\/workspace.ts/i,
       }),
     ).toBePartiallyChecked();
+  });
+
+  it("marks deleted files with a strikethrough name and Deleted chip", () => {
+    render(
+      <ReviewFilesPanel
+        files={reviewFileEntries(
+          [
+            {
+              id: "deleted-file",
+              path: "app/src/app/welcome/page.tsx",
+              previousPath: null,
+              changeType: "deleted",
+              additions: 0,
+              deletions: 8,
+              isBinary: false,
+              skipReason: null,
+            },
+          ],
+          [
+            {
+              id: "gone",
+              path: "app/src/app/welcome/page.tsx",
+              status: "pending",
+              revisionState: "unchanged",
+            },
+          ],
+        )}
+        search=""
+        selectedPath="app/src/app/welcome/page.tsx"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("page.tsx")).toHaveClass("line-through");
+    expect(screen.getByText("Deleted")).toBeVisible();
+    expect(
+      screen.getByRole("listitem", {
+        name: "app/src/app/welcome/page.tsx, deleted, 0 of 1 review units reviewed",
+      }),
+    ).toBeVisible();
   });
 
   it("keeps added files on one line without an Added label", () => {
@@ -734,5 +775,99 @@ describe("ReviewFilesPanel", () => {
 
     expect(screen.getByRole("button", { name: "Render 1" })).toBeVisible();
     expect(progressReads).toBe(mounted);
+  });
+
+  it("folds files a move left unchanged into one row that opens as a ledger", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const moved = reviewFileEntries(
+      [
+        {
+          id: "academy-layout",
+          path: "app/[shell]/academy/layout.tsx",
+          previousPath: "app/academy/layout.tsx",
+          changeType: "renamed",
+          additions: 0,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "bank-page",
+          path: "app/[shell]/bank/page.tsx",
+          previousPath: "app/vault/index.tsx",
+          changeType: "renamed",
+          additions: 0,
+          deletions: 0,
+          isBinary: false,
+          skipReason: null,
+        },
+        {
+          id: "admin-page",
+          path: "app/[shell]/adminbuilding/page.tsx",
+          previousPath: "app/adminbuilding/page.tsx",
+          changeType: "renamed",
+          additions: 1,
+          deletions: 1,
+          isBinary: false,
+          skipReason: null,
+        },
+      ],
+      [
+        {
+          id: "admin-import",
+          path: "app/[shell]/adminbuilding/page.tsx",
+          status: "pending",
+          revisionState: "initial",
+        },
+      ],
+    );
+    render(
+      <ReviewFilesPanel
+        files={moved}
+        search=""
+        onSelect={onSelect}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const fold = screen.getByRole("button", {
+      name: "Expand 2 files moved unchanged from app/",
+    });
+    expect(fold).toBeVisible();
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("academy")).not.toBeInTheDocument();
+    expect(screen.queryByText("bank")).not.toBeInTheDocument();
+    expect(screen.getByText("adminbuilding")).toBeVisible();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Sign off 1 review unit in app\/\[shell\]\/adminbuilding\/page.tsx/i,
+      }),
+    ).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: /layout.tsx/ })).toBeNull();
+
+    await user.click(fold);
+
+    const ledger = screen.getByRole("list", {
+      name: "Files moved unchanged into app/[shell]",
+    });
+    expect(ledger).toBeVisible();
+    const [sameShape, reshaped] = within(ledger).getAllByRole("listitem");
+    expect(sameShape).toHaveTextContent(/^academy\/layout\.tsx$/);
+    expect(sameShape).toHaveAttribute(
+      "title",
+      "app/academy/layout.tsx → app/[shell]/academy/layout.tsx",
+    );
+    expect(reshaped).toHaveTextContent(/^bank\/page\.tsx←vault\/index\.tsx$/);
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+
+    fold.focus();
+    await user.keyboard("{ArrowLeft}");
+
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("list", { name: /moved unchanged into/ }),
+    ).toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

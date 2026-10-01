@@ -86,6 +86,17 @@ describe("priority inbox", () => {
       }),
     ).toEqual([target]);
     expect(
+      filterPriorityInbox(
+        [item({ id: "labeled", labels: [{ name: "size:XXL" }] })],
+        {
+          view: "all",
+          provider: "all",
+          repositories: [],
+          search: "size:xxl",
+        },
+      ).map(({ id }) => id),
+    ).toEqual(["labeled"]);
+    expect(
       filterPriorityInbox([target, item({ id: "other", signedUnits: 1 })], {
         view: "all",
         provider: "all",
@@ -120,6 +131,32 @@ describe("priority inbox", () => {
         search: "settlement",
       }),
     ).toEqual([draft, open]);
+  });
+
+  it("keeps pull requests that match the reviewer's involvement", () => {
+    const rows = [
+      item({ id: "both", assignedToViewer: true, authoredByViewer: true }),
+      item({ id: "assigned", assignedToViewer: true }),
+      item({ id: "created", authoredByViewer: true }),
+      item({ id: "other" }),
+    ];
+    const filters = {
+      view: "all" as const,
+      provider: "all" as const,
+      repositories: [],
+      search: "",
+    };
+
+    expect(
+      filterPriorityInbox(rows, { ...filters, involvement: "created" }).map(
+        ({ id }) => id,
+      ),
+    ).toEqual(["both", "created"]);
+    expect(
+      filterPriorityInbox(rows, { ...filters, involvement: "both" }).map(
+        ({ id }) => id,
+      ),
+    ).toEqual(["both"]);
   });
 
   it("keeps same-named repositories distinct across providers", () => {

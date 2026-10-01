@@ -26,6 +26,7 @@ const freeConfiguration: SaasConfiguration = {
   managedModel: "provider/model",
   managedModels: ["provider/model"],
   reviewPullRequests: false,
+  autoPublishFindings: false,
   maxReviewTokens: null,
   deepReviewAvailable: false,
   configuration: {
@@ -148,7 +149,14 @@ describe("SaasAiSettings", () => {
     expect(screen.queryByText("Managed model")).not.toBeInTheDocument();
     expect(screen.queryByText("Model prompts")).not.toBeInTheDocument();
     expect(screen.getByText("Tokens per review")).toBeVisible();
-    expect(screen.getByRole("checkbox")).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
+    ).toBeDisabled();
     expect(
       screen.getByText(/Pull-request review is a Pro capability/),
     ).toBeVisible();
@@ -170,12 +178,33 @@ describe("SaasAiSettings", () => {
       useManagedModels: true,
       mode: "automatic",
       reviewPullRequests: false,
+      autoPublishFindings: false,
       maxReviewTokens: null,
     });
     expect(mocks.configurationInvalidate).toHaveBeenCalledOnce();
     expect(mocks.guidanceInvalidate).toHaveBeenCalledOnce();
     expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(mocks.toastSuccess).toHaveBeenCalledWith("AI preferences saved");
+  });
+
+  it("saves the automatic publish preference", async () => {
+    const user = userEvent.setup();
+    renderSaasSettings({
+      configuration: {
+        reviewPullRequests: true,
+        deepReviewAvailable: true,
+      },
+    });
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
+    expect(mocks.save).toHaveBeenCalledWith(
+      expect.objectContaining({ autoPublishFindings: true }),
+    );
   });
 
   it("shows subscription management without the upgrade table for Pro", () => {
@@ -202,7 +231,14 @@ describe("SaasAiSettings", () => {
     expect(
       screen.getByRole("button", { name: "Manage subscription" }),
     ).toBeVisible();
-    expect(screen.getByRole("checkbox")).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
+    ).toBeEnabled();
     expect(
       screen.queryByText(/Pull-request review is a Pro capability/),
     ).not.toBeInTheDocument();
@@ -267,6 +303,11 @@ describe("SaasAiSettings", () => {
     ).toBeDisabled();
     expect(
       screen.getByRole("checkbox", { name: "Review the full pull request" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Publish findings automatically",
+      }),
     ).toBeDisabled();
     expect(
       screen.getByRole("textbox", { name: /Tokens per review/ }),

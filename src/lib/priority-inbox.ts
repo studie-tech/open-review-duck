@@ -1,11 +1,20 @@
+import {
+  type InboxInvolvement,
+  matchesInboxInvolvement,
+} from "~/lib/pull-request-involvement";
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
+
 type PriorityInboxGroupId = "continue" | "ready" | "unreviewable";
 export type PriorityInboxView = "all" | PriorityInboxGroupId;
 
 export interface PriorityInboxItem {
   additions: number;
+  assignedToViewer?: boolean;
   authorLogin: string;
+  authoredByViewer?: boolean;
   deletions: number;
   id: string;
+  labels?: readonly PullRequestLabel[];
   number: number;
   provider: "github" | "gitlab" | "azure_devops";
   repositoryName: string;
@@ -19,7 +28,6 @@ export interface PriorityInboxItem {
 export interface PriorityInboxGroup {
   id: PriorityInboxGroupId;
   label: string;
-  description: string;
   rank: number;
 }
 
@@ -27,20 +35,16 @@ const groups = {
   continue: {
     id: "continue",
     label: "Continue reviewing",
-    description: "Pick up where you left off",
     rank: 0,
   },
   ready: {
     id: "ready",
     label: "Ready to start",
-    description: "Prepared changes waiting for a first pass",
     rank: 1,
   },
   unreviewable: {
     id: "unreviewable",
     label: "Not reviewable here",
-    description:
-      "Open on the provider or synchronize if supported files landed",
     rank: 2,
   },
 } satisfies Record<PriorityInboxGroupId, PriorityInboxGroup>;
@@ -96,6 +100,7 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
   pullRequests: readonly T[],
   filters: {
     includeDrafts?: boolean;
+    involvement?: InboxInvolvement;
     provider: "all" | PriorityInboxItem["provider"];
     repositories: readonly string[];
     search: string;
@@ -130,6 +135,9 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
     ) {
       return false;
     }
+    if (!matchesInboxInvolvement(pullRequest, filters.involvement)) {
+      return false;
+    }
     if (searchTerms.length === 0) return true;
     const haystack = [
       pullRequest.title,
@@ -140,6 +148,7 @@ export function filterPriorityInbox<T extends PriorityInboxItem>(
       String(pullRequest.number),
       pullRequest.provider.replace("_", " "),
       `${pullRequest.provider}:${pullRequest.repositoryOwner}/${pullRequest.repositoryName}`,
+      ...(pullRequest.labels ?? []).map((label) => label.name),
     ]
       .join(" ")
       .toLowerCase();

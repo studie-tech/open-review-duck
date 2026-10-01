@@ -17,6 +17,8 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
+  reviewFileCardIsDeleted,
+  reviewUnitIsCollapsed,
   reviewUnitStartsCollapsed,
 } from "./review-file-card";
 
@@ -133,7 +135,57 @@ describe("reviewCardRanges", () => {
   });
 });
 
+describe("reviewFileCardIsDeleted", () => {
+  it("is true only when every member is a deletion", () => {
+    expect(reviewFileCardIsDeleted([{ changeType: "deleted" }])).toBe(true);
+    expect(
+      reviewFileCardIsDeleted([
+        { changeType: "deleted" },
+        { changeType: "modified" },
+      ]),
+    ).toBe(false);
+    expect(reviewFileCardIsDeleted([])).toBe(false);
+  });
+});
+
 describe("ReviewFileCardHeader", () => {
+  it("makes a deleted file card unmistakable", () => {
+    render(
+      <ReviewFileCardHeader
+        members={
+          [
+            {
+              ...units[0],
+              path: "app/src/app/welcome/page.tsx",
+              changeType: "deleted",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        selected
+        itemLabel="File"
+        sourceBytes={247}
+      />,
+    );
+
+    expect(screen.getByText("This file is deleted")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "You are reviewing the last version on the base branch. It will not be in the merge.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Deleted")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Last version before removal · 1 unit · 1 changed lines · 247 B",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("app/src/app/welcome/page.tsx")).toHaveClass(
+      "line-through",
+    );
+  });
+
   it("does not call a waiting-only card reviewed", () => {
     render(
       <ReviewFileCardHeader
@@ -363,6 +415,38 @@ describe("ReviewFileUnitMarker", () => {
     expect(reviewUnitStartsCollapsed({ status: "waiting" })).toBe(false);
   });
 
+  it("opens inspected or discussed units unless the reviewer folded them", () => {
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: false,
+        inspected: true,
+        startsCollapsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: true,
+        inspected: false,
+        startsCollapsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: true,
+        inspected: true,
+        override: true,
+        startsCollapsed: true,
+      }),
+    ).toBe(true);
+    expect(
+      reviewUnitIsCollapsed({
+        hasVisibleConversation: false,
+        inspected: false,
+        startsCollapsed: true,
+      }),
+    ).toBe(true);
+  });
+
   it("labels the unit as a section with its line span instead of a card title", () => {
     render(
       <ReviewFileUnitMarker
@@ -518,5 +602,88 @@ describe("ReviewFileUnitMarker", () => {
     expect(
       screen.getByRole("button", { name: "Saving review for SavingUnit" }),
     ).toBeDisabled();
+  });
+});
+
+describe("file contents clipboard action", () => {
+  it.each([
+    "// Whole file\r\nconst configuration = true;\r\n\r\nconst main = true;\r\n",
+    "",
+  ])(
+    "copies exact whole-file text even when the card is folded (%j)",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      const onSelect = vi.fn();
+      const onToggleExpanded = vi.fn();
+      render(
+        <ReviewFileCardHeader
+          members={units as never}
+          index={0}
+          count={1}
+          selected={false}
+          expanded={false}
+          onSelect={onSelect}
+          onToggleExpanded={onToggleExpanded}
+          fileContents={source}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Copy file contents" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "File contents copied" }),
+        ).toBeInTheDocument(),
+      );
+      expect(writeText).toHaveBeenCalledWith(source);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onToggleExpanded).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "binary"])(
+    "disables copying unavailable or binary source (%s)",
+    (kind) => {
+      render(
+        <ReviewFileCardHeader
+          members={[{ ...units[0], kind: kind ?? "constant" }] as never}
+          index={0}
+          count={1}
+          selected
+          fileContents={kind ? "binary placeholder" : undefined}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Copy file contents" }),
+      ).toBeDisabled();
+    },
+  );
+
+  it("reports clipboard failure without claiming success", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
+    render(
+      <ReviewFileCardHeader
+        members={units as never}
+        index={0}
+        count={1}
+        selected
+        fileContents="const main = true;"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy file contents" }));
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith("Could not copy the file contents"),
+    );
+    expect(
+      screen.getByRole("button", { name: "Copy file contents" }),
+    ).toBeInTheDocument();
   });
 });

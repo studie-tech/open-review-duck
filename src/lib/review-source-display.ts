@@ -24,11 +24,32 @@ export const HEAVY_DATA_CHANGE_LINES = 30;
 /** Byte size that hides a data document even when it is mostly one line. */
 export const HEAVY_DATA_SOURCE_BYTES = 16 * 1024;
 
+/** Languages whose review payload is authored Markdown, not executable source. */
+const MARKDOWN_REVIEW_LANGUAGES = new Set(["markdown", "mdx"]);
+
+/** Extensions that should open the Markdown preview instead of raw source. */
+const MARKDOWN_REVIEW_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
+
 /** Returns the lowercase file extension of a repository path. */
 export function reviewPathExtension(path: string) {
   const name = path.split("/").pop() ?? "";
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+/**
+ * Reports whether a review file is Markdown the reviewer can read rendered.
+ *
+ * Language wins when analysis stored `markdown` or `mdx`. Otherwise the
+ * path extension covers files that arrived as plain text.
+ */
+export function isReviewMarkdownFile(input: {
+  language?: string;
+  path?: string;
+}) {
+  const language = (input.language ?? "").trim().toLowerCase();
+  if (MARKDOWN_REVIEW_LANGUAGES.has(language)) return true;
+  return MARKDOWN_REVIEW_EXTENSIONS.has(reviewPathExtension(input.path ?? ""));
 }
 
 /**
@@ -140,10 +161,38 @@ export function isHeavyReviewSource(input: {
  * Reviewed cards fold so finished work stops competing for attention.
  * Heavy data files start folded so opening the review does not paint
  * thousands of JSON rows before the reviewer has asked to see them.
+ * A later sidebar pick can open the selected card without rewriting
+ * this default; see `selectedReviewFileCardExpanded`.
  */
 export function reviewFileCardStartsExpanded(input: {
   heavy: boolean;
   reviewed: boolean;
 }) {
   return !input.reviewed && !input.heavy;
+}
+
+/**
+ * Reports whether the selected file card should show its source.
+ *
+ * The chevron and "Show file" write an explicit reveal for this path and
+ * reviewed state; that choice wins. Choosing the file from the sidebar is
+ * a request to read it, so inspection opens the card until the reviewer
+ * leaves or folds it again. Otherwise the card uses its first-paint default.
+ */
+export function selectedReviewFileCardExpanded(input: {
+  defaultExpanded: boolean;
+  inspected: boolean;
+  path: string;
+  reviewed: boolean;
+  reveal?: { expanded: boolean; path: string; reviewed: boolean };
+}) {
+  if (
+    input.reveal &&
+    input.reveal.path === input.path &&
+    input.reveal.reviewed === input.reviewed
+  ) {
+    return input.reveal.expanded;
+  }
+  if (input.inspected) return true;
+  return input.defaultExpanded;
 }

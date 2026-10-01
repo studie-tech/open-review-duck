@@ -646,6 +646,39 @@ describe("review analysis engine", () => {
     expect(save?.reviewOrder).toBeGreaterThan(normalize?.reviewOrder ?? -1);
   });
 
+  it("does not let a deleted tsconfig map current imports", () => {
+    const result = analyzeFiles([
+      {
+        path: "tsconfig.json",
+        content: JSON.stringify({
+          compilerOptions: { paths: { "@/*": ["./legacy/*"] } },
+        }),
+        changeType: "deleted",
+      },
+      {
+        path: "legacy/lib/toast.ts",
+        content: "export function toast() { return 'old' }",
+      },
+      {
+        path: "src/lib/toast.ts",
+        content: "export function toast() { return 'new' }",
+      },
+      {
+        path: "app.ts",
+        content: [
+          'import { toast } from "@/lib/toast";',
+          "export function show() { return toast() }",
+        ].join("\n"),
+      },
+    ]);
+    const stale = result.units.find(
+      ({ path, name }) => path === "legacy/lib/toast.ts" && name === "toast",
+    );
+    const show = result.units.find(({ name }) => name === "show");
+
+    expect(show?.dependencies).not.toContain(stale?.stableKey);
+  });
+
   it("resolves aliased imports even when exported names are duplicated", () => {
     const result = analyzeFiles([
       {
@@ -971,6 +1004,70 @@ export const quickTravelSchema = z.object({ sector: z.number() });`;
       });
     },
   );
+
+  it("asks for no sign-off when a file only moved", () => {
+    const content = [
+      'import type { Metadata } from "next";',
+      "",
+      'export const metadata: Metadata = { title: "Academy" };',
+      "",
+      "export default function Layout({ children }: { children: React.ReactNode }) {",
+      "  return children;",
+      "}",
+    ].join("\n");
+    const result = analyzeFiles([
+      {
+        path: "app/src/app/[shell]/academy/layout.tsx",
+        previousPath: "app/src/app/academy/layout.tsx",
+        content,
+        previousContent: content,
+        changeType: "renamed",
+      },
+    ]);
+
+    expect(result.units.filter(({ kind }) => kind !== "file")).toEqual([]);
+    expect(result.units.find(({ kind }) => kind === "file")).toMatchObject({
+      path: "app/src/app/[shell]/academy/layout.tsx",
+      changeType: "renamed",
+      changedLineCount: 0,
+    });
+  });
+
+  it("reviews only the edits inside a moved file", () => {
+    const previous = [
+      'import { Board } from "@/components/Board";',
+      "",
+      'export const metadata = { title: "Admin" };',
+      "",
+      "export default function AdminBuilding() {",
+      '  return <Board title="Admin Building" />;',
+      "}",
+    ].join("\n");
+    const current = previous.replace(
+      '"@/components/Board"',
+      '"@/app/[shell]/_components/Board"',
+    );
+    const result = analyzeFiles([
+      {
+        path: "app/src/app/[shell]/adminbuilding/page.tsx",
+        previousPath: "app/src/app/adminbuilding/page.tsx",
+        content: current,
+        previousContent: previous,
+        changeType: "renamed",
+      },
+    ]);
+    const reviewable = result.units.filter(({ kind }) => kind !== "file");
+
+    expect(reviewable).toHaveLength(1);
+    expect(reviewable[0]).toMatchObject({
+      changeType: "modified",
+      startLine: 1,
+      endLine: 1,
+      changedLineCount: 2,
+    });
+    expect(reviewable[0]?.source).toContain("_components/Board");
+    expect(reviewable[0]?.previousSource).toContain("@/components/Board");
+  });
 
   it("keeps generic TypeScript arrow declarations isolated around an insertion", () => {
     const random =

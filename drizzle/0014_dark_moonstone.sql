@@ -1,0 +1,1 @@
+ALTER TABLE "open_review_duck_pull_request" ADD COLUMN "labels" jsonb DEFAULT '[]'::jsonb NOT NULL;

@@ -96,6 +96,7 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
   ]);
   const operations: string[] = [];
   const insertBatchSizes = { jobs: [] as number[], items: [] as number[] };
+  let staleParentReads = 0;
   files.forEach((file, index) => {
     /** Registers one fixture revision as a readable source blob. */
     const blob = (side: string, source: string | null | undefined) => {
@@ -128,7 +129,19 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
   const rowsOf = (table: unknown) => tables.get(table) ?? [];
   const query = {
     aiJobs: {
-      findFirst: async () => rowsOf(aiJobs)[0],
+      findFirst: async () => {
+        const row = rowsOf(aiJobs)[0];
+        if (!row) return undefined;
+        if (staleParentReads > 0) {
+          staleParentReads -= 1;
+          return {
+            ...row,
+            deepReviewTerminalState: null,
+            status: "queued",
+          };
+        }
+        return row;
+      },
       findMany: async () =>
         rowsOf(aiJobs).filter((row) => row.parentJobId !== null),
     },
@@ -199,6 +212,10 @@ function createFakeDatabase(files: FixtureFile[], parent: Row = {}) {
     jobs: () => rowsOf(aiJobs),
     items: () => rowsOf(aiReviewItems),
     parent: () => rowsOf(aiJobs)[0] as Row,
+    /** Next parent lookups return a queued snapshot older than the item rows. */
+    serveStaleParent(times: number) {
+      staleParentReads = times;
+    },
   };
 }
 
@@ -372,6 +389,20 @@ describe("sealReviewPlan", () => {
     expect(second.selectedCount).toBe(1);
     expect(fake.jobs()).toHaveLength(jobCount);
     expect(fake.items()).toHaveLength(2);
+  });
+
+  it("replays a skipped plan even if the caller still holds a queued parent", async () => {
+    const fake = createFakeDatabase([
+      { path: "src/a.bin", isBinary: true },
+      { path: "src/b.bin", isBinary: true },
+    ]);
+
+    const first = await sealReviewPlan(fake.db, PARENT_ID);
+    fake.serveStaleParent(1);
+    const second = await sealReviewPlan(fake.db, PARENT_ID);
+
+    expect(first.terminalState).toBe("skipped");
+    expect(second).toEqual(first);
   });
 
   it("replays a repository-only compliance survey without duplicating it", async () => {

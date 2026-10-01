@@ -13,12 +13,14 @@ type AssistanceMode = "off" | "on_demand" | "automatic";
 interface AiPreferenceValues {
   mode: AssistanceMode;
   reviewPullRequests: boolean;
+  autoPublishFindings: boolean;
   maxReviewTokensInput: string;
 }
 
 interface InitialAiPreferences {
   mode: AssistanceMode;
   reviewPullRequests: boolean;
+  autoPublishFindings: boolean;
   maxReviewTokens: number | null;
 }
 
@@ -37,12 +39,14 @@ type AiPreferencesDeployment =
       kind: "local";
       introduction: string;
       deepReviewDescription: { available: string; unavailable: string };
+      autoPublishDescription: { available: string; unavailable: string };
       tokenCapDescription: string;
     }
   | {
       kind: "saas";
       introduction: string;
       deepReviewDescription: { available: string; unavailable: string };
+      autoPublishDescription: { available: string; unavailable: string };
       tokenCapDescription: string;
       unavailableBadge: string;
     };
@@ -55,6 +59,7 @@ export function useAiPreferenceDraft(initial: InitialAiPreferences) {
   const [values, setValues] = useState<AiPreferenceValues>({
     mode: initial.mode,
     reviewPullRequests: initial.reviewPullRequests,
+    autoPublishFindings: initial.autoPublishFindings,
     maxReviewTokensInput: initial.maxReviewTokens?.toString() ?? "",
   });
   const maxReviewTokens = parseOptionalReviewTokenCap(
@@ -63,6 +68,7 @@ export function useAiPreferenceDraft(initial: InitialAiPreferences) {
   const dirty =
     values.mode !== initial.mode ||
     values.reviewPullRequests !== initial.reviewPullRequests ||
+    values.autoPublishFindings !== initial.autoPublishFindings ||
     maxReviewTokens.cap !== initial.maxReviewTokens;
 
   return { values, setValues, maxReviewTokens, dirty };
@@ -163,31 +169,53 @@ export function AiPreferencesForm({
                 : deployment.deepReviewDescription.unavailable}
             </p>
           </div>
-          <label className="inline-flex shrink-0 items-center gap-2 sm:mt-0.5">
-            <span className="sr-only">Review the full pull request</span>
-            <span className="relative inline-flex">
-              <input
-                type="checkbox"
-                checked={values.reviewPullRequests}
-                disabled={!deepReviewAvailable || pending}
-                onChange={(event) =>
-                  onValuesChange({
-                    ...values,
-                    reviewPullRequests: event.target.checked,
-                  })
-                }
-                className="peer sr-only"
-              />
-              <span
-                aria-hidden="true"
-                className="bg-surface-subtle peer-checked:bg-lime peer-focus-visible:ring-lime/55 peer-disabled:opacity-45 block h-6 w-10 rounded-full border border-line transition peer-checked:border-lime peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-ink peer-disabled:cursor-not-allowed"
-              />
-              <span
-                aria-hidden="true"
-                className="bg-cloud pointer-events-none absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition peer-checked:translate-x-4 peer-checked:bg-accent-foreground peer-disabled:opacity-45"
-              />
-            </span>
-          </label>
+          <PreferenceSwitch
+            label="Review the full pull request"
+            checked={values.reviewPullRequests}
+            disabled={!deepReviewAvailable || pending}
+            onCheckedChange={(checked) =>
+              onValuesChange({
+                ...values,
+                reviewPullRequests: checked,
+              })
+            }
+          />
+        </div>
+
+        <div
+          className={cn(
+            "grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:gap-6 sm:px-6",
+            !deepReviewAvailable && "bg-surface-subtle/60",
+          )}
+        >
+          <div className="min-w-0">
+            <p className="flex flex-wrap items-center gap-2">
+              <span className="text-cloud text-sm font-medium">
+                Publish findings automatically
+              </span>
+              {deployment.kind === "saas" && !deepReviewAvailable && (
+                <Badge className="border-violet/25 bg-violet/10 text-violet">
+                  {deployment.unavailableBadge}
+                </Badge>
+              )}
+            </p>
+            <p className="text-mist mt-1 text-xs leading-5">
+              {deepReviewAvailable
+                ? deployment.autoPublishDescription.available
+                : deployment.autoPublishDescription.unavailable}
+            </p>
+          </div>
+          <PreferenceSwitch
+            label="Publish findings automatically"
+            checked={values.autoPublishFindings}
+            disabled={!deepReviewAvailable || pending}
+            onCheckedChange={(checked) =>
+              onValuesChange({
+                ...values,
+                autoPublishFindings: checked,
+              })
+            }
+          />
         </div>
 
         <div className="grid gap-3 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)] sm:items-center sm:gap-6 sm:px-6">
@@ -237,5 +265,41 @@ export function AiPreferencesForm({
         </div>
       )}
     </section>
+  );
+}
+
+/** Renders one lime preference switch with a visually hidden checkbox. */
+function PreferenceSwitch({
+  label,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="inline-flex shrink-0 items-center gap-2 sm:mt-0.5">
+      <span className="sr-only">{label}</span>
+      <span className="relative inline-flex">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onCheckedChange(event.target.checked)}
+          className="peer sr-only"
+        />
+        <span
+          aria-hidden="true"
+          className="bg-surface-subtle peer-checked:bg-lime peer-focus-visible:ring-lime/55 peer-disabled:opacity-45 block h-6 w-10 rounded-full border border-line transition peer-checked:border-lime peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-ink peer-disabled:cursor-not-allowed"
+        />
+        <span
+          aria-hidden="true"
+          className="bg-cloud pointer-events-none absolute top-0.5 left-0.5 size-5 rounded-full shadow-sm transition peer-checked:translate-x-4 peer-checked:bg-accent-foreground peer-disabled:opacity-45"
+        />
+      </span>
+    </label>
   );
 }

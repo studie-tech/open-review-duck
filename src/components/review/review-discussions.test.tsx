@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AiFixPromptPullRequest } from "~/lib/ai-fix-prompt";
 import {
   isOpenProviderDiscussion,
   orderProviderDiscussions,
@@ -13,6 +20,18 @@ import {
 } from "./review-discussions";
 
 afterEach(cleanup);
+
+const pullRequest: AiFixPromptPullRequest = {
+  provider: "github",
+  repositoryOwner: "acme",
+  repositoryName: "review",
+  number: 12,
+  title: "Retry provider calls",
+  webUrl: "https://github.com/acme/review/pull/12",
+  sourceBranch: "feature/retries",
+  targetBranch: "main",
+  headSha: "abc1234",
+};
 
 /** Builds one provider discussion fixture with focused overrides. */
 function discussion(
@@ -65,7 +84,7 @@ describe("ReviewDiscussionsPanel", () => {
     render(
       <ReviewDiscussionsPanel
         loading={false}
-        provider="github"
+        pullRequest={pullRequest}
         threads={[
           discussion(),
           discussion({
@@ -104,6 +123,49 @@ describe("ReviewDiscussionsPanel", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("offers a fix prompt on open conversations only", async () => {
+    // user-event installs its own clipboard on setup, so ours goes in after.
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(
+      <ReviewDiscussionsPanel
+        loading={false}
+        pullRequest={pullRequest}
+        threads={[
+          discussion(),
+          discussion({ externalId: "thread-2", status: "resolved" }),
+        ]}
+        onClose={vi.fn()}
+        onOpenThread={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy AI fix prompt for the conversation in src/retry.ts at line 17",
+      }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+    });
+    const prompt = writeText.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain(
+      "# Address a review conversation on pull request #12",
+    );
+    expect(prompt).toContain("### src/retry.ts line 17");
+    expect(prompt).toContain("Should this retry delay be capped?");
+
+    await user.click(screen.getByRole("tab", { name: "Resolved 1" }));
+    expect(
+      screen.queryByRole("button", { name: /fix prompt/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens a selected conversation in its review unit", async () => {
     const onOpenThread = vi.fn();
     const thread = discussion();
@@ -111,7 +173,7 @@ describe("ReviewDiscussionsPanel", () => {
     render(
       <ReviewDiscussionsPanel
         loading={false}
-        provider="github"
+        pullRequest={pullRequest}
         threads={[thread]}
         onClose={vi.fn()}
         onOpenThread={onOpenThread}
@@ -131,7 +193,7 @@ describe("ReviewDiscussionsPanel", () => {
     render(
       <ReviewDiscussionsPanel
         loading={false}
-        provider="github"
+        pullRequest={pullRequest}
         threads={[
           discussion({
             comments: [
@@ -165,7 +227,7 @@ describe("ReviewDiscussionsPanel", () => {
     render(
       <ReviewDiscussionsPanel
         loading={false}
-        provider="github"
+        pullRequest={pullRequest}
         threads={[discussion()]}
         onClose={onClose}
         onOpenThread={vi.fn()}
@@ -188,7 +250,7 @@ describe("ReviewDiscussionSummary", () => {
   it("separates code completion from discussion resolution", () => {
     const { container } = render(
       <ReviewDiscussionSummary
-        provider="github"
+        pullRequest={pullRequest}
         threads={[
           discussion(),
           discussion({ externalId: "thread-2", status: "resolved" }),

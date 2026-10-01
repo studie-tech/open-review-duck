@@ -1,3 +1,5 @@
+import type { ProviderMergeBlockedFix } from "~/lib/provider-merge-gate";
+import type { PullRequestLabel } from "~/lib/pull-request-labels";
 import type { SourceFile } from "~/server/analysis/types";
 
 export type ProviderName = "github" | "gitlab" | "azure_devops";
@@ -25,6 +27,9 @@ export interface PullRequestSummary {
   description?: string;
   authorLogin: string;
   authorAvatarUrl?: string;
+  authorExternalId?: string;
+  reviewerExternalIds?: string[];
+  assigneeExternalIds?: string[];
   sourceBranch: string;
   targetBranch: string;
   headSha: string;
@@ -34,6 +39,7 @@ export interface PullRequestSummary {
   additions: number;
   deletions: number;
   changedFiles: number;
+  labels: PullRequestLabel[];
 }
 
 export interface PullRequestListOptions {
@@ -130,6 +136,8 @@ export interface ProviderPullRequestLifecycle {
   mergeable: boolean | null;
   canMerge: boolean;
   mergeBlockedReason?: string;
+  /** The branch change that would lift the block, when a commit can. */
+  mergeBlockedFix?: ProviderMergeBlockedFix;
   mergeActionLabel: string;
   /** False when the connected credential cannot merge even if the PR is ready. */
   hasMergePermission: boolean;
@@ -192,6 +200,15 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     number: number,
   ): Promise<ProviderPullRequestLifecycle>;
+  /**
+   * Publishes a draft for collaboration without merging or approving a revision.
+   * Callers preflight freshness; provider draft transitions do not offer an
+   * atomic expected-SHA guard (unlike merge operations).
+   */
+  markPullRequestReadyForReview(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+  }): Promise<void>;
   /** Merges or completes the pull request at the reviewed revision. */
   mergePullRequest(input: {
     repositoryExternalId: string;
@@ -204,6 +221,15 @@ export interface PullRequestProvider {
     number: number,
     options?: ChangedFilesOptions,
   ): Promise<SourceFile[]>;
+  /**
+   * Resolves the diff base from immutable PR revisions when baseSha is a target tip.
+   * Providers that already expose the merge base as baseSha can omit this method.
+   */
+  getPullRequestDiffBase?(
+    repositoryExternalId: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<string>;
   /** Lists regular files in an immutable repository revision. */
   listRepositoryFiles(
     repositoryExternalId: string,
@@ -240,6 +266,12 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     pullRequestNumber: number,
   ): Promise<ProviderReviewThread[]>;
+  /** Uploads an image into the provider so comments retain its access rules. */
+  uploadCommentImage?(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    file: File;
+  }): Promise<string>;
   /** Publishes an inline review comment to the code provider. */
   publishInlineComment(input: {
     repositoryExternalId: string;
@@ -287,6 +319,33 @@ export interface PullRequestProvider {
     threadExternalId: string;
     commentExternalId: string;
   }): Promise<void>;
+  /**
+   * Lists commits in one pull request that touched a file, oldest-commit
+   * metadata first, each with that commit's unified diff for the file.
+   */
+  listPullRequestFileCommits(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    path: string;
+    headSha: string;
+  }): Promise<ProviderFileCommitList>;
+}
+
+/** One commit's patch for a single file inside a pull request. */
+export interface ProviderFileCommit {
+  sha: string;
+  author: string;
+  authoredAt: string;
+  message: string;
+  url?: string;
+  patch: string | null;
+  merge: boolean;
+}
+
+/** File commits for a pull request, flagged when the line map was cut short. */
+export interface ProviderFileCommitList {
+  commits: ProviderFileCommit[];
+  truncated: boolean;
 }
 
 export class ProviderError extends Error {

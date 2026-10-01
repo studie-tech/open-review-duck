@@ -59,6 +59,7 @@ export interface ReviewCommandState {
   deletedUnitsToSignOff: readonly unknown[];
   externalSyncPending: boolean;
   fileWaitingUnitIds: readonly string[];
+  loadingChanges: boolean;
   filteredReviewActive: boolean;
   initialData: Pick<WorkspaceData, "concepts" | "pullRequest">;
   nextQueueEntry?: { index: number; unit: { name: string } };
@@ -111,7 +112,7 @@ export interface ReviewCommandActions {
   stepAiQuestion: (direction: -1 | 1) => void;
   stepFinding: (direction: -1 | 1) => void;
   stopWaitingOnActive: () => void;
-  syncExternalData: () => Promise<void>;
+  syncExternalData: (options?: { silent?: boolean }) => Promise<boolean>;
   toggleContext: () => void;
   toggleInsightsPanel: () => void;
   togglePathPanel: () => void;
@@ -252,6 +253,7 @@ export function buildReviewWorkspaceCommands(
     externalSyncPending,
     fileWaitingUnitIds,
     filteredReviewActive,
+    loadingChanges,
     initialData,
     nextQueueEntry,
     nextReview,
@@ -307,7 +309,9 @@ export function buildReviewWorkspaceCommands(
   } = actions;
   const reviewPullRequestCommand: CommandCenterItem = {
     id: "review-pull-request-with-ai",
-    label: "Review the full pull request",
+    label: reviewRunning
+      ? "View AI review progress"
+      : "AI review status and results",
     description:
       aiConfiguration.data?.mode === "off"
         ? "Enable AI assistance in settings first"
@@ -315,7 +319,7 @@ export function buildReviewWorkspaceCommands(
     group: "Review actions",
     icon: <Sparkles className="size-4" />,
     shortcut: reviewShortcuts.reviewPullRequest,
-    disabled: reviewRunning || aiConfiguration.data?.mode === "off",
+    disabled: false,
     onSelect: () => setAiReviewDialogOpen(true),
   };
   const reviewCommands: CommandCenterItem[] = [
@@ -615,17 +619,29 @@ export function buildReviewWorkspaceCommands(
 
     {
       id: "sync-provider-data",
-      label: updateAvailable ? "Load code changes" : "Sync",
-      description: updateAvailable
-        ? "Load the synced revision and preserve unaffected sign-offs"
-        : "Poll for the latest code and conversations",
+      label: loadingChanges
+        ? "Loading new revision"
+        : updateAvailable
+          ? "Load code changes"
+          : externalSyncPending
+            ? "Syncing…"
+            : "Check for updates",
+      description: loadingChanges
+        ? "ReviewDuck is replacing the workspace with the synced revision"
+        : updateAvailable
+          ? "Load the synced revision and preserve unaffected sign-offs"
+          : externalSyncPending
+            ? "ReviewDuck is fetching the latest pull request revision"
+            : "ReviewDuck watches the pull-request head and syncs when it moves",
       group: "Review actions",
       icon: <RefreshCw className="size-4" />,
       shortcut: updateAvailable
         ? reviewShortcuts.loadChanges
         : reviewShortcuts.refresh,
       disabled:
-        resetReview.isPending || (!updateAvailable && externalSyncPending),
+        resetReview.isPending ||
+        loadingChanges ||
+        (!updateAvailable && externalSyncPending),
       onSelect: updateAvailable
         ? loadAvailableChanges
         : () => void syncExternalData(),
@@ -642,6 +658,7 @@ export function buildReviewWorkspaceCommands(
         pendingConceptSignOffIds.size > 0 ||
         pendingUndoCount > 0 ||
         externalSyncPending ||
+        loadingChanges ||
         resetReview.isPending,
       onSelect: () => setResetDialogOpen(true),
     },

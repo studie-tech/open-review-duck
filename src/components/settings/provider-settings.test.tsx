@@ -32,6 +32,10 @@ vi.mock("~/components/settings/provider-rail", () => ({
   ProviderRail: () => <nav>Connections</nav>,
 }));
 
+vi.mock("~/components/settings/comment-identity", () => ({
+  CommentIdentity: () => null,
+}));
+
 vi.mock("~/components/settings/connection-detail", () => ({
   ConnectionDetail: ({
     authorizationPending,

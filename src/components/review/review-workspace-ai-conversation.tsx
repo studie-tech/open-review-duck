@@ -22,9 +22,14 @@ import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import { isEditableTarget } from "~/lib/keyboard-shortcuts";
 import { providerLabel } from "~/lib/provider-labels";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import type { RouterOutputs } from "~/trpc/react";
+import {
+  CommentImageTextarea,
+  type UploadCommentImage,
+} from "./comment-image-textarea";
 import { ProviderCommentBody } from "./review-workspace-markdown";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
@@ -84,8 +89,17 @@ const AI_CONVERSATION_VISIBILITY_KEY = "reviewduck:ai-conversation-visibility";
 /** Lets Escape dismiss an active inline interaction from any of its controls. */
 function useInlineEscapeDismissal<ElementType extends HTMLElement>(
   onDismiss: () => void,
-  enabled = true,
-  allowPageFocusFallback = false,
+  {
+    allowPageFocusFallback = false,
+    dismissWhileOpen = false,
+    enabled = true,
+    relatedElementId,
+  }: {
+    allowPageFocusFallback?: boolean;
+    dismissWhileOpen?: boolean;
+    enabled?: boolean;
+    relatedElementId?: string;
+  } = {},
 ) {
   const root = useRef<ElementType>(null);
 
@@ -95,15 +109,35 @@ function useInlineEscapeDismissal<ElementType extends HTMLElement>(
     /** Gives the active inline surface first refusal on an unmodified Escape. */
     function dismissOnEscape(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const element = root.current;
       const activeElement = document.activeElement;
+      if (
+        isEditableTarget(activeElement) &&
+        !element?.contains(activeElement)
+      ) {
+        return;
+      }
+      if (
+        activeElement instanceof Element &&
+        activeElement.closest("dialog[open]") &&
+        !element?.contains(activeElement)
+      ) {
+        return;
+      }
+      const related = relatedElementId
+        ? document.getElementById(relatedElementId)
+        : null;
       const focusIsInside = Boolean(
-        element && activeElement && element.contains(activeElement),
+        activeElement &&
+          (element?.contains(activeElement) ||
+            related === activeElement ||
+            related?.contains(activeElement)),
       );
       const mayHandlePageFocus =
         allowPageFocusFallback &&
         (activeElement === document.body || activeElement === null);
-      if (!focusIsInside && !mayHandlePageFocus) {
+      if (!dismissWhileOpen && !focusIsInside && !mayHandlePageFocus) {
         return;
       }
       event.preventDefault();
@@ -113,7 +147,13 @@ function useInlineEscapeDismissal<ElementType extends HTMLElement>(
 
     window.addEventListener("keydown", dismissOnEscape, true);
     return () => window.removeEventListener("keydown", dismissOnEscape, true);
-  }, [allowPageFocusFallback, enabled, onDismiss]);
+  }, [
+    allowPageFocusFallback,
+    dismissWhileOpen,
+    enabled,
+    onDismiss,
+    relatedElementId,
+  ]);
 
   return root;
 }
@@ -281,32 +321,45 @@ export function InlineLineActionChooser({
 }) {
   const providerName = providerLabel(provider);
   const commentButton = useRef<HTMLButtonElement>(null);
-  const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(onCancel);
+  const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(onCancel, {
+    dismissWhileOpen: true,
+    relatedElementId: `review-line-${line}`,
+  });
   useEffect(() => {
     commentButton.current?.focus();
   }, []);
+  useEffect(() => {
+    /** Routes the destination shortcuts even when the originating line kept focus. */
+    function chooseDestination(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+        return;
+      }
+      if (
+        isEditableTarget(event.target) &&
+        !escapeBoundary.current?.contains(event.target as Node)
+      ) {
+        return;
+      }
+      if (event.code === "Digit1" || event.key === "1") {
+        event.preventDefault();
+        event.stopPropagation();
+        onComment();
+        return;
+      }
+      if (event.code === "Digit2" || event.key === "2") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (canAsk) onAskAi();
+      }
+    }
+
+    window.addEventListener("keydown", chooseDestination, true);
+    return () => window.removeEventListener("keydown", chooseDestination, true);
+  }, [canAsk, escapeBoundary, onAskAi, onComment]);
   return (
     <section
       ref={escapeBoundary}
       aria-label={`Choose an action for line ${line}`}
-      onKeyDown={(event) => {
-        if (
-          !(event.metaKey || event.ctrlKey) ||
-          event.altKey ||
-          event.shiftKey
-        ) {
-          return;
-        }
-        if (event.code === "Digit1" || event.key === "1") {
-          event.preventDefault();
-          event.stopPropagation();
-          onComment();
-        } else if (event.code === "Digit2" || event.key === "2") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (canAsk) onAskAi();
-        }
-      }}
       className="border-cyan/20 bg-panel mx-4 my-2 ml-[82px] rounded-xl border p-3 font-sans shadow-xl"
     >
       <div className="flex min-w-0 items-center justify-between gap-3">
@@ -373,6 +426,7 @@ export function InlineCommentComposer({
   onCancel,
   onDraftChange,
   onPost,
+  onUploadImage,
   path,
   pending,
   posting,
@@ -383,13 +437,18 @@ export function InlineCommentComposer({
   onCancel: () => void;
   onDraftChange: (value: string) => void;
   onPost: (body: string) => void;
+  onUploadImage?: UploadCommentImage;
   path: string;
   pending: boolean;
   posting: boolean;
   provider: WorkspaceData["pullRequest"]["provider"];
 }) {
+  const [uploading, setUploading] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
-  const escapeBoundary = useInlineEscapeDismissal<HTMLDivElement>(onCancel);
+  const escapeBoundary = useInlineEscapeDismissal<HTMLDivElement>(onCancel, {
+    dismissWhileOpen: true,
+    relatedElementId: `review-line-${line}`,
+  });
   // The composer keeps the comment text so a keystroke never re-renders the
   // workspace tree; the parent only stores it so an unmount it did not ask
   // for, such as a wait that failed, keeps what the reviewer already typed.
@@ -413,19 +472,23 @@ export function InlineCommentComposer({
           {path}
         </span>
       </div>
-      <textarea
+      <CommentImageTextarea
+        disabled={pending}
         ref={input}
         value={draft}
-        onChange={(event) => {
-          setDraft(event.target.value);
-          onDraftChange(event.target.value);
+        onUploadImage={onUploadImage}
+        onUploadingChange={setUploading}
+        onValueChange={(value) => {
+          setDraft(value);
+          onDraftChange(value);
         }}
         onKeyDown={(event) => {
           if (
             event.key === "Enter" &&
             (event.metaKey || event.ctrlKey) &&
             draft.trim() &&
-            !pending
+            !pending &&
+            !uploading
           ) {
             event.preventDefault();
             onPost(draft);
@@ -437,7 +500,10 @@ export function InlineCommentComposer({
       />
       <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-fog flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] leading-4">
-          <span>Posts immediately to {providerLabel(provider)}.</span>
+          <span>
+            Posts immediately to {providerLabel(provider)}. Paste images to
+            attach.
+          </span>
           <span className="flex items-center gap-1">
             <ShortcutHint shortcut={reviewShortcuts.postComment} />
             post
@@ -451,7 +517,7 @@ export function InlineCommentComposer({
           <Button
             size="sm"
             variant="secondary"
-            disabled={!draft.trim() || pending}
+            disabled={!draft.trim() || pending || uploading}
             onClick={() => onPost(draft)}
           >
             {posting ? (
@@ -464,6 +530,66 @@ export function InlineCommentComposer({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Keeps the provider-comment destination switch off the workspace tree. */
+export function InlineLineActionSurface({
+  canAsk,
+  initialDraft,
+  initialMode = "choose",
+  line,
+  onAskAi,
+  onCancel,
+  onDraftChange,
+  onPost,
+  onUploadImage,
+  path,
+  pending,
+  posting,
+  provider,
+}: {
+  canAsk: boolean;
+  initialDraft: string;
+  initialMode?: "choose" | "provider";
+  line: number;
+  onAskAi: () => void;
+  onCancel: () => void;
+  onDraftChange: (value: string) => void;
+  onPost: (body: string) => void;
+  onUploadImage?: UploadCommentImage;
+  path: string;
+  pending: boolean;
+  posting: boolean;
+  provider: WorkspaceData["pullRequest"]["provider"];
+}) {
+  const [mode, setMode] = useState<"choose" | "provider">(initialMode);
+  if (mode === "choose") {
+    return (
+      <InlineLineActionChooser
+        canAsk={canAsk}
+        line={line}
+        onAskAi={onAskAi}
+        onCancel={onCancel}
+        onComment={() => setMode("provider")}
+        path={path}
+        provider={provider}
+      />
+    );
+  }
+  return (
+    <InlineCommentComposer
+      initialDraft={initialDraft}
+      line={line}
+      onCancel={onCancel}
+      onDraftChange={onDraftChange}
+      onUploadImage={onUploadImage}
+      onPost={onPost}
+      path={path}
+      pending={pending}
+      posting={posting}
+      provider={provider}
+    />
   );
 }
 
@@ -521,11 +647,11 @@ export function InlineAiQuestion({
   const [publishingProposal, setPublishingProposal] = useState<string>();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingThread, setDeletingThread] = useState(false);
-  const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(
-    onClose,
-    !deleteDialogOpen,
-    true,
-  );
+  const escapeBoundary = useInlineEscapeDismissal<HTMLElement>(onClose, {
+    allowPageFocusFallback: true,
+    enabled: !deleteDialogOpen,
+    relatedElementId: `review-line-${line}`,
+  });
   const threadInFlight = entries.some(({ status }) =>
     ["queued", "running", "streaming"].includes(status),
   );

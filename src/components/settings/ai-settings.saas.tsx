@@ -30,6 +30,12 @@ const saasPreferenceDeployment = {
     unavailable:
       "Pull-request review is a Pro capability. A full review fans out one agent per changed file, which the free monthly token allowance cannot fund.",
   },
+  autoPublishDescription: {
+    available:
+      "Post each publishable finding to the pull request when a review finishes. Leave this off to validate findings first.",
+    unavailable:
+      "Publishing findings automatically is a Pro capability. Free accounts review and post each finding themselves.",
+  },
   tokenCapDescription:
     "Optional cap on one review. Leave empty for no limit. New reviews cannot start after your monthly plan tokens are used up.",
   unavailableBadge: "Pro",
@@ -214,6 +220,7 @@ export function SaasAiSettings({
                 useManagedModels: true,
                 mode: preferences.values.mode,
                 reviewPullRequests: preferences.values.reviewPullRequests,
+                autoPublishFindings: preferences.values.autoPublishFindings,
                 maxReviewTokens: preferences.maxReviewTokens.cap,
               }),
           }}

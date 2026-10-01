@@ -13,19 +13,27 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import {
+  type AiFixPromptPullRequest,
+  discussionFixPrompt,
+} from "~/lib/ai-fix-prompt";
 import { providerLabel } from "~/lib/provider-labels";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import {
+  CommentImageTextarea,
+  type UploadCommentImage,
+} from "./comment-image-textarea";
+import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 import { ProviderCommentBody } from "./review-workspace-markdown";
 
-type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ProviderConversationThread =
   RouterOutputs["review"]["providerConversations"]["threads"][number];
 
@@ -128,24 +136,27 @@ export function ProviderConversation({
   onDeleteThread,
   onEditComment,
   onReply,
+  onUploadImage,
   onResolve,
-  provider,
+  pullRequest,
   revealed = false,
   replying,
   thread,
   publishedByReviewDuck,
 }: ProviderConversationActions & {
+  onUploadImage?: UploadCommentImage;
   className?: string;
   managing?: boolean;
   /** Marks comments after this moment as the activity a wait was paused for. */
   newSince?: Date | null;
-  provider: WorkspaceData["pullRequest"]["provider"];
+  pullRequest: AiFixPromptPullRequest;
   /** Opens and highlights a conversation selected from PR-wide discussions. */
   revealed?: boolean;
   replying: boolean;
   thread: ProviderConversationThread;
   publishedByReviewDuck: boolean;
 }) {
+  const provider = pullRequest.provider;
   /** Reports whether one comment arrived after the reviewer began waiting. */
   const isNewComment = (createdAt: string) =>
     Boolean(newSince && new Date(createdAt) > newSince);
@@ -154,6 +165,11 @@ export function ProviderConversation({
   const hasNewComments = thread.comments.some(({ createdAt }) =>
     isNewComment(createdAt),
   );
+  const [activeUploads, setActiveUploads] = useState(0);
+  const uploading = activeUploads > 0;
+  const trackUpload = useCallback((active: boolean) => {
+    setActiveUploads((count) => Math.max(0, count + (active ? 1 : -1)));
+  }, []);
   const [expanded, setExpanded] = useState(
     thread.status !== "resolved" || hasNewComments,
   );
@@ -194,26 +210,38 @@ export function ProviderConversation({
     if (revealed) setExpanded(true);
   }, [revealed]);
 
-  /** Publishes the draft while preserving it if the provider rejects the reply. */
-  async function submitReply() {
+  /**
+   * Publishes the draft, reopening a resolved conversation when asked.
+   *
+   * A reply on a resolved thread is almost always a continuation, so reopen
+   * is the default path. The draft stays if the provider rejects the reply;
+   * a failed reopen still leaves the published comment in place.
+   */
+  async function submitReply(reopen: boolean) {
     const body = replyBody.trim();
-    if (!body || replying || inFlight.current) return;
+    if (uploading || !body || replying || inFlight.current) return;
     inFlight.current = true;
     try {
       await onReply(body);
       setReplyBody("");
       setReplyOpen(false);
+      if (reopen) {
+        setResolving(true);
+        await onResolve(false);
+      }
     } catch {
-      // The mutation owns the user-facing error; retain the draft for retry.
+      // The mutation owns the user-facing error. A rejected reply keeps the
+      // draft; a rejected reopen still leaves the published comment in place.
     } finally {
       inFlight.current = false;
+      setResolving(false);
     }
   }
 
   /** Saves an edited comment, keeping the draft open if the provider says no. */
   async function submitEdit(commentExternalId: string) {
     const body = editBody.trim();
-    if (!body || managing || inFlight.current) return;
+    if (uploading || !body || managing || inFlight.current) return;
     inFlight.current = true;
     try {
       await onEditComment(commentExternalId, body);
@@ -228,7 +256,7 @@ export function ProviderConversation({
 
   /** Resolves or reopens the conversation, leaving the error to the mutation. */
   async function submitResolution(resolve: boolean) {
-    if (managing || inFlight.current) return;
+    if (uploading || managing || inFlight.current) return;
     inFlight.current = true;
     setResolving(true);
     try {
@@ -245,7 +273,7 @@ export function ProviderConversation({
   /** Carries out the deletion the reviewer just confirmed. */
   async function confirmDelete() {
     const target = confirmingDelete;
-    if (!target || managing || inFlight.current) return;
+    if (uploading || !target || managing || inFlight.current) return;
     inFlight.current = true;
     try {
       await (target.kind === "thread"
@@ -307,7 +335,7 @@ export function ProviderConversation({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            disabled={managing}
+            disabled={uploading || managing}
             aria-label={
               resolved
                 ? "Reopen this conversation"
@@ -343,9 +371,15 @@ export function ProviderConversation({
                   : "Resolve"}
             </span>
           </button>
+          {!resolved && (
+            <CopyAiFixPromptButton
+              subject="this conversation"
+              prompt={() => discussionFixPrompt(pullRequest, thread)}
+            />
+          )}
           <button
             type="button"
-            disabled={managing || holdsAnotherReviewersComment}
+            disabled={uploading || managing || holdsAnotherReviewersComment}
             aria-label="Delete this conversation"
             title={
               holdsAnotherReviewersComment
@@ -412,7 +446,7 @@ export function ProviderConversation({
                     <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
                       <button
                         type="button"
-                        disabled={managing}
+                        disabled={uploading || managing}
                         aria-label={`Edit the comment by ${comment.author}`}
                         title="Edit this comment"
                         onClick={() => {
@@ -425,7 +459,7 @@ export function ProviderConversation({
                       </button>
                       <button
                         type="button"
-                        disabled={managing}
+                        disabled={uploading || managing}
                         aria-label={`Delete the comment by ${comment.author}`}
                         title="Delete this comment"
                         onClick={() =>
@@ -443,11 +477,14 @@ export function ProviderConversation({
                 </div>
                 {editing === comment.externalId ? (
                   <div className="mt-2">
-                    <textarea
+                    <CommentImageTextarea
+                      disabled={managing}
                       ref={editInputRef}
                       aria-label={`Edit the comment by ${comment.author} on ${providerLabel(provider)}`}
                       value={editBody}
-                      onChange={(event) => setEditBody(event.target.value)}
+                      onUploadImage={onUploadImage}
+                      onUploadingChange={trackUpload}
+                      onValueChange={setEditBody}
                       onKeyDown={(event) => {
                         if (event.key === "Escape") {
                           event.preventDefault();
@@ -471,7 +508,7 @@ export function ProviderConversation({
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={managing}
+                        disabled={uploading || managing}
                         onClick={() => setEditing(undefined)}
                       >
                         Cancel
@@ -481,6 +518,7 @@ export function ProviderConversation({
                         variant="secondary"
                         disabled={
                           managing ||
+                          uploading ||
                           !editBody.trim() ||
                           editBody.trim() === comment.body.trim()
                         }
@@ -508,53 +546,105 @@ export function ProviderConversation({
                   <p className="text-cloud text-[11px] font-medium">
                     Reply on {providerLabel(provider)}
                   </p>
-                  <span className="text-fog flex items-center gap-1 text-[9px]">
-                    <ShortcutHint shortcut={reviewShortcuts.postComment} />
-                    post
-                  </span>
                 </div>
-                <textarea
+                {resolved && (
+                  <p className="border-lime/20 bg-lime/8 text-lime mt-2 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[10px] leading-4">
+                    <CircleCheck
+                      className="size-3.5 shrink-0"
+                      aria-hidden="true"
+                    />
+                    This conversation is resolved. Posting a reply reopens it.
+                  </p>
+                )}
+                <CommentImageTextarea
+                  disabled={replying || managing}
                   ref={replyInputRef}
                   value={replyBody}
-                  onChange={(event) => setReplyBody(event.target.value)}
+                  onUploadImage={onUploadImage}
+                  onUploadingChange={trackUpload}
+                  onValueChange={setReplyBody}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
                       event.preventDefault();
                       setReplyOpen(false);
-                    } else if (
-                      event.key === "Enter" &&
-                      (event.metaKey || event.ctrlKey)
-                    ) {
-                      event.preventDefault();
-                      void submitReply();
+                      return;
                     }
+                    if (
+                      event.key !== "Enter" ||
+                      !(event.metaKey || event.ctrlKey)
+                    ) {
+                      return;
+                    }
+                    event.preventDefault();
+                    void submitReply(resolved && !event.shiftKey);
                   }}
                   placeholder="Continue this conversation…"
                   rows={3}
                   className="bg-surface text-cloud focus:border-cyan/45 mt-2 w-full resize-y rounded-lg border border-line px-3 py-2 text-xs leading-5 outline-none"
                 />
-                <div className="mt-2 flex justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={replying}
-                    onClick={() => setReplyOpen(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={!replyBody.trim() || replying}
-                    onClick={() => void submitReply()}
-                  >
-                    {replying ? (
-                      <LoaderCircle className="size-3 animate-spin" />
-                    ) : (
-                      <Send className="size-3" />
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-fog flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] leading-4">
+                    <span className="flex items-center gap-1">
+                      <ShortcutHint shortcut={reviewShortcuts.postComment} />
+                      {resolved ? "post and reopen" : "post"}
+                    </span>
+                    {resolved && (
+                      <span className="flex items-center gap-1">
+                        <ShortcutHint
+                          shortcut={reviewShortcuts.postCommentKeepResolved}
+                        />
+                        keep resolved
+                      </span>
                     )}
-                    {replying ? "Posting…" : "Reply"}
-                  </Button>
+                    <span>· Esc cancels</span>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={uploading || replying || managing}
+                      onClick={() => setReplyOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    {resolved && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={
+                          uploading || !replyBody.trim() || replying || managing
+                        }
+                        aria-label="Keep resolved: post the reply without reopening this conversation"
+                        onClick={() => void submitReply(false)}
+                      >
+                        Keep resolved
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={resolved ? "primary" : "secondary"}
+                      disabled={
+                        uploading || !replyBody.trim() || replying || managing
+                      }
+                      aria-label={
+                        resolved
+                          ? "Post and reopen this conversation"
+                          : undefined
+                      }
+                      onClick={() => void submitReply(resolved)}
+                    >
+                      {replying ? (
+                        <LoaderCircle className="size-3 animate-spin" />
+                      ) : (
+                        <Send className="size-3" />
+                      )}
+                      {replying
+                        ? "Posting…"
+                        : resolved
+                          ? "Post and reopen"
+                          : "Reply"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : (

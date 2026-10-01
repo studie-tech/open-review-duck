@@ -51,12 +51,24 @@ const queryState = vi.hoisted(() => ({
   unimportedError: undefined as { message: string } | undefined,
   unimportedRefetch: vi.fn(),
   unimportedInvalidate: vi.fn(),
+  startAiMutate: vi.fn(),
+  aiConfiguration: {
+    deepReviewAvailable: true,
+    mode: "on_demand",
+    reviewPullRequests: false,
+  },
 }));
 
 vi.mock("~/trpc/react", () => ({
   api: {
     useUtils: vi.fn(() => ({
+      ai: {
+        reviewStatus: { setData: vi.fn() },
+        reviewRuns: { invalidate: vi.fn() },
+        reviewHistory: { invalidate: vi.fn() },
+      },
       review: {
+        deepReviewFindings: { invalidate: vi.fn() },
         dashboard: {
           setData: queryState.dashboardSetData,
           invalidate: queryState.dashboardInvalidate,
@@ -123,8 +135,55 @@ vi.mock("~/trpc/react", () => ({
         ),
       },
     },
+    ai: {
+      reviewRuns: { useQuery: vi.fn(() => ({ data: [] })) },
+      reviewStatus: {
+        useQuery: vi.fn(() => ({ data: null, isLoading: false })),
+      },
+      reviewHistory: {
+        useQuery: vi.fn(() => ({ data: [], isLoading: false })),
+      },
+      reviewRun: { useQuery: vi.fn(() => ({ data: null, isLoading: false })) },
+      configuration: {
+        useQuery: vi.fn(() => ({
+          data: queryState.aiConfiguration,
+        })),
+      },
+      start: {
+        useMutation: vi.fn(
+          (options?: {
+            onSuccess?: (job: { pullRequestId: string }) => void;
+          }) => ({
+            mutate: (input: { pullRequestId: string; kind: string }) => {
+              queryState.startAiMutate(input);
+              options?.onSuccess?.({ pullRequestId: input.pullRequestId });
+            },
+            isPending: false,
+          }),
+        ),
+      },
+    },
   },
 }));
+
+/** Opens a jsdom dialog the way a browser would, then restores the original. */
+function withBrowserShowModal() {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLDialogElement.prototype,
+    "showModal",
+  );
+  HTMLDialogElement.prototype.showModal = function showModal(
+    this: HTMLDialogElement,
+  ) {
+    this.setAttribute("open", "");
+  };
+  return () => {
+    if (original)
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", original);
+    else
+      delete (HTMLDialogElement.prototype as { showModal?: unknown }).showModal;
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -160,6 +219,12 @@ afterEach(() => {
     manualRepositoryCount: 0,
   };
   queryState.unimportedError = undefined;
+  queryState.startAiMutate.mockReset();
+  queryState.aiConfiguration = {
+    deepReviewAvailable: true,
+    mode: "on_demand",
+    reviewPullRequests: false,
+  };
 });
 
 describe("PullRequestsContent", () => {
@@ -186,12 +251,15 @@ describe("PullRequestsContent", () => {
       repositoryOwner: "acme",
       repositoryName: "web",
       provider: "github",
+      assignedToViewer: false,
+      authoredByViewer: false,
       queueState: "active",
       queueSource: "manual",
       removedAt: null,
       totalUnits: 4,
       signedUnits: 0,
       carriedSignOffs: 0,
+      labels: [],
       ...rest,
     };
   };
@@ -414,6 +482,10 @@ describe("PullRequestsContent", () => {
         number: 101,
         title: "Inventory improvements",
         signedUnits: 2,
+        labels: [
+          { name: "size:XXL", color: "b60205" },
+          { name: "feat", color: "0e8a16" },
+        ],
       }),
       pullRequest({
         id: "unsupported",
@@ -437,6 +509,8 @@ describe("PullRequestsContent", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByText("Continue reviewing")).toBeVisible();
+    expect(screen.getByText("size:XXL")).toBeVisible();
+    expect(screen.getByText("feat")).toBeVisible();
     expect(screen.getAllByText("Ready to start").length).toBeGreaterThan(0);
 
     await user.selectOptions(
@@ -566,6 +640,7 @@ describe("PullRequestsContent", () => {
       "sonia",
     );
     expect(dashboardFilters(localStorage)).toEqual({
+      involvement: "all",
       provider: "gitlab",
       repositories: ["gitlab:payments/api"],
       search: "sonia",
@@ -756,6 +831,7 @@ describe("PullRequestsContent", () => {
           targetBranch: "main",
           title: "Add usage metrics",
           webUrl: "https://example.com/pull/77",
+          labels: [{ name: "size:L", color: "d93f0b" }],
         },
       ],
     };
@@ -779,6 +855,7 @@ describe("PullRequestsContent", () => {
       screen.getByRole("heading", { name: "Your priority inbox" }),
     ).toBeVisible();
     expect(screen.getByText("Add usage metrics")).toBeVisible();
+    expect(screen.getByText("size:L")).toBeVisible();
     expect(screen.getByText("Not in your queue")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Add for review" }));
@@ -828,6 +905,7 @@ describe("PullRequestsContent", () => {
           targetBranch: "main",
           title: "Draft usage metrics",
           webUrl: "https://example.com/pull/78",
+          labels: [],
         },
       ],
     };
@@ -872,7 +950,7 @@ describe("PullRequestsContent", () => {
     ).toBeVisible();
   });
 
-  it("ages the hydrated inbox from the server read instead of the mount", () => {
+  it("passes hydrated inbox query options from the server read time", () => {
     const fetchedAt = Date.parse("2026-08-21T12:20:00Z");
 
     render(
@@ -888,5 +966,210 @@ describe("PullRequestsContent", () => {
         refetchOnWindowFocus: true,
       }),
     );
+  });
+
+  it("omits instructional inbox and section subtitles", () => {
+    queryState.activeSyncs = [];
+    render(
+      <PullRequestsContent
+        fetchedAt={Date.now()}
+        initialPullRequests={[
+          pullRequest({ id: "ready", title: "Inventory improvements" }),
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "What needs your attention." }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Continue an active review first/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Grouped by the next useful action/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Pick up where you left off/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Prepared changes waiting for a first pass/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks for confirmation before removing a pull request from the queue", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      queryState.activeSyncs = [];
+      const user = userEvent.setup();
+      render(
+        <PullRequestsContent
+          fetchedAt={Date.now()}
+          initialPullRequests={[
+            pullRequest({ id: "ready", title: "Inventory improvements" }),
+          ]}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Remove Inventory improvements from my queue",
+        }),
+      );
+      expect(queryState.removeMutate).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("heading", {
+          name: "Remove this pull request from your queue?",
+        }),
+      ).toBeVisible();
+
+      await user.keyboard("{Enter}");
+      expect(queryState.removeMutate).toHaveBeenCalledWith({
+        pullRequestId: "ready",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the pull request queued when removal is dismissed with Escape", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      queryState.activeSyncs = [];
+      const user = userEvent.setup();
+      render(
+        <PullRequestsContent
+          fetchedAt={Date.now()}
+          initialPullRequests={[
+            pullRequest({ id: "ready", title: "Inventory improvements" }),
+          ]}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Remove Inventory improvements from my queue",
+        }),
+      );
+      await user.keyboard("{Escape}");
+      expect(queryState.removeMutate).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("heading", {
+          name: "Remove this pull request from your queue?",
+        }),
+      ).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("starts an AI review from the inbox only after confirming its token usage", async () => {
+    const restore = withBrowserShowModal();
+    try {
+      queryState.activeSyncs = [];
+      const user = userEvent.setup();
+      render(
+        <PullRequestsContent
+          fetchedAt={Date.now()}
+          initialPullRequests={[
+            pullRequest({ id: "ready", title: "Inventory improvements" }),
+          ]}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Review with AI: Inventory improvements",
+        }),
+      );
+      expect(screen.getByRole("heading", { name: "AI review" })).toBeVisible();
+      expect(
+        screen.getByText(/contributes to this pull request’s token usage/),
+      ).toBeVisible();
+      expect(queryState.startAiMutate).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Start AI review" }));
+      expect(queryState.startAiMutate).toHaveBeenCalledWith({
+        pullRequestId: "ready",
+        kind: "review",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("hides inbox AI review actions when deep review is unavailable", () => {
+    queryState.activeSyncs = [];
+    queryState.aiConfiguration = {
+      deepReviewAvailable: false,
+      mode: "on_demand",
+      reviewPullRequests: false,
+    };
+    render(
+      <PullRequestsContent
+        fetchedAt={Date.now()}
+        initialPullRequests={[
+          pullRequest({ id: "ready", title: "Inventory improvements" }),
+        ]}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Review with AI: Inventory improvements",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("filters the inbox by who opened or is assigned the pull request", async () => {
+    queryState.activeSyncs = [];
+    const user = userEvent.setup();
+    render(
+      <PullRequestsContent
+        fetchedAt={Date.now()}
+        initialPullRequests={[
+          pullRequest({
+            authoredByViewer: true,
+            id: "mine",
+            title: "My change",
+          }),
+          pullRequest({
+            assignedToViewer: true,
+            id: "review",
+            number: 43,
+            title: "Needs my review",
+          }),
+          pullRequest({
+            assignedToViewer: true,
+            authoredByViewer: true,
+            id: "both",
+            number: 44,
+            title: "My assigned change",
+          }),
+          pullRequest({
+            id: "other",
+            number: 45,
+            title: "Someone else's change",
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Someone else's change")).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: "Created by me" }));
+    expect(screen.getByText("My change")).toBeVisible();
+    expect(screen.getByText("My assigned change")).toBeVisible();
+    expect(screen.queryByText("Needs my review")).not.toBeInTheDocument();
+    expect(screen.queryByText("Someone else's change")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Both" }));
+    expect(screen.getByText("My assigned change")).toBeVisible();
+    expect(screen.queryByText("My change")).not.toBeInTheDocument();
+    expect(dashboardFilters(localStorage).involvement).toBe("both");
+
+    await user.click(screen.getByRole("radio", { name: "Assigned to me" }));
+    expect(screen.getByText("Needs my review")).toBeVisible();
+    expect(screen.queryByText("My change")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Anyone" }));
+    expect(screen.getByText("Someone else's change")).toBeVisible();
   });
 });

@@ -61,7 +61,16 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const provider = await providerForConnection(db, scope.connection);
-  const ref = scope.changeType === "deleted" ? scope.baseSha : scope.headSha;
+  const ref =
+    scope.changeType === "deleted"
+      ? provider.getPullRequestDiffBase
+        ? await provider.getPullRequestDiffBase(
+            scope.repositoryExternalId,
+            scope.baseSha,
+            scope.headSha,
+          )
+        : scope.baseSha
+      : scope.headSha;
   const bytes = await provider.getFileBytes(
     scope.repositoryExternalId,
     scope.path,

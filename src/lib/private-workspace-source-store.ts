@@ -3,7 +3,11 @@ import {
   type PrivateSourceRange,
 } from "./private-source-client";
 
-export type WorkspaceSourcePriority = "active" | "next" | "preview";
+export type WorkspaceSourcePriority =
+  | "active"
+  | "next"
+  | "preview"
+  | "background";
 export type WorkspaceSourceStatus =
   | "idle"
   | "queued"
@@ -53,6 +57,7 @@ const PRIORITY_RANK: Record<WorkspaceSourcePriority, number> = {
   active: 0,
   next: 1,
   preview: 2,
+  background: 3,
 };
 
 /**
@@ -82,6 +87,7 @@ export class PrivateWorkspaceSourceStore<
   readonly #errors = new Map<string, unknown>();
   readonly #statuses = new Map<string, WorkspaceSourceStatus>();
   readonly #listeners = new Set<() => void>();
+  #protectedPaths = new Set<string>();
   #queue: Array<SourceRequest<Unit, Context>> = [];
   #active = 0;
   #sequence = 0;
@@ -225,6 +231,39 @@ export class PrivateWorkspaceSourceStore<
     return promise;
   }
 
+  /** Protects the active navigation window from speculative cache eviction. */
+  protect(paths: readonly string[]) {
+    this.#protectedPaths = new Set(paths);
+  }
+
+  /** Warms subsequent files serially without evicting the reader's working set. */
+  async prefetch(paths: readonly string[], cancelled: () => boolean) {
+    if (cancelled() || this.#disposed) return;
+    const desired = new Set(this.#protectedPaths);
+    for (const path of paths) {
+      if (desired.size >= this.#maximumReadyFiles) break;
+      desired.add(path);
+    }
+    for (const path of this.#results.keys()) {
+      if (!desired.has(path)) this.#dropResult(path);
+    }
+    this.#publish();
+    for (const path of paths.filter((path) => desired.has(path))) {
+      if (
+        cancelled() ||
+        this.#disposed ||
+        this.#results.size >= this.#maximumReadyFiles
+      )
+        return;
+      if (this.status(path) !== "idle") continue;
+      try {
+        await this.request(path, "background");
+      } catch {
+        // A speculative failure is retried only when explicitly requested.
+      }
+    }
+  }
+
   /** Drops one failed path and its failed object promises before trying again. */
   retry(
     path: string,
@@ -276,6 +315,8 @@ export class PrivateWorkspaceSourceStore<
   /** Fills the bounded file-level worker pool. */
   #pump() {
     while (!this.#disposed && this.#active < this.#concurrency) {
+      // Background work starts only after interactive work has drained.
+      if (this.#queue[0]?.priority === "background" && this.#active > 0) return;
       const request = this.#queue.shift();
       if (!request) return;
       const startedAt = performance.now();
@@ -285,6 +326,14 @@ export class PrivateWorkspaceSourceStore<
       void this.#loadPath(request.path)
         .then((result) => {
           if (this.#disposed) return;
+          if (
+            request.priority === "background" &&
+            this.#results.size >= this.#maximumReadyFiles
+          ) {
+            this.#dropResult(request.path);
+            request.resolve(result);
+            return;
+          }
           this.#results.set(request.path, result);
           this.#evictLeastRecentlyUsed(request.path);
           this.#errors.delete(request.path);
@@ -296,7 +345,7 @@ export class PrivateWorkspaceSourceStore<
           if (this.#disposed || this.#controller.signal.aborted) return;
           this.#errors.set(request.path, cause);
           this.#statuses.set(request.path, "error");
-          this.#onFailure?.(cause);
+          if (request.priority !== "background") this.#onFailure?.(cause);
           this.#measure(request, startedAt, "error");
           request.reject(cause);
         })
@@ -339,22 +388,25 @@ export class PrivateWorkspaceSourceStore<
   /** Bounds decoded source and verified bytes while protecting the newest file. */
   #evictLeastRecentlyUsed(newestPath: string) {
     while (this.#results.size > this.#maximumReadyFiles) {
-      const oldestPath = this.#results.keys().next().value as
-        | string
-        | undefined;
+      const oldestPath = [...this.#results.keys()].find(
+        (path) => path !== newestPath && !this.#protectedPaths.has(path),
+      );
       if (!oldestPath) return;
       if (oldestPath === newestPath && this.#results.size === 1) return;
-      this.#results.delete(oldestPath);
-      this.#statuses.delete(oldestPath);
-      for (const source of [
-        ...(this.#unitsByPath.get(oldestPath) ?? []),
-        this.#contextByPath.get(oldestPath),
-      ]) {
-        if (!source) continue;
-        if (source.currentBlobId) this.#blobCache.delete(source.currentBlobId);
-        if (source.previousBlobId)
-          this.#blobCache.delete(source.previousBlobId);
-      }
+      this.#dropResult(oldestPath);
+    }
+  }
+
+  /** Releases decoded source and cached bytes for one file. */
+  #dropResult(path: string) {
+    this.#results.delete(path);
+    this.#statuses.delete(path);
+    for (const source of [
+      ...(this.#unitsByPath.get(path) ?? []),
+      this.#contextByPath.get(path),
+    ]) {
+      if (source?.currentBlobId) this.#blobCache.delete(source.currentBlobId);
+      if (source?.previousBlobId) this.#blobCache.delete(source.previousBlobId);
     }
   }
 

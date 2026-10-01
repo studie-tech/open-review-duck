@@ -47,6 +47,50 @@ function deferred() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("PrivateWorkspaceSourceStore", () => {
+  it("waits for foreground work, warms serially, and advances a protected buffer", async () => {
+    const first = deferred();
+    const background = deferred();
+    const order: string[] = [];
+    const sources = ["a", "b", "c", "d", "e"].map((path) => source(path));
+    const store = new PrivateWorkspaceSourceStore({
+      snapshotId: "snapshot",
+      units: sources,
+      contexts: [],
+      maximumReadyFiles: 3,
+      hydrate: (async (items: TestSource[]) => {
+        const path = items[0]?.path ?? "";
+        order.push(path);
+        if (path === "a") await first.promise;
+        if (path === "b") await background.promise;
+        return { failures: [], successfulIndexes: [0], units: items };
+      }) as never,
+    });
+    store.protect(["a"]);
+    const active = store.request("a", "active");
+    const warm = store.prefetch(["b", "c", "d"], () => false);
+    expect(order).toEqual(["a"]);
+    first.resolve();
+    await active;
+    await vi.waitFor(() => expect(order).toEqual(["a", "b"]));
+    // An active navigation request starts even while background I/O is pending.
+    await store.request("e", "active");
+    expect(order).toEqual(["a", "b", "e"]);
+    background.resolve();
+    await warm;
+    expect(store.status("a")).toBe("ready");
+    expect(store.status("d")).toBe("idle");
+    store.protect(["e"]);
+    await store.prefetch(["c", "d"], () => false);
+    expect(store.status("e")).toBe("ready");
+    expect(store.status("c")).toBe("ready");
+    expect(store.status("d")).toBe("ready");
+    expect(store.status("a")).toBe("idle");
+    const before = order.length;
+    await store.prefetch(["a"], () => true);
+    expect(order).toHaveLength(before);
+    store.dispose();
+  });
+
   it("promotes a newly selected path ahead of queued prefetches", async () => {
     const first = deferred();
     const order: string[] = [];

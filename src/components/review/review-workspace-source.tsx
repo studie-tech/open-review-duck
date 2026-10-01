@@ -19,9 +19,11 @@ import {
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
+import type { MarkdownReviewView } from "~/lib/review-files";
 import {
   formatReviewSourceBytes,
   isHeavyReviewSource,
+  isReviewMarkdownFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceKindLabel,
@@ -34,8 +36,20 @@ import {
   ReviewFileCardHeader,
   reviewCardRanges,
   reviewedFileCard,
+  reviewFileCardIsDeleted,
 } from "./review-file-card";
 import { ReviewBinaryPreview } from "./review-image-preview";
+import {
+  type ReviewLineCommentMarker,
+  ReviewLineCommentMarkers,
+  reviewLineCommentMarkersBySide,
+} from "./review-line-comment-markers";
+import { ReviewDiffWithLineHistory } from "./review-line-history";
+import {
+  SideBySideUnitDiff,
+  type SideBySideUnitDiffProps,
+} from "./review-workspace-diff";
+import { ReviewMarkdownPreview } from "./review-workspace-markdown";
 import {
   SourceLineWindow,
   WORKSPACE_SOURCE_ROW_HEIGHT_PX,
@@ -101,6 +115,7 @@ export function reviewCardMemberForLine(
  * that calls it. This placeholder is what the reviewer uses to open it again.
  */
 export function ReviewFileCardSourcePlaceholder({
+  deleted = false,
   framed = false,
   itemLabel = "file",
   language,
@@ -110,6 +125,7 @@ export function ReviewFileCardSourcePlaceholder({
   reviewed,
   sourceBytes,
 }: {
+  deleted?: boolean;
   framed?: boolean;
   itemLabel?: "card" | "file";
   language?: string;
@@ -124,7 +140,8 @@ export function ReviewFileCardSourcePlaceholder({
     <div
       className={cn(
         "flex items-center justify-between gap-3 px-4 py-3 font-sans",
-        framed && "rounded-b-xl border-x border-b border-line bg-code",
+        framed && "rounded-b-xl border-x border-b bg-code",
+        framed && (deleted ? "border-coral/25" : "border-line"),
       )}
     >
       <div className="min-w-0">
@@ -133,9 +150,11 @@ export function ReviewFileCardSourcePlaceholder({
           {lineCount === 1 ? "line" : "lines"} of {kind} hidden
         </p>
         <p className="text-fog mt-0.5 text-[10px]">
-          {reviewed
-            ? "Folded after review. Open it again if you need another look."
-            : "Hidden so the review stays responsive."}
+          {deleted
+            ? "This file is deleted. Open the last version if you need another look."
+            : reviewed
+              ? "Folded after review. Open it again if you need another look."
+              : "Hidden so the review stays responsive."}
           {sourceBytes ? ` · ${formatReviewSourceBytes(sourceBytes)}` : null}
         </p>
       </div>
@@ -152,9 +171,11 @@ export function ReviewFileCardSourcePlaceholder({
 
 /** Preserves atomic line numbers when a full file is not available yet. */
 function ReviewConceptFileCardFallbackMember({
+  deleted = false,
   member,
   onCommentLine,
 }: {
+  deleted?: boolean;
   member: ReviewUnit;
   onCommentLine?: (unitId: string, line: number) => void;
 }) {
@@ -173,7 +194,10 @@ function ReviewConceptFileCardFallbackMember({
               className={cn(
                 "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
                 !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+                owner &&
+                  (deleted
+                    ? "border-l-2 border-l-coral/40 bg-coral/[.08] hover:bg-coral/[.12]"
+                    : "border-l-2 border-l-cyan/30 bg-cyan/[.012]"),
               )}
             >
               {owner && onCommentLine ? (
@@ -190,7 +214,14 @@ function ReviewConceptFileCardFallbackMember({
                   {lineNumber}
                 </span>
               )}
-              <pre className="syntax-code overflow-visible text-cloud">
+              <pre
+                className={cn(
+                  "syntax-code overflow-visible text-cloud",
+                  deleted &&
+                    owner &&
+                    "text-cloud/80 line-through decoration-coral/35",
+                )}
+              >
                 <HighlightedTokens tokens={line.tokens} />
               </pre>
             </div>
@@ -211,11 +242,19 @@ function ReviewConceptFileCardSource({
   fileSource,
   members,
   onCommentLine,
+  onOpenLineComment,
+  rightLineCommentMarkers,
 }: {
   fileSource: string;
   members: readonly ReviewUnit[];
   onCommentLine?: (unitId: string, line: number) => void;
+  onOpenLineComment?: (threadExternalId: string) => void;
+  rightLineCommentMarkers?: ReadonlyMap<
+    number,
+    readonly ReviewLineCommentMarker[]
+  >;
 }) {
+  const deleted = reviewFileCardIsDeleted(members);
   const ranges = useMemo(() => reviewCardRanges(members), [members]);
   const startLine = ranges.at(0)?.startLine ?? 1;
   const endLine = ranges.at(-1)?.endLine ?? startLine;
@@ -257,15 +296,27 @@ function ReviewConceptFileCardSource({
           startLine={startLine}
           renderLine={(line, lineNumber) => {
             const owner = ownerByLine.get(lineNumber);
+            const markers = rightLineCommentMarkers?.get(lineNumber);
             return (
               <div
                 key={`${members[0]?.id}-${lineNumber}`}
                 className={cn(
-                  "group grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                  "group relative grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
                   !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                  owner && "border-l-2 border-l-cyan/30 bg-cyan/[.012]",
+                  owner &&
+                    (deleted
+                      ? "border-l-2 border-l-coral/40 bg-coral/[.08] hover:bg-coral/[.12]"
+                      : "border-l-2 border-l-cyan/30 bg-cyan/[.012]"),
                 )}
               >
+                {markers && onOpenLineComment ? (
+                  <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                    <ReviewLineCommentMarkers
+                      markers={markers}
+                      onOpen={onOpenLineComment}
+                    />
+                  </div>
+                ) : null}
                 {owner && onCommentLine ? (
                   <button
                     type="button"
@@ -280,7 +331,14 @@ function ReviewConceptFileCardSource({
                     {lineNumber}
                   </span>
                 )}
-                <pre className="syntax-code overflow-visible text-cloud">
+                <pre
+                  className={cn(
+                    "syntax-code overflow-visible text-cloud",
+                    deleted &&
+                      owner &&
+                      "text-cloud/80 line-through decoration-coral/35",
+                  )}
+                >
                   <HighlightedTokens tokens={line.tokens} />
                 </pre>
               </div>
@@ -291,6 +349,7 @@ function ReviewConceptFileCardSource({
         members.map((member) => (
           <ReviewConceptFileCardFallbackMember
             key={member.id}
+            deleted={deleted}
             member={member}
             onCommentLine={onCommentLine}
           />
@@ -300,39 +359,118 @@ function ReviewConceptFileCardSource({
   );
 }
 
-/** Shows every same-file member as one continuous card with dimmed gaps. */
+/**
+ * Uses commit history on a neighbor card only when the card knows its pull request.
+ *
+ * Tests and callers without that id keep the plain diff, so they do not ask
+ * the provider for commits.
+ */
+function ReviewConceptFileDiff({
+  path,
+  pullRequestId,
+  ...diff
+}: SideBySideUnitDiffProps & { path: string; pullRequestId?: string }) {
+  if (!pullRequestId) return <SideBySideUnitDiff {...diff} />;
+  return (
+    <ReviewDiffWithLineHistory
+      path={path}
+      pullRequestId={pullRequestId}
+      {...diff}
+    />
+  );
+}
+
+/** Neighbor file card that uses the same source body as the selected card. */
 export function ReviewConceptFileCardPreview({
   members,
   index,
   count,
   fileSource,
+  sourceAvailable = true,
+  previousFileSource = "",
+  diffVisible = true,
+  ignoreWhitespace = false,
   onSelect,
   onCommentLine,
+  onOpenLineComment,
+  commentThreads,
   itemLabel = "Card",
   sourceBytes,
+  markdownView = "preview",
+  onSourceNeeded,
+  pullRequestId,
 }: {
   members: readonly ReviewUnit[];
   index: number;
   count: number;
   fileSource: string;
+  sourceAvailable?: boolean;
+  previousFileSource?: string;
+  diffVisible?: boolean;
+  ignoreWhitespace?: boolean;
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
+  onOpenLineComment?: (threadExternalId: string) => void;
+  commentThreads?: Parameters<typeof reviewLineCommentMarkersBySide>[0];
   itemLabel?: "Card" | "File";
   sourceBytes?: number;
+  markdownView?: MarkdownReviewView;
+  onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
+  pullRequestId?: string;
 }) {
-  const ranges = reviewCardRanges(members);
-  const startLine = ranges.at(0)?.startLine ?? 1;
-  const endLine = ranges.at(-1)?.endLine ?? startLine;
+  const first = members[0];
+  const articleRef = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const placeholderHeight = useRef<number | undefined>(undefined);
+  const [nearViewport, setNearViewport] = useState(!onSourceNeeded);
+  useEffect(() => {
+    const element = articleRef.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setNearViewport(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting && bodyRef.current) {
+          placeholderHeight.current =
+            bodyRef.current.getBoundingClientRect().height;
+        }
+        setNearViewport(Boolean(entry?.isIntersecting));
+      },
+      { root: element.closest("[data-code-scroll-pane]"), rootMargin: "600px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (nearViewport && first?.path) {
+      void onSourceNeeded?.(first.path, "preview").catch(() => undefined);
+    }
+  }, [first?.path, nearViewport, onSourceNeeded]);
+  const lineCommentMarkers = useMemo(
+    () => reviewLineCommentMarkersBySide(commentThreads ?? []),
+    [commentThreads],
+  );
+  const currentRanges = reviewCardRanges(members, "current");
+  const previousRanges = reviewCardRanges(
+    members,
+    "previous",
+    previousFileSource,
+  );
+  const startLine = currentRanges.at(0)?.startLine ?? 1;
+  const endLine = currentRanges.at(-1)?.endLine ?? startLine;
   const lineCount = endLine - startLine + 1;
   const changedLineCount = members.reduce(
     (total, member) => total + member.changedLineCount,
     0,
   );
   const reviewed = reviewedFileCard(members);
+  const deleted = reviewFileCardIsDeleted(members);
   const heavy = isHeavyReviewSource({
     changedLineCount,
-    language: members[0]?.language,
-    path: members[0]?.path,
+    language: first?.language,
+    path: first?.path,
     source: fileSource,
   });
   const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
@@ -345,13 +483,28 @@ export function ReviewConceptFileCardPreview({
   }
   const fileBytes =
     sourceBytes ?? reviewSourceByteLength({ source: fileSource });
+  const markdownFile =
+    first !== undefined &&
+    first.kind !== "binary" &&
+    isReviewMarkdownFile({ language: first.language, path: first.path });
+  const showMarkdownPreview = markdownFile && markdownView === "preview";
+  const canShowDiff =
+    !showMarkdownPreview &&
+    diffVisible &&
+    first?.kind !== "binary" &&
+    Boolean(fileSource || previousFileSource);
+  const allAdded = members.every((member) => member.changeType === "added");
+  const allDeleted = members.every((member) => member.changeType === "deleted");
   return (
     <article
+      ref={articleRef}
       className={cn(
         "mx-4 overflow-hidden rounded-xl border",
-        reviewed
-          ? "border-addition/30 bg-addition/10"
-          : "border-line bg-surface/30",
+        deleted
+          ? "border-coral/30 bg-coral/[.04]"
+          : reviewed
+            ? "border-addition/30 bg-addition/10"
+            : "border-line bg-surface/30",
       )}
     >
       <ReviewFileCardHeader
@@ -364,24 +517,104 @@ export function ReviewConceptFileCardPreview({
         expanded={expanded}
         onToggleExpanded={() => setExpanded((open) => !open)}
         sourceBytes={fileBytes}
+        fileContents={
+          sourceAvailable
+            ? deleted
+              ? previousFileSource || fileSource
+              : fileSource
+            : undefined
+        }
       />
-      {expanded ? (
-        <ReviewConceptFileCardSource
-          fileSource={fileSource}
-          members={members}
-          onCommentLine={onCommentLine}
-        />
-      ) : (
-        <ReviewFileCardSourcePlaceholder
-          itemLabel={itemLabel === "File" ? "file" : "card"}
-          language={members[0]?.language}
-          lineCount={lineCount}
-          onShow={() => setExpanded(true)}
-          path={members[0]?.path}
-          reviewed={reviewed}
-          sourceBytes={fileBytes}
-        />
-      )}
+      <div ref={bodyRef}>
+        {expanded && !nearViewport ? (
+          <div
+            aria-hidden="true"
+            style={{
+              height:
+                placeholderHeight.current ??
+                Math.min(600, Math.max(84, lineCount * 21)),
+            }}
+          />
+        ) : expanded &&
+          onSourceNeeded &&
+          first?.kind !== "binary" &&
+          !fileSource &&
+          !previousFileSource ? (
+          <div className="px-4 py-5 text-fog" role="status">
+            Loading source…
+          </div>
+        ) : expanded && showMarkdownPreview && first ? (
+          <ReviewMarkdownPreview
+            path={first.path}
+            currentSource={
+              fileSource || members.map((member) => member.source).join("\n\n")
+            }
+            previousSource={
+              previousFileSource ||
+              members
+                .flatMap((member) =>
+                  member.previousSource ? [member.previousSource] : [],
+                )
+                .join("\n\n")
+            }
+          />
+        ) : expanded ? (
+          canShowDiff && first ? (
+            <ReviewConceptFileDiff
+              ignoreWhitespace={ignoreWhitespace}
+              pullRequestId={pullRequestId}
+              path={first.path}
+              previousSource={previousFileSource}
+              currentSource={fileSource}
+              language={first.language ?? "text"}
+              previousStartLine={1}
+              currentStartLine={1}
+              previousFocusRanges={previousRanges}
+              currentFocusRanges={currentRanges}
+              previousFocusStartLine={
+                allAdded ? null : previousRanges.at(0)?.startLine
+              }
+              previousFocusEndLine={
+                allAdded ? null : previousRanges.at(-1)?.endLine
+              }
+              currentFocusStartLine={
+                allDeleted ? null : currentRanges.at(0)?.startLine
+              }
+              currentFocusEndLine={
+                allDeleted ? null : currentRanges.at(-1)?.endLine
+              }
+              onSelectReviewLine={(line) => {
+                const owner = reviewCardMemberForLine(members, line);
+                if (owner) onCommentLine?.(owner.id, line);
+              }}
+              leftLineCommentMarkers={lineCommentMarkers.left}
+              rightLineCommentMarkers={lineCommentMarkers.right}
+              onOpenLineComment={onOpenLineComment}
+              emitReviewLineAnchors={false}
+              className="rounded-none border-0"
+            />
+          ) : (
+            <ReviewConceptFileCardSource
+              fileSource={fileSource}
+              members={members}
+              onCommentLine={onCommentLine}
+              onOpenLineComment={onOpenLineComment}
+              rightLineCommentMarkers={lineCommentMarkers.right}
+            />
+          )
+        ) : (
+          <ReviewFileCardSourcePlaceholder
+            deleted={deleted}
+            itemLabel={itemLabel === "File" ? "file" : "card"}
+            language={first?.language}
+            lineCount={lineCount}
+            onShow={() => setExpanded(true)}
+            path={first?.path}
+            reviewed={reviewed}
+            sourceBytes={fileBytes}
+          />
+        )}
+      </div>
     </article>
   );
 }

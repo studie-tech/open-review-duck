@@ -32,6 +32,12 @@ const localPreferenceDeployment = {
       "Ask the assistant for evidence-backed findings when a new revision syncs. One agent runs per changed file.",
     unavailable: "This deployment cannot run a pull-request review.",
   },
+  autoPublishDescription: {
+    available:
+      "Post each publishable finding to the pull request when a review finishes. Leave this off to validate findings first.",
+    unavailable:
+      "Automatic publishing needs a pull-request review this deployment cannot run.",
+  },
   tokenCapDescription: "Optional cap on one review. Leave empty for no limit.",
 } as const;
 
@@ -145,6 +151,7 @@ export function LocalAiSettings({
     useManagedModels: false as const,
     mode: preferences.values.mode,
     reviewPullRequests: preferences.values.reviewPullRequests,
+    autoPublishFindings: preferences.values.autoPublishFindings,
     maxReviewTokens: preferences.maxReviewTokens.cap,
   });
 

@@ -1,4 +1,8 @@
 import { mapWithLimit } from "~/lib/concurrency";
+import {
+  oldestFirstByParent,
+  pullRequestFileCommitShas,
+} from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import {
   applyCheckRequiredFlags,
@@ -6,6 +10,8 @@ import {
   githubMergeGate,
 } from "~/lib/provider-merge-gate";
 import { githubViewerCanMerge } from "~/lib/provider-permission-recovery";
+import { providerAccountIds } from "~/lib/pull-request-involvement";
+import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -19,6 +25,7 @@ import {
   type ChangedFilesOptions,
   type ProviderCheckState,
   ProviderError,
+  type ProviderFileCommit,
   type ProviderPullRequestCheck,
   type ProviderPullRequestLifecycle,
   type ProviderPullRequestReviewState,
@@ -64,6 +71,7 @@ interface GitHubInstallationRepositories {
 }
 interface GitHubPull {
   id: number;
+  node_id?: string;
   number: number;
   title: string;
   body: string | null;
@@ -77,6 +85,11 @@ interface GitHubPull {
   user: { id: number; login: string; avatar_url: string };
   requested_reviewers?: Array<{ id: number; login: string }>;
   assignees?: Array<{ id: number; login: string }>;
+  labels?: Array<{
+    name: string;
+    color?: string | null;
+    description?: string | null;
+  }>;
   head: { ref: string; sha: string };
   base: { ref: string; sha: string };
   mergeable?: boolean | null;
@@ -99,6 +112,20 @@ interface GitHubFile {
   status: string;
   previous_filename?: string;
   sha?: string;
+  patch?: string;
+}
+interface GitHubListedCommit {
+  sha: string;
+  html_url?: string;
+  commit: {
+    message: string;
+    author: { name?: string | null; date?: string | null } | null;
+  };
+  author: { login?: string | null } | null;
+  parents?: Array<{ sha: string }>;
+}
+interface GitHubCommitDetail {
+  files?: GitHubFile[];
 }
 interface GitHubTree {
   truncated: boolean;
@@ -233,6 +260,40 @@ export class GitHubProvider implements PullRequestProvider {
       Authorization: `Bearer ${token}`,
       "X-GitHub-Api-Version": "2022-11-28",
     };
+  }
+
+  /** Uses the native user-attachment endpoint also used by GitHub CLI. */
+  async uploadCommentImage(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    file: File;
+  }) {
+    if (
+      this.installation ||
+      new URL(this.apiUrl).hostname !== "api.github.com"
+    ) {
+      throw new ProviderError(
+        this.name,
+        "Image uploads require a personal GitHub.com connection with repository write access. You can also attach the image on GitHub and paste its link here.",
+      );
+    }
+    const url = new URL("https://uploads.github.com/user-attachments/assets");
+    url.searchParams.set("name", input.file.name);
+    url.searchParams.set("content_type", input.file.type);
+    url.searchParams.set("repository_id", input.repositoryExternalId);
+    const attachment = await providerFetch<{ url: string }>(
+      this.name,
+      url.href,
+      {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/octet-stream",
+        },
+        body: new Uint8Array(await input.file.arrayBuffer()),
+      },
+    );
+    return attachment.url;
   }
 
   /** Fetches the account identity associated with a provider token. */
@@ -389,6 +450,9 @@ export class GitHubProvider implements PullRequestProvider {
       description: pull.body ?? undefined,
       authorLogin: pull.user.login,
       authorAvatarUrl: pull.user.avatar_url,
+      authorExternalId: pull.user.id == null ? undefined : String(pull.user.id),
+      reviewerExternalIds: providerAccountIds(pull.requested_reviewers),
+      assigneeExternalIds: providerAccountIds(pull.assignees),
       sourceBranch: pull.head.ref,
       targetBranch: pull.base.ref,
       headSha: pull.head.sha,
@@ -398,6 +462,7 @@ export class GitHubProvider implements PullRequestProvider {
       additions: pull.additions ?? 0,
       deletions: pull.deletions ?? 0,
       changedFiles: pull.changed_files ?? 0,
+      labels: normalizePullRequestLabels(pull.labels),
     };
   }
 
@@ -558,9 +623,60 @@ export class GitHubProvider implements PullRequestProvider {
       mergeable: merge.mergeable,
       canMerge: merge.canMerge && hasMergePermission,
       mergeBlockedReason: merge.mergeBlockedReason,
+      mergeBlockedFix: merge.mergeBlockedFix,
       mergeActionLabel: "Merge",
       hasMergePermission,
     });
+  }
+
+  /** Publishes a GitHub draft using its immutable GraphQL node identity. */
+  async markPullRequestReadyForReview(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+  }) {
+    const pull = await providerFetch<GitHubPull>(
+      this.name,
+      `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/${input.pullRequestNumber}`,
+      { headers: this.headers },
+    );
+    if (!pull.node_id)
+      throw new ProviderError(
+        this.name,
+        "GitHub did not return the pull request identity",
+      );
+    const response = await providerFetch<{
+      data?: {
+        markPullRequestReadyForReview?: { pullRequest?: { isDraft: boolean } };
+      };
+      errors?: Array<{ message: string; type?: string }>;
+    }>(this.name, this.graphqlUrl(), {
+      method: "POST",
+      headers: { ...this.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `mutation ReviewDuckMarkReady($pullRequestId: ID!) {
+          markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+            pullRequest { isDraft }
+          }
+        }`,
+        variables: { pullRequestId: pull.node_id },
+      }),
+    });
+    const failure = response.errors?.[0];
+    if (failure)
+      throw new ProviderError(
+        this.name,
+        failure.message,
+        failure.type === "FORBIDDEN" ? 403 : undefined,
+      );
+    if (
+      response.data?.markPullRequestReadyForReview?.pullRequest?.isDraft !==
+      false
+    ) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not mark this pull request ready for review",
+      );
+    }
   }
 
   /** Merges the pull request at the exact reviewed GitHub commit. */
@@ -587,6 +703,29 @@ export class GitHubProvider implements PullRequestProvider {
     );
   }
 
+  /** Resolves the common ancestor without confusing the target tip with the PR base. */
+  async getPullRequestDiffBase(
+    repositoryExternalId: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<string> {
+    const comparison = await providerFetch<{
+      merge_base_commit?: { sha?: string };
+    }>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}?per_page=1`,
+      { headers: this.headers },
+    );
+    const sha = comparison.merge_base_commit?.sha;
+    if (!sha) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not return the PR merge base",
+      );
+    }
+    return sha;
+  }
+
   /** Fetches the changed source files required for static analysis. */
   async getChangedFiles(
     repositoryExternalId: string,
@@ -599,6 +738,11 @@ export class GitHubProvider implements PullRequestProvider {
       ),
       this.getPullRequest(repositoryExternalId, number),
     ]);
+    const diffBaseSha = await this.getPullRequestDiffBase(
+      repositoryExternalId,
+      pull.baseSha,
+      pull.headSha,
+    );
     return collectProviderSourceFiles(
       files,
       options?.maximumSourceBytes,
@@ -608,12 +752,13 @@ export class GitHubProvider implements PullRequestProvider {
           deleted && file.previous_filename
             ? file.previous_filename
             : file.filename;
-        const ref = deleted ? pull.baseSha : pull.headSha;
+        const ref = deleted ? diffBaseSha : pull.headSha;
         return loadChangedSource({
           path,
+          previousPath: deleted ? undefined : file.previous_filename,
           previousFetchPath: file.previous_filename ?? path,
           ref,
-          previousRef: pull.baseSha,
+          previousRef: diffBaseSha,
           changeType: this.changeType(file.status),
           needsPrevious: file.status !== "added" && !deleted,
           oversizedHash: file.sha ?? `${ref}:${path}`,
@@ -1397,6 +1542,83 @@ export class GitHubProvider implements PullRequestProvider {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Lists pull-request commits that touched one file, with that file's patch.
+   *
+   * Commits from before the pull request are dropped. Histories longer than
+   * the line-map limit come back without patches.
+   */
+  async listPullRequestFileCommits(input: {
+    repositoryExternalId: string;
+    pullRequestNumber: number;
+    path: string;
+    headSha: string;
+  }) {
+    const root = `${this.apiUrl}/repositories/${input.repositoryExternalId}`;
+    const [pullCommits, pathCommits] = await Promise.all([
+      this.getAllPages<GitHubListedCommit>(
+        `${root}/pulls/${input.pullRequestNumber}/commits?per_page=100`,
+      ),
+      this.getAllPages<GitHubListedCommit>(
+        `${root}/commits?sha=${encodeURIComponent(input.headSha)}&path=${encodeURIComponent(input.path)}&per_page=100`,
+      ),
+    ]);
+    const orderedPull = oldestFirstByParent(
+      pullCommits.map((commit) => ({
+        sha: commit.sha,
+        parents: (commit.parents ?? []).map((parent) => parent.sha),
+      })),
+    );
+    const chosen = pullRequestFileCommitShas(
+      orderedPull.map((commit) => commit.sha),
+      new Set(pathCommits.map((commit) => commit.sha)),
+    );
+    const bySha = new Map(
+      [...pullCommits, ...pathCommits].map((commit) => [commit.sha, commit]),
+    );
+    const commits = await mapWithLimit(chosen.shas, 4, async (sha) => {
+      const listed = bySha.get(sha);
+      const merge = (listed?.parents?.length ?? 0) > 1;
+      const detail =
+        chosen.truncated || merge
+          ? undefined
+          : await providerFetch<GitHubCommitDetail>(
+              this.name,
+              `${root}/commits/${sha}`,
+              { headers: this.headers },
+            );
+      const file = detail?.files?.find(
+        (entry) =>
+          entry.filename === input.path ||
+          entry.previous_filename === input.path,
+      );
+      return this.fileCommitFromGitHub(listed, sha, {
+        merge,
+        patch:
+          chosen.truncated || merge ? null : file ? (file.patch ?? null) : "",
+      });
+    });
+    return { commits, truncated: chosen.truncated };
+  }
+
+  /** Normalizes one GitHub commit into the shared file-history shape. */
+  private fileCommitFromGitHub(
+    listed: GitHubListedCommit | undefined,
+    sha: string,
+    input: { merge: boolean; patch: string | null },
+  ): ProviderFileCommit {
+    return {
+      sha,
+      author:
+        listed?.author?.login ?? listed?.commit.author?.name ?? sha.slice(0, 7),
+      authoredAt: listed?.commit.author?.date ?? "",
+      message: listed?.commit.message ?? "",
+      url: listed?.html_url,
+      patch: input.patch,
+      merge: input.merge,
+    };
   }
 
   /** Maps a GitHub file status to a normalized change type. */

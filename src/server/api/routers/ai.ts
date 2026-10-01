@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import {
   aiJobs,
@@ -38,6 +47,7 @@ import {
 import { mapAiStartError } from "~/server/ai/start-errors";
 import { isLocalDeployment } from "~/server/deployment";
 import { cancelDeepReviewTree } from "~/server/review/deep/cancel";
+import { deepReviewRunPayload } from "~/server/review/deep/payload";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import {
   assertSafeRemoteUrl,
@@ -81,6 +91,7 @@ async function requirePromptAdministrator(
   db: Parameters<typeof ensurePersonalWorkspace>[0],
   userId: string,
 ) {
+  if (isLocalDeployment()) return;
   await ensurePersonalWorkspace(db, userId);
   const user = await db.query.users.findFirst({
     columns: { isAdmin: true },
@@ -119,10 +130,11 @@ export const aiRouter = createTRPCRouter({
       ? (preference?.selectedModel ?? "")
       : managedSaasModel();
     return {
-      canEditPrompts: Boolean(user?.isAdmin),
+      canEditPrompts: local || Boolean(user?.isAdmin),
       mode: preference?.mode ?? workspace.aiMode,
       reviewPullRequests:
         preference?.reviewPullRequests ?? workspace.aiReviewEnabled,
+      autoPublishFindings: preference?.autoPublishFindings ?? false,
       maxReviewTokens: preference?.maxReviewTokens ?? null,
       // Both review entry points read this: the Review button and the
       // auto-start effect that fires on every pull-request page load. Without
@@ -194,6 +206,10 @@ export const aiRouter = createTRPCRouter({
           message: "Bring-your-own-provider configuration is local-only",
         });
       }
+      const workspace = await requirePersonalWorkspaceAdministrator(
+        ctx.db,
+        ctx.auth.userId,
+      );
       if (!input.baseUrl) {
         return {
           ok: false as const,
@@ -201,10 +217,6 @@ export const aiRouter = createTRPCRouter({
         };
       }
       try {
-        const workspace = await requirePersonalWorkspaceAdministrator(
-          ctx.db,
-          ctx.auth.userId,
-        );
         const existing = await ctx.db.query.localAiConfigurations.findFirst({
           where: eq(localAiConfigurations.workspaceId, workspace.id),
         });
@@ -373,6 +385,7 @@ export const aiRouter = createTRPCRouter({
           selectedModel,
           mode: input.mode,
           reviewPullRequests: input.reviewPullRequests,
+          autoPublishFindings: input.autoPublishFindings,
           maxReviewTokens: input.maxReviewTokens ?? null,
         })
         .onConflictDoUpdate({
@@ -381,6 +394,7 @@ export const aiRouter = createTRPCRouter({
             selectedModel,
             mode: input.mode,
             reviewPullRequests: input.reviewPullRequests,
+            autoPublishFindings: input.autoPublishFindings,
             maxReviewTokens: input.maxReviewTokens ?? null,
           },
         });
@@ -589,14 +603,91 @@ export const aiRouter = createTRPCRouter({
       };
     }),
 
+  reviewRuns: protectedProcedure
+    .input(z.object({ pullRequestIds: z.array(z.string().uuid()).max(500) }))
+    .query(async ({ ctx, input }) => {
+      if (!input.pullRequestIds.length) return [];
+      return ctx.db
+        .selectDistinctOn([aiJobs.pullRequestId], {
+          id: aiJobs.id,
+          pullRequestId: aiJobs.pullRequestId,
+          status: aiJobs.status,
+          deepReviewTerminalState: aiJobs.deepReviewTerminalState,
+        })
+        .from(aiJobs)
+        .where(
+          and(
+            inArray(aiJobs.pullRequestId, input.pullRequestIds),
+            eq(aiJobs.userId, ctx.auth.userId),
+            eq(aiJobs.kind, "review"),
+            eq(aiJobs.reviewScope, "pull_request"),
+            isNull(aiJobs.parentJobId),
+            isNull(aiJobs.unitId),
+          ),
+        )
+        .orderBy(aiJobs.pullRequestId, desc(aiJobs.createdAt), desc(aiJobs.id));
+    }),
+
+  reviewHistory: protectedProcedure
+    .input(aiJobLookupSchema.pick({ pullRequestId: true }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db.query.aiJobs.findMany({
+        columns: {
+          id: true,
+          status: true,
+          createdAt: true,
+          snapshotId: true,
+          totalTokens: true,
+          deepReviewTerminalState: true,
+        },
+        where: and(
+          eq(aiJobs.pullRequestId, input.pullRequestId),
+          eq(aiJobs.userId, ctx.auth.userId),
+          eq(aiJobs.kind, "review"),
+          eq(aiJobs.reviewScope, "pull_request"),
+          isNull(aiJobs.unitId),
+          isNull(aiJobs.parentJobId),
+        ),
+        orderBy: (table, { desc }) => [desc(table.createdAt), desc(table.id)],
+        limit: 50,
+      });
+    }),
+
+  reviewRun: protectedProcedure
+    .input(z.object({ jobId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const job = await ctx.db.query.aiJobs.findFirst({
+        where: and(
+          eq(aiJobs.id, input.jobId),
+          eq(aiJobs.userId, ctx.auth.userId),
+          eq(aiJobs.kind, "review"),
+          isNull(aiJobs.parentJobId),
+        ),
+      });
+      if (!job) throw new TRPCError({ code: "NOT_FOUND" });
+      const [payload, snapshot, currentSnapshot] = await Promise.all([
+        deepReviewRunPayload(ctx.db, job),
+        ctx.db.query.reviewSnapshots.findFirst({
+          where: eq(reviewSnapshots.id, job.snapshotId),
+          columns: { headSha: true },
+        }),
+        ctx.db.query.reviewSnapshots.findFirst({
+          where: eq(reviewSnapshots.pullRequestId, job.pullRequestId),
+          columns: { id: true },
+          orderBy: [desc(reviewSnapshots.version)],
+        }),
+      ]);
+      return {
+        ...payload,
+        headSha: snapshot?.headSha ?? null,
+        isCurrentSnapshot: currentSnapshot?.id === job.snapshotId,
+        totalTokens: job.totalTokens,
+      };
+    }),
+
   reviewStatus: protectedProcedure
     .input(aiJobLookupSchema.pick({ pullRequestId: true }))
     .query(async ({ ctx, input }) => {
-      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
-        where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
-        orderBy: (table, { desc }) => [desc(table.version)],
-      });
-      if (!snapshot) return null;
       // The whole row, deliberately: `deepReviewTerminalState` and
       // `runFailureClass` are what let the UI distinguish a complete run from
       // a partial or failed one, and a narrowing column list is exactly how
@@ -606,13 +697,13 @@ export const aiRouter = createTRPCRouter({
         (await ctx.db.query.aiJobs.findFirst({
           where: and(
             eq(aiJobs.pullRequestId, input.pullRequestId),
-            eq(aiJobs.snapshotId, snapshot.id),
             eq(aiJobs.userId, ctx.auth.userId),
-            eq(aiJobs.agentVersion, CURRENT_AI_AGENT_VERSION),
             eq(aiJobs.kind, "review"),
+            eq(aiJobs.reviewScope, "pull_request"),
+            isNull(aiJobs.parentJobId),
             isNull(aiJobs.unitId),
           ),
-          orderBy: (table, { desc }) => [desc(table.createdAt)],
+          orderBy: (table, { desc }) => [desc(table.createdAt), desc(table.id)],
         })) ?? null
       );
     }),

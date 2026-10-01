@@ -1,5 +1,10 @@
 export type HostedAuthorizationProvider = "github" | "gitlab";
 
+export type HostedAuthorizationRequest = {
+  purpose?: "workspace" | "user_identity";
+  connectionId?: string;
+};
+
 const authorizationStartError = "Authorization could not be started";
 
 /** Starts a hosted provider authorization flow and redirects to the provider. */
@@ -8,11 +13,16 @@ export async function startHostedProviderAuthorization(
   redirectPath: string,
   navigate: (authorizationUrl: string) => void = (authorizationUrl) =>
     window.location.assign(authorizationUrl),
+  request?: HostedAuthorizationRequest,
 ) {
   const response = await fetch(`/api/integrations/${provider}/start`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ redirectPath }),
+    body: JSON.stringify({
+      redirectPath,
+      ...(request?.purpose ? { purpose: request.purpose } : {}),
+      ...(request?.connectionId ? { connectionId: request.connectionId } : {}),
+    }),
   });
 
   let payload: unknown;

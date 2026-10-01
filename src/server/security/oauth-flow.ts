@@ -30,6 +30,27 @@ export function githubInstallationId(value: unknown) {
 }
 
 export const GITHUB_USER_AUTHORIZATION_STAGE = "github-user-authorization";
+export const USER_IDENTITY_PURPOSE = "user_identity";
+
+/** Narrows an OAuth start purpose to workspace install or personal identity. */
+export function oauthAuthorizationPurpose(
+  value: unknown,
+): "workspace" | "user_identity" {
+  return value === USER_IDENTITY_PURPOSE ? "user_identity" : "workspace";
+}
+
+/** Accepts the connection a personal-identity authorization is bound to. */
+export function oauthAuthorizationConnectionId(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  ) {
+    return undefined;
+  }
+  return value;
+}
 
 /**
  * Resolves the installation bound to the second GitHub authorization stage.

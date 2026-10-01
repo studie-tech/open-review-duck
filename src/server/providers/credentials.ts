@@ -243,6 +243,74 @@ async function oauthToken(
   );
 }
 
+/** Exchanges a GitLab OAuth refresh token for a new access grant. */
+export async function refreshGitLabOAuthToken(refreshToken: string) {
+  if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
+    throw new Error("OAuth client credentials are not configured");
+  }
+  const response = await fetch("https://gitlab.com/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: env.GITLAB_CLIENT_ID,
+      client_secret: env.GITLAB_CLIENT_SECRET,
+    }),
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`OAuth token refresh failed (${response.status})`);
+  }
+  const tokens = (await response.json()) as {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    expires_in?: unknown;
+  };
+  if (
+    typeof tokens.access_token !== "string" ||
+    tokens.access_token.length === 0 ||
+    tokens.access_token.length > 65_536 ||
+    typeof tokens.expires_in !== "number" ||
+    !Number.isFinite(tokens.expires_in) ||
+    tokens.expires_in <= 0 ||
+    tokens.expires_in > 7 * 86_400 ||
+    typeof tokens.refresh_token !== "string" ||
+    tokens.refresh_token.length === 0 ||
+    tokens.refresh_token.length > 65_536
+  ) {
+    throw new Error("OAuth refresh response is invalid");
+  }
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    expiresIn: tokens.expires_in,
+  };
+}
+
+/** Revokes one GitLab OAuth access or refresh token. */
+export async function revokeGitLabOAuthToken(token: string) {
+  if (!env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
+    throw new Error("GitLab OAuth client credentials are not configured");
+  }
+  const response = await fetch("https://gitlab.com/oauth/revoke", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GITLAB_CLIENT_ID,
+      client_secret: env.GITLAB_CLIENT_SECRET,
+      token,
+    }),
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  await response.body?.cancel();
+  if (!response.ok) {
+    throw new Error(`GitLab OAuth revocation failed (${response.status})`);
+  }
+}
+
 /** Revokes a stored GitLab OAuth grant before its encrypted copy is deleted. */
 export async function revokeProviderOAuth(
   db: Database,
@@ -284,22 +352,7 @@ export async function revokeProviderOAuth(
     );
   }
   for (const token of tokens) {
-    const response = await fetch("https://gitlab.com/oauth/revoke", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: env.GITLAB_CLIENT_ID,
-        client_secret: env.GITLAB_CLIENT_SECRET,
-        token,
-      }),
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`GitLab OAuth revocation failed (${response.status})`);
-    }
-    await response.body?.cancel();
+    await revokeGitLabOAuthToken(token);
   }
 }
 
@@ -339,74 +392,29 @@ async function refreshOauthToken(db: Database, connectionId: string) {
       },
       row.credential.encryptedRefreshToken,
     );
-    const tokenUrl = "https://gitlab.com/oauth/token";
-    const clientId = env.GITLAB_CLIENT_ID;
-    const clientSecret = env.GITLAB_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
-      throw new Error("OAuth client credentials are not configured");
-    }
-    const form = new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
-    const response = await fetch(tokenUrl, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: form,
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      throw new Error(`OAuth token refresh failed (${response.status})`);
-    }
-    const tokens = (await response.json()) as {
-      access_token?: unknown;
-      refresh_token?: unknown;
-      expires_in?: unknown;
-    };
-    if (
-      typeof tokens.access_token !== "string" ||
-      tokens.access_token.length === 0 ||
-      tokens.access_token.length > 65_536 ||
-      typeof tokens.expires_in !== "number" ||
-      !Number.isFinite(tokens.expires_in) ||
-      tokens.expires_in <= 0 ||
-      tokens.expires_in > 7 * 86_400 ||
-      (tokens.refresh_token !== undefined &&
-        (typeof tokens.refresh_token !== "string" ||
-          tokens.refresh_token.length === 0 ||
-          tokens.refresh_token.length > 65_536)) ||
-      typeof tokens.refresh_token !== "string"
-    ) {
-      throw new Error("OAuth refresh response is invalid");
-    }
+    const tokens = await refreshGitLabOAuthToken(refreshToken);
     const encryptedAccessToken = await sealVaultSecret(
       {
         workspaceId: row.connection.workspaceId,
         recordId: row.credential.id,
         provider: `${row.connection.provider}-oauth-access`,
       },
-      tokens.access_token,
+      tokens.accessToken,
     );
-    const encryptedRefreshToken =
-      typeof tokens.refresh_token === "string"
-        ? await sealVaultSecret(
-            {
-              workspaceId: row.connection.workspaceId,
-              recordId: row.credential.id,
-              provider: `${row.connection.provider}-oauth-refresh`,
-            },
-            tokens.refresh_token,
-          )
-        : row.credential.encryptedRefreshToken;
+    const encryptedRefreshToken = await sealVaultSecret(
+      {
+        workspaceId: row.connection.workspaceId,
+        recordId: row.credential.id,
+        provider: `${row.connection.provider}-oauth-refresh`,
+      },
+      tokens.refreshToken,
+    );
     const [updated] = await tx
       .update(oauthCredentials)
       .set({
         encryptedAccessToken,
         encryptedRefreshToken,
-        expiresAt: new Date(Date.now() + tokens.expires_in * 1_000),
+        expiresAt: new Date(Date.now() + tokens.expiresIn * 1_000),
         refreshVersion: sql`${oauthCredentials.refreshVersion} + 1`,
       })
       .where(eq(oauthCredentials.id, row.credential.id))
