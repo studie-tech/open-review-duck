@@ -484,6 +484,11 @@ describe("a comment written in the language's own spelling", () => {
     ({ path, content, first, second }) => {
       const [firstToken, firstComment] = first;
       const [secondToken, secondComment] = second;
+      if (!firstToken || !firstComment || !secondToken || !secondComment) {
+        throw new Error(
+          "Comment fixtures need a declaration token and comment text",
+        );
+      }
       const earlier = tightestUnit(path, content, firstToken);
       const later = tightestUnit(path, content, secondToken);
 
