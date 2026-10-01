@@ -1295,6 +1295,39 @@ export const chunkArray = <T>(values: readonly T[], batchSize: number): T[][] =>
     expect(reviewable).toMatchObject([{ name: "TestAdd", reviewOrder: 0 }]);
   });
 
+  it("does not assign a trailing comment to the next declaration", () => {
+    const units = analyzeFiles([
+      {
+        path: "helpers.ts",
+        changeType: "added",
+        content:
+          "function previous() {} // previous note\nfunction next() {}\n",
+      },
+    ]).units;
+    const next = units.find(({ name }) => name === "next");
+    expect(next?.source).toBe("function next() {}");
+    expect(next?.startLine).toBe(2);
+  });
+
+  it.each([
+    "/// Formal\n// Ordinary\n\n",
+    "// Earlier ordinary\n\n/// Formal\n\n",
+  ])("applies blank-line boundaries to each comment group: %s", (comments) => {
+    const units = analyzeFiles([
+      {
+        path: "helpers.ts",
+        changeType: "added",
+        content: `${comments}function next() {}\n`,
+      },
+    ]).units;
+    const next = units.find(({ name }) => name === "next");
+    expect(next?.source).not.toContain("ordinary");
+    expect(next?.source).not.toContain("Ordinary");
+    if (comments.startsWith("// Earlier"))
+      expect(next?.source).toContain("/// Formal");
+    else expect(next?.source).toBe("function next() {}");
+  });
+
   it("reviews an ordinary comment with the declaration it introduces", () => {
     const content = [
       "// Group up to four prepared source slides per outline request.",

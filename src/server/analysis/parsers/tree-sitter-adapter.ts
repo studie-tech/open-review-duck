@@ -786,6 +786,12 @@ function leadingDocumentationStart(
       text.startsWith("##");
     const adjacentComment =
       directlyPrecedes(source, sibling.endIndex, start) &&
+      source
+        .slice(
+          source.lastIndexOf("\n", sibling.startIndex - 1) + 1,
+          sibling.startIndex,
+        )
+        .trim() === "" &&
       commentIntroducesDeclaration(language, text);
     if (!formalDocumentation && !adjacentComment) break;
     if (sibling.startIndex >= start) break;
@@ -836,6 +842,7 @@ function commentSeparatedByBlankLine(
     (left, right) => right.length - left.length,
   );
   let cursor = start;
+  let rangeStart = start;
   let ordinaryComment = false;
   let formalComment = false;
   while (cursor < source.length) {
@@ -843,22 +850,31 @@ function commentSeparatedByBlankLine(
     const lineEnd = lineBreak < 0 ? source.length : lineBreak;
     const line = source.slice(cursor, lineEnd).trim();
     if (line === "") {
-      if (!ordinaryComment || formalComment || lineBreak < 0) return start;
+      if (lineBreak < 0) return rangeStart;
       let next = lineBreak + 1;
       while (
         next < source.length &&
-        (source[next] === " " || source[next] === "\t" || source[next] === "\n")
+        (source[next] === " " ||
+          source[next] === "\t" ||
+          source[next] === "\n" ||
+          source[next] === "\r")
       ) {
         next += 1;
       }
-      if (next >= source.length) return start;
-      return source.lastIndexOf("\n", next - 1) + 1;
+      if (next >= source.length) return rangeStart;
+      if (ordinaryComment && !formalComment) {
+        rangeStart = source.lastIndexOf("\n", next - 1) + 1;
+      }
+      ordinaryComment = false;
+      formalComment = false;
+      cursor = next;
+      continue;
     }
     const lineComment = lineMarkers.some((marker) => line.startsWith(marker));
     const blockComment = syntax.blockComments.some(
       ([open, close]) => line.startsWith(open) && line.endsWith(close),
     );
-    if (!lineComment && !blockComment) return start;
+    if (!lineComment && !blockComment) return rangeStart;
     if (
       line.startsWith("/**") ||
       line.startsWith("///") ||
@@ -866,13 +882,15 @@ function commentSeparatedByBlankLine(
       line.startsWith("##")
     ) {
       formalComment = true;
+      ordinaryComment = false;
     } else {
       ordinaryComment = true;
+      formalComment = false;
     }
-    if (lineBreak < 0) return start;
+    if (lineBreak < 0) return rangeStart;
     cursor = lineBreak + 1;
   }
-  return start;
+  return rangeStart;
 }
 
 /**
