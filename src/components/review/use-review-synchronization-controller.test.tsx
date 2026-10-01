@@ -60,6 +60,7 @@ const utils = {
       "providerConversations",
       "providerReviewState",
       "providerLifecycle",
+      "revisionProbe",
     ].map((key) => [key, { invalidate: state.invalidate }]),
   ),
 };
@@ -99,6 +100,56 @@ async function settle() {
 }
 
 describe("review synchronization", () => {
+  it("makes completed background work available without refreshing or acknowledging it", async () => {
+    const { rerender, result } = renderHook(() =>
+      useReviewSynchronizationController(input),
+    );
+    await settle();
+    state.status = { status: "completed" };
+    rerender();
+    await settle();
+    expect(result.current.updateAvailable).toBe(true);
+    expect(state.refresh).not.toHaveBeenCalled();
+  });
+
+  it("keeps updates pending while a draft or save is active", async () => {
+    state.probe = { ...state.probe, current: true, snapshotId: "external" };
+    const { result, rerender } = renderHook(
+      ({ canLoadChanges }) =>
+        useReviewSynchronizationController({ ...input, canLoadChanges }),
+      { initialProps: { canLoadChanges: false } },
+    );
+    await settle();
+    act(() => result.current.loadAvailableChanges());
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(result.current.updateAvailable).toBe(true);
+    rerender({ canLoadChanges: true });
+    act(() => result.current.loadAvailableChanges());
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks draft readiness again at click time", async () => {
+    state.probe = { ...state.probe, current: true, snapshotId: "external" };
+    let draftOpen = false;
+    const onBeforeLoad = vi.fn();
+    const { result } = renderHook(() =>
+      useReviewSynchronizationController({
+        ...input,
+        canLoadChanges: () => !draftOpen,
+        onBeforeLoad,
+      }),
+    );
+    await settle();
+    draftOpen = true;
+    act(() => result.current.loadAvailableChanges());
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(onBeforeLoad).not.toHaveBeenCalled();
+    draftOpen = false;
+    act(() => result.current.loadAvailableChanges());
+    expect(onBeforeLoad).toHaveBeenCalledOnce();
+    expect(state.refresh).toHaveBeenCalledOnce();
+  });
+
   it("checks every five seconds and always checks on focus and reconnect", async () => {
     renderHook(() => useReviewSynchronizationController(input));
     await settle();
@@ -177,16 +228,19 @@ describe("review synchronization", () => {
     expect(state.queue).toHaveBeenCalledTimes(5);
   });
 
-  it("loads a snapshot synced elsewhere once without queuing another sync", async () => {
+  it("announces a snapshot synced elsewhere without replacing the current review", async () => {
     state.probe = { ...state.probe, current: true, snapshotId: "external" };
-    const { rerender } = renderHook(() =>
+    const { rerender, result } = renderHook(() =>
       useReviewSynchronizationController(input),
     );
     await settle();
-    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(result.current.updateAvailable).toBe(true);
+    expect(state.refresh).not.toHaveBeenCalled();
     expect(state.queue).not.toHaveBeenCalled();
     state.updatedAt += 5_000;
     rerender();
+    expect(state.refresh).not.toHaveBeenCalled();
+    act(() => result.current.loadAvailableChanges());
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
 

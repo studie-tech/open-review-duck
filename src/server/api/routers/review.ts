@@ -1641,7 +1641,14 @@ export const reviewRouter = createTRPCRouter({
         ctx.auth.userId,
         input.pullRequestId,
       );
-      const snapshot = scope.snapshot;
+      const snapshot = input.snapshotId
+        ? await ctx.db.query.reviewSnapshots.findFirst({
+            where: and(
+              eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+              eq(reviewSnapshots.id, input.snapshotId),
+            ),
+          })
+        : scope.snapshot;
       if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
 
       const provider = await providerForConnection(ctx.db, scope.connection);
@@ -1820,7 +1827,12 @@ export const reviewRouter = createTRPCRouter({
           .where(accessiblePullRequest(ctx.auth.userId, input.pullRequestId))
           .limit(1),
         ctx.db.query.reviewSnapshots.findFirst({
-          where: eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+          where: and(
+            eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+            input.snapshotId
+              ? eq(reviewSnapshots.id, input.snapshotId)
+              : undefined,
+          ),
           orderBy: [desc(reviewSnapshots.version)],
         }),
       ]);

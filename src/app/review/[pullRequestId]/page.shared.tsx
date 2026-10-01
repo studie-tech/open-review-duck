@@ -16,10 +16,5 @@ export default async function ReviewPage({
     if (isTrpcNotFoundError(cause)) notFound();
     throw cause;
   });
-  return (
-    <ReviewWorkspace
-      key={data.snapshot?.id ?? data.pullRequest.id}
-      initialData={data}
-    />
-  );
+  return <ReviewWorkspace key={data.pullRequest.id} initialData={data} />;
 }

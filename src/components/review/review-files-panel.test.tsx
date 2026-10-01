@@ -56,6 +56,46 @@ const files = reviewFileEntries(
 function noop() {}
 
 describe("ReviewFilesPanel", () => {
+  it("keeps New selected and does not scroll back to the selection during background updates", async () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const props = {
+      files,
+      search: "",
+      selectedPath: "public/duck.png",
+      onSelect: vi.fn(),
+      onToggle: vi.fn(),
+    };
+    const { rerender } = render(<ReviewFilesPanel {...props} />);
+    await userEvent.click(screen.getByRole("button", { name: /^New$/ }));
+    const calls = scrollIntoView.mock.calls.length;
+    rerender(<ReviewFilesPanel {...props} files={[...files]} />);
+    expect(screen.getByRole("button", { name: /^New$/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(scrollIntoView).toHaveBeenCalledTimes(calls);
+  });
+
+  it("does not pull the sidebar back when another folder is collapsed", async () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    render(
+      <ReviewFilesPanel
+        files={files}
+        search=""
+        selectedPath="public/duck.png"
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+    scrollIntoView.mockClear();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Collapse review" }),
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("shows folder progress, revision attention, and zero-unit files", () => {
     render(
       <ReviewFilesPanel
