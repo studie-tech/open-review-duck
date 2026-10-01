@@ -124,7 +124,6 @@ export function ReviewMarkdownPreview({
       defaultMarkdownPreviewVersion({ currentSource, previousSource }),
     );
   }
-  const name = path.split("/").at(-1) ?? path;
   const showVersionSwitch = hasCurrent || hasPrevious;
   const resolvedVersion =
     version === "compare" && !(hasCurrent && hasPrevious)
@@ -137,15 +136,8 @@ export function ReviewMarkdownPreview({
 
   return (
     <div className="font-sans">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface/40 px-4 py-2.5 sm:px-5">
-        <div className="min-w-0">
-          <p className="text-cloud truncate text-[11px] font-medium">{name}</p>
-          <p className="text-fog mt-0.5 text-[10px] leading-4">
-            Rendered Markdown. Switch to Raw to comment on lines or read the
-            diff.
-          </p>
-        </div>
-        {showVersionSwitch && (
+      {showVersionSwitch && (
+        <div className="flex justify-end px-4 py-2 sm:px-5">
           <fieldset className="flex h-7 shrink-0 items-center rounded-lg border border-line bg-surface/25 p-0.5">
             <legend className="sr-only">Markdown revision</legend>
             {hasPrevious && (
@@ -198,8 +190,8 @@ export function ReviewMarkdownPreview({
               </button>
             )}
           </fieldset>
-        )}
-      </div>
+        </div>
+      )}
       {resolvedVersion === "compare" ? (
         <div className="grid lg:grid-cols-2">
           <section className="border-b border-line lg:border-r lg:border-b-0">
