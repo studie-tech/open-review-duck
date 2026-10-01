@@ -34,8 +34,8 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-// Rebuild snapshots that loaded PR before-content from the target tip instead of the merge base.
-export const CURRENT_ANALYSIS_VERSION = 46;
+// A line comment introduces the declaration under it, so stored units rebuild.
+export const CURRENT_ANALYSIS_VERSION = 47;
 
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 

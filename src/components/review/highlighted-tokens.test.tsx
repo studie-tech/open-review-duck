@@ -18,13 +18,17 @@ import { HighlightedTokens } from "./highlighted-tokens";
 import { UnitImportContext } from "./review-workspace-dialogs";
 import { SymbolPeekCard, useSymbolPeek } from "./symbol-peek";
 
+const highlighting = vi.hoisted(() => ({
+  source: undefined as string | undefined,
+}));
+
 vi.mock("~/lib/syntax-highlighting", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("~/lib/syntax-highlighting")>();
   return {
     ...actual,
     useHighlightedSource: (source: string) =>
-      source.split("\n").map((text) => ({
+      (highlighting.source ?? source).split("\n").map((text) => ({
         text,
         tokens: text
           ? [{ className: "tok-test", from: 0, text, to: text.length }]
@@ -196,6 +200,88 @@ describe("highlighted source surfaces", () => {
     fireEvent.click(gutter, { shiftKey: true });
     expect(onSelectLine).toHaveBeenCalledWith(12, true);
     expect(screen.getByText("const value = 1;")).toHaveClass("tok-keyword");
+  });
+
+  it("keeps the complete definition available beyond the old 18-line limit", () => {
+    const source = Array.from({ length: 88 }, (_, index) =>
+      index === 12
+        ? "export function helper() {"
+        : `// definition line ${index + 1}`,
+    ).join("\n");
+    render(
+      <SymbolPeekCard
+        definition={{
+          endLine: 295,
+          focusLine: 220,
+          language: "typescript",
+          name: "helper",
+          path: "src/helper.ts",
+          source,
+          startLine: 208,
+          unitKind: "function",
+        }}
+        onClose={vi.fn()}
+        onHold={vi.fn()}
+        peeked={{
+          anchor: { bottom: 80, left: 100, top: 60 },
+          symbol: "helper",
+        }}
+      />,
+    );
+    expect(screen.getByText("// definition line 88")).toBeInTheDocument();
+    expect(screen.getByText("295")).toBeInTheDocument();
+    expect(screen.queryByText("70 more lines")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Source of helper" }),
+    ).toHaveAttribute("tabindex", "0");
+  });
+
+  it("waits for the new definition lines before focusing and preserves subsequent user scrolling", () => {
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.classList.contains("grid")
+          ? Number(this.firstElementChild?.textContent) * 20
+          : 0;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(20);
+    const first = {
+      endLine: 1,
+      focusLine: 1,
+      language: "text",
+      name: "helper",
+      path: "src/helper.ts",
+      source: "old definition",
+      startLine: 1,
+      unitKind: "function",
+    };
+    const props = {
+      definition: first,
+      onClose: vi.fn(),
+      onHold: vi.fn(),
+      peeked: { anchor: { bottom: 80, left: 100, top: 60 }, symbol: "helper" },
+    };
+    const { rerender } = render(<SymbolPeekCard {...props} />);
+    const region = screen.getByRole("region", { name: "Source of helper" });
+    region.scrollTop = 55;
+    const next = {
+      ...first,
+      source: Array.from(
+        { length: 30 },
+        (_, index) => `new line ${index + 1}`,
+      ).join("\n"),
+      endLine: 30,
+      focusLine: 25,
+    };
+    highlighting.source = first.source;
+    rerender(<SymbolPeekCard {...props} definition={next} />);
+    expect(region.scrollTop).toBe(55);
+    highlighting.source = undefined;
+    rerender(<SymbolPeekCard {...props} definition={next} />);
+    expect(region.scrollTop).toBe(460);
+    region.scrollTop = 700;
+    rerender(<SymbolPeekCard {...props} definition={next} />);
+    expect(region.scrollTop).toBe(700);
   });
 
   it("keeps symbol-peek line numbering and focus styling", () => {

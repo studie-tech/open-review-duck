@@ -398,6 +398,7 @@ export function ReviewConceptFileCardPreview({
   sourceBytes,
   markdownView = "preview",
   onSourceNeeded,
+  onSourceVisible,
   pullRequestId,
 }: {
   members: readonly ReviewUnit[];
@@ -416,6 +417,7 @@ export function ReviewConceptFileCardPreview({
   sourceBytes?: number;
   markdownView?: MarkdownReviewView;
   onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
+  onSourceVisible?: (path: string) => (() => void) | undefined;
   pullRequestId?: string;
 }) {
   const first = members[0];
@@ -443,11 +445,6 @@ export function ReviewConceptFileCardPreview({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => {
-    if (nearViewport && first?.path) {
-      void onSourceNeeded?.(first.path, "preview").catch(() => undefined);
-    }
-  }, [first?.path, nearViewport, onSourceNeeded]);
   const lineCommentMarkers = useMemo(
     () => reviewLineCommentMarkersBySide(commentThreads ?? []),
     [commentThreads],
@@ -475,12 +472,12 @@ export function ReviewConceptFileCardPreview({
   });
   const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [defaultExpandedState, setDefaultExpandedState] =
-    useState(defaultExpanded);
-  if (defaultExpanded !== defaultExpandedState) {
-    setDefaultExpandedState(defaultExpanded);
-    setExpanded(defaultExpanded);
-  }
+  useEffect(() => {
+    if (!nearViewport || !expanded || !first?.path) return;
+    const release = onSourceVisible?.(first.path);
+    void onSourceNeeded?.(first.path, "preview").catch(() => undefined);
+    return release;
+  }, [expanded, first?.path, nearViewport, onSourceNeeded, onSourceVisible]);
   const fileBytes =
     sourceBytes ?? reviewSourceByteLength({ source: fileSource });
   const markdownFile =
@@ -498,6 +495,7 @@ export function ReviewConceptFileCardPreview({
   return (
     <article
       ref={articleRef}
+      data-review-viewer-file={first?.path}
       className={cn(
         "mx-4 overflow-hidden rounded-xl border",
         deleted
@@ -540,7 +538,11 @@ export function ReviewConceptFileCardPreview({
           first?.kind !== "binary" &&
           !fileSource &&
           !previousFileSource ? (
-          <div className="px-4 py-5 text-fog" role="status">
+          <div
+            className="px-4 py-5 text-fog"
+            style={{ minHeight: Math.min(600, Math.max(84, lineCount * 21)) }}
+            role="status"
+          >
             Loading source…
           </div>
         ) : expanded && showMarkdownPreview && first ? (

@@ -40,6 +40,42 @@ function reviewUnitWithoutSource(unit: ReviewUnit): ReviewUnit {
   return { ...unit, source: "", previousSource: null };
 }
 
+const REVIEW_DECISION_FIELDS = [
+  "status",
+  "changedSinceSignOff",
+  "waitingSince",
+  "signOffOrigin",
+] as const;
+
+/** Applies fresh server metadata without overwriting unacknowledged local decisions. */
+export function reconcileReviewLedger(
+  current: readonly ReviewUnit[],
+  previousServer: readonly ReviewUnit[],
+  incoming: readonly ReviewUnit[],
+) {
+  const localById = new Map(current.map((unit) => [unit.id, unit]));
+  const baselineById = new Map(previousServer.map((unit) => [unit.id, unit]));
+  return incoming.map((unit) => {
+    const local = localById.get(unit.id);
+    const baseline = baselineById.get(unit.id);
+    const merged = reviewUnitWithoutSource(unit);
+    if (!local || !baseline) return merged;
+    for (const field of REVIEW_DECISION_FIELDS) {
+      const localValue = local[field];
+      const baselineValue = baseline[field];
+      if (
+        (localValue instanceof Date ? localValue.getTime() : localValue) !==
+        (baselineValue instanceof Date
+          ? baselineValue.getTime()
+          : baselineValue)
+      ) {
+        Object.assign(merged, { [field]: local[field] });
+      }
+    }
+    return merged;
+  });
+}
+
 const mergedSources = new WeakMap<
   ReviewUnit,
   WeakMap<ReviewUnit, ReviewUnit>
@@ -55,11 +91,9 @@ function mergeReviewUnitSource(current: ReviewUnit, hydrated: ReviewUnit) {
   const existing = versions.get(hydrated);
   if (existing) return existing;
   const merged = {
-    ...hydrated,
-    status: current.status,
-    changedSinceSignOff: current.changedSinceSignOff,
-    waitingSince: current.waitingSince,
-    signOffOrigin: current.signOffOrigin,
+    ...current,
+    source: hydrated.source,
+    previousSource: hydrated.previousSource,
   };
   versions.set(hydrated, merged);
   return merged;
@@ -211,14 +245,26 @@ export function usePrivateWorkspaceSourceHydration(
   const snapshotId = initialData.snapshot?.id;
   const [reviewLedger, setReviewLedger] = useState(() => ({
     snapshotId,
+    serverUnits: initialData.units,
     units: initialData.units.map(reviewUnitWithoutSource),
   }));
   const snapshotChanged = reviewLedger.snapshotId !== snapshotId;
+  const serverChanged = reviewLedger.serverUnits !== initialData.units;
   const reviewUnits = snapshotChanged
     ? initialData.units.map(reviewUnitWithoutSource)
-    : reviewLedger.units;
-  if (snapshotChanged) {
-    setReviewLedger({ snapshotId, units: reviewUnits });
+    : serverChanged
+      ? reconcileReviewLedger(
+          reviewLedger.units,
+          reviewLedger.serverUnits,
+          initialData.units,
+        )
+      : reviewLedger.units;
+  if (snapshotChanged || serverChanged) {
+    setReviewLedger({
+      snapshotId,
+      serverUnits: initialData.units,
+      units: reviewUnits,
+    });
   }
   const activeUnitId = reviewUnits[activeIndex]?.id ?? reviewUnits[0]?.id;
   // A snapshot owns one immutable source manifest. Review-state refreshes must
@@ -317,7 +363,14 @@ export function usePrivateWorkspaceSourceHydration(
         const materialized = materializeUnits(ledgerUnits, store);
         const next =
           typeof update === "function" ? update(materialized) : update;
-        return { snapshotId, units: next.map(reviewUnitWithoutSource) };
+        return {
+          snapshotId,
+          serverUnits:
+            current.snapshotId === snapshotId
+              ? current.serverUnits
+              : initialData.units,
+          units: next.map(reviewUnitWithoutSource),
+        };
       });
     },
     [initialData.units, snapshotId, store],
@@ -363,12 +416,17 @@ export function usePrivateWorkspaceSourceHydration(
           Promise.reject(new Error("No source snapshot"))),
     [store],
   );
+  const retainSourcePath = useCallback(
+    (path: string) => store?.retainPath(path),
+    [store],
+  );
   const activeStatus = sourceStatus(plan.activePath);
 
   return {
     fileContexts,
     hydratedUnitIds,
     prepareSourcePath,
+    retainSourcePath,
     settledUnitIds,
     setUnits,
     sourceHydrationPending:

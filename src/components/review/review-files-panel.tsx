@@ -474,6 +474,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   onToggle: (file: ReviewFileEntry) => void;
   onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
+  const pendingSelectionReveal = useRef(selectedPath);
   const [filter, setFilter] = useState<ReviewFileFilter>("all");
   // Only apply review progress to the initial outline; later sign-offs must
   // not collapse folders the reviewer is currently using.
@@ -519,6 +520,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   // tree. Expand any collapsed ancestors so the row exists, then scroll it
   // into the sidebar with `nearest` so an already-visible file does not jump.
   useLayoutEffect(() => {
+    pendingSelectionReveal.current = selectedPath;
     if (!selectedPath) return;
     const ancestors = reviewFileAncestorPaths(selectedPath);
     setExpanded((current) => {
@@ -537,12 +539,14 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-scroll after ancestor folders expand so the selected row exists
   useLayoutEffect(() => {
-    if (!selectedPath) return;
+    if (!selectedPath || pendingSelectionReveal.current !== selectedPath)
+      return;
     const row = document
       .getElementById(reviewFileTreeControlId(selectedPath))
       ?.closest("[data-review-file-path]");
     if (!(row instanceof HTMLElement)) return;
     row.scrollIntoView?.({ block: "nearest" });
+    pendingSelectionReveal.current = undefined;
   }, [expanded, selectedPath]);
 
   /** Expands or collapses one folder without rebuilding the rest of the tree. */
