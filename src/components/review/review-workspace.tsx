@@ -122,6 +122,7 @@ import {
   rememberReviewPosition,
   shortRevision,
 } from "~/lib/review-revision";
+import { reviewIndexAfterRefresh } from "~/lib/review-revision-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
   isHeavyReviewSource,
@@ -315,6 +316,7 @@ import { useReviewDialogController } from "./use-review-dialog-controller";
 import { useReviewPanelController } from "./use-review-panel-controller";
 import { useReviewSynchronizationController } from "./use-review-synchronization-controller";
 import { useReviewWaitController } from "./use-review-wait-controller";
+import { useStagedReviewWorkspace } from "./use-staged-review-workspace";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
@@ -415,10 +417,15 @@ function revealReviewLineIfNeeded(line: number) {
 
 /** Renders the review workspace interface. */
 export function ReviewWorkspace({
-  initialData,
+  initialData: incomingData,
 }: {
   initialData: WorkspaceData;
 }) {
+  const {
+    displayed: initialData,
+    available: stagedRevisionAvailable,
+    requestLoad,
+  } = useStagedReviewWorkspace(incomingData);
   const router = useRouter();
   const { navigate, pending: navigationPending } = usePendingNavigation();
   const [layoutRefreshing, startLayoutRefresh] = useTransition();
@@ -435,12 +442,53 @@ export function ReviewWorkspace({
   const [sourceIntentSnapshotId, setSourceIntentSnapshotId] =
     useState<string>();
   const snapshotId = initialData.snapshot?.id;
+  const displayedSnapshotId = useRef(snapshotId);
+  displayedSnapshotId.current = snapshotId;
+  const revisionViewport = useRef<
+    | {
+        unit: ReviewUnit;
+        line?: number;
+        offset: number;
+      }
+    | undefined
+  >(undefined);
+  const [navigationSnapshot, setNavigationSnapshot] = useState({
+    snapshotId,
+    units: initialData.units,
+  });
+  if (navigationSnapshot.snapshotId !== snapshotId) {
+    const previous =
+      revisionViewport.current?.unit ?? navigationSnapshot.units[activeIndex];
+    const nextIndex = reviewIndexAfterRefresh(
+      previous,
+      initialData.units,
+      initialData.files,
+    );
+    const next = initialData.units[nextIndex];
+    if (
+      previous &&
+      next &&
+      next.path !== previous.path &&
+      !(previous.stableKey && next.stableKey === previous.stableKey) &&
+      !initialData.files.some(
+        (file) =>
+          file.path === next.path && file.previousPath === previous.path,
+      )
+    ) {
+      revisionViewport.current = undefined;
+    }
+    setActiveIndex(nextIndex);
+    setNavigationSnapshot({ snapshotId, units: initialData.units });
+    setSourceIntentSnapshotId(snapshotId);
+  }
+  const navigationRestored = useRef(false);
   const sourceIntentReady = sourceIntentSnapshotId === snapshotId;
   // Source loading must not begin against server defaults and then compete
   // with the review position and mode restored from this browser.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a snapshot is immutable and owns its initial navigation intent
   useEffect(() => {
-    if (!snapshotId) return;
+    if (!snapshotId || navigationRestored.current) return;
+    navigationRestored.current = true;
     const rememberedUnitId = rememberedReviewPosition(
       window.localStorage,
       initialData.pullRequest.id,
@@ -472,6 +520,7 @@ export function ReviewWorkspace({
     fileContexts,
     hydratedUnitIds,
     prepareSourcePath,
+    retainSourcePath,
     settledUnitIds,
     setUnits,
     sourceHydrationPending,
@@ -641,6 +690,8 @@ export function ReviewWorkspace({
   const reviewCardsAboveRef = useRef<HTMLDivElement>(null);
   const codeOverviewRef = useRef<HTMLDivElement>(null);
   const [selectedCardStuck, setSelectedCardStuck] = useState(false);
+  const cardPinInterrupted = useRef(false);
+  const transientSnapshotId = useRef(snapshotId);
   const importPreviewFocusRef = useRef<HTMLDivElement>(null);
   const importPreviewRequestRef = useRef(0);
   const [sessionId, setSessionId] = useState<string>();
@@ -806,10 +857,16 @@ export function ReviewWorkspace({
       card.getBoundingClientRect().top < pane.getBoundingClientRect().top - 1;
     setSelectedCardStuck((current) => (current === next ? current : next));
   }, []);
+  const previousPinUnitId = useRef(activeUnit?.id);
   const selectedCardPinKey = `${reviewMode}:${activeConceptCardIndex}:${activeUnit?.id ?? ""}:${activeUnit?.startLine ?? ""}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-pin after the selected file hydrates so the card has its real height
   useLayoutEffect(() => {
-    if (!activeUnit?.id || !selectedCardPinKey) return;
+    if (previousPinUnitId.current !== activeUnit?.id) {
+      previousPinUnitId.current = activeUnit?.id;
+      cardPinInterrupted.current = false;
+    }
+    if (!activeUnit?.id || !selectedCardPinKey || cardPinInterrupted.current)
+      return;
     const pane = codeScrollRef.current;
     if (!pane) return;
     const focusLine = activeUnit.startLine;
@@ -821,6 +878,7 @@ export function ReviewWorkspace({
 
     /** Pins file-tree selections to the card top and unit navigation to its work. */
     const pinSelectedCard = () => {
+      if (cardPinInterrupted.current) return;
       const card = reviewUnitStartRef.current;
       if (!card) {
         pane.scrollTo({ top: 0, behavior: "auto" });
@@ -837,6 +895,35 @@ export function ReviewWorkspace({
         unitLine: unitLine instanceof HTMLElement ? unitLine : undefined,
         unitStart: unitStart instanceof HTMLElement ? unitStart : undefined,
       });
+      const resume = revisionViewport.current;
+      if (resume && resume.line !== undefined && activeSourceAvailable) {
+        const line = Math.max(
+          1,
+          Math.min(
+            activeUnit.endLine,
+            activeUnit.startLine + resume.line - resume.unit.startLine,
+          ),
+        );
+        const row =
+          card.querySelector<HTMLElement>(`[data-current-line="${line}"]`) ??
+          document.getElementById(`review-line-${line}`);
+        if (row) {
+          pane.scrollTo({
+            top: Math.max(
+              0,
+              pane.scrollTop +
+                row.getBoundingClientRect().top -
+                pane.getBoundingClientRect().top -
+                resume.offset,
+            ),
+            behavior: "auto",
+          });
+          revisionViewport.current = undefined;
+          cardPinInterrupted.current = true;
+          updateSelectedCardChrome();
+          return;
+        }
+      }
       const paneTop = pane.getBoundingClientRect().top;
       const targetTop = target.getBoundingClientRect().top;
       const stickyHeader =
@@ -873,6 +960,7 @@ export function ReviewWorkspace({
     };
   }, [
     activeFileCardHydrationPending,
+    activeSourceAvailable,
     activeUnit?.id,
     activeUnit?.startLine,
     reviewMode,
@@ -1595,6 +1683,7 @@ export function ReviewWorkspace({
   const peekedDefinition = api.review.symbolDefinition.useQuery(
     {
       pullRequestId: initialData.pullRequest.id,
+      snapshotId,
       sourcePath: activeUnit?.path ?? "",
       sourceLanguage: peekedLanguage ?? "text",
       symbol: peekedSymbol?.symbol ?? "",
@@ -1654,6 +1743,8 @@ export function ReviewWorkspace({
       const index = unitsRef.current.findIndex(({ id }) => id === unitId);
       const target = unitsRef.current[index];
       if (!target || index < 0) return;
+      cardPinInterrupted.current = false;
+      revisionViewport.current = undefined;
       setSourcePinRequest({ kind: pin, unitId: target.id });
       setActiveIndex(index);
       setInspectedFilePath((current) =>
@@ -2020,6 +2111,7 @@ export function ReviewWorkspace({
     try {
       const result = await utils.review.importTarget.fetch({
         pullRequestId: initialData.pullRequest.id,
+        snapshotId,
         sourcePath: activeUnit.path,
         sourceLanguage: supportedLanguage(activeUnit.language),
         specifier: reference.specifier,
@@ -2065,15 +2157,20 @@ export function ReviewWorkspace({
     }
   }
   const { mutate: beginSession } = api.review.beginSession.useMutation({
-    onSuccess: (session) => setSessionId(session?.id),
+    onSuccess: (session) => {
+      if (session?.snapshotId === displayedSnapshotId.current) {
+        setSessionId(session?.id);
+      }
+    },
     onError: (error) => toast.error(error.message),
   });
   useEffect(() => {
+    if (!snapshotId) return;
     beginSession({
       pullRequestId: initialData.pullRequest.id,
     });
     // A review workspace starts one resumable session per snapshot.
-  }, [beginSession, initialData.pullRequest.id]);
+  }, [beginSession, initialData.pullRequest.id, snapshotId]);
   useEffect(() => {
     const snapshot = initialData.snapshot;
     if (!snapshot) return;
@@ -3060,6 +3157,7 @@ export function ReviewWorkspace({
             sourceBytes={sourceBytes}
             markdownView={markdownView}
             onSourceNeeded={prepareSourcePath}
+            onSourceVisible={retainSourcePath}
             pullRequestId={initialData.pullRequest.id}
           />
         );
@@ -3074,6 +3172,7 @@ export function ReviewWorkspace({
       markdownView,
       openLineCommentThread,
       prepareSourcePath,
+      retainSourcePath,
       reviewMode,
       selectUnit,
       showDiff,
@@ -3096,6 +3195,54 @@ export function ReviewWorkspace({
     updateAvailable,
   } = useReviewSynchronizationController({
     manualSyncPending,
+    stagedRevisionAvailable,
+    canLoadChanges: () =>
+      !commandBindingsSuspended &&
+      aiQuestionLine === undefined &&
+      pendingCommentLine === undefined &&
+      pendingConceptSignOffIds.size === 0 &&
+      !publishComment.isPending &&
+      !imageUpload.isPending &&
+      !awaitResponse.isPending &&
+      !conceptLayoutPending &&
+      !document.querySelector(
+        '[data-review-workspace] textarea, [data-review-workspace] [contenteditable="true"]',
+      ) &&
+      signOffQueue.ids.size === 0 &&
+      !undoPending &&
+      pendingFiles.size === 0 &&
+      !pendingSourceNavigation,
+    onBeforeLoad: () => {
+      requestLoad();
+      const pane = codeScrollRef.current;
+      if (!pane || !activeUnit) return;
+      const top = pane.getBoundingClientRect().top;
+      const card = [
+        ...pane.querySelectorAll<HTMLElement>("[data-review-viewer-file]"),
+      ].find((element) => element.getBoundingClientRect().bottom > top + 24);
+      const path = card?.dataset.reviewViewerFile ?? activeUnit.path;
+      const row =
+        card &&
+        [...card.querySelectorAll<HTMLElement>("[data-current-line]")].find(
+          (element) => element.getBoundingClientRect().bottom > top + 24,
+        );
+      const line = row ? Number(row.dataset.currentLine) : undefined;
+      const members = unitsRef.current.filter((unit) => unit.path === path);
+      const unit =
+        members.find(
+          (unit) =>
+            line !== undefined &&
+            line >= unit.startLine &&
+            line <= unit.endLine,
+        ) ??
+        members[0] ??
+        activeUnit;
+      revisionViewport.current = {
+        unit,
+        line,
+        offset: row ? row.getBoundingClientRect().top - top : 0,
+      };
+    },
     onReset: () => {
       const updated = resetSignedOffReviewUnits(unitsRef.current);
       unitsRef.current = updated;
@@ -3893,6 +4040,38 @@ export function ReviewWorkspace({
     units,
   });
   clearFindingLineRef.current = () => setFindingLine(undefined);
+  useLayoutEffect(() => {
+    if (transientSnapshotId.current === snapshotId) return;
+    transientSnapshotId.current = snapshotId;
+    sourceNavigationSequence.current += 1;
+    cardPinInterrupted.current = false;
+    setPendingSourceNavigation(undefined);
+    setSourcePinRequest(undefined);
+    setSelectedLine(undefined);
+    setKeyboardLine(undefined);
+    setPendingCommentLine(undefined);
+    setPendingProviderThread(undefined);
+    setFocusedProviderThreadId(undefined);
+    setExplanationLine(undefined);
+    setAiQuestionLine(undefined);
+    setAiQuestionPreviewLine(undefined);
+    setFindingLine(undefined);
+    setContextBefore(0);
+    setContextAfter(0);
+    setImportReturn(undefined);
+    setImportPreview(undefined);
+    importPreviewRequestRef.current += 1;
+    setResolvingImport(undefined);
+    setImportContextUnitIds(new Set());
+    setFullFileUnitIds(new Set());
+    setUnitFoldOverrides(new Map());
+    signOffUndoHistoryRef.current = [];
+    setSignOffUndoHistory([]);
+    setSessionId(undefined);
+    setCompletedBrowsing(false);
+    setCompletionOpen(false);
+    setWaitingCompletionOpen(false);
+  }, [snapshotId, setAiQuestionLine, setAiQuestionPreviewLine, setFindingLine]);
   // Resolved once per unit rather than once per rendered line: the index can
   // hold forty findings and a unit can hold hundreds of lines.
   const deepReviewFindingsByLine = useMemo(() => {
@@ -5585,7 +5764,22 @@ export function ReviewWorkspace({
             Open it on the provider to review unsupported files, or synchronize
             again if supported changes have landed.
           </p>
+          {updateAvailable && (
+            <p role="status" className="text-cyan mt-3 text-sm">
+              New code changes are ready to review.
+            </p>
+          )}
           <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button
+              loading={loadingChanges || externalSyncPending}
+              onClick={
+                updateAvailable
+                  ? loadAvailableChanges
+                  : () => void syncExternalData()
+              }
+            >
+              {updateAvailable ? "Load changes" : "Synchronize pull request"}
+            </Button>
             <Button asChild>
               <Link href="/pullrequests">
                 <LinkPendingSpinner />
@@ -5614,6 +5808,14 @@ export function ReviewWorkspace({
   // blocks stay mounted wherever the reviewer has scrolled the source.
   const pinnedReviewLines = [
     activeUnit?.startLine,
+    revisionViewport.current?.line === undefined
+      ? undefined
+      : Math.min(
+          activeUnit.endLine,
+          activeUnit.startLine +
+            revisionViewport.current.line -
+            revisionViewport.current.unit.startLine,
+        ),
     aiQuestionLine,
     aiQuestionPreviewLine,
     explanationLine,
@@ -5635,7 +5837,10 @@ export function ReviewWorkspace({
     // `overflow: clip` rather than `hidden`: hidden still forms a scroll
     // port, so focusing a visually-hidden file checkbox can scroll this
     // shell and leave the review jammed into the top of the window.
-    <div className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-clip">
+    <div
+      data-review-workspace
+      className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-clip"
+    >
       <header className="flex h-16 items-center gap-4 border-b border-line px-4 sm:px-6">
         <Link
           href="/pullrequests"
@@ -5823,8 +6028,8 @@ export function ReviewWorkspace({
         >
           <RefreshCw className="text-cyan size-4 shrink-0" />
           <p className="text-mist min-w-0 flex-1 text-xs">
-            New code changes are ready. Loading them will preserve unaffected
-            sign-offs and reopen affected units.
+            New code changes are ready. Your current review stays in place until
+            you load them. Unaffected sign-offs are preserved.
           </p>
           <Button
             size="sm"
@@ -6771,16 +6976,41 @@ export function ReviewWorkspace({
                 </button>
               </div>
             )}
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: observes user scroll intent so async layout never overrides it */}
             <div
               ref={codeScrollRef}
               data-code-scroll-pane
+              onWheel={() => {
+                cardPinInterrupted.current = true;
+              }}
+              onTouchStart={() => {
+                cardPinInterrupted.current = true;
+              }}
+              onPointerDown={() => {
+                cardPinInterrupted.current = true;
+              }}
+              onKeyDown={(event) => {
+                if (
+                  [
+                    "ArrowUp",
+                    "ArrowDown",
+                    "PageUp",
+                    "PageDown",
+                    "Home",
+                    "End",
+                    " ",
+                  ].includes(event.key)
+                ) {
+                  cardPinInterrupted.current = true;
+                }
+              }}
               onScroll={() => {
                 closeSymbolPeek();
                 updateCodeOverview();
                 updateSelectedCardChrome();
               }}
               {...peekHandlers}
-              className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-xs leading-[21px] font-medium [overflow-anchor:none]"
+              className="min-h-0 flex-1 overflow-auto bg-code pb-5 font-mono text-xs leading-[21px] font-medium [overflow-anchor:auto]"
             >
               <div aria-hidden="true" className="h-5" />
               {keyboardLine !== undefined && (
@@ -6845,6 +7075,7 @@ export function ReviewWorkspace({
               <div
                 ref={reviewUnitStartRef}
                 data-review-member-id={activeUnit.id}
+                data-review-viewer-file={activeUnit.path}
                 data-selected="true"
                 className="mx-4 scroll-mt-5"
               >
@@ -7234,6 +7465,7 @@ export function ReviewWorkspace({
                                 )}
                               <div
                                 id={`review-line-${lineNumber}`}
+                                data-current-line={lineNumber}
                                 className={cn(
                                   "group relative grid grid-cols-[66px_1fr] border-l-2 border-transparent px-4 hover:bg-surface-subtle",
                                   contextVisible &&

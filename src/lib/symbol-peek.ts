@@ -1,10 +1,10 @@
 import { builtinTypes, keywords, type SyntaxToken } from "./highlight-tokens";
 
-/** Longest excerpt a definition preview shows before the reader scrolls it. */
+/** Bounds source-scan fallback excerpts when no complete parsed declaration exists. */
 export const SYMBOL_PEEK_MAXIMUM_LINES = 18;
 
 /** Width the card is rendered at, and the width its placement is solved for. */
-export const SYMBOL_PEEK_CARD_WIDTH = 460;
+export const SYMBOL_PEEK_CARD_WIDTH = 760;
 
 /** The shape of a name a definition can be looked up for. */
 export const SYMBOL_PATTERN = "^[A-Za-z_$][\\w$]*$";

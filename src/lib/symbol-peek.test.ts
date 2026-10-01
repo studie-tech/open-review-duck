@@ -233,6 +233,17 @@ describe("peekable tokens", () => {
 });
 
 describe("definition card placement", () => {
+  it("uses the taller side for a full definition when the lower side is cramped", () => {
+    const placement = peekPlacement(
+      { bottom: 600, left: 900, top: 580 },
+      { height: 900, width: 1400 },
+      { width: 760, minimumHeight: 480 },
+    );
+    expect(placement.placement).toBe("above");
+    expect(placement.maxHeight).toBe(568);
+    expect(placement.left).toBe(628);
+  });
+
   const viewport = { height: 900, width: 1400 };
 
   it("sits under the name when there is room", () => {
@@ -262,7 +273,7 @@ describe("definition card placement", () => {
       viewport,
     );
 
-    expect(placement.left).toBe(1400 - 460 - 12);
+    expect(placement.left).toBe(1400 - 760 - 12);
   });
 
   it("never places a card off the left edge of a narrow viewport", () => {
