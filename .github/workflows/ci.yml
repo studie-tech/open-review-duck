@@ -10,18 +10,14 @@ on:
 permissions:
   contents: read
 
-# The container build keeps its layers and its package store on one sticky disk,
-# which only one run can hold at a time. Two runs on a branch therefore leave the
-# loser building from nothing, so a superseded pull-request run is stopped rather
-# than left to compete with the commit that replaced it. Pushes to main and tags
-# queue instead: those builds are published, and dropping one loses a release.
+# Stop superseded PR checks; main and release runs retain their queue.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
       DATABASE_URL: postgresql://user:password@localhost:5432/open_review_duck
@@ -74,7 +70,7 @@ jobs:
         run: pnpm build
 
   local-container:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # A cache-empty build needs this ceiling to finish cleanly; interrupting
     # BuildKit prevents its reusable layers from being persisted.
     timeout-minutes: 75
@@ -86,14 +82,14 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184
-        with:
-          cache-key: open-review-duck/local-appliance
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - name: Build the local appliance
-        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           load: true
+          cache-from: type=gha,scope=local-appliance
+          cache-to: type=gha,scope=local-appliance,mode=max
           tags: open-review-duck:ci
           provenance: false
           sbom: false
