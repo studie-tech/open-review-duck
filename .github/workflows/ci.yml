@@ -10,7 +10,8 @@ on:
 permissions:
   contents: read
 
-# Stop superseded PR checks; main and release runs retain their queue.
+# Cancel superseded PR checks, but let running main and tag checks finish.
+# GitHub replaces older pending runs in the same concurrency group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
