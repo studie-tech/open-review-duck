@@ -5,7 +5,6 @@ import {
   ChevronDown,
   Columns2,
   FileCode2,
-  RefreshCw,
 } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -16,6 +15,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { toast } from "sonner";
 import { ShortcutHint } from "~/components/command-center";
 import { Button } from "~/components/ui/button";
 import type { KeyboardShortcut } from "~/lib/keyboard-shortcuts";
@@ -773,13 +773,7 @@ export function ReviewCodeViewSwitch({
 
 export const REVISION_NOTICE_DISMISS_MS = 10_000;
 
-/**
- * Explains a newly loaded pull-request revision and then gets out of the way.
- *
- * The banner has to stay readable, but it is not a decision: after ten seconds
- * the reviewer has either absorbed it or is already in the code. The button
- * shows the remaining seconds so the auto-dismiss is not a surprise.
- */
+/** Announces loaded revisions without resizing or moving the code viewport. */
 export function ReviewRevisionLoadedNotice({
   children,
   onAcknowledge,
@@ -787,49 +781,51 @@ export function ReviewRevisionLoadedNotice({
   children: ReactNode;
   onAcknowledge: () => void;
 }) {
-  const [secondsLeft, setSecondsLeft] = useState(
-    Math.ceil(REVISION_NOTICE_DISMISS_MS / 1000),
-  );
+  const description = useRef(children);
   const acknowledge = useRef(onAcknowledge);
   acknowledge.current = onAcknowledge;
-
   useEffect(() => {
-    const startedAt = Date.now();
-    const tick = window.setInterval(() => {
-      const remainingMs = REVISION_NOTICE_DISMISS_MS - (Date.now() - startedAt);
-      if (remainingMs <= 0) {
-        window.clearInterval(tick);
-        acknowledge.current();
-        return;
-      }
-      setSecondsLeft(Math.ceil(remainingMs / 1000));
-    }, 250);
-    return () => window.clearInterval(tick);
+    let acknowledged = false;
+    /** Records a revision once whether the toast expires or is dismissed. */
+    const finish = () => {
+      if (acknowledged) return;
+      acknowledged = true;
+      acknowledge.current();
+    };
+    const id = toast.info("New pull-request revision loaded", {
+      description: description.current,
+      duration: REVISION_NOTICE_DISMISS_MS,
+      closeButton: true,
+      onDismiss: finish,
+      onAutoClose: finish,
+    });
+    return () => {
+      toast.dismiss(id);
+    };
   }, []);
+  return null;
+}
 
-  return (
-    <div
-      role="status"
-      className="border-cyan/20 bg-cyan/[.045] flex shrink-0 items-start gap-3 border-b px-4 py-3 sm:items-center sm:px-6"
-    >
-      <RefreshCw className="text-cyan mt-0.5 size-4 shrink-0 sm:mt-0" />
-      <div className="min-w-0 flex-1">
-        <p className="text-cloud text-xs font-medium">
-          New pull-request revision loaded
-        </p>
-        <p className="text-mist mt-0.5 text-[10px] leading-4">{children}</p>
-      </div>
-      <Button
-        variant="secondary"
-        size="sm"
-        className="shrink-0 tabular-nums"
-        aria-label={`Got it, dismissing in ${secondsLeft} ${secondsLeft === 1 ? "second" : "seconds"}`}
-        onClick={() => acknowledge.current()}
-      >
-        Got it · {secondsLeft}s
-      </Button>
-    </div>
-  );
+/** Announces staged changes while keeping loading an explicit reviewer action. */
+export function ReviewChangesAvailableNotice({
+  onLoad,
+}: {
+  onLoad: () => void;
+}) {
+  const load = useRef(onLoad);
+  load.current = onLoad;
+  useEffect(() => {
+    const id = toast.info("New code changes are ready", {
+      description: "Your current review stays in place until you load them.",
+      duration: 6000,
+      closeButton: true,
+      action: { label: "Load changes", onClick: () => load.current() },
+    });
+    return () => {
+      toast.dismiss(id);
+    };
+  }, []);
+  return null;
 }
 
 /**

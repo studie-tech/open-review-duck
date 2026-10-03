@@ -51,6 +51,7 @@ import {
   conceptMembersInReadingOrder,
   nextAnchorableLine,
   REVISION_NOTICE_DISMISS_MS,
+  ReviewChangesAvailableNotice,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
   ReviewFileCardSourcePlaceholder,
@@ -178,50 +179,68 @@ describe("ReviewCodeViewSwitch", () => {
   });
 });
 
-describe("ReviewRevisionLoadedNotice", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("counts down on the button and dismisses after ten seconds", () => {
-    vi.useFakeTimers();
-    const onAcknowledge = vi.fn();
-    render(
-      <ReviewRevisionLoadedNotice onAcknowledge={onAcknowledge}>
-        GitHub moved from 5591601 to 83e2e65.
+describe("revision toasts", () => {
+  it("does not render a banner or repeat a loaded-revision toast on rerender", () => {
+    const info = vi.spyOn(toast, "info").mockReturnValue("revision-toast");
+    const dismiss = vi
+      .spyOn(toast, "dismiss")
+      .mockReturnValue("revision-toast");
+    onTestFinished(() => {
+      info.mockRestore();
+      dismiss.mockRestore();
+    });
+    const acknowledged = vi.fn();
+    const { container, rerender, unmount } = render(
+      <ReviewRevisionLoadedNotice onAcknowledge={acknowledged}>
+        Revision changed.
       </ReviewRevisionLoadedNotice>,
     );
-
-    expect(
-      screen.getByRole("button", { name: "Got it, dismissing in 10 seconds" }),
-    ).toHaveTextContent("Got it · 10s");
-
-    act(() => {
-      vi.advanceTimersByTime(REVISION_NOTICE_DISMISS_MS - 1);
-    });
-    expect(onAcknowledge).not.toHaveBeenCalled();
-    expect(
-      screen.getByRole("button", { name: "Got it, dismissing in 1 second" }),
-    ).toBeVisible();
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(onAcknowledge).toHaveBeenCalledOnce();
-  });
-
-  it("dismisses immediately when the reviewer acknowledges", async () => {
-    const onAcknowledge = vi.fn();
-    render(
-      <ReviewRevisionLoadedNotice onAcknowledge={onAcknowledge}>
-        No reviewed units were reopened.
+    expect(container).toBeEmptyDOMElement();
+    expect(info).toHaveBeenCalledWith(
+      "New pull-request revision loaded",
+      expect.objectContaining({
+        duration: REVISION_NOTICE_DISMISS_MS,
+        closeButton: true,
+        description: "Revision changed.",
+      }),
+    );
+    rerender(
+      <ReviewRevisionLoadedNotice onAcknowledge={acknowledged}>
+        Revision changed.
       </ReviewRevisionLoadedNotice>,
     );
+    expect(info).toHaveBeenCalledOnce();
+    const options = info.mock.calls[0]?.[1];
+    options?.onAutoClose?.({} as never);
+    options?.onDismiss?.({} as never);
+    expect(acknowledged).toHaveBeenCalledOnce();
+    unmount();
+    expect(dismiss).toHaveBeenCalledWith("revision-toast");
+  });
 
-    await userEvent.click(
-      screen.getByRole("button", { name: /Got it, dismissing in/ }),
+  it("keeps the available-changes toast action connected to the latest load handler", () => {
+    const info = vi.spyOn(toast, "info").mockReturnValue("available-toast");
+    const dismiss = vi
+      .spyOn(toast, "dismiss")
+      .mockReturnValue("available-toast");
+    onTestFinished(() => {
+      info.mockRestore();
+      dismiss.mockRestore();
+    });
+    const first = vi.fn();
+    const latest = vi.fn();
+    const { container, rerender } = render(
+      <ReviewChangesAvailableNotice onLoad={first} />,
     );
-    expect(onAcknowledge).toHaveBeenCalledOnce();
+    expect(container).toBeEmptyDOMElement();
+    rerender(<ReviewChangesAvailableNotice onLoad={latest} />);
+    expect(info).toHaveBeenCalledOnce();
+    const action = info.mock.calls[0]?.[1]?.action;
+    if (!action || typeof action !== "object" || !("onClick" in action))
+      throw new Error("Missing toast action");
+    action.onClick({} as never);
+    expect(latest).toHaveBeenCalledOnce();
+    expect(first).not.toHaveBeenCalled();
   });
 });
 

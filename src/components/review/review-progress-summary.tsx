@@ -15,6 +15,7 @@ import {
   type ProgressUnit,
   reviewProgressBreakdown,
 } from "~/lib/review-progress";
+import { ReviewChangeComposition } from "./review-change-composition";
 
 const number = new Intl.NumberFormat("en-US");
 
@@ -109,51 +110,27 @@ export function ReviewProgressSummary({
   }, [open]);
 
   return (
-    <div className="mt-3 space-y-2.5">
-      <div className="flex min-w-0 items-center justify-between gap-2 text-[11px]">
-        <span className="text-mist">
-          {mode === "path" ? "Concepts remaining" : "Files reviewed"}
-        </span>
-        <span className="shrink-0 whitespace-nowrap font-medium text-cloud tabular-nums">
-          {mode === "path"
-            ? number.format(conceptsRemaining)
-            : `${number.format(reviewed)} / ${number.format(reviewable.length)}`}
-        </span>
-      </div>
-      <div className="flex min-w-0 items-center justify-between gap-2 text-[11px]">
-        <span className="text-mist">Units reviewed</span>
-        <span className="shrink-0 whitespace-nowrap font-medium text-cloud tabular-nums">
-          {number.format(signed)} / {number.format(units.length)}
-        </span>
-      </div>
-      <div
-        role="progressbar"
-        aria-label="Review units completed"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-        aria-valuetext={`${number.format(signed)} of ${number.format(units.length)} units reviewed`}
-        className="h-1 overflow-hidden rounded-full bg-surface-hover"
-      >
-        <div
-          className="h-full rounded-full bg-lime transition-all"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+    <div className="mt-3 flex items-center justify-between gap-2">
+      <span className="text-[10px] font-semibold uppercase tracking-[.12em] text-fog">
+        {mode === "files" ? "Changed files" : "Review concepts"}
+      </span>
       <button
         ref={trigger}
         type="button"
+        aria-label="Review details"
+        title="Review progress and change breakdown"
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? id : undefined}
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between rounded-md py-1 text-[11px] text-fog transition-colors hover:text-cyan focus-visible:outline-2 focus-visible:outline-cyan"
+        className="flex shrink-0 items-center gap-2 rounded-md border border-line px-2 py-1 text-[10px] text-fog hover:border-cyan/40 hover:text-cyan focus-visible:outline-2 focus-visible:outline-cyan"
       >
-        <span className="flex items-center gap-1.5">
-          <ChartNoAxesColumn className="size-3.5" aria-hidden="true" />
-          Change breakdown
+        <span className="whitespace-nowrap tabular-nums">
+          {mode === "files"
+            ? `${number.format(files.length)} files`
+            : `${number.format(conceptsRemaining)} left`}
         </span>
-        <ChevronRight className="size-3" aria-hidden="true" />
+        <ChartNoAxesColumn className="size-3.5" aria-hidden="true" />
       </button>
       {open &&
         createPortal(
@@ -173,16 +150,16 @@ export function ReviewProgressSummary({
                   id={`${id}-title`}
                   className="text-sm font-semibold text-cloud"
                 >
-                  Change breakdown
+                  Review details
                 </h2>
                 <p className="mt-1 text-[11px] text-fog">
-                  Changed lines by file type in this PR
+                  Progress and change composition for this PR
                 </p>
               </div>
               <button
                 ref={close}
                 type="button"
-                aria-label="Close change breakdown"
+                aria-label="Close review details"
                 onClick={() => {
                   setOpen(false);
                   trigger.current?.focus();
@@ -191,6 +168,38 @@ export function ReviewProgressSummary({
               >
                 <X className="size-4" aria-hidden="true" />
               </button>
+            </div>
+            <div className="space-y-2.5 border-b border-line px-4 py-3">
+              <div className="flex min-w-0 items-center justify-between gap-2 text-[11px]">
+                <span className="text-mist">
+                  {mode === "path" ? "Concepts remaining" : "Files reviewed"}
+                </span>
+                <span className="shrink-0 whitespace-nowrap font-medium text-cloud tabular-nums">
+                  {mode === "path"
+                    ? number.format(conceptsRemaining)
+                    : `${number.format(reviewed)} / ${number.format(reviewable.length)}`}
+                </span>
+              </div>
+              <div className="flex min-w-0 items-center justify-between gap-2 text-[11px]">
+                <span className="text-mist">Units reviewed</span>
+                <span className="shrink-0 whitespace-nowrap font-medium text-cloud tabular-nums">
+                  {number.format(signed)} / {number.format(units.length)}
+                </span>
+              </div>
+              <div
+                role="progressbar"
+                aria-label="Review units completed"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                aria-valuetext={`${number.format(signed)} of ${number.format(units.length)} units reviewed`}
+                className="h-1 overflow-hidden rounded-full bg-surface-hover"
+              >
+                <div
+                  className="h-full rounded-full bg-lime transition-all"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
             </div>
             <div className="px-4 py-3">
               <div className="mb-3 flex items-center justify-between text-[10px] text-fog">
@@ -254,6 +263,14 @@ export function ReviewProgressSummary({
                 </span>
               </div>
             </div>
+            {mode === "files" && (
+              <div className="border-t border-line px-4 py-3">
+                <p className="mb-2 text-[10px] font-medium text-fog">
+                  File changes
+                </p>
+                <ReviewChangeComposition files={files} />
+              </div>
+            )}
             <div className="border-t border-line px-4 py-3 text-[10px] leading-relaxed text-fog">
               Counts added + deleted text lines. Reviewed lines belong to
               signed-off units. Binary files have no text-line count.
