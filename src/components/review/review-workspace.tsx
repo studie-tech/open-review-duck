@@ -75,7 +75,6 @@ import {
   findImportTargetUnit,
   type ImportReference,
 } from "~/lib/import-navigation";
-import { formatShortcut } from "~/lib/keyboard-shortcuts";
 import { takeOptimisticActionBatch } from "~/lib/optimistic-action-queue";
 import { providerLabel } from "~/lib/provider-labels";
 import { followPendingProviderLifecycle } from "~/lib/provider-lifecycle";
@@ -181,7 +180,6 @@ import {
 import { HighlightedTokens } from "./highlighted-tokens";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
-import { ReviewChangeComposition } from "./review-change-composition";
 import { findNextReview, ReviewCompletion } from "./review-completion";
 import {
   isOpenProviderDiscussion,
@@ -286,6 +284,7 @@ import {
   conceptMembersInReadingOrder,
   lineWithinReviewRanges,
   nextAnchorableLine,
+  ReviewChangesAvailableNotice,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
   ReviewFileCardSourcePlaceholder,
@@ -5976,15 +5975,22 @@ export function ReviewWorkspace({
               <Keyboard className="size-4" />
             </button>
           </ReviewToolbarTooltip>
-          <ReviewSyncStatusButton
-            provider={initialData.pullRequest.provider}
-            status={syncStatus}
-            onClick={
-              updateAvailable
-                ? loadAvailableChanges
-                : () => void syncExternalData()
-            }
-          />
+          {updateAvailable ? (
+            <Button
+              size="sm"
+              loading={loadingChanges}
+              onClick={loadAvailableChanges}
+              title="New code changes are ready. Your current review stays in place until you load them."
+            >
+              Load changes
+            </Button>
+          ) : (
+            <ReviewSyncStatusButton
+              provider={initialData.pullRequest.provider}
+              status={syncStatus}
+              onClick={() => void syncExternalData()}
+            />
+          )}
           <ReviewToolbarTooltip
             label={`Open pull request in ${providerLabel(initialData.pullRequest.provider)}`}
             shortcut={reviewShortcuts.openProvider}
@@ -6011,31 +6017,13 @@ export function ReviewWorkspace({
       </header>
 
       {updateAvailable && (
-        <div
-          role="status"
-          className="border-cyan/20 bg-cyan/[.055] flex shrink-0 items-center gap-3 border-b px-4 py-2.5 sm:px-6"
-        >
-          <RefreshCw className="text-cyan size-4 shrink-0" />
-          <p className="text-mist min-w-0 flex-1 text-xs">
-            New code changes are ready. Your current review stays in place until
-            you load them. Unaffected sign-offs are preserved.
-          </p>
-          <Button
-            size="sm"
-            loading={loadingChanges}
-            onClick={loadAvailableChanges}
-            title={`Load the synced code changes (${formatShortcut(reviewShortcuts.loadChanges).join(" then ")})`}
-          >
-            <span>{loadingChanges ? "Loading changes…" : "Load changes"}</span>
-            {!loadingChanges && (
-              <ShortcutHint shortcut={reviewShortcuts.loadChanges} />
-            )}
-          </Button>
-        </div>
+        <ReviewChangesAvailableNotice onLoad={loadAvailableChanges} />
       )}
-
       {revisionNotice && (
-        <ReviewRevisionLoadedNotice onAcknowledge={acknowledgeLoadedRevision}>
+        <ReviewRevisionLoadedNotice
+          key={initialData.snapshot.id}
+          onAcknowledge={acknowledgeLoadedRevision}
+        >
           {revisionNotice.previous &&
           revisionNotice.previous.headSha !== initialData.snapshot.headSha
             ? `${providerLabel(initialData.pullRequest.provider)} moved from ${shortRevision(revisionNotice.previous.headSha)} to ${shortRevision(initialData.snapshot.headSha)}. `
@@ -6045,8 +6033,6 @@ export function ReviewWorkspace({
             : "No reviewed units were reopened. "}
           {revisionPreservedCount > 0 &&
             `${revisionPreservedCount} unaffected ${revisionPreservedCount === 1 ? "sign-off was" : "sign-offs were"} preserved. `}
-          Only a new source or analysis revision can change review state;
-          interface updates cannot.
         </ReviewRevisionLoadedNotice>
       )}
 
@@ -6133,16 +6119,6 @@ export function ReviewWorkspace({
           )}
           <div className="shrink-0 border-b border-line px-4 py-4">
             <ReviewModeSwitch mode={reviewMode} onChange={changeReviewMode} />
-            <div className="mt-4 flex items-center justify-between">
-              <span className="text-fog text-[10px] font-semibold tracking-[.16em] uppercase">
-                {reviewMode === "path" ? "Review concepts" : "Changed files"}
-              </span>
-              <Badge>
-                {reviewMode === "path"
-                  ? `${initialData.concepts.length} concepts`
-                  : `${reviewFiles.length} files`}
-              </Badge>
-            </div>
             <ReviewProgressSummary
               files={reviewFiles}
               units={units}
@@ -6151,9 +6127,6 @@ export function ReviewWorkspace({
                 initialData.concepts.length - signedConceptCount
               }
             />
-            {reviewMode === "files" && (
-              <ReviewChangeComposition files={reviewFiles} className="mt-3" />
-            )}
             <div className="relative mt-3">
               <input
                 ref={pathSearchRef}

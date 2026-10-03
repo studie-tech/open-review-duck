@@ -72,16 +72,19 @@ describe("review progress summary", () => {
         conceptsRemaining={0}
       />,
     );
-    expect(screen.getByText("Files reviewed")).toBeVisible();
-    expect(screen.getByText("Units reviewed")).toBeVisible();
-    expect(screen.queryByText("44,528")).not.toBeInTheDocument();
-    expect(screen.getByRole("progressbar")).toHaveAttribute(
+    expect(screen.queryByText("Files reviewed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Units reviewed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByText("modified")).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "Review details" });
+    fireEvent.click(trigger);
+    const popup = screen.getByRole("dialog", { name: "Review details" });
+    expect(within(popup).getByText("Files reviewed")).toBeVisible();
+    expect(within(popup).getByText("Units reviewed")).toBeVisible();
+    expect(within(popup).getByRole("progressbar")).toHaveAttribute(
       "aria-valuenow",
       "50",
     );
-    const trigger = screen.getByRole("button", { name: "Change breakdown" });
-    fireEvent.click(trigger);
-    const popup = screen.getByRole("dialog", { name: "Change breakdown" });
     expect(within(popup).getByText("Code")).toBeVisible();
     expect(within(popup).getByText("Data & config")).toBeVisible();
     expect(
@@ -91,7 +94,7 @@ describe("review progress summary", () => {
     ).toBeVisible();
     expect(within(popup).getByText("216 / 44,528")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Close change breakdown" }),
+      screen.getByRole("button", { name: "Close review details" }),
     ).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -113,6 +116,7 @@ describe("review progress summary", () => {
         conceptsRemaining={0}
       />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Review details" }));
     expect(screen.getByRole("progressbar")).toHaveAttribute(
       "aria-valuenow",
       "0.1",
@@ -128,8 +132,8 @@ describe("review progress summary", () => {
         conceptsRemaining={3}
       />,
     );
-    expect(screen.getByText("Concepts remaining")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Change breakdown" }));
+    expect(screen.queryByText("Concepts remaining")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review details" }));
     rerender(
       <ReviewProgressSummary
         files={files}
