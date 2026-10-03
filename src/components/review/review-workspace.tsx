@@ -214,6 +214,7 @@ import {
   REVIEW_PATH_PANEL_WIDTHS,
   ReviewPanelResizeHandle,
 } from "./review-panel-resize-handle";
+import { ReviewProgressSummary } from "./review-progress-summary";
 import {
   overviewMarksFromDiffRows,
   overviewRangeFromDiffRows,
@@ -1128,9 +1129,6 @@ export function ReviewWorkspace({
   const signedCount = units.filter(
     (unit) => unit.status === "signed_off",
   ).length;
-  const reviewedFileCount = reviewFiles.filter(
-    ({ state }) => state === "reviewed",
-  ).length;
   const activeReviewFile = activeUnit
     ? reviewFiles.find(({ path }) => path === activeUnit.path)
     : undefined;
@@ -1157,15 +1155,6 @@ export function ReviewWorkspace({
   const signedConceptCount = conceptProgress.filter(
     ({ status }) => status === "signed_off",
   ).length;
-  const conceptChangedLineTotal = units.reduce(
-    (total, unit) => total + unit.changedLineCount,
-    0,
-  );
-  const reviewedChangedLines = units.reduce(
-    (total, unit) =>
-      total + (unit.status === "signed_off" ? unit.changedLineCount : 0),
-    0,
-  );
   const waitingCount = units.filter((unit) => unit.status === "waiting").length;
   const availability = reviewAvailability(units);
   const hasNextActionableUnit = availability === "active";
@@ -6154,27 +6143,14 @@ export function ReviewWorkspace({
                   : `${reviewFiles.length} files`}
               </Badge>
             </div>
-            <div className="mt-3 flex items-center gap-2 text-[9px]">
-              <span className="text-cloud">
-                {reviewMode === "path"
-                  ? `${initialData.concepts.length - signedConceptCount} concepts remaining`
-                  : `${reviewedFileCount}/${reviewFiles.filter(({ totalUnits }) => totalUnits > 0).length} files reviewed`}
-              </span>
-              <span aria-hidden="true" className="text-line-strong">
-                ·
-              </span>
-              <span className="text-fog">
-                {signedCount}/{units.length} units · {reviewedChangedLines}/
-                {conceptChangedLineTotal} lines
-              </span>
-            </div>
-            <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-hover">
-              <div
-                aria-hidden="true"
-                className="bg-lime h-full rounded-full transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
+            <ReviewProgressSummary
+              files={reviewFiles}
+              units={units}
+              mode={reviewMode}
+              conceptsRemaining={
+                initialData.concepts.length - signedConceptCount
+              }
+            />
             {reviewMode === "files" && (
               <ReviewChangeComposition files={reviewFiles} className="mt-3" />
             )}
