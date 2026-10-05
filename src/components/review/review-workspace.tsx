@@ -61,6 +61,7 @@ import {
 } from "~/components/review/ai-review-status-dialog";
 import { ContextRevealControl } from "~/components/review/context-reveal-control";
 import { useStartPullRequestAiReview } from "~/components/review/use-start-pull-request-ai-review";
+import { PersonalTokenDialog } from "~/components/settings/comment-identity";
 import { ThemeToggle, toggleColorTheme } from "~/components/theme-toggle";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -426,6 +427,8 @@ export function ReviewWorkspace({
     available: stagedRevisionAvailable,
     requestLoad,
   } = useStagedReviewWorkspace(incomingData);
+  const [personalTokenConnectionId, setPersonalTokenConnectionId] =
+    useState<string>();
   const router = useRouter();
   const { navigate, pending: navigationPending } = usePendingNavigation();
   const [layoutRefreshing, startLayoutRefresh] = useTransition();
@@ -6468,6 +6471,20 @@ export function ReviewWorkspace({
         </aside>
 
         <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
+          {personalTokenConnectionId && (
+            <PersonalTokenDialog
+              connection={{
+                connectionId: personalTokenConnectionId,
+                provider: initialData.pullRequest.provider,
+                displayName: initialData.pullRequest.repositoryName,
+              }}
+              localMode={false}
+              onClose={() => setPersonalTokenConnectionId(undefined)}
+              onConnected={() => {
+                void providerReviewState.refetch();
+              }}
+            />
+          )}
           {waitingCompletionVisible && (
             <ReviewWaitingCompletion
               dashboardShortcut={reviewShortcuts.dashboard}
@@ -6506,6 +6523,7 @@ export function ReviewWorkspace({
                   approval={
                     <ProviderReviewDecision
                       embedded
+                      onConnectPersonalToken={setPersonalTokenConnectionId}
                       state={providerReviewState.data}
                       error={
                         setProviderReviewDecision.error?.message ??

@@ -34,7 +34,10 @@ import {
   oauthAuthorizationPurpose,
 } from "~/server/security/oauth-flow";
 import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
-import { requireWorkspaceAdministrator } from "~/server/workspaces/access";
+import {
+  requireWorkspaceAdministrator,
+  requireWorkspaceMembership,
+} from "~/server/workspaces/access";
 
 class InstallationClaimedError extends Error {
   override name = "InstallationClaimedError";
@@ -353,21 +356,27 @@ async function completeProviderAuthorization(
     );
   }
   const purpose = oauthAuthorizationPurpose(stateClaims.purpose);
-  if (purpose === "workspace") {
-    try {
+  try {
+    if (purpose === "workspace") {
       await requireWorkspaceAdministrator(
         db,
         state.workspaceId,
         authentication.userId,
       );
-    } catch (cause) {
-      if (cause instanceof TRPCError && cause.code === "FORBIDDEN") {
-        return securedCallbackResponse(
-          NextResponse.json({ error: "Forbidden" }, { status: 403 }),
-        );
-      }
-      throw cause;
+    } else {
+      await requireWorkspaceMembership(
+        db,
+        state.workspaceId,
+        authentication.userId,
+      );
     }
+  } catch (cause) {
+    if (cause instanceof TRPCError && cause.code === "FORBIDDEN") {
+      return securedCallbackResponse(
+        NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      );
+    }
+    throw cause;
   }
   const stateSecret = JSON.parse(
     await openVaultSecret(

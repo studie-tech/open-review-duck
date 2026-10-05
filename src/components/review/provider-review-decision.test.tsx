@@ -276,6 +276,35 @@ describe("ProviderReviewDecision", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("opens personal PAT setup for the exact team connection", async () => {
+    const connect = vi.fn();
+    render(
+      <ProviderReviewDecision
+        state={{
+          ...githubState,
+          provider: "azure_devops",
+          personalAccountRequired: true,
+          canApprove: false,
+        }}
+        loading={false}
+        mutationPending={false}
+        provider="azure_devops"
+        repositoryUrl="https://example.com/repo"
+        pullRequestUrl="https://example.com/pull/1"
+        onRefresh={vi.fn()}
+        onDecision={vi.fn()}
+        onConnectPersonalToken={connect}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Connect my Azure DevOps account" }),
+    );
+    expect(connect).toHaveBeenCalledWith("conn-github");
+    expect(
+      screen.queryByRole("link", { name: "Connect my Azure DevOps account" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("disables confirmation when refresh discovers a newer revision", async () => {
     const props = {
       loading: false,

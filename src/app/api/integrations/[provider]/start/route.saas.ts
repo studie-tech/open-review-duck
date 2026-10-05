@@ -18,7 +18,10 @@ import {
 } from "~/server/security/oauth-flow";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { sealVaultSecret } from "~/server/security/vault";
-import { requirePersonalWorkspaceAdministrator } from "~/server/workspaces/access";
+import {
+  requirePersonalWorkspaceAdministrator,
+  requireWorkspaceMembership,
+} from "~/server/workspaces/access";
 import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 
 /** Starts one App/OAuth connection with signed, one-time, PKCE-bound state. */
@@ -57,6 +60,7 @@ export async function POST(
     );
   }
   const workspace = await ensurePersonalWorkspace(db, authentication.userId);
+  let workspaceId = workspace.id;
   try {
     if (purpose === "workspace") {
       await requirePersonalWorkspaceAdministrator(db, authentication.userId);
@@ -64,7 +68,6 @@ export async function POST(
       const connection = await db.query.providerConnections.findFirst({
         where: and(
           eq(providerConnections.id, connectionId),
-          eq(providerConnections.workspaceId, workspace.id),
           eq(providerConnections.provider, provider),
         ),
       });
@@ -74,10 +77,16 @@ export async function POST(
           { status: 404 },
         );
       }
+      await requireWorkspaceMembership(
+        db,
+        connection.workspaceId,
+        authentication.userId,
+      );
+      workspaceId = connection.workspaceId;
     }
     await enforceRateLimit(
       db,
-      `${purpose === "user_identity" ? "personal-oauth-start" : "provider-oauth-start"}:${workspace.id}:${authentication.userId}`,
+      `${purpose === "user_identity" ? "personal-oauth-start" : "provider-oauth-start"}:${workspaceId}:${authentication.userId}`,
       10,
       10 * 60_000,
     );
@@ -101,7 +110,7 @@ export async function POST(
   }
   const id = randomUUID();
   const state = await new SignJWT({
-    workspaceId: workspace.id,
+    workspaceId,
     provider,
     purpose,
     ...(connectionId ? { connectionId } : {}),
@@ -118,11 +127,11 @@ export async function POST(
   const callback = oauthCallbackUrl(env.APP_URL, provider);
   await db.insert(oauthStates).values({
     id,
-    workspaceId: workspace.id,
+    workspaceId,
     provider,
     stateHash: createHash("sha256").update(state).digest("hex"),
     encryptedVerifier: await sealVaultSecret(
-      { workspaceId: workspace.id, recordId: id, provider: "oauth-state" },
+      { workspaceId, recordId: id, provider: "oauth-state" },
       JSON.stringify({
         verifier,
         ...(connectionId ? { connectionId } : {}),
