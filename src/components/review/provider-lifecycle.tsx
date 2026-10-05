@@ -129,78 +129,85 @@ export function ProviderLifecycle({
         aria-labelledby="provider-lifecycle-title"
         className="rounded-2xl border border-line bg-panel/70 p-4"
       >
-        <div className="flex flex-wrap items-start gap-3">
-          <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
-            <GitMerge className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
-              Checks and merge
-            </p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <h3 id="provider-lifecycle-title" className="text-sm text-cloud">
-                Status on {providerName}
-              </h3>
-              {state && (
-                <Badge
-                  className={cn(
-                    badgeReady
-                      ? "border-addition/30 bg-addition/10 text-addition"
-                      : summary === "failing"
-                        ? "border-coral/25 bg-coral/10 text-coral"
-                        : summary === "pending"
-                          ? "border-cyan/25 bg-cyan/10 text-cyan"
-                          : "border-line-strong bg-surface text-mist",
+        <div
+          className={
+            approval ? "grid items-start gap-5 xl:grid-cols-2" : undefined
+          }
+        >
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-start gap-3">
+              <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
+                <GitMerge className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
+                  Checks and merge
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <h3
+                    id="provider-lifecycle-title"
+                    className="text-sm text-cloud"
+                  >
+                    Status on {providerName}
+                  </h3>
+                  {state && (
+                    <Badge
+                      className={cn(
+                        badgeReady
+                          ? "border-addition/30 bg-addition/10 text-addition"
+                          : summary === "failing"
+                            ? "border-coral/25 bg-coral/10 text-coral"
+                            : summary === "pending"
+                              ? "border-cyan/25 bg-cyan/10 text-cyan"
+                              : "border-line-strong bg-surface text-mist",
+                      )}
+                    >
+                      {merged ? (
+                        <CheckCircle2 className="size-3" />
+                      ) : summary === "failing" ? (
+                        <XCircle className="size-3" />
+                      ) : mergeReady || summary === "passing" ? (
+                        <CheckCircle2 className="size-3" />
+                      ) : summary === "pending" ? (
+                        <LoaderCircle className="size-3 animate-spin" />
+                      ) : (
+                        <CircleDashed className="size-3" />
+                      )}
+                      {merged ? "Merged" : summaryLabel}
+                    </Badge>
                   )}
-                >
-                  {merged ? (
-                    <CheckCircle2 className="size-3" />
-                  ) : summary === "failing" ? (
-                    <XCircle className="size-3" />
-                  ) : mergeReady || summary === "passing" ? (
-                    <CheckCircle2 className="size-3" />
-                  ) : summary === "pending" ? (
-                    <LoaderCircle className="size-3 animate-spin" />
-                  ) : (
-                    <CircleDashed className="size-3" />
-                  )}
-                  {merged ? "Merged" : summaryLabel}
-                </Badge>
-              )}
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                aria-label="Refresh checks and merge state"
+                title="Refresh checks and merge state"
+                disabled={loading || mutationPending}
+                onClick={onRefresh}
+              >
+                {loading ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+              </Button>
             </div>
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-label="Refresh checks and merge state"
-            title="Refresh checks and merge state"
-            disabled={loading || mutationPending}
-            onClick={onRefresh}
-          >
-            {loading ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-          </Button>
-        </div>
 
-        {loading && !state ? (
-          <p role="status" className="text-mist mt-4 text-xs">
-            Synchronizing checks and merge state…
-          </p>
-        ) : error && !state ? (
-          <ProviderPermissionRecovery
-            kind={permissionDenied ? "merge" : "sync"}
-            provider={provider}
-            pullRequestUrl={pullRequestUrl}
-            reviewPath={reviewPath}
-          />
-        ) : state ? (
-          <div className="mt-4">
-            <div className={approval ? "grid gap-5 xl:grid-cols-2" : undefined}>
-              <div className="min-w-0">
+            {loading && !state ? (
+              <p role="status" className="text-mist mt-4 text-xs">
+                Synchronizing checks and merge state…
+              </p>
+            ) : error && !state ? (
+              <ProviderPermissionRecovery
+                kind={permissionDenied ? "merge" : "sync"}
+                provider={provider}
+                pullRequestUrl={pullRequestUrl}
+                reviewPath={reviewPath}
+              />
+            ) : state ? (
+              <div className="mt-4">
                 {state.checks.length > 0 ? (
                   <ul className="max-h-52 max-w-2xl space-y-1 overflow-y-auto pr-1">
                     {state.checks.map((check) => (
@@ -276,53 +283,52 @@ export function ProviderLifecycle({
                     </p>
                   )}
               </div>
-              {approval && <div className="min-w-0">{approval}</div>}
-            </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              {merged ? (
-                <p className="text-addition text-xs">
-                  This pull request is merged on {providerName}.
-                </p>
-              ) : closed ? (
-                <p className="text-mist text-xs">
-                  This pull request is closed on {providerName}.
-                </p>
-              ) : draft && onMarkReady ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={
-                    mutationPending || loading || !state.revisionCurrent
-                  }
-                  onClick={onMarkReady}
-                >
-                  <GitPullRequest className="size-3.5" />
-                  Mark ready for review
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={mutationPending || !state.canMerge}
-                  onClick={() => setConfirming(true)}
-                >
-                  <GitMerge className="size-3.5" />
-                  {mergeLabel}
-                </Button>
-              )}
-              {mutationPending && (
-                <span
-                  role="status"
-                  className="text-mist flex items-center gap-2 text-[10px]"
-                >
-                  <LoaderCircle className="size-3 animate-spin" />
-                  Updating {providerName}…
-                </span>
-              )}
-            </div>
+            ) : null}
           </div>
-        ) : null}
-        {!state && approval && <div className="mt-5">{approval}</div>}
+          {approval && <div className="min-w-0">{approval}</div>}
+        </div>
+        {state && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {merged ? (
+              <p className="text-addition text-xs">
+                This pull request is merged on {providerName}.
+              </p>
+            ) : closed ? (
+              <p className="text-mist text-xs">
+                This pull request is closed on {providerName}.
+              </p>
+            ) : draft && onMarkReady ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={mutationPending || loading || !state.revisionCurrent}
+                onClick={onMarkReady}
+              >
+                <GitPullRequest className="size-3.5" />
+                Mark ready for review
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={mutationPending || !state.canMerge}
+                onClick={() => setConfirming(true)}
+              >
+                <GitMerge className="size-3.5" />
+                {mergeLabel}
+              </Button>
+            )}
+            {mutationPending && (
+              <span
+                role="status"
+                className="text-mist flex items-center gap-2 text-[10px]"
+              >
+                <LoaderCircle className="size-3 animate-spin" />
+                Updating {providerName}…
+              </span>
+            )}
+          </div>
+        )}
       </section>
 
       {confirming && state && (
