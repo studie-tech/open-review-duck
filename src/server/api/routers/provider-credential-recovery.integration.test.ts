@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { localCredentials, providerConnections, users } from "@/drizzle/schema";
+import {
+  localCredentials,
+  providerConnections,
+  userProviderCredentials,
+  users,
+  workspaceMembers,
+} from "@/drizzle/schema";
 import { createCaller } from "~/server/api/root";
 import { db } from "~/server/db";
 import { openVaultSecret } from "~/server/security/vault";
@@ -25,6 +31,7 @@ async function localReviewer() {
   const workspace = await ensurePersonalWorkspace(db, userId);
   return {
     workspaceId: workspace.id,
+    userId,
     caller: createCaller({
       auth: { userId, has: () => false },
       db,
@@ -38,6 +45,45 @@ afterAll(async () => {
 });
 
 describe("local provider credential recovery", () => {
+  it("lets members connect their own PAT to a team connection and refuses outsiders", async () => {
+    const owner = await localReviewer();
+    const member = await localReviewer();
+    const outsider = await localReviewer();
+    const connection = await owner.caller.provider.connect({
+      provider: "azure_devops",
+      accessToken: "team-shared-token",
+      baseUrl: "https://dev.azure.com/reviewduck-test",
+      displayName: "Team",
+    });
+    await db.insert(workspaceMembers).values({
+      workspaceId: owner.workspaceId,
+      userId: member.userId,
+      role: "member",
+    });
+    await expect(
+      member.caller.provider.connectPersonalCredential({
+        connectionId: connection.id,
+        accessToken: "member-personal-token",
+      }),
+    ).resolves.toBeDefined();
+    const credential = await db.query.userProviderCredentials.findFirst({
+      where: eq(userProviderCredentials.connectionId, connection.id),
+    });
+    expect(credential).toMatchObject({
+      userId: member.userId,
+      connectionId: connection.id,
+    });
+    await expect(
+      outsider.caller.provider.connectPersonalCredential({
+        connectionId: connection.id,
+        accessToken: "outsider-token",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const credentials = await db.query.userProviderCredentials.findMany({
+      where: eq(userProviderCredentials.connectionId, connection.id),
+    });
+    expect(credentials).toHaveLength(1);
+  });
   it("recovers a connection with a token an earlier disconnect abandoned", async () => {
     const { caller, workspaceId } = await localReviewer();
     const abandoned = await caller.provider.connect({

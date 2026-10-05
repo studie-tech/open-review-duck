@@ -37,6 +37,7 @@ export function ProviderReviewDecision({
   loading,
   mutationPending,
   onDecision,
+  onConnectPersonalToken,
   onRefresh,
   permissionDenied,
   provider,
@@ -49,6 +50,7 @@ export function ProviderReviewDecision({
   error?: string;
   loading: boolean;
   mutationPending: boolean;
+  onConnectPersonalToken?: (connectionId: string) => void;
   onDecision: (action: ReviewAction, body?: string) => void;
   onRefresh: () => void;
   permissionDenied?: boolean;
@@ -272,6 +274,16 @@ export function ProviderReviewDecision({
                       size="sm"
                       loading={authorizationPending}
                       onClick={() => void connectPersonalAccount()}
+                    >
+                      <KeyRound className="size-3.5" />
+                      Connect my {providerName} account
+                    </Button>
+                  ) : onConnectPersonalToken ? (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        onConnectPersonalToken(state.connection.connectionId)
+                      }
                     >
                       <KeyRound className="size-3.5" />
                       Connect my {providerName} account

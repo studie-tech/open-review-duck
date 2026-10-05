@@ -297,10 +297,11 @@ export function CommentIdentity({
 }
 
 /** Collects one personal PAT for the selected workspace connection. */
-function PersonalTokenDialog({
+export function PersonalTokenDialog({
   connection,
   localMode,
   onClose,
+  onConnected,
 }: {
   connection:
     | {
@@ -311,6 +312,7 @@ function PersonalTokenDialog({
     | undefined;
   localMode: boolean;
   onClose: () => void;
+  onConnected?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -320,6 +322,7 @@ function PersonalTokenDialog({
     onSuccess: async () => {
       await utils.provider.commentIdentity.invalidate();
       toast.success("Personal account connected");
+      onConnected?.();
       onClose();
     },
   });
@@ -354,7 +357,7 @@ function PersonalTokenDialog({
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
             <h2 id={titleId} className="text-cloud text-base font-semibold">
-              Post as yourself on {providerLabel(connection.provider)}
+              Connect your {providerLabel(connection.provider)} account
             </h2>
             <p className="text-mist mt-1 text-xs leading-5">
               Paste a token for your own {providerLabel(connection.provider)}{" "}

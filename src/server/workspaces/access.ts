@@ -17,7 +17,7 @@ function assertAdministrativeRole(role: string) {
 }
 
 /** Loads a workspace only when the user is an active member. */
-async function requireWorkspaceMembership(
+export async function requireWorkspaceMembership(
   db: Database,
   workspaceId: string,
   userId: string,

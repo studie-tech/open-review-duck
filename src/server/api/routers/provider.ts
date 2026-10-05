@@ -56,7 +56,10 @@ import { enforceRateLimit } from "~/server/security/rate-limit";
 import { assertSafeRemoteUrl } from "~/server/security/remote-url";
 import { sealVaultSecret } from "~/server/security/vault";
 import { pruneExpiredReviewSnapshots } from "~/server/sync/retention";
-import { requirePersonalWorkspaceAdministrator } from "~/server/workspaces/access";
+import {
+  requirePersonalWorkspaceAdministrator,
+  requireWorkspaceMembership,
+} from "~/server/workspaces/access";
 import { ensurePersonalWorkspace } from "~/server/workspaces/service";
 import {
   connectionIdSchema,
@@ -193,20 +196,21 @@ export const providerRouter = createTRPCRouter({
   connectPersonalCredential: protectedProcedure
     .input(connectPersonalProviderSchema)
     .mutation(async ({ ctx, input }) => {
-      const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
       await enforceRateLimit(
         ctx.db,
-        `personal-provider-connect:${workspace.id}:${ctx.auth.userId}`,
+        `personal-provider-connect:${input.connectionId}:${ctx.auth.userId}`,
         10,
         10 * 60_000,
       );
       const connection = await ctx.db.query.providerConnections.findFirst({
-        where: and(
-          eq(providerConnections.id, input.connectionId),
-          eq(providerConnections.workspaceId, workspace.id),
-        ),
+        where: eq(providerConnections.id, input.connectionId),
       });
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      await requireWorkspaceMembership(
+        ctx.db,
+        connection.workspaceId,
+        ctx.auth.userId,
+      );
       try {
         return await savePersonalProviderPat(ctx.db, {
           userId: ctx.auth.userId,
