@@ -32,6 +32,7 @@ type ReviewAction =
 
 /** Renders live provider review state and exact-revision decision controls. */
 export function ProviderReviewDecision({
+  embedded = false,
   error,
   loading,
   mutationPending,
@@ -44,6 +45,7 @@ export function ProviderReviewDecision({
   reviewPath,
   state,
 }: {
+  embedded?: boolean;
   error?: string;
   loading: boolean;
   mutationPending: boolean;
@@ -138,7 +140,11 @@ export function ProviderReviewDecision({
     <>
       <section
         aria-labelledby="provider-review-title"
-        className="rounded-2xl border border-line bg-panel/70 p-4"
+        className={
+          embedded
+            ? "border-t border-line pt-4 xl:border-t-0 xl:border-l xl:pl-5 xl:pt-0"
+            : "rounded-2xl border border-line bg-panel/70 p-4"
+        }
       >
         <div className="flex flex-wrap items-start gap-3">
           <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
@@ -146,7 +152,7 @@ export function ProviderReviewDecision({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">
-              Provider approval
+              {embedded ? "Your review" : "Provider approval"}
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <h3 id="provider-review-title" className="text-sm text-cloud">
