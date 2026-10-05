@@ -634,4 +634,41 @@ describe("ProviderLifecycle", () => {
       ).toBeVisible();
     });
   });
+  it.each(["blocked", "unavailable"])(
+    "keeps approval available inside the merge card when checks are %s",
+    (status) => {
+      render(
+        <ProviderLifecycle
+          approval={<button type="button">Approve</button>}
+          state={
+            status === "blocked"
+              ? {
+                  ...githubLifecycle,
+                  canMerge: false,
+                  mergeBlockedReason: "An approval is required.",
+                }
+              : undefined
+          }
+          error={
+            status === "unavailable"
+              ? "Checks could not be refreshed"
+              : undefined
+          }
+          loading={false}
+          mutationPending={false}
+          pullRequest={githubPullRequest}
+          onRefresh={vi.fn()}
+          onMerge={vi.fn()}
+        />,
+      );
+      const approve = screen.getByRole("button", { name: "Approve" });
+      expect(approve).toBeEnabled();
+      const card = approve.closest("section");
+      expect(card).toHaveTextContent("Checks and merge");
+      if (status === "blocked")
+        expect(
+          within(card as HTMLElement).getByRole("button", { name: "Merge" }),
+        ).toBeDisabled();
+    },
+  );
 });

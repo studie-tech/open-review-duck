@@ -11,7 +11,7 @@ import {
   RefreshCw,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
@@ -35,6 +35,7 @@ type LifecycleState = RouterOutputs["review"]["providerLifecycle"];
 
 /** Renders live CI checks and the provider merge action after a review. */
 export function ProviderLifecycle({
+  approval,
   discussions,
   error,
   loading,
@@ -48,6 +49,8 @@ export function ProviderLifecycle({
   reviewPath,
   state,
 }: {
+  /** Personal review controls, placed before the provider merge action. */
+  approval?: ReactNode;
   /** Open review conversations, quoted when they are what blocks merging. */
   discussions?: readonly AiFixPromptDiscussion[];
   error?: string;
@@ -196,78 +199,85 @@ export function ProviderLifecycle({
           />
         ) : state ? (
           <div className="mt-4">
-            {state.checks.length > 0 ? (
-              <ul className="max-h-52 max-w-2xl space-y-1 overflow-y-auto pr-1">
-                {state.checks.map((check) => (
-                  <li key={check.id}>
-                    <CheckRow check={check} pullRequest={pullRequest} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-mist text-[10px] leading-4">
-                {providerName} has not reported any checks or pipelines for this
-                revision yet.
-              </p>
-            )}
+            <div className={approval ? "grid gap-5 xl:grid-cols-2" : undefined}>
+              <div className="min-w-0">
+                {state.checks.length > 0 ? (
+                  <ul className="max-h-52 max-w-2xl space-y-1 overflow-y-auto pr-1">
+                    {state.checks.map((check) => (
+                      <li key={check.id}>
+                        <CheckRow check={check} pullRequest={pullRequest} />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-mist text-[10px] leading-4">
+                    {providerName} has not reported any checks or pipelines for
+                    this revision yet.
+                  </p>
+                )}
 
-            {readyError && (
-              <p role="alert" className="text-coral mt-3 text-xs leading-5">
-                {readyError}
-              </p>
-            )}
-            {actionableError && !showPermissionRecovery && (
-              <p role="alert" className="text-coral mt-3 text-xs leading-5">
-                {actionableError}
-              </p>
-            )}
-            {state.mergeBlockedReason && !merged && !missingMergePermission && (
-              <div className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
-                <p>{state.mergeBlockedReason}</p>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <a
-                    href={pullRequestUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-cyan inline-flex items-center gap-1 hover:underline"
-                  >
-                    Open on {providerName}
-                    <ExternalLink className="size-3" />
-                  </a>
-                  {mergeBlockedFix && (
-                    <CopyAiFixPromptButton
-                      variant="inline"
-                      className="-mx-1"
-                      subject="the merge block"
-                      prompt={mergeBlockedPrompt}
-                    />
+                {readyError && (
+                  <p role="alert" className="text-coral mt-3 text-xs leading-5">
+                    {readyError}
+                  </p>
+                )}
+                {actionableError && !showPermissionRecovery && (
+                  <p role="alert" className="text-coral mt-3 text-xs leading-5">
+                    {actionableError}
+                  </p>
+                )}
+                {state.mergeBlockedReason &&
+                  !merged &&
+                  !missingMergePermission && (
+                    <div className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
+                      <p>{state.mergeBlockedReason}</p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <a
+                          href={pullRequestUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-cyan inline-flex items-center gap-1 hover:underline"
+                        >
+                          Open on {providerName}
+                          <ExternalLink className="size-3" />
+                        </a>
+                        {mergeBlockedFix && (
+                          <CopyAiFixPromptButton
+                            variant="inline"
+                            className="-mx-1"
+                            subject="the merge block"
+                            prompt={mergeBlockedPrompt}
+                          />
+                        )}
+                      </div>
+                    </div>
                   )}
-                </div>
+                {showPermissionRecovery && (
+                  <ProviderPermissionRecovery
+                    kind={
+                      readyError && permissionDenied
+                        ? "ready"
+                        : permissionDenied || missingMergePermission
+                          ? "merge"
+                          : "sync"
+                    }
+                    provider={provider}
+                    connection={state.connection}
+                    pullRequestUrl={pullRequestUrl}
+                    reviewPath={reviewPath}
+                  />
+                )}
+                {(summary === "failing" || optionalPending) &&
+                  state.canMerge && (
+                    <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
+                      {summary === "failing"
+                        ? `Some checks have not passed. ${providerName} still allows merging this revision.`
+                        : `Some checks haven't completed yet. ${providerName} still allows merging this revision.`}
+                    </p>
+                  )}
               </div>
-            )}
-            {showPermissionRecovery && (
-              <ProviderPermissionRecovery
-                kind={
-                  readyError && permissionDenied
-                    ? "ready"
-                    : permissionDenied || missingMergePermission
-                      ? "merge"
-                      : "sync"
-                }
-                provider={provider}
-                connection={state.connection}
-                pullRequestUrl={pullRequestUrl}
-                reviewPath={reviewPath}
-              />
-            )}
-            {(summary === "failing" || optionalPending) && state.canMerge && (
-              <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
-                {summary === "failing"
-                  ? `Some checks have not passed. ${providerName} still allows merging this revision.`
-                  : `Some checks haven't completed yet. ${providerName} still allows merging this revision.`}
-              </p>
-            )}
-
+              {approval && <div className="min-w-0">{approval}</div>}
+            </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {merged ? (
                 <p className="text-addition text-xs">
@@ -312,6 +322,7 @@ export function ProviderLifecycle({
             </div>
           </div>
         ) : null}
+        {!state && approval && <div className="mt-5">{approval}</div>}
       </section>
 
       {confirming && state && (

@@ -36,7 +36,6 @@ interface ReviewCompletionProps {
   discussionStatus?: ReactNode;
   lifecycle?: ReactNode;
   openDiscussions?: number;
-  providerReview: ReactNode;
   queueLoading: boolean;
   onDashboard: () => void;
   onDismiss: () => void;
@@ -146,7 +145,6 @@ export function ReviewCompletion({
   discussionStatus,
   lifecycle,
   openDiscussions = 0,
-  providerReview,
   queueLoading,
   onDashboard,
   onDismiss,
@@ -237,8 +235,6 @@ export function ReviewCompletion({
                 {lifecycle}
               </div>
               <div className="space-y-4">
-                {providerReview}
-
                 {nextReview ? (
                   <div>
                     <p className="text-fog text-[9px] font-semibold tracking-[.15em] uppercase">

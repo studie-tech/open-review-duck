@@ -6503,6 +6503,39 @@ export function ReviewWorkspace({
               }
               lifecycle={
                 <ProviderLifecycle
+                  approval={
+                    <ProviderReviewDecision
+                      embedded
+                      state={providerReviewState.data}
+                      error={
+                        setProviderReviewDecision.error?.message ??
+                        providerReviewState.error?.message
+                      }
+                      loading={providerReviewState.isFetching}
+                      mutationPending={setProviderReviewDecision.isPending}
+                      permissionDenied={
+                        setProviderReviewDecision.error?.data?.code ===
+                          "FORBIDDEN" ||
+                        providerReviewState.error?.data?.code === "FORBIDDEN"
+                      }
+                      provider={initialData.pullRequest.provider}
+                      repositoryUrl={initialData.pullRequest.repositoryWebUrl}
+                      pullRequestUrl={initialData.pullRequest.webUrl}
+                      reviewPath={`/review/${initialData.pullRequest.id}`}
+                      onRefresh={() => {
+                        void providerReviewState.refetch().then((result) => {
+                          if (!result.error) setProviderReviewDecision.reset();
+                        });
+                      }}
+                      onDecision={(action, body) =>
+                        setProviderReviewDecision.mutate({
+                          pullRequestId: initialData.pullRequest.id,
+                          action,
+                          body,
+                        })
+                      }
+                    />
+                  }
                   state={providerLifecycle.data}
                   error={
                     mergePullRequest.error?.message ??
@@ -6539,38 +6572,6 @@ export function ReviewWorkspace({
                   onMerge={() =>
                     mergePullRequest.mutate({
                       pullRequestId: initialData.pullRequest.id,
-                    })
-                  }
-                />
-              }
-              providerReview={
-                <ProviderReviewDecision
-                  state={providerReviewState.data}
-                  error={
-                    setProviderReviewDecision.error?.message ??
-                    providerReviewState.error?.message
-                  }
-                  loading={providerReviewState.isFetching}
-                  mutationPending={setProviderReviewDecision.isPending}
-                  permissionDenied={
-                    setProviderReviewDecision.error?.data?.code ===
-                      "FORBIDDEN" ||
-                    providerReviewState.error?.data?.code === "FORBIDDEN"
-                  }
-                  provider={initialData.pullRequest.provider}
-                  repositoryUrl={initialData.pullRequest.repositoryWebUrl}
-                  pullRequestUrl={initialData.pullRequest.webUrl}
-                  reviewPath={`/review/${initialData.pullRequest.id}`}
-                  onRefresh={() => {
-                    void providerReviewState.refetch().then((result) => {
-                      if (!result.error) setProviderReviewDecision.reset();
-                    });
-                  }}
-                  onDecision={(action, body) =>
-                    setProviderReviewDecision.mutate({
-                      pullRequestId: initialData.pullRequest.id,
-                      action,
-                      body,
                     })
                   }
                 />
