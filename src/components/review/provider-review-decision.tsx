@@ -6,17 +6,22 @@ import {
   ExternalLink,
   GitFork,
   GitPullRequest,
+  KeyRound,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
   Undo2,
   XCircle,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
+import { startHostedProviderAuthorization } from "~/lib/hosted-provider-authorization";
 import { providerLabel } from "~/lib/provider-labels";
+import { providerSettingsHref } from "~/lib/provider-permission-recovery";
 import { cn } from "~/lib/utils";
 import type { RouterInputs, RouterOutputs } from "~/trpc/react";
 import { ProviderPermissionRecovery } from "./provider-permission-recovery";
@@ -54,20 +59,43 @@ export function ProviderReviewDecision({
   const [confirmation, setConfirmation] = useState<ReviewAction>();
   const [reason, setReason] = useState("");
   const providerName = providerLabel(provider);
-  const githubAppReviewHandoff = Boolean(
-    state?.connection.credentialKind === "github_app" &&
-      state.unavailableReason &&
-      /personal approval|personal review decision|GitHub user identity/i.test(
-        state.unavailableReason,
-      ),
+  const [authorizationPending, setAuthorizationPending] = useState(false);
+  const personalAccountRequired = Boolean(state?.personalAccountRequired);
+  const personalAuthorizationError = Boolean(
+    error && /authorization expired|Connect your .* account/i.test(error),
   );
+  const needsPersonalAccount =
+    personalAccountRequired || personalAuthorizationError;
+
+  /** Connects the reviewer's identity without changing comment posting settings. */
+  async function connectPersonalAccount() {
+    if (!state || provider === "azure_devops") return;
+    setAuthorizationPending(true);
+    try {
+      await startHostedProviderAuthorization(
+        provider,
+        reviewPath ?? "/settings/providers",
+        undefined,
+        {
+          purpose: "user_identity",
+          connectionId: state.connection.connectionId,
+        },
+      );
+    } catch (cause) {
+      setAuthorizationPending(false);
+      toast.error(
+        cause instanceof Error ? cause.message : "Authorization failed",
+      );
+    }
+  }
   const permissionLikeUnavailable = Boolean(
     state?.unavailableReason &&
-      !githubAppReviewHandoff &&
+      !needsPersonalAccount &&
       /permission|reconnect/i.test(state.unavailableReason),
   );
   const showPermissionRecovery = Boolean(
-    permissionDenied || permissionLikeUnavailable || (error && !state),
+    !needsPersonalAccount &&
+      (permissionDenied || permissionLikeUnavailable || (error && !state)),
   );
   const decisionLabel =
     state?.decision === "approved"
@@ -90,7 +118,9 @@ export function ProviderReviewDecision({
     if (!confirmation) return;
     onDecision(
       confirmation,
-      confirmation === "request_changes" ? reason.trim() : undefined,
+      confirmation === "request_changes" && state?.provider !== "azure_devops"
+        ? reason.trim()
+        : undefined,
     );
   }
 
@@ -120,9 +150,9 @@ export function ProviderReviewDecision({
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <h3 id="provider-review-title" className="text-sm text-cloud">
-                Finish on {providerName}
+                Review on {providerName}
               </h3>
-              {state && (
+              {state && !needsPersonalAccount && (
                 <Badge
                   className={cn(
                     state.decision === "approved"
@@ -163,6 +193,15 @@ export function ProviderReviewDecision({
           <p role="status" className="text-mist mt-4 text-xs">
             Synchronizing approval state…
           </p>
+        ) : error && !state && personalAuthorizationError ? (
+          <div className="mt-4 text-xs text-mist">
+            <p role="alert">{error}</p>
+            <Button asChild size="sm" className="mt-3">
+              <Link href="/settings/providers">
+                Reconnect my {providerName} account
+              </Link>
+            </Button>
+          </div>
         ) : error && !state ? (
           <ProviderPermissionRecovery
             kind={permissionDenied ? "review" : "sync"}
@@ -188,7 +227,11 @@ export function ProviderReviewDecision({
                   {state.changesRequestedCount} requesting changes
                 </span>
               )}
-              <span className="text-fog">Live state for {state.actorName}</span>
+              <span className="text-fog">
+                {needsPersonalAccount
+                  ? "Workspace approval totals"
+                  : `Live state for ${state.actorName}`}
+              </span>
             </div>
             {error && !showPermissionRecovery && (
               <p role="alert" className="text-coral mt-3 text-xs leading-5">
@@ -197,35 +240,60 @@ export function ProviderReviewDecision({
             )}
             {state.unavailableReason &&
               !permissionLikeUnavailable &&
-              !githubAppReviewHandoff && (
+              (!needsPersonalAccount || !state.revisionCurrent) && (
                 <p className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
                   {state.unavailableReason}
                 </p>
               )}
-            {githubAppReviewHandoff && (
+            {needsPersonalAccount && (
               <div
                 role="note"
-                aria-label="GitHub App review handoff"
+                aria-label="Connect personal review account"
                 className="mt-3 rounded-xl border border-line bg-surface/50 px-3 py-3"
               >
                 <p className="text-cloud text-xs font-medium">
-                  Review decisions happen on GitHub
+                  Approve from ReviewDuck
                 </p>
                 <p className="text-mist mt-1 text-[10px] leading-4">
-                  ReviewDuck keeps the approval status in sync through the
-                  GitHub App. GitHub requires approvals and change requests to
-                  be submitted by your personal user.
+                  Connect your {providerName} account to submit your own review
+                  decision here. Your comment posting preference stays
+                  unchanged.
                 </p>
-                <Button asChild size="sm" variant="secondary" className="mt-3">
-                  <a href={pullRequestUrl} target="_blank" rel="noreferrer">
-                    Review on GitHub
-                    <ExternalLink className="size-3.5" />
-                  </a>
-                </Button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {state.connection.canReconnect &&
+                  provider !== "azure_devops" ? (
+                    <Button
+                      size="sm"
+                      loading={authorizationPending}
+                      onClick={() => void connectPersonalAccount()}
+                    >
+                      <KeyRound className="size-3.5" />
+                      Connect my {providerName} account
+                    </Button>
+                  ) : (
+                    <Button asChild size="sm">
+                      <Link
+                        href={providerSettingsHref(
+                          state.connection.connectionId,
+                        )}
+                      >
+                        <KeyRound className="size-3.5" />
+                        Connect my {providerName} account
+                      </Link>
+                    </Button>
+                  )}
+                  <Button asChild size="sm" variant="secondary">
+                    <a href={pullRequestUrl} target="_blank" rel="noreferrer">
+                      Review on {providerName}
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </Button>
+                </div>
               </div>
             )}
             {showPermissionRecovery && (
               <ProviderPermissionRecovery
+                personalAccount
                 kind={
                   permissionDenied || permissionLikeUnavailable
                     ? "review"
@@ -238,24 +306,27 @@ export function ProviderReviewDecision({
               />
             )}
             <div className="mt-4 flex flex-wrap gap-2">
-              {state.canApprove && state.decision !== "approved" && (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={mutationPending}
-                  onClick={() => setConfirmation("approve")}
-                >
-                  <Check className="size-3.5" />
-                  Approve
-                </Button>
-              )}
-              {state.canRequestChanges &&
+              {!needsPersonalAccount &&
+                state.canApprove &&
+                state.decision !== "approved" && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={mutationPending || loading}
+                    onClick={() => setConfirmation("approve")}
+                  >
+                    <Check className="size-3.5" />
+                    Approve
+                  </Button>
+                )}
+              {!needsPersonalAccount &&
+                state.canRequestChanges &&
                 state.decision !== "changes_requested" && (
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
-                    disabled={mutationPending}
+                    disabled={mutationPending || loading}
                     onClick={() => {
                       setReason("");
                       setConfirmation("request_changes");
@@ -265,12 +336,12 @@ export function ProviderReviewDecision({
                     {requestChangesLabel}
                   </Button>
                 )}
-              {state.canClear && (
+              {!needsPersonalAccount && state.canClear && (
                 <Button
                   type="button"
                   size="sm"
                   variant="ghost"
-                  disabled={mutationPending}
+                  disabled={mutationPending || loading}
                   onClick={() => setConfirmation("clear")}
                 >
                   <Undo2 className="size-3.5" />
@@ -324,7 +395,10 @@ export function ProviderReviewDecision({
                 : `${requestChangesLabel} on ${providerName}?`
           }
           description={
-            confirmation === "request_changes" ? (
+            confirmation === "request_changes" &&
+            state.provider === "azure_devops" ? (
+              "This records a rejection vote on Azure DevOps. Add a discussion separately if you need to explain the changes."
+            ) : confirmation === "request_changes" ? (
               <div>
                 <p>
                   This decision is submitted against the exact revision you
@@ -342,11 +416,7 @@ export function ProviderReviewDecision({
                   maxLength={10_000}
                   onChange={(event) => setReason(event.target.value)}
                   className="bg-ink text-cloud placeholder:text-fog focus:border-cyan/45 mt-2 min-h-28 w-full resize-y rounded-xl border border-line px-3 py-2 text-xs outline-none"
-                  placeholder={
-                    state.provider === "azure_devops"
-                      ? "Add a note in ReviewDuck separately if context is needed."
-                      : "Explain what needs to change…"
-                  }
+                  placeholder="Explain what needs to change…"
                 />
               </div>
             ) : confirmation === "clear" ? (
@@ -367,7 +437,12 @@ export function ProviderReviewDecision({
           confirmVariant={
             confirmation === "request_changes" ? "danger" : "primary"
           }
-          confirmDisabled={requiresReason && !reason.trim()}
+          confirmDisabled={
+            loading ||
+            needsPersonalAccount ||
+            !state.revisionCurrent ||
+            (requiresReason && !reason.trim())
+          }
           pending={mutationPending}
           pendingLabel={
             <span className="flex items-center gap-2">

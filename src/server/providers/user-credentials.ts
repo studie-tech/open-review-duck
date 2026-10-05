@@ -121,6 +121,47 @@ export async function providerForReviewerRead(
   return providerForPublicationIdentity(db, connection, userId, identity);
 }
 
+/** Resolves approval identity independently of the comment posting preference. */
+export async function providerForReviewDecision(
+  db: Database,
+  connection: ProviderConnection,
+  userId: string,
+  write = false,
+) {
+  const credential = await db.query.userProviderCredentials.findFirst({
+    columns: { id: true },
+    where: and(
+      eq(userProviderCredentials.userId, userId),
+      eq(userProviderCredentials.connectionId, connection.id),
+    ),
+  });
+  if (credential) {
+    return {
+      provider: await providerForPublicationIdentity(
+        db,
+        connection,
+        userId,
+        "reviewer",
+      ),
+      personalAccountRequired: false,
+    };
+  }
+  // A local token belongs to the local operator. Shared hosted credentials
+  // must never record a human approval on behalf of another workspace member.
+  const personalAccountRequired =
+    !isLocalDeployment() || connection.credentialKind === "github_app";
+  if (write && personalAccountRequired) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: missingPersonalProviderMessage(connection.provider),
+    });
+  }
+  return {
+    provider: await providerForConnection(db, connection),
+    personalAccountRequired,
+  };
+}
+
 /**
  * Resolves the provider client one write should use, and names that identity
  * so the ledger can edit or delete with the same credential later.

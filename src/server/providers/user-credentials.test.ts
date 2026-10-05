@@ -1,11 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { providerConnections } from "@/drizzle/schema";
-import { sealVaultSecret } from "~/server/security/vault";
+import { openVaultSecret, sealVaultSecret } from "~/server/security/vault";
 import {
   deleteUserProviderCredential,
   missingPersonalProviderMessage,
   providerForPublicationIdentity,
+  providerForReviewDecision,
   providerForReviewerRead,
   providerForReviewerWrite,
   revokeUserProviderCredentials,
@@ -160,6 +161,135 @@ describe("personal publication identity", () => {
         "user-1",
       ),
     ).resolves.toBe(workspaceProvider);
+  });
+});
+
+describe("review decision identity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isLocalDeployment.mockReturnValue(false);
+  });
+
+  it.each(["github", "gitlab", "azure_devops"] as const)(
+    "uses the connected %s reviewer even when comments use the workspace",
+    async (provider) => {
+      const credential = {
+        id: "personal",
+        credentialKind: "pat",
+        encryptedAccessToken: "sealed",
+        expiresAt: null,
+      };
+      const membership = vi.fn().mockResolvedValue({ publishAsSelf: false });
+      const db = {
+        query: {
+          userProviderCredentials: {
+            findFirst: vi.fn().mockResolvedValue(credential),
+          },
+          workspaceMembers: { findFirst: membership },
+        },
+      };
+      vi.mocked(openVaultSecret).mockResolvedValue("personal-token");
+      const selected = await providerForReviewDecision(
+        db as never,
+        {
+          ...connection,
+          provider,
+          baseUrl:
+            provider === "azure_devops" ? "https://dev.azure.com/acme" : null,
+        },
+        "user-1",
+        true,
+      );
+      expect(selected.personalAccountRequired).toBe(false);
+      expect(selected.provider.name).toBe(provider);
+      expect(membership).not.toHaveBeenCalled();
+      expect(providerForConnection).not.toHaveBeenCalled();
+      expect(openVaultSecret).toHaveBeenCalledWith(
+        expect.objectContaining({ recordId: "personal" }),
+        "sealed",
+      );
+    },
+  );
+
+  it.each(["github", "gitlab", "azure_devops"] as const)(
+    "reads shared %s totals but refuses a shared approval without a reviewer credential",
+    async (provider) => {
+      const shared = { name: provider };
+      const db = {
+        query: {
+          userProviderCredentials: {
+            findFirst: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+      };
+      providerForConnection.mockResolvedValue(shared);
+      expect(
+        await providerForReviewDecision(
+          db as never,
+          { ...connection, provider },
+          "user-1",
+        ),
+      ).toEqual({
+        provider: shared,
+        personalAccountRequired: true,
+      });
+      await expect(
+        providerForReviewDecision(
+          db as never,
+          { ...connection, provider },
+          "user-1",
+          true,
+        ),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(providerForConnection).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves local operator PAT approvals but never approves as a GitHub installation", async () => {
+    isLocalDeployment.mockReturnValue(true);
+    const db = {
+      query: {
+        userProviderCredentials: {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    };
+    providerForConnection.mockResolvedValue({ name: "github" });
+    expect(
+      (
+        await providerForReviewDecision(
+          db as never,
+          { ...connection, credentialKind: "local_pat" },
+          "local",
+          true,
+        )
+      ).personalAccountRequired,
+    ).toBe(false);
+    await expect(
+      providerForReviewDecision(db as never, connection, "local", true),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+
+  it("does not fall back to a shared approval when opening a personal credential fails", async () => {
+    const db = {
+      query: {
+        userProviderCredentials: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: "personal",
+            credentialKind: "pat",
+            encryptedAccessToken: "bad",
+            expiresAt: null,
+          }),
+        },
+      },
+    };
+    vi.mocked(openVaultSecret).mockRejectedValue(
+      new Error("Personal credential unavailable"),
+    );
+    await expect(
+      providerForReviewDecision(db as never, connection, "user-1", true),
+    ).rejects.toThrow("Personal credential unavailable");
+    expect(providerForConnection).not.toHaveBeenCalled();
   });
 });
 

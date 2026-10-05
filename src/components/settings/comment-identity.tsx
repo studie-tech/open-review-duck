@@ -96,7 +96,7 @@ export function CommentIdentity({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 id={headingId} className="text-sm font-medium text-cloud">
-              Posting identity
+              Provider identity
             </h3>
             <span
               className={cn(
@@ -117,8 +117,8 @@ export function CommentIdentity({
             {needsAccount
               ? `Connect your ${providerLabel(connection.provider)} account to resume posting.`
               : publishAsSelf
-                ? "Comments, replies, and review decisions are posted as you."
-                : "Comments, replies, and review decisions use the workspace connection."}
+                ? "Comments and replies are posted as you."
+                : "Comments and replies use the workspace connection. Approvals use your personal account."}
           </p>
         </div>
         <Button
@@ -128,7 +128,7 @@ export function CommentIdentity({
           aria-controls={optionsId}
           onClick={() => setExpanded((open) => !open)}
         >
-          {expanded ? "Done" : needsAccount ? "Set up" : "Change"}
+          {expanded ? "Done" : !connected ? "Connect account" : "Change"}
           <ChevronDown
             className={cn("size-3.5 transition", expanded && "rotate-180")}
           />
@@ -202,72 +202,72 @@ export function CommentIdentity({
               ))}
             </div>
           </fieldset>
-          {(publishAsSelf || connected) && (
-            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium text-cloud">
-                  {connected
-                    ? `Connected as ${connected.displayLogin}`
-                    : `Your ${providerLabel(connection.provider)} account`}
-                </p>
-                <p className="mt-1 text-[11px] leading-5 text-mist">
-                  {connected
-                    ? `Personal identity for ${connection.displayName}.`
-                    : "Posting here is paused until you connect your account."}
-                </p>
-              </div>
-              {connected ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-cloud">
+                {connected
+                  ? `Connected as ${connected.displayLogin}`
+                  : `Your ${providerLabel(connection.provider)} account`}
+              </p>
+              <p className="mt-1 text-[11px] leading-5 text-mist">
+                {connected
+                  ? `Personal identity for ${connection.displayName}.`
+                  : "Connect your account to approve in ReviewDuck. You can also choose to post comments as yourself."}
+              </p>
+            </div>
+            {connected && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={pending}
+                onClick={() => disconnect.mutate({ connectionId })}
+              >
+                Disconnect personal account
+              </Button>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {canReconnect && hostedProvider && (
                 <Button
-                  variant="ghost"
                   size="sm"
                   disabled={pending}
-                  onClick={() => disconnect.mutate({ connectionId })}
+                  onClick={() => {
+                    setAuthorizationPending(true);
+                    void startHostedProviderAuthorization(
+                      hostedProvider,
+                      "/settings/providers",
+                      undefined,
+                      { purpose: "user_identity", connectionId },
+                    ).catch((cause: unknown) => {
+                      setAuthorizationPending(false);
+                      toast.error(
+                        cause instanceof Error
+                          ? cause.message
+                          : "Authorization failed",
+                      );
+                    });
+                  }}
                 >
-                  Disconnect personal account
-                </Button>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  {canReconnect && hostedProvider && (
-                    <Button
-                      size="sm"
-                      disabled={pending}
-                      onClick={() => {
-                        setAuthorizationPending(true);
-                        void startHostedProviderAuthorization(
-                          hostedProvider,
-                          "/settings/providers",
-                          undefined,
-                          { purpose: "user_identity", connectionId },
-                        ).catch((cause: unknown) => {
-                          setAuthorizationPending(false);
-                          toast.error(
-                            cause instanceof Error
-                              ? cause.message
-                              : "Authorization failed",
-                          );
-                        });
-                      }}
-                    >
-                      {authorizationPending && (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      )}
-                      Connect my {providerLabel(connection.provider)} account
-                    </Button>
+                  {authorizationPending && (
+                    <Loader2 className="size-3.5 animate-spin" />
                   )}
-                  <Button
-                    variant={canReconnect ? "ghost" : "secondary"}
-                    size="sm"
-                    disabled={pending}
-                    onClick={() => setPatConnectionId(connectionId)}
-                  >
-                    {canReconnect
-                      ? "Use a token instead"
-                      : "Connect my account"}
-                  </Button>
-                </div>
+                  {connected ? "Reconnect my" : "Connect my"}{" "}
+                  {providerLabel(connection.provider)} account
+                </Button>
               )}
+              <Button
+                variant={canReconnect ? "ghost" : "secondary"}
+                size="sm"
+                disabled={pending}
+                onClick={() => setPatConnectionId(connectionId)}
+              >
+                {connected
+                  ? "Update my token"
+                  : canReconnect
+                    ? "Use a token instead"
+                    : "Connect my account"}
+              </Button>
             </div>
-          )}
+          </div>
           {publishAsSelf && missingOthers > 0 && (
             <p className="mt-3 flex items-start gap-2 text-[11px] leading-5 text-fog">
               <CircleAlert className="mt-1 size-3 shrink-0" />

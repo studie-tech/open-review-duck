@@ -79,4 +79,46 @@ describe("ProviderPermissionRecovery", () => {
       expect(reconnect).toBeEnabled();
     });
   });
+  it("reauthorizes the personal identity instead of the workspace installation", async () => {
+    vi.mocked(startHostedProviderAuthorization).mockResolvedValue(undefined);
+    render(
+      <ProviderPermissionRecovery
+        personalAccount
+        kind="review"
+        provider="github"
+        connection={{ ...connection, credentialKind: "github_app" }}
+        pullRequestUrl="https://github.com/acme/repo/pull/7"
+        reviewPath="/review/pull-request-7"
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reconnect my GitHub account" }),
+    );
+    expect(startHostedProviderAuthorization).toHaveBeenCalledWith(
+      "github",
+      "/review/pull-request-7",
+      undefined,
+      { purpose: "user_identity", connectionId: "connection-1" },
+    );
+  });
+
+  it("keeps personal PAT recovery away from workspace token replacement", () => {
+    render(
+      <ProviderPermissionRecovery
+        personalAccount
+        kind="review"
+        provider="azure_devops"
+        connection={{
+          ...connection,
+          credentialKind: "pat",
+          canReconnect: false,
+          canReplaceToken: true,
+        }}
+        pullRequestUrl="https://example.com/pull/7"
+      />,
+    );
+    expect(
+      screen.getByRole("link", { name: "Reconnect my Azure DevOps account" }),
+    ).toHaveAttribute("href", "/settings/providers?connection=connection-1");
+  });
 });
