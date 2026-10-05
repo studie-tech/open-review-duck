@@ -21,7 +21,7 @@ const { disconnectOnSuccess, saveMutate, identityData } = vi.hoisted(() => ({
         provider: "github" as const,
         displayName: "Acme GitHub",
         credentialKind: "github_app",
-        identity: null,
+        identity: null as null | { displayLogin: string },
       },
     ],
   },
@@ -89,7 +89,9 @@ describe("CommentIdentity", () => {
   it("saves the publish-as-myself preference", async () => {
     render(<CommentIdentity localMode connectionId="connection-1" />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Connect account" }),
+    );
     await userEvent.click(screen.getByRole("radio", { name: /^My account/ }));
 
     expect(saveMutate).toHaveBeenCalledWith({ publishAsSelf: true });
@@ -108,16 +110,19 @@ describe("CommentIdentity", () => {
     );
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByText("Other GitHub")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Connect account" }),
+    );
     expect(
       screen.queryByRole("button", { name: "Connect my account" }),
-    ).not.toBeInTheDocument();
+    ).toBeVisible();
+    expect(saveMutate).not.toHaveBeenCalled();
     expect(
       screen.getByText(/Your preference applies to all connections/),
     ).toBeVisible();
     identityData.publishAsSelf = true;
     rerender(<CommentIdentity localMode connectionId="connection-1" />);
-    expect(screen.getByText(/Posting here is paused/)).toBeVisible();
+    expect(screen.getByText(/Connect your account to approve/)).toBeVisible();
     expect(screen.getByText(/1 other connection also needs/)).toBeVisible();
     await userEvent.click(
       screen.getByRole("button", { name: "Connect my account" }),
@@ -137,5 +142,17 @@ describe("CommentIdentity", () => {
     expect(toast.warning).toHaveBeenCalledWith(
       expect.stringMatching(/could not confirm revocation/),
     );
+  });
+  it("allows replacing a personal token while keeping shared comments", async () => {
+    const connection = identityData.connections[0];
+    if (!connection) throw new Error("Missing test connection");
+    connection.identity = { displayLogin: "reviewer" };
+    render(<CommentIdentity localMode connectionId="connection-1" />);
+    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Update my token" }),
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent("Acme GitHub");
+    expect(saveMutate).not.toHaveBeenCalled();
   });
 });

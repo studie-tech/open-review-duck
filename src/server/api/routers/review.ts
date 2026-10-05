@@ -67,6 +67,7 @@ import { isLocalDeployment } from "~/server/deployment";
 import { providerForConnection } from "~/server/providers/credentials";
 import type { ProviderPullRequestLifecycle } from "~/server/providers/types";
 import {
+  providerForReviewDecision,
   providerForReviewerRead,
   providerForReviewerWrite,
 } from "~/server/providers/user-credentials";
@@ -729,11 +730,12 @@ export const reviewRouter = createTRPCRouter({
         60_000,
       );
       try {
-        const provider = await providerForReviewerRead(
-          ctx.db,
-          scope.connection,
-          ctx.auth.userId,
-        );
+        const { provider, personalAccountRequired } =
+          await providerForReviewDecision(
+            ctx.db,
+            scope.connection,
+            ctx.auth.userId,
+          );
         const [state, remotePullRequest] = await Promise.all([
           provider.getPullRequestReviewState(
             scope.repositoryExternalId,
@@ -753,9 +755,15 @@ export const reviewRouter = createTRPCRouter({
           provider: scope.connection.provider,
           revisionCurrent,
           syncedAt: new Date(),
-          canApprove: revisionCurrent && state.canApprove,
-          canRequestChanges: revisionCurrent && state.canRequestChanges,
-          canClear: revisionCurrent && state.canClear,
+          personalAccountRequired,
+          canApprove:
+            !personalAccountRequired && revisionCurrent && state.canApprove,
+          canRequestChanges:
+            !personalAccountRequired &&
+            revisionCurrent &&
+            state.canRequestChanges,
+          canClear:
+            !personalAccountRequired && revisionCurrent && state.canClear,
           unavailableReason: revisionCurrent
             ? state.unavailableReason
             : "The provider has a newer revision. Synchronize this pull request before changing its review decision.",
@@ -1065,10 +1073,11 @@ export const reviewRouter = createTRPCRouter({
         });
       }
       try {
-        const { provider } = await providerForReviewerWrite(
+        const { provider } = await providerForReviewDecision(
           ctx.db,
           scope.connection,
           ctx.auth.userId,
+          true,
         );
         const [remotePullRequest, currentState] = await Promise.all([
           provider.getPullRequest(
@@ -1109,6 +1118,7 @@ export const reviewRouter = createTRPCRouter({
             provider: scope.connection.provider,
             revisionCurrent: true,
             syncedAt: new Date(),
+            personalAccountRequired: false,
             unavailableReason: currentState.unavailableReason,
             connection: providerConnectionRecovery(
               isLocalDeployment(),
@@ -1166,6 +1176,7 @@ export const reviewRouter = createTRPCRouter({
           provider: scope.connection.provider,
           revisionCurrent: true,
           syncedAt: new Date(),
+          personalAccountRequired: false,
           unavailableReason: updatedState.unavailableReason,
           connection: providerConnectionRecovery(
             isLocalDeployment(),

@@ -4,14 +4,20 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { startHostedProviderAuthorization } from "~/lib/hosted-provider-authorization";
 import type { RouterOutputs } from "~/trpc/react";
 import { ProviderReviewDecision } from "./provider-review-decision";
+
+vi.mock("~/lib/hosted-provider-authorization", () => ({
+  startHostedProviderAuthorization: vi.fn().mockResolvedValue(undefined),
+}));
 
 type ReviewState = RouterOutputs["review"]["providerReviewState"];
 
 afterEach(cleanup);
 
 const githubState: ReviewState = {
+  personalAccountRequired: false,
   connection: {
     canReconnect: false,
     canReplaceToken: true,
@@ -104,11 +110,12 @@ describe("ProviderReviewDecision", () => {
     );
   });
 
-  it("presents GitHub App personal review as a neutral provider handoff", () => {
+  it("offers personal authorization for a GitHub App connection", async () => {
     render(
       <ProviderReviewDecision
         state={{
           ...githubState,
+          personalAccountRequired: true,
           canApprove: false,
           canRequestChanges: false,
           connection: {
@@ -130,9 +137,21 @@ describe("ProviderReviewDecision", () => {
       />,
     );
 
-    expect(screen.getByText("Review decisions happen on GitHub")).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Connect my GitHub account" }),
+    );
+    expect(startHostedProviderAuthorization).toHaveBeenCalledWith(
+      "github",
+      "/settings/providers",
+      undefined,
+      {
+        purpose: "user_identity",
+        connectionId: "app",
+      },
+    );
+    expect(screen.getByText("Approve from ReviewDuck")).toBeVisible();
     expect(
-      screen.getByText(/keeps the approval status in sync/i),
+      screen.getByText(/comment posting preference stays unchanged/i),
     ).toBeVisible();
     expect(
       screen.getByRole("link", { name: /Review on GitHub/i }),
@@ -194,5 +213,125 @@ describe("ProviderReviewDecision", () => {
       screen.queryByRole("link", { name: /Open provider settings/i }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
+  });
+  it.each(["gitlab", "azure_devops"] as const)(
+    "keeps %s review actions provider-specific",
+    async (provider) => {
+      render(
+        <ProviderReviewDecision
+          state={{
+            ...githubState,
+            provider,
+            decision: "approved",
+            canApprove: false,
+            canClear: true,
+            canRequestChanges: provider === "azure_devops",
+            requestChangesRequiresBody: false,
+          }}
+          loading={false}
+          mutationPending={false}
+          provider={provider}
+          repositoryUrl="https://example.com/repo"
+          pullRequestUrl="https://example.com/pull/1"
+          onRefresh={vi.fn()}
+          onDecision={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: provider === "gitlab" ? "Unapprove" : "Clear decision",
+        }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Request changes" }),
+      ).not.toBeInTheDocument();
+      if (provider === "azure_devops")
+        expect(screen.getByRole("button", { name: "Reject" })).toBeVisible();
+    },
+  );
+
+  it("routes Azure DevOps personal connection to settings without replacing the workspace token", () => {
+    render(
+      <ProviderReviewDecision
+        state={{
+          ...githubState,
+          provider: "azure_devops",
+          personalAccountRequired: true,
+          canApprove: false,
+        }}
+        loading={false}
+        mutationPending={false}
+        provider="azure_devops"
+        repositoryUrl="https://example.com/repo"
+        pullRequestUrl="https://example.com/pull/1"
+        onRefresh={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("link", { name: "Connect my Azure DevOps account" }),
+    ).toHaveAttribute("href", "/settings/providers?connection=conn-github");
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables confirmation when refresh discovers a newer revision", async () => {
+    const props = {
+      loading: false,
+      mutationPending: false,
+      provider: "github" as const,
+      repositoryUrl: "https://example.com/repo",
+      pullRequestUrl: "https://example.com/pull/1",
+      onRefresh: vi.fn(),
+      onDecision: vi.fn(),
+    };
+    const view = render(
+      <ProviderReviewDecision {...props} state={githubState} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    view.rerender(
+      <ProviderReviewDecision
+        {...props}
+        state={{
+          ...githubState,
+          revisionCurrent: false,
+          canApprove: false,
+          unavailableReason: "Synchronize the newer revision.",
+        }}
+      />,
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /Approve/,
+      }),
+    ).toBeDisabled();
+  });
+  it("submits an Azure rejection vote without collecting a discarded reason", async () => {
+    const onDecision = vi.fn();
+    render(
+      <ProviderReviewDecision
+        state={{
+          ...githubState,
+          provider: "azure_devops",
+          requestChangesRequiresBody: false,
+        }}
+        loading={false}
+        mutationPending={false}
+        provider="azure_devops"
+        repositoryUrl="https://example.com/repo"
+        pullRequestUrl="https://example.com/pull/1"
+        onRefresh={vi.fn()}
+        onDecision={onDecision}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /Reject/,
+      }),
+    );
+    expect(onDecision).toHaveBeenCalledWith("request_changes", undefined);
   });
 });
