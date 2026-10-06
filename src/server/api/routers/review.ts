@@ -45,6 +45,10 @@ import { attributeFileCommits } from "~/lib/line-commit-history";
 import { buildProviderLifecycle } from "~/lib/provider-lifecycle";
 import { providerConnectionRecovery } from "~/lib/provider-permission-recovery";
 import {
+  matchesPullRequestRepository,
+  parsePullRequestLink,
+} from "~/lib/pull-request-link";
+import {
   definitionIsWhereTheNameWasRead,
   localDefinitionForPeek,
   sameFileDeclarationPeek,
@@ -2490,6 +2494,56 @@ export const reviewRouter = createTRPCRouter({
       });
     }),
 
+  resolveImportLink: protectedProcedure
+    .input(z.object({ url: z.string().min(1).max(4_096) }))
+    .query(async ({ ctx, input }) => {
+      const link = parsePullRequestLink(input.url);
+      if (!link)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This is not a supported pull request URL.",
+        });
+      const accessible = await ctx.db
+        .select({
+          id: repositories.id,
+          owner: repositories.owner,
+          name: repositories.name,
+          webUrl: repositories.webUrl,
+          provider: providerConnections.provider,
+        })
+        .from(repositories)
+        .innerJoin(
+          workspaceMembers,
+          eq(repositories.workspaceId, workspaceMembers.workspaceId),
+        )
+        .innerJoin(
+          providerConnections,
+          eq(repositories.connectionId, providerConnections.id),
+        )
+        .where(eq(workspaceMembers.userId, ctx.auth.userId));
+      const matches = accessible.filter((repository) =>
+        matchesPullRequestRepository(link, repository),
+      );
+      const repository = matches[0];
+      if (!repository)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            "This repository is not connected to a workspace you can access. Import it in Settings first.",
+        });
+      if (matches.length > 1)
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This repository is connected more than once. Open it from Settings to choose the connection to use.",
+        });
+      return {
+        repositoryId: repository.id,
+        repositoryName: `${repository.owner}/${repository.name}`,
+        number: link.number,
+      };
+    }),
+
   sync: protectedProcedure
     .input(syncPullRequestSchema)
     .mutation(async ({ ctx, input }) => {
@@ -2554,7 +2608,21 @@ export const reviewRouter = createTRPCRouter({
         )
         .limit(1);
       if (!sync) throw new TRPCError({ code: "NOT_FOUND" });
-      return { ...sync.sync, providerRunId: sync.providerRunId };
+      const pullRequest =
+        sync.sync.status === "completed"
+          ? await ctx.db.query.pullRequests.findFirst({
+              where: and(
+                eq(pullRequests.repositoryId, sync.sync.repositoryId),
+                eq(pullRequests.number, sync.sync.pullRequestNumber),
+              ),
+              columns: { id: true },
+            })
+          : undefined;
+      return {
+        ...sync.sync,
+        providerRunId: sync.providerRunId,
+        pullRequestId: pullRequest?.id ?? null,
+      };
     }),
 
   activeSyncs: protectedProcedure.query(async ({ ctx }) =>

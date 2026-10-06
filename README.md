@@ -21,6 +21,21 @@ state in sync from the same screen.
 Use the hosted app at [reviewduck.ai](https://reviewduck.ai), or run the local
 appliance below.
 
+## Open a pull request from a link
+
+Use `/review/import?url=<encoded-provider-PR-URL>` on your ReviewDuck host.
+For example:
+
+```text
+https://reviewduck.ai/review/import?url=https%3A%2F%2Fgithub.com%2Fteam%2Frepo%2Fpull%2F42
+```
+
+The signed-in reviewer must have access to a workspace where the repository is
+already imported. ReviewDuck prepares the latest PR changes, shows import
+progress, and redirects to the review when ready. GitHub, GitLab (including
+nested groups), and Azure DevOps PR URLs are supported. Existing active import
+jobs are reused; failed imports can be retried on the loading screen.
+
 ## Run ReviewDuck locally
 
 The Docker image includes ReviewDuck, PostgreSQL 18, migrations, durable
