@@ -919,11 +919,16 @@ describe("same-file concept cards", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Compare Markdown" }),
-      ).toHaveAttribute("aria-pressed", "true");
-    });
+    // The Markdown preview loads dynamically; parallel suite runs can need
+    // longer than Testing Library's default one-second import window.
+    await waitFor(
+      () => {
+        expect(
+          screen.getByRole("button", { name: "Compare Markdown" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      },
+      { timeout: 5_000 },
+    );
     await waitFor(() => {
       expect(
         screen.getAllByRole("heading", { name: "ReviewDuck" }),
