@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { isReviewNotebookFile } from "~/lib/review-source-display";
 
 /**
  * Loads Markdown only when a reviewer opens generated or provider-authored text.
@@ -34,3 +35,30 @@ export const ReviewMarkdownPreview = dynamic(
     ),
   },
 );
+
+const ReviewNotebookPreview = dynamic(
+  () =>
+    import("./review-notebook-preview").then(
+      (module) => module.ReviewNotebookPreview,
+    ),
+  {
+    loading: () => (
+      <div className="px-6 py-10 text-center text-xs text-fog" role="status">
+        Rendering notebook…
+      </div>
+    ),
+  },
+);
+
+/** Loads the appropriate document renderer without loading notebooks for code. */
+export function ReviewDocumentPreview(props: {
+  currentSource: string;
+  previousSource?: string;
+  path: string;
+}) {
+  return isReviewNotebookFile(props) ? (
+    <ReviewNotebookPreview {...props} />
+  ) : (
+    <ReviewMarkdownPreview {...props} />
+  );
+}

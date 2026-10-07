@@ -23,7 +23,7 @@ import type { MarkdownReviewView } from "~/lib/review-files";
 import {
   formatReviewSourceBytes,
   isHeavyReviewSource,
-  isReviewMarkdownFile,
+  isReviewPreviewFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceKindLabel,
@@ -49,7 +49,7 @@ import {
   SideBySideUnitDiff,
   type SideBySideUnitDiffProps,
 } from "./review-workspace-diff";
-import { ReviewMarkdownPreview } from "./review-workspace-markdown";
+import { ReviewDocumentPreview } from "./review-workspace-markdown";
 import {
   SourceLineWindow,
   WORKSPACE_SOURCE_ROW_HEIGHT_PX,
@@ -480,13 +480,13 @@ export function ReviewConceptFileCardPreview({
   }, [expanded, first?.path, nearViewport, onSourceNeeded, onSourceVisible]);
   const fileBytes =
     sourceBytes ?? reviewSourceByteLength({ source: fileSource });
-  const markdownFile =
+  const previewableFile =
     first !== undefined &&
     first.kind !== "binary" &&
-    isReviewMarkdownFile({ language: first.language, path: first.path });
-  const showMarkdownPreview = markdownFile && markdownView === "preview";
+    isReviewPreviewFile({ language: first.language, path: first.path });
+  const showDocumentPreview = previewableFile && markdownView === "preview";
   const canShowDiff =
-    !showMarkdownPreview &&
+    !showDocumentPreview &&
     diffVisible &&
     first?.kind !== "binary" &&
     Boolean(fileSource || previousFileSource);
@@ -545,11 +545,14 @@ export function ReviewConceptFileCardPreview({
           >
             Loading source…
           </div>
-        ) : expanded && showMarkdownPreview && first ? (
-          <ReviewMarkdownPreview
+        ) : expanded && showDocumentPreview && first ? (
+          <ReviewDocumentPreview
             path={first.path}
             currentSource={
-              fileSource || members.map((member) => member.source).join("\n\n")
+              deleted
+                ? ""
+                : fileSource ||
+                  members.map((member) => member.source).join("\n\n")
             }
             previousSource={
               previousFileSource ||

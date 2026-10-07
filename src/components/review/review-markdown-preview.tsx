@@ -33,18 +33,20 @@ export function defaultMarkdownPreviewVersion(input: {
 export function ReviewMarkdownViewSwitch({
   view,
   onChange,
+  documentLabel = "Markdown",
 }: {
+  documentLabel?: string;
   view: MarkdownReviewView;
   onChange: (view: MarkdownReviewView) => void;
 }) {
   return (
     <fieldset className="flex h-8 shrink-0 items-center rounded-lg border border-line bg-surface/25 p-0.5">
-      <legend className="sr-only">Markdown view</legend>
+      <legend className="sr-only">{documentLabel} view</legend>
       <button
         type="button"
         aria-pressed={view === "preview"}
         aria-label="Preview view"
-        title="Preview view: read the rendered Markdown document"
+        title={`Preview view: read the rendered ${documentLabel} document`}
         onClick={() => onChange("preview")}
         className={cn(
           "flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] transition",
@@ -60,7 +62,7 @@ export function ReviewMarkdownViewSwitch({
         type="button"
         aria-pressed={view === "raw"}
         aria-label="Raw view"
-        title="Raw view: read the Markdown source, comments, and diffs"
+        title={`Raw view: read the ${documentLabel} source, comments, and diffs`}
         onClick={() => onChange("raw")}
         className={cn(
           "flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] transition",
