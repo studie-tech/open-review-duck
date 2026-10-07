@@ -258,3 +258,43 @@ it("bounds checkpoint uploads even when provider candidates exceed the review so
   await expect(next.loadSource("budget-0", fallback)).resolves.toBe(source);
   expect(fallback).toHaveBeenCalledOnce();
 });
+
+it("rebuilds imports correctly from durable facts after all analysis modules reload", async () => {
+  const files: SourceFile[] = [
+    {
+      path: "cold/a.ts",
+      changeType: "added",
+      content: "export function work() { return 1; }\n",
+    },
+    {
+      path: "cold/b.ts",
+      changeType: "added",
+      content: "export function work() { return 2; }\n",
+    },
+    {
+      path: "cold/caller.ts",
+      changeType: "added",
+      content:
+        "import { work } from './a';\nexport function caller() { return work(); }\n",
+    },
+  ];
+  const original = await analyzeFilesIncrementally(files, await openCache());
+  // All parser language caches are module-local. A fresh module graph models
+  // a new serverless worker, while checkpoints still live in the DB/store.
+  vi.resetModules();
+  const { analyzeFilesIncrementally: coldAnalyze } = await import(
+    "./incremental-analysis"
+  );
+  const cache = await openCache();
+  const restored = await coldAnalyze(files, cache);
+  expect(cache.metrics).toMatchObject({
+    analysisExtracted: 0,
+    analysisReused: 3,
+  });
+  expect(restored).toEqual(original);
+  const caller = restored.units.find((unit) => unit.name === "caller");
+  const target = restored.units.find(
+    (unit) => unit.path === "cold/a.ts" && unit.name === "work",
+  );
+  expect(caller?.dependencies).toContain(target?.stableKey);
+});

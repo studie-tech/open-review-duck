@@ -2172,11 +2172,20 @@ export function extractFileAnalysis(file: SourceFile): CountedUnit[] {
   return [...reviewUnitsForPr, fileContext];
 }
 
+/** Extracts unresolved import references alongside cached file-local declarations. */
+export function extractFileImports(file: SourceFile) {
+  const language = languageAdapterForFile(file)?.language ?? "text";
+  return file.isBinary || file.skipReason || language === "text"
+    ? []
+    : parseImportReferences(file.content, language);
+}
+
 /** Resolves extracted file facts against the complete revision and orders review units. */
 export function analyzeFiles(
   files: SourceFile[],
   importMaps?: ImportPathContext,
   cachedUnits?: ReadonlyMap<string, ReturnType<typeof extractFileAnalysis>>,
+  cachedImports?: ReadonlyMap<string, ReturnType<typeof extractFileImports>>,
 ): AnalysisResult {
   const rawUnits = files.flatMap(
     (file) => cachedUnits?.get(file.path) ?? extractFileAnalysis(file),
@@ -2193,6 +2202,7 @@ export function analyzeFiles(
     files,
     rawUnits,
     mergeImportPathContexts(importMapsFromAnalyzedFiles(files), importMaps),
+    cachedImports,
   );
   const dependencies = new Map(
     rawUnits.map((unit) => [
@@ -2239,6 +2249,7 @@ function buildImportAliases(
   files: SourceFile[],
   units: Array<Pick<AnalyzedUnit, "stableKey" | "path" | "name" | "kind">>,
   importMaps?: ImportPathContext,
+  cachedImports?: ReadonlyMap<string, ReturnType<typeof extractFileImports>>,
 ) {
   const paths = new Set(files.map(({ path }) => path));
   const unitsByPathAndName = new Map<string, string[]>();
@@ -2254,7 +2265,8 @@ function buildImportAliases(
       result.set(file.path, aliases);
       continue;
     }
-    for (const item of parseImportReferences(file.content, language)) {
+    for (const item of cachedImports?.get(file.path) ??
+      parseImportReferences(file.content, language)) {
       const targetPath = resolveImportPath(
         file.path,
         item.specifier,
