@@ -266,3 +266,81 @@ describe("rendered Markdown changes", () => {
     ).toHaveTextContent("Deleted");
   });
 });
+
+describe("Markdown jump target availability", () => {
+  it.each([
+    ["HTML comments", "# Guide\n\n<!-- old -->", "# Guide\n\n<!-- new -->"],
+    [
+      "link definitions",
+      "# Guide\n\n[site]: https://old.example",
+      "# Guide\n\n[site]: https://new.example",
+    ],
+  ])(
+    "hides the change toolbar for edits confined to %s",
+    (_label, previousSource, currentSource) => {
+      const { container } = render(
+        <ReviewMarkdownPreview
+          path="guide.md"
+          previousSource={previousSource}
+          currentSource={currentSource}
+        />,
+      );
+      expect(container.querySelector("[data-markdown-change]")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Jump to changes" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/removed lines?/)).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/Use Raw for exact source changes/),
+      ).toBeVisible();
+    },
+  );
+
+  it("removes the toolbar when switching to a revision without visible changes", async () => {
+    render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource={"# Guide\n\nRemoved paragraph."}
+        currentSource="# Guide"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Jump to changes" }),
+    ).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Current Markdown" }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Jump to changes" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Previous Markdown" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Jump to changes" }),
+    ).toBeVisible();
+  });
+
+  it("clears a stale target when source updates without a path change", () => {
+    const { rerender } = render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource="# Before"
+        currentSource="# After"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Jump to changes" }),
+    ).toBeVisible();
+    rerender(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource={"# Same\n\n<!-- old -->"}
+        currentSource={"# Same\n\n<!-- new -->"}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Jump to changes" }),
+    ).not.toBeInTheDocument();
+  });
+});

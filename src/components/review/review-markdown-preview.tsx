@@ -1,8 +1,11 @@
 "use client";
 
 import { BookOpen, Columns2, FileCode2 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
-import { markdownChangedLines } from "~/lib/markdown-diff";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MarkdownChanges,
+  markdownChangedLines,
+} from "~/lib/markdown-diff";
 import type { MarkdownReviewView } from "~/lib/review-files";
 import { cn } from "~/lib/utils";
 import { ProviderCommentBody } from "./provider-comment-body";
@@ -151,32 +154,60 @@ export function ReviewMarkdownPreview({
           ? "previous"
           : version;
 
+  const [renderedTarget, setRenderedTarget] = useState<{
+    changes: MarkdownChanges;
+    version: MarkdownPreviewVersion;
+    path: string;
+    available: boolean;
+  } | null>(null);
+  useEffect(() => {
+    setRenderedTarget({
+      changes,
+      version: resolvedVersion,
+      path,
+      available: Boolean(
+        container.current?.querySelector("[data-markdown-change]"),
+      ),
+    });
+  }, [changes, resolvedVersion, path]);
+  const hasRenderedTarget =
+    renderedTarget?.changes === changes &&
+    renderedTarget.version === resolvedVersion &&
+    renderedTarget.path === path &&
+    renderedTarget.available;
+
   return (
     <div ref={container} className="font-sans">
       {showVersionSwitch && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-5">
-          <div className="flex items-center gap-3 text-[11px] text-mist">
-            <span className="text-coral">
-              − {changes.previous.length} removed{" "}
-              {changes.previous.length === 1 ? "line" : "lines"}
-            </span>
-            <span className="text-addition">
-              + {changes.current.length} added{" "}
-              {changes.current.length === 1 ? "line" : "lines"}
-            </span>
-            <button
-              type="button"
-              disabled={changes.previous.length + changes.current.length === 0}
-              className="rounded-md border border-line px-2 py-1 text-cloud hover:bg-surface-hover disabled:opacity-40"
-              onClick={() =>
-                container.current
-                  ?.querySelector("[data-markdown-change]")
-                  ?.scrollIntoView({ behavior: "smooth", block: "center" })
-              }
-            >
-              Jump to changes
-            </button>
-          </div>
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-2 px-4 py-2 sm:px-5",
+            hasRenderedTarget ? "justify-between" : "justify-end",
+          )}
+        >
+          {hasRenderedTarget && (
+            <div className="flex items-center gap-3 text-[11px] text-mist">
+              <span className="text-coral">
+                − {changes.previous.length} removed{" "}
+                {changes.previous.length === 1 ? "line" : "lines"}
+              </span>
+              <span className="text-addition">
+                + {changes.current.length} added{" "}
+                {changes.current.length === 1 ? "line" : "lines"}
+              </span>
+              <button
+                type="button"
+                className="rounded-md border border-line px-2 py-1 text-cloud hover:bg-surface-hover disabled:opacity-40"
+                onClick={() =>
+                  container.current
+                    ?.querySelector("[data-markdown-change]")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                }
+              >
+                Jump to changes
+              </button>
+            </div>
+          )}
           <fieldset className="flex h-7 shrink-0 items-center rounded-lg border border-line bg-surface/25 p-0.5">
             <legend className="sr-only">Markdown revision</legend>
             {hasPrevious && (
