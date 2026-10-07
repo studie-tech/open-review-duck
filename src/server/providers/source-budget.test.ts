@@ -242,3 +242,29 @@ describe("loadChangedSource", () => {
     expect(getFileContent).toHaveBeenCalledTimes(2);
   });
 });
+
+it("verifies a current Git blob identity before permitting immutable content reuse", async () => {
+  const loadSource = vi.fn(
+    async (
+      _identity: string,
+      load: () => Promise<string | undefined>,
+      validate?: (content: string) => boolean,
+    ) => {
+      expect(validate?.("test content\n")).toBe(true);
+      expect(validate?.("content from another revision\n")).toBe(false);
+      return load();
+    },
+  );
+  await loadChangedSource({
+    path: "file.txt",
+    ref: "head",
+    previousRef: "base",
+    changeType: "added",
+    needsPrevious: false,
+    oversizedHash: "sha",
+    contentIdentity: "blob:d670460b4b4aece5915caf5c68d12f560a9fe3e4",
+    getFileContent: async () => "test content\n",
+    loadSource,
+  });
+  expect(loadSource).toHaveBeenCalledOnce();
+});

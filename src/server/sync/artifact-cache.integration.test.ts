@@ -206,3 +206,55 @@ describe("durable incremental analysis", () => {
     }
   });
 });
+
+describe("manifest and source revision races", () => {
+  it("never persists content under a provider blob identity it cannot verify", async () => {
+    /** Accepts only bytes belonging to the manifest revision being cached. */
+    const valid = (text: string) => text === "revision B";
+    const raced = await openCache();
+    await expect(
+      raced.loadSource("manifest-B", async () => "revision A", valid),
+    ).resolves.toBe("revision A");
+    const next = await openCache();
+    const correct = vi.fn(async () => "revision B");
+    await expect(next.loadSource("manifest-B", correct, valid)).resolves.toBe(
+      "revision B",
+    );
+    expect(correct).toHaveBeenCalledOnce();
+    const verified = await openCache();
+    correct.mockClear();
+    await expect(
+      verified.loadSource("manifest-B", correct, valid),
+    ).resolves.toBe("revision B");
+    expect(correct).not.toHaveBeenCalled();
+  });
+
+  it("does not share an unverified source result between different path loaders", async () => {
+    const cache = await openCache();
+    /** Accepts only bytes belonging to the manifest revision being cached. */
+    const valid = (text: string) => text === "expected";
+    const first = vi.fn(async () => "old first file");
+    const second = vi.fn(async () => "old second file");
+    await expect(
+      Promise.all([
+        cache.loadSource("raced-shared-blob", first, valid),
+        cache.loadSource("raced-shared-blob", second, valid),
+      ]),
+    ).resolves.toEqual(["old first file", "old second file"]);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+  });
+});
+
+it("bounds checkpoint uploads even when provider candidates exceed the review source budget", async () => {
+  const cache = await openCache();
+  const source = "x".repeat(2_000_000);
+  for (let index = 0; index < 11; index++)
+    await cache.loadSource(`budget-${index}`, async () => source);
+  const next = await openCache();
+  const fallback = vi.fn(async () => source);
+  await expect(next.loadSource("budget-10", fallback)).resolves.toBe(source);
+  expect(fallback).toHaveBeenCalledOnce();
+  await expect(next.loadSource("budget-0", fallback)).resolves.toBe(source);
+  expect(fallback).toHaveBeenCalledOnce();
+});
