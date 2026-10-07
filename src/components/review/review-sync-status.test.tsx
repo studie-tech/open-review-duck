@@ -140,7 +140,8 @@ describe("review sync status", () => {
     await userEvent.click(
       screen.getByRole("button", { name: reviewSyncStatusLabel("ready") }),
     );
-    expect(onClick).toHaveBeenCalledOnce();
+    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("button")).toBeDisabled();
 
     rerender(
       <ReviewSyncStatusButton

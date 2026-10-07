@@ -44,7 +44,6 @@ export const reviewShortcuts = {
   awaitResponse: [{ key: "w" }],
   refresh: [{ key: "r", mod: true }],
   reset: [{ key: "r", mod: true, shift: true }],
-  loadChanges: [{ key: "r", mod: true }],
   dashboard: [{ key: "g" }, { key: "r" }],
   aiSettings: [{ key: "g" }, { key: "a" }],
   postComment: [{ key: "Enter", mod: true }],

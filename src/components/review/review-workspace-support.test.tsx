@@ -51,7 +51,6 @@ import {
   conceptMembersInReadingOrder,
   nextAnchorableLine,
   REVISION_NOTICE_DISMISS_MS,
-  ReviewChangesAvailableNotice,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
   ReviewFileCardSourcePlaceholder,
@@ -197,13 +196,14 @@ describe("revision toasts", () => {
     );
     expect(container).toBeEmptyDOMElement();
     expect(info).toHaveBeenCalledWith(
-      "New pull-request revision loaded",
+      "Pull request updated",
       expect.objectContaining({
         duration: REVISION_NOTICE_DISMISS_MS,
         closeButton: true,
         description: "Revision changed.",
       }),
     );
+    expect(info.mock.calls[0]?.[1]).not.toHaveProperty("action");
     rerender(
       <ReviewRevisionLoadedNotice onAcknowledge={acknowledged}>
         Revision changed.
@@ -216,31 +216,6 @@ describe("revision toasts", () => {
     expect(acknowledged).toHaveBeenCalledOnce();
     unmount();
     expect(dismiss).toHaveBeenCalledWith("revision-toast");
-  });
-
-  it("keeps the available-changes toast action connected to the latest load handler", () => {
-    const info = vi.spyOn(toast, "info").mockReturnValue("available-toast");
-    const dismiss = vi
-      .spyOn(toast, "dismiss")
-      .mockReturnValue("available-toast");
-    onTestFinished(() => {
-      info.mockRestore();
-      dismiss.mockRestore();
-    });
-    const first = vi.fn();
-    const latest = vi.fn();
-    const { container, rerender } = render(
-      <ReviewChangesAvailableNotice onLoad={first} />,
-    );
-    expect(container).toBeEmptyDOMElement();
-    rerender(<ReviewChangesAvailableNotice onLoad={latest} />);
-    expect(info).toHaveBeenCalledOnce();
-    const action = info.mock.calls[0]?.[1]?.action;
-    if (!action || typeof action !== "object" || !("onClick" in action))
-      throw new Error("Missing toast action");
-    action.onClick({} as never);
-    expect(latest).toHaveBeenCalledOnce();
-    expect(first).not.toHaveBeenCalled();
   });
 });
 

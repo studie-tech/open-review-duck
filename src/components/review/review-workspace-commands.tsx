@@ -91,7 +91,6 @@ export interface ReviewCommandActions {
   awaitActiveUnit: () => void;
   beginKeyboardComment: () => void;
   focusReviewSearch: () => void;
-  loadAvailableChanges: () => void;
   navigate: (href: string) => void;
   navigateConcept: (direction: -1 | 1) => void;
   navigateConceptCard: (direction: -1 | 1) => void;
@@ -279,7 +278,6 @@ export function buildReviewWorkspaceCommands(
     awaitActiveUnit,
     beginKeyboardComment,
     focusReviewSearch,
-    loadAvailableChanges,
     navigate,
     navigateConcept,
     navigateConceptCard,
@@ -622,29 +620,26 @@ export function buildReviewWorkspaceCommands(
       label: loadingChanges
         ? "Loading new revision"
         : updateAvailable
-          ? "Load code changes"
+          ? "Update waiting for current action"
           : externalSyncPending
             ? "Syncing…"
             : "Check for updates",
       description: loadingChanges
         ? "ReviewDuck is replacing the workspace with the synced revision"
         : updateAvailable
-          ? "Load the synced revision and preserve unaffected sign-offs"
+          ? "Changes load automatically after your draft or pending review action finishes"
           : externalSyncPending
             ? "ReviewDuck is fetching the latest pull request revision"
             : "ReviewDuck watches the pull-request head and syncs when it moves",
       group: "Review actions",
       icon: <RefreshCw className="size-4" />,
-      shortcut: updateAvailable
-        ? reviewShortcuts.loadChanges
-        : reviewShortcuts.refresh,
+      shortcut: reviewShortcuts.refresh,
       disabled:
         resetReview.isPending ||
         loadingChanges ||
-        (!updateAvailable && externalSyncPending),
-      onSelect: updateAvailable
-        ? loadAvailableChanges
-        : () => void syncExternalData(),
+        updateAvailable ||
+        externalSyncPending,
+      onSelect: () => void syncExternalData(),
     },
     {
       id: "reset-review",

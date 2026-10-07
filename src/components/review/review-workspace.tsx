@@ -285,7 +285,6 @@ import {
   conceptMembersInReadingOrder,
   lineWithinReviewRanges,
   nextAnchorableLine,
-  ReviewChangesAvailableNotice,
   ReviewCodeViewSwitch,
   ReviewConceptFileCardPreview,
   ReviewFileCardSourcePlaceholder,
@@ -3177,7 +3176,6 @@ export function ReviewWorkspace({
   const {
     acknowledgeLoadedRevision,
     externalSyncPending,
-    loadAvailableChanges,
     loadingChanges,
     markUpdateAvailable,
     resetReview,
@@ -5610,7 +5608,6 @@ export function ReviewWorkspace({
       awaitActiveUnit,
       beginKeyboardComment,
       focusReviewSearch,
-      loadAvailableChanges,
       navigate,
       navigateConcept,
       navigateConceptCard,
@@ -5755,21 +5752,12 @@ export function ReviewWorkspace({
             Open it on the provider to review unsupported files, or synchronize
             again if supported changes have landed.
           </p>
-          {updateAvailable && (
-            <p role="status" className="text-cyan mt-3 text-sm">
-              New code changes are ready to review.
-            </p>
-          )}
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             <Button
               loading={loadingChanges || externalSyncPending}
-              onClick={
-                updateAvailable
-                  ? loadAvailableChanges
-                  : () => void syncExternalData()
-              }
+              onClick={() => void syncExternalData()}
             >
-              {updateAvailable ? "Load changes" : "Synchronize pull request"}
+              Synchronize pull request
             </Button>
             <Button asChild>
               <Link href="/pullrequests">
@@ -5978,22 +5966,11 @@ export function ReviewWorkspace({
               <Keyboard className="size-4" />
             </button>
           </ReviewToolbarTooltip>
-          {updateAvailable ? (
-            <Button
-              size="sm"
-              loading={loadingChanges}
-              onClick={loadAvailableChanges}
-              title="New code changes are ready. Your current review stays in place until you load them."
-            >
-              Load changes
-            </Button>
-          ) : (
-            <ReviewSyncStatusButton
-              provider={initialData.pullRequest.provider}
-              status={syncStatus}
-              onClick={() => void syncExternalData()}
-            />
-          )}
+          <ReviewSyncStatusButton
+            provider={initialData.pullRequest.provider}
+            status={syncStatus}
+            onClick={() => void syncExternalData()}
+          />
           <ReviewToolbarTooltip
             label={`Open pull request in ${providerLabel(initialData.pullRequest.provider)}`}
             shortcut={reviewShortcuts.openProvider}
@@ -6019,9 +5996,6 @@ export function ReviewWorkspace({
         </ReviewToolbar>
       </header>
 
-      {updateAvailable && (
-        <ReviewChangesAvailableNotice onLoad={loadAvailableChanges} />
-      )}
       {revisionNotice && (
         <ReviewRevisionLoadedNotice
           key={initialData.snapshot.id}

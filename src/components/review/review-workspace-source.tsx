@@ -792,34 +792,12 @@ export function ReviewRevisionLoadedNotice({
       acknowledged = true;
       acknowledge.current();
     };
-    const id = toast.info("New pull-request revision loaded", {
+    const id = toast.info("Pull request updated", {
       description: description.current,
       duration: REVISION_NOTICE_DISMISS_MS,
       closeButton: true,
       onDismiss: finish,
       onAutoClose: finish,
-    });
-    return () => {
-      toast.dismiss(id);
-    };
-  }, []);
-  return null;
-}
-
-/** Announces staged changes while keeping loading an explicit reviewer action. */
-export function ReviewChangesAvailableNotice({
-  onLoad,
-}: {
-  onLoad: () => void;
-}) {
-  const load = useRef(onLoad);
-  load.current = onLoad;
-  useEffect(() => {
-    const id = toast.info("New code changes are ready", {
-      description: "Your current review stays in place until you load them.",
-      duration: 6000,
-      closeButton: true,
-      action: { label: "Load changes", onClick: () => load.current() },
     });
     return () => {
       toast.dismiss(id);

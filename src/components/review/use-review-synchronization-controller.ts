@@ -53,7 +53,6 @@ export function useReviewSynchronizationController({
   const [loadingChanges, startLoadingChanges] = useTransition();
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const autoSyncedHeadSha = useRef<string | undefined>(undefined);
-  const silentSync = useRef(false);
   const retryAfter = useRef(0);
   const failedAttempts = useRef(0);
   const retryRevision = useRef<string | undefined>(undefined);
@@ -64,9 +63,11 @@ export function useReviewSynchronizationController({
   }, [stagedRevisionAvailable]);
 
   const loadedSnapshotId = useRef(snapshot?.id);
+  const displayedSnapshotIds = useRef(new Set([snapshot?.id]));
   useEffect(() => {
     if (loadedSnapshotId.current === snapshot?.id) return;
     loadedSnapshotId.current = snapshot?.id;
+    displayedSnapshotIds.current.add(snapshot?.id);
     setUpdateAvailable(false);
     void utils.review.revisionProbe.invalidate({
       pullRequestId: pullRequest.id,
@@ -129,13 +130,6 @@ export function useReviewSynchronizationController({
         }),
       ]);
       sendReviewSession({ type: "SYNC_FINISHED" });
-      if (!silentSync.current) {
-        toast.success("Pull request synchronized", {
-          description:
-            "New changes are ready. Load them when you are ready to continue.",
-        });
-      }
-      silentSync.current = false;
     } else if (status === "failed" || status === "cancelled") {
       if (status === "failed") {
         autoSyncedHeadSha.current = undefined;
@@ -156,7 +150,6 @@ export function useReviewSynchronizationController({
           : "Pull request synchronization failed",
         { description: syncStatus.data?.error ?? "Try again in a moment." },
       );
-      silentSync.current = false;
     }
   }, [
     activeSyncId,
@@ -198,7 +191,6 @@ export function useReviewSynchronizationController({
       failedAttempts.current = 0;
       retryAfter.current = 0;
     }
-    silentSync.current = Boolean(options?.silent);
     sendReviewSession({ type: "SYNC_STARTED" });
     try {
       await pollLatestPullRequest.mutateAsync({
@@ -212,7 +204,6 @@ export function useReviewSynchronizationController({
       }
       return true;
     } catch (cause) {
-      silentSync.current = false;
       sendReviewSession({ type: "SYNC_FINISHED" });
       toast.error(
         `Could not queue ${providerLabel(pullRequest.provider)} synchronization`,
@@ -236,6 +227,7 @@ export function useReviewSynchronizationController({
       probe?.current &&
       probe.snapshotId &&
       probe.snapshotId !== snapshot?.id &&
+      !displayedSnapshotIds.current.has(probe.snapshotId) &&
       !syncing
     ) {
       setUpdateAvailable(true);
@@ -308,10 +300,6 @@ export function useReviewSynchronizationController({
         ? canLoadChanges()
         : canLoadChanges)
     ) {
-      toast.info("Finish the current action before loading changes", {
-        description:
-          "Save or close your draft and let pending review actions finish. Your place will be preserved.",
-      });
       return;
     }
     onBeforeLoad?.();
@@ -322,6 +310,14 @@ export function useReviewSynchronizationController({
     });
   }
 
+  // Recheck readiness after every render: drafts and pending actions can finish
+  // without a new provider probe. Loading stays automatic once they do.
+  useEffect(() => {
+    if (updateAvailable && !loadingChanges && !syncing) {
+      loadAvailableChanges();
+    }
+  });
+
   /** Acknowledges the explanation for the currently loaded revision. */
   function acknowledgeLoadedRevision() {
     rememberLoadedRevision();
@@ -331,7 +327,6 @@ export function useReviewSynchronizationController({
   return {
     acknowledgeLoadedRevision,
     externalSyncPending: syncing,
-    loadAvailableChanges,
     loadingChanges,
     markUpdateAvailable: () => setUpdateAvailable(true),
     resetReview,
