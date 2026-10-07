@@ -3,6 +3,7 @@ import {
   analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
   extractFileAnalysis,
+  extractFileImports,
 } from "~/server/analysis/engine";
 import { languageAdapterForFile } from "~/server/analysis/parsers";
 import {
@@ -23,10 +24,11 @@ export async function analyzeFilesIncrementally(
 ) {
   const extracted = new Map<string, ReturnType<typeof extractFileAnalysis>>();
   const missing = [] as typeof files;
+  const imports = new Map<string, ReturnType<typeof extractFileImports>>();
   const analysisKeys = new Map(
     files.map((file) => [
       file.path,
-      syncArtifactKey("file-analysis", [
+      syncArtifactKey("file-analysis-v2", [
         CURRENT_ANALYSIS_VERSION,
         {
           ...file,
@@ -43,11 +45,14 @@ export async function analyzeFilesIncrementally(
     const cached = await cache.read(analysisKeys.get(file.path) ?? "");
     if (cached !== undefined) {
       try {
-        const units = JSON.parse(cached) as ReturnType<
-          typeof extractFileAnalysis
-        >;
+        const facts = JSON.parse(cached) as {
+          units: ReturnType<typeof extractFileAnalysis>;
+          imports: ReturnType<typeof extractFileImports>;
+        };
+        const { units } = facts;
         if (
           !Array.isArray(units) ||
+          !Array.isArray(facts.imports) ||
           units.some(
             (unit) =>
               unit.path !== file.path ||
@@ -62,6 +67,7 @@ export async function analyzeFilesIncrementally(
         )
           throw new Error("Invalid cached analysis");
         extracted.set(file.path, units);
+        imports.set(file.path, facts.imports);
         cache.metrics.analysisReused++;
         return;
       } catch {
@@ -71,25 +77,28 @@ export async function analyzeFilesIncrementally(
     missing.push(file);
   });
 
-  await withPreparedTreeSitterLanguages(
-    missing
-      .map((file) => languageAdapterForFile(file)?.language)
-      .filter((language): language is TreeSitterLanguage =>
-        Boolean(language && language !== "text"),
-      ),
-    async () => {
-      await mapWithLimit(missing, 4, async (file) => {
-        const units = extractFileAnalysis(file);
-        extracted.set(file.path, units);
-        cache.metrics.analysisExtracted++;
-        await cache.write(
-          analysisKeys.get(file.path) ?? "",
-          JSON.stringify(units),
-        );
-      });
-    },
-  );
+  if (missing.length)
+    await withPreparedTreeSitterLanguages(
+      missing
+        .map((file) => languageAdapterForFile(file)?.language)
+        .filter((language): language is TreeSitterLanguage =>
+          Boolean(language && language !== "text"),
+        ),
+      async () => {
+        await mapWithLimit(missing, 4, async (file) => {
+          const units = extractFileAnalysis(file);
+          const references = extractFileImports(file);
+          extracted.set(file.path, units);
+          imports.set(file.path, references);
+          cache.metrics.analysisExtracted++;
+          await cache.write(
+            analysisKeys.get(file.path) ?? "",
+            JSON.stringify({ units, imports: references }),
+          );
+        });
+      },
+    );
   // Rebuild imports, symbol ambiguity, ordering and concepts for the whole PR.
   // Only file-local extraction is reusable across revisions.
-  return analyzeFiles(files, undefined, extracted);
+  return analyzeFiles(files, undefined, extracted, imports);
 }
