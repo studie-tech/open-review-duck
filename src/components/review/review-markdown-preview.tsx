@@ -1,7 +1,8 @@
 "use client";
 
 import { BookOpen, Columns2, FileCode2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { markdownChangedLines } from "~/lib/markdown-diff";
 import type { MarkdownReviewView } from "~/lib/review-files";
 import { cn } from "~/lib/utils";
 import { ProviderCommentBody } from "./provider-comment-body";
@@ -76,9 +77,11 @@ export function ReviewMarkdownViewSwitch({
 function MarkdownPreviewPane({
   body,
   emptyLabel,
+  changes,
 }: {
   body: string;
   emptyLabel: string;
+  changes?: { lines: readonly number[]; side: "previous" | "current" };
 }) {
   if (!body.trim()) {
     return (
@@ -90,6 +93,7 @@ function MarkdownPreviewPane({
   return (
     <ProviderCommentBody
       body={body}
+      changes={changes}
       variant="document"
       className="mt-0 max-w-none px-6 py-5 sm:px-8"
     />
@@ -112,6 +116,19 @@ export function ReviewMarkdownPreview({
   path: string;
   previousSource?: string;
 }) {
+  const changes = useMemo(
+    () => markdownChangedLines(previousSource, currentSource),
+    [previousSource, currentSource],
+  );
+  const previousChanges = useMemo(
+    () => ({ lines: changes.previous, side: "previous" as const }),
+    [changes],
+  );
+  const currentChanges = useMemo(
+    () => ({ lines: changes.current, side: "current" as const }),
+    [changes],
+  );
+  const container = useRef<HTMLDivElement>(null);
   const hasCurrent = Boolean(currentSource.trim());
   const hasPrevious = Boolean(previousSource.trim());
   const [version, setVersion] = useState<MarkdownPreviewVersion>(() =>
@@ -135,9 +152,31 @@ export function ReviewMarkdownPreview({
           : version;
 
   return (
-    <div className="font-sans">
+    <div ref={container} className="font-sans">
       {showVersionSwitch && (
-        <div className="flex justify-end px-4 py-2 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-5">
+          <div className="flex items-center gap-3 text-[11px] text-mist">
+            <span className="text-coral">
+              − {changes.previous.length} removed{" "}
+              {changes.previous.length === 1 ? "line" : "lines"}
+            </span>
+            <span className="text-addition">
+              + {changes.current.length} added{" "}
+              {changes.current.length === 1 ? "line" : "lines"}
+            </span>
+            <button
+              type="button"
+              disabled={changes.previous.length + changes.current.length === 0}
+              className="rounded-md border border-line px-2 py-1 text-cloud hover:bg-surface-hover disabled:opacity-40"
+              onClick={() =>
+                container.current
+                  ?.querySelector("[data-markdown-change]")
+                  ?.scrollIntoView({ behavior: "smooth", block: "center" })
+              }
+            >
+              Jump to changes
+            </button>
+          </div>
           <fieldset className="flex h-7 shrink-0 items-center rounded-lg border border-line bg-surface/25 p-0.5">
             <legend className="sr-only">Markdown revision</legend>
             {hasPrevious && (
@@ -192,6 +231,11 @@ export function ReviewMarkdownPreview({
           </fieldset>
         </div>
       )}
+      {showVersionSwitch && (
+        <p className="px-4 pb-2 text-[10px] text-fog sm:px-5">
+          Highlights show changed blocks. Use Raw for exact source changes.
+        </p>
+      )}
       {resolvedVersion === "compare" ? (
         <div className="grid lg:grid-cols-2">
           <section className="border-b border-line lg:border-r lg:border-b-0">
@@ -200,6 +244,7 @@ export function ReviewMarkdownPreview({
             </h3>
             <MarkdownPreviewPane
               body={previousSource}
+              changes={previousChanges}
               emptyLabel="No previous version of this Markdown file."
             />
           </section>
@@ -209,6 +254,7 @@ export function ReviewMarkdownPreview({
             </h3>
             <MarkdownPreviewPane
               body={currentSource}
+              changes={currentChanges}
               emptyLabel="This Markdown file is empty in the pull request."
             />
           </section>
@@ -216,6 +262,9 @@ export function ReviewMarkdownPreview({
       ) : (
         <MarkdownPreviewPane
           body={resolvedVersion === "previous" ? previousSource : currentSource}
+          changes={
+            resolvedVersion === "previous" ? previousChanges : currentChanges
+          }
           emptyLabel={
             resolvedVersion === "previous"
               ? "No previous version of this Markdown file."
