@@ -94,11 +94,19 @@ function NotebookPane({
   return (
     <div className="space-y-4 p-5">
       {notebook.cells.map((cell, index) => {
+        const indexedCounterpart = other?.cells[index];
         const counterpart = cell.id
-          ? other?.cells.find((candidate) => candidate.id === cell.id)
-          : other?.cells[index];
+          ? (other?.cells.find((candidate) => candidate.id === cell.id) ??
+            (indexedCounterpart?.id ? undefined : indexedCounterpart))
+          : indexedCounterpart;
+        const comparableCell = { ...cell, id: undefined };
+        const comparableCounterpart = counterpart
+          ? { ...counterpart, id: undefined }
+          : undefined;
         const changed =
-          compare && JSON.stringify(cell) !== JSON.stringify(counterpart);
+          compare &&
+          JSON.stringify(comparableCell) !==
+            JSON.stringify(comparableCounterpart);
         return (
           <section
             key={cell.id ?? index}

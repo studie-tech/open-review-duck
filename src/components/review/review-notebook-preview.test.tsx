@@ -135,6 +135,42 @@ describe("notebook preview", () => {
     expect(screen.getByRole("heading", { name: "New balance" })).toBeVisible();
   });
 
+  it("ignores newly introduced cell IDs while still detecting output changes", () => {
+    const previous = JSON.parse(notebook());
+    for (const cell of previous.cells) delete cell.id;
+    const { rerender } = render(
+      <ReviewNotebookPreview
+        path="upgraded.ipynb"
+        previousSource={JSON.stringify(previous)}
+        currentSource={notebook()}
+      />,
+    );
+    expect(screen.queryByText("Changed cell")).toBeNull();
+    const current = JSON.parse(notebook());
+    current.cells[1].outputs = [{ output_type: "stream", text: "New output" }];
+    rerender(
+      <ReviewNotebookPreview
+        path="upgraded.ipynb"
+        previousSource={JSON.stringify(previous)}
+        currentSource={JSON.stringify(current)}
+      />,
+    );
+    expect(screen.getAllByText("Changed cell")).toHaveLength(2);
+  });
+
+  it("does not pair a new cell with a different cell ID at the same index", () => {
+    const current = JSON.parse(notebook());
+    current.cells.unshift({ ...current.cells[0], id: "inserted" });
+    render(
+      <ReviewNotebookPreview
+        path="inserted.ipynb"
+        previousSource={notebook()}
+        currentSource={JSON.stringify(current)}
+      />,
+    );
+    expect(screen.getAllByText("Changed cell")).toHaveLength(1);
+  });
+
   it("opens deleted notebooks on the previous revision and handles empty cells", () => {
     const { rerender } = render(
       <ReviewNotebookPreview
