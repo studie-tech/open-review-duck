@@ -52,12 +52,6 @@ export async function startRepositoryBranchSync(
           orderBy: [desc(repositoryBranchSyncRuns.createdAt)],
         });
         if (active) {
-          // A webhook or manual request arriving during a run is not lost.
-          // The owner drains the newest request before publishing completion.
-          await tx
-            .update(syncRuns)
-            .set({ requestVersion: sql`${syncRuns.requestVersion} + 1` })
-            .where(eq(syncRuns.id, active.id));
           return reserveWorkflowStart({
             lock: () =>
               tx.execute(
