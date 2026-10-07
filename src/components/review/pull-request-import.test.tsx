@@ -11,7 +11,9 @@ const state = vi.hoisted(() => ({
   target: undefined as
     | undefined
     | { repositoryId: string; repositoryName: string; number: number },
-  targetError: undefined as undefined | { message: string },
+  targetError: undefined as
+    | undefined
+    | { message: string; data?: { code: string } },
   status: undefined as
     | undefined
     | {
@@ -95,12 +97,16 @@ describe("linked pull request import", () => {
   });
   it("shows an inaccessible repository and does not start an import", () => {
     state.target = undefined;
-    state.targetError = { message: "Repository is not connected" };
+    state.targetError = {
+      message: "Repository is not connected",
+      data: { code: "NOT_FOUND" },
+    };
     render(<PullRequestImport url={url} />);
     expect(screen.getByRole("alert").textContent).toBe(
       "Repository is not connected",
     );
     expect(state.mutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     expect(screen.getByText("Manage repositories").getAttribute("href")).toBe(
       "/settings/providers",
     );
