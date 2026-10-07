@@ -184,10 +184,11 @@ export async function syncPullRequest(
     () =>
       provider.getChangedFiles(repository.externalId, number, {
         maximumSourceBytes: PULL_REQUEST_SOURCE_BUDGET_BYTES,
-        loadSource: (identity, load) =>
+        loadSource: (identity, load, validate) =>
           cache.loadSource(
             JSON.stringify([connection.id, repository.externalId, identity]),
             load,
+            validate,
           ),
       }),
   );

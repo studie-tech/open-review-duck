@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isLikelyBinaryFile, type SourceFile } from "~/server/analysis/types";
 
 export interface ProviderSourceCandidate {
@@ -19,6 +20,7 @@ export interface ChangedSourceLoad {
   loadSource?: (
     identity: string,
     load: () => Promise<string | undefined>,
+    validate?: (content: string) => boolean,
   ) => Promise<string | undefined>;
   /** Provider blob identity for the current side, when the manifest supplies it. */
   contentIdentity?: string;
@@ -123,10 +125,25 @@ export async function loadChangedSource(
   const load = (path: string, ref: string, identity?: string) => {
     /** Downloads the immutable source only after a cache miss. */
     const fetch = () => request.getFileContent(path, ref);
+    const blob = identity?.match(/^blob:([a-f0-9]{40}|[a-f0-9]{64})$/i)?.[1];
+    // A mutable manifest can race its separately fetched PR metadata. Never
+    // checkpoint commit A's bytes under a blob ID reported for commit B.
+    const validate = blob
+      ? (content: string) => {
+          const bytes = Buffer.from(content);
+          return (
+            createHash(blob.length === 40 ? "sha1" : "sha256")
+              .update(`blob ${bytes.byteLength}\0`)
+              .update(bytes)
+              .digest("hex") === blob.toLowerCase()
+          );
+        }
+      : undefined;
     return request.loadSource
       ? request.loadSource(
           identity ?? JSON.stringify(["commit", ref, path]),
           fetch,
+          validate,
         )
       : fetch();
   };

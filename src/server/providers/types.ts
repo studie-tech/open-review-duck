@@ -59,6 +59,7 @@ export interface ChangedFilesOptions {
   loadSource?: (
     identity: string,
     load: () => Promise<string | undefined>,
+    validate?: (content: string) => boolean,
   ) => Promise<string | undefined>;
 }
 
