@@ -16,6 +16,12 @@ export interface ChangedSourceLoad {
   changeType: NonNullable<SourceFile["changeType"]>;
   needsPrevious: boolean;
   oversizedHash: string;
+  loadSource?: (
+    identity: string,
+    load: () => Promise<string | undefined>,
+  ) => Promise<string | undefined>;
+  /** Provider blob identity for the current side, when the manifest supplies it. */
+  contentIdentity?: string;
   contentBinaryHash?: (content: string) => string;
   getFileContent: (path: string, ref: string) => Promise<string | undefined>;
 }
@@ -113,7 +119,18 @@ export async function loadChangedSource(
       },
     };
   }
-  const content = await request.getFileContent(fetchPath, request.ref);
+  /** Resolves one exact commit/path or provider blob identity. */
+  const load = (path: string, ref: string, identity?: string) => {
+    /** Downloads the immutable source only after a cache miss. */
+    const fetch = () => request.getFileContent(path, ref);
+    return request.loadSource
+      ? request.loadSource(
+          identity ?? JSON.stringify(["commit", ref, path]),
+          fetch,
+        )
+      : fetch();
+  };
+  const content = await load(fetchPath, request.ref, request.contentIdentity);
   if (content === undefined) return { file: skippedFile };
   if (isLikelyBinaryFile(request.path, content)) {
     return {
@@ -129,7 +146,7 @@ export async function loadChangedSource(
     };
   }
   const previousContent = request.needsPrevious
-    ? await request.getFileContent(previousFetchPath, request.previousRef)
+    ? await load(previousFetchPath, request.previousRef)
     : undefined;
   if (request.needsPrevious && previousContent === undefined) {
     return { file: skippedFile };
@@ -164,7 +181,7 @@ export async function collectProviderSourceFiles<T>(
   let stopped = false;
   // Consume each result as soon as it finishes. Slow files no longer leave
   // the other seven slots idle, and completed source is budgeted immediately.
-  await Promise.all(
+  const outcomes = await Promise.allSettled(
     Array.from(
       { length: Math.min(PROVIDER_SOURCE_CONCURRENCY, values.length) },
       async () => {
@@ -214,5 +231,9 @@ export async function collectProviderSourceFiles<T>(
       },
     ),
   );
+  // Do not let workflow retries race downloads still completing from a
+  // failed attempt. All started workers settle before the failure escapes.
+  const failure = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
   return files;
 }

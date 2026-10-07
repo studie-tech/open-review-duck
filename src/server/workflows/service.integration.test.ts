@@ -227,3 +227,30 @@ describe("recoverable workflow service reservations", () => {
     });
   });
 });
+
+describe("coalesced push requests", () => {
+  it("records concurrent requests on one owner and preserves manual source verification", async () => {
+    const existing = await db.query.syncRuns.findFirst({
+      where: eq(syncRuns.id, fixture.pullRequestSyncId),
+    });
+    const input = {
+      workspaceId: fixture.workspaceId,
+      repositoryId: fixture.repositoryId,
+      pullRequestNumber: 41,
+    };
+    const runs = await Promise.all([
+      startPullRequestSync(db, input),
+      startPullRequestSync(db, { ...input, verifySources: true }),
+      startPullRequestSync(db, input),
+    ]);
+    expect(new Set(runs.map((run) => run.syncId))).toEqual(
+      new Set([fixture.pullRequestSyncId]),
+    );
+    const updated = await db.query.syncRuns.findFirst({
+      where: eq(syncRuns.id, fixture.pullRequestSyncId),
+    });
+    expect(updated?.requestVersion).toBe((existing?.requestVersion ?? 0) + 3);
+    expect(updated?.verifySources).toBe(true);
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+});

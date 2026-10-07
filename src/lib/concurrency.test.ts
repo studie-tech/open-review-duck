@@ -88,3 +88,25 @@ describe("createBoundedSemaphore", () => {
     expect(() => createBoundedSemaphore(1.5)).toThrow("positive integer");
   });
 });
+
+it("stops queued work and waits for in-flight writes before allowing a retry", async () => {
+  const gate = controlledPromise();
+  const started: number[] = [];
+  let settled = false;
+  const result = mapWithLimit([1, 2, 3, 4], 2, async (value) => {
+    started.push(value);
+    if (value === 1) throw new Error("provider failure");
+    await gate.promise;
+    return value;
+  });
+  const observed = result.catch((cause: unknown) => {
+    settled = true;
+    return cause;
+  });
+  await Promise.resolve();
+  expect(started).toEqual([1, 2]);
+  expect(settled).toBe(false);
+  gate.resolve();
+  expect(await observed).toEqual(new Error("provider failure"));
+  expect(started).toEqual([1, 2]);
+});

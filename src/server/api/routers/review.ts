@@ -1237,7 +1237,9 @@ export const reviewRouter = createTRPCRouter({
     }),
 
   poll: protectedProcedure
-    .input(reviewWorkspaceSchema)
+    .input(
+      reviewWorkspaceSchema.extend({ verifySources: z.boolean().optional() }),
+    )
     .mutation(async ({ ctx, input }) => {
       await enforceRateLimit(
         ctx.db,
@@ -1273,6 +1275,7 @@ export const reviewRouter = createTRPCRouter({
           workspaceId: current.workspaceId,
           repositoryId: current.repositoryId,
           pullRequestNumber: current.number,
+          verifySources: input.verifySources,
         })),
       };
     }),

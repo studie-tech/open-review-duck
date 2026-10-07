@@ -1895,6 +1895,41 @@ function calculateDepth(
   return depth;
 }
 
+/** Computes acyclic dependency depths once, preserving per-root cycle handling. */
+export function calculateRevisionDepths(dependencies: Map<string, string[]>) {
+  const remaining = new Map(
+    [...dependencies].map(([key, values]) => [key, values.length]),
+  );
+  const parents = new Map<string, string[]>();
+  for (const [key, values] of dependencies)
+    for (const dependency of values) appendToIndex(parents, dependency, key);
+  const depths = new Map<string, number>();
+  const queue = [...remaining]
+    .filter(([, count]) => count === 0)
+    .map(([key]) => key);
+  for (const key of queue) depths.set(key, 0);
+  for (let index = 0; index < queue.length; index++) {
+    const key = queue[index];
+    if (key === undefined) continue;
+    for (const parent of parents.get(key) ?? []) {
+      depths.set(
+        parent,
+        Math.max(depths.get(parent) ?? 0, (depths.get(key) ?? 0) + 1),
+      );
+      const count = (remaining.get(parent) ?? 0) - 1;
+      remaining.set(parent, count);
+      if (count === 0) queue.push(parent);
+    }
+  }
+  for (const key of dependencies.keys()) {
+    // Nodes in or depending on cycles retain the analyzer's original traversal
+    // semantics. Only completed acyclic nodes use the shared result.
+    if (remaining.get(key) !== 0)
+      depths.set(key, calculateDepth(key, dependencies));
+  }
+  return depths;
+}
+
 /** Orders coherent dependency concepts depth-first while keeping test files contiguous. */
 function clusterConceptUnits(units: AnalyzedUnit[]) {
   const fileContexts = units
@@ -2068,79 +2103,84 @@ function importMapsFromAnalyzedFiles(files: SourceFile[]) {
   );
 }
 
-/** Extracts review units and produces their dependency-aware review order. */
+/** Extracts file-local facts before cross-file dependency resolution. */
+export function extractFileAnalysis(file: SourceFile): CountedUnit[] {
+  const { adapter, reviewUnits: unscopedReviewUnits } =
+    rawFileReviewUnits(file);
+  const changeType = file.changeType ?? "modified";
+  // Scoping exists to decide which of a file's declarations a revision
+  // touched. A file reviewed whole has one, and it answers for every line on
+  // both sides, so the only question left is whether the revision touched
+  // the file at all — a mode change and some rebases report a file as
+  // modified with both sides identical, and scoping is what drops those.
+  const scopedReviewUnits = adapter?.reviewsWholeFile
+    ? !file.reviewWholeFile &&
+      revisionComparesSides(file) &&
+      file.previousContent === file.content
+      ? []
+      : unscopedReviewUnits
+    : file.reviewWholeFile
+      ? unscopedReviewUnits
+      : prScopedReviewUnits(
+          file,
+          adapter?.language ?? "text",
+          unscopedReviewUnits,
+        );
+  // Preserve the analyzer's existing high-confidence atomic units. Broader
+  // multi-file concepts are built as a separate presentation layer.
+  const atomicReviewUnits = clusterRelatedChangeUnits(
+    file,
+    adapter?.language ?? "text",
+    scopedReviewUnits,
+  );
+  const reviewUnitsForPr = assignChangedLineCounts(file, atomicReviewUnits);
+  const fileContextSource =
+    file.isBinary || file.skipReason
+      ? wholeFileDeclaration(file).source
+      : file.content;
+  const fileContext: CountedUnit = {
+    stableKey: stableReviewKey(file.path, "file", "<file-context>"),
+    path: file.path,
+    language: adapter?.language ?? "text",
+    kind: "file",
+    name: basename(file.path),
+    signature: `Module ${file.path}`,
+    startLine: 1,
+    endLine: Math.max(1, file.content.split("\n").length),
+    source: fileContextSource,
+    previousSource: file.isBinary ? undefined : file.previousContent,
+    previousStartLine:
+      file.isBinary || file.previousContent === undefined ? undefined : 1,
+    previousEndLine:
+      file.isBinary || file.previousContent === undefined
+        ? undefined
+        : Math.max(1, file.previousContent.split("\n").length),
+    contentHash: sha256(file.binaryHash ?? fileContextSource),
+    semanticHash: sha256(
+      `${changeType}:${
+        file.isBinary
+          ? (file.binaryHash ?? file.path)
+          : semanticSource(file.content, adapter?.language ?? "text")
+      }`,
+    ),
+    changeType,
+    complexity:
+      1 + reviewUnitsForPr.reduce((total, unit) => total + unit.complexity, 0),
+    changedLineCount: 0,
+    dependencies: reviewUnitsForPr.map((unit) => unit.stableKey),
+  };
+  return [...reviewUnitsForPr, fileContext];
+}
+
+/** Resolves extracted file facts against the complete revision and orders review units. */
 export function analyzeFiles(
   files: SourceFile[],
   importMaps?: ImportPathContext,
+  cachedUnits?: ReadonlyMap<string, ReturnType<typeof extractFileAnalysis>>,
 ): AnalysisResult {
-  const rawUnits = files.flatMap((file) => {
-    const { adapter, reviewUnits: unscopedReviewUnits } =
-      rawFileReviewUnits(file);
-    const changeType = file.changeType ?? "modified";
-    // Scoping exists to decide which of a file's declarations a revision
-    // touched. A file reviewed whole has one, and it answers for every line on
-    // both sides, so the only question left is whether the revision touched
-    // the file at all — a mode change and some rebases report a file as
-    // modified with both sides identical, and scoping is what drops those.
-    const scopedReviewUnits = adapter?.reviewsWholeFile
-      ? !file.reviewWholeFile &&
-        revisionComparesSides(file) &&
-        file.previousContent === file.content
-        ? []
-        : unscopedReviewUnits
-      : file.reviewWholeFile
-        ? unscopedReviewUnits
-        : prScopedReviewUnits(
-            file,
-            adapter?.language ?? "text",
-            unscopedReviewUnits,
-          );
-    // Preserve the analyzer's existing high-confidence atomic units. Broader
-    // multi-file concepts are built as a separate presentation layer.
-    const atomicReviewUnits = clusterRelatedChangeUnits(
-      file,
-      adapter?.language ?? "text",
-      scopedReviewUnits,
-    );
-    const reviewUnitsForPr = assignChangedLineCounts(file, atomicReviewUnits);
-    const fileContextSource =
-      file.isBinary || file.skipReason
-        ? wholeFileDeclaration(file).source
-        : file.content;
-    const fileContext: CountedUnit = {
-      stableKey: stableReviewKey(file.path, "file", "<file-context>"),
-      path: file.path,
-      language: adapter?.language ?? "text",
-      kind: "file",
-      name: basename(file.path),
-      signature: `Module ${file.path}`,
-      startLine: 1,
-      endLine: Math.max(1, file.content.split("\n").length),
-      source: fileContextSource,
-      previousSource: file.isBinary ? undefined : file.previousContent,
-      previousStartLine:
-        file.isBinary || file.previousContent === undefined ? undefined : 1,
-      previousEndLine:
-        file.isBinary || file.previousContent === undefined
-          ? undefined
-          : Math.max(1, file.previousContent.split("\n").length),
-      contentHash: sha256(file.binaryHash ?? fileContextSource),
-      semanticHash: sha256(
-        `${changeType}:${
-          file.isBinary
-            ? (file.binaryHash ?? file.path)
-            : semanticSource(file.content, adapter?.language ?? "text")
-        }`,
-      ),
-      changeType,
-      complexity:
-        1 +
-        reviewUnitsForPr.reduce((total, unit) => total + unit.complexity, 0),
-      changedLineCount: 0,
-      dependencies: reviewUnitsForPr.map((unit) => unit.stableKey),
-    };
-    return [...reviewUnitsForPr, fileContext];
-  });
+  const rawUnits = files.flatMap(
+    (file) => cachedUnits?.get(file.path) ?? extractFileAnalysis(file),
+  );
   const byShortKey = new Map<string, string[]>();
   const stableKeys = new Set(rawUnits.map((unit) => unit.stableKey));
   const byName = new Map<string, string[]>();
@@ -2176,10 +2216,11 @@ export function analyzeFiles(
       ],
     ]),
   );
+  const depths = calculateRevisionDepths(dependencies);
   const withDepth = rawUnits.map((unit) => ({
     ...unit,
     dependencies: dependencies.get(unit.stableKey) ?? [],
-    depth: calculateDepth(unit.stableKey, dependencies),
+    depth: depths.get(unit.stableKey) ?? 0,
     reviewOrder: 0,
   }));
   const sorted = clusterConceptUnits(withDepth).map(

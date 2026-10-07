@@ -1,6 +1,7 @@
 import {
   hydratePrivateReviewSources,
   type PrivateSourceRange,
+  type VerifiedPrivateSourceCache,
 } from "./private-source-client";
 
 export type WorkspaceSourcePriority =
@@ -73,6 +74,7 @@ export class PrivateWorkspaceSourceStore<
   Context extends WorkspaceFileContext,
 > {
   readonly #snapshotId: string;
+  readonly #reusable?: VerifiedPrivateSourceCache;
   readonly #unitsByPath: ReadonlyMap<string, readonly Unit[]>;
   readonly #contextByPath: ReadonlyMap<string, Context>;
   readonly #hydrate: HydrateSources;
@@ -104,11 +106,13 @@ export class PrivateWorkspaceSourceStore<
     concurrency?: number;
     maximumReadyFiles?: number;
     hydrate?: HydrateSources;
+    reusable?: VerifiedPrivateSourceCache;
     onFailure?: (cause: unknown) => void;
     onMeasurement?: (measurement: WorkspaceSourceMeasurement) => void;
   }) {
     this.#snapshotId = input.snapshotId;
     this.#hydrate = input.hydrate ?? hydratePrivateReviewSources;
+    this.#reusable = input.reusable;
     this.#concurrency = Math.max(1, input.concurrency ?? 4);
     this.#maximumReadyFiles = Math.max(1, input.maximumReadyFiles ?? 24);
     this.#onFailure = input.onFailure;
@@ -387,6 +391,9 @@ export class PrivateWorkspaceSourceStore<
         this.#blobCache,
         1,
         this.#controller.signal,
+        undefined,
+        undefined,
+        this.#reusable,
       );
       if (contextResult.failures[0]) throw contextResult.failures[0].cause;
       hydratedContext = contextResult.units[0];
@@ -398,6 +405,9 @@ export class PrivateWorkspaceSourceStore<
       this.#blobCache,
       Math.max(1, Math.min(8, units.length)),
       this.#controller.signal,
+      undefined,
+      undefined,
+      this.#reusable,
     );
     if (unitResult.failures[0]) throw unitResult.failures[0].cause;
     return { context: hydratedContext, units: unitResult.units };

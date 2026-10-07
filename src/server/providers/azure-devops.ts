@@ -633,6 +633,11 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         const path = change.item.path.replace(/^\//, "");
         const oversizedHash = change.item.objectId ?? `${ref}:${path}`;
         return loadChangedSource({
+          loadSource: options?.loadSource,
+          contentIdentity:
+            !deleted && change.item.objectId
+              ? `blob:${change.item.objectId}`
+              : undefined,
           path,
           previousPath:
             deleted || change.originalPath === undefined

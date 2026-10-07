@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { providerLabel } from "~/lib/provider-labels";
 import { acknowledgeReviewRevision } from "~/lib/review-revision";
+import { syncProgressLabel } from "~/lib/sync-progress";
 import { api, type RouterOutputs } from "~/trpc/react";
 import {
   REVIEW_REVISION_PROBE_MS,
@@ -85,7 +86,9 @@ export function useReviewSynchronizationController({
     {
       enabled: Boolean(activeSyncId),
       refetchInterval: (query) =>
-        ["queued", "running"].includes(query.state.data?.status ?? "")
+        !query.state.data ||
+        query.state.status === "error" ||
+        ["queued", "running"].includes(query.state.data.status)
           ? 1_500
           : false,
     },
@@ -114,7 +117,18 @@ export function useReviewSynchronizationController({
       setActiveSyncId(undefined);
       failedAttempts.current = 0;
       retryAfter.current = 0;
-      setUpdateAvailable(true);
+      const resultSnapshotId = syncStatus.data?.resultSnapshotId;
+      // Old runs have no result identity; probe them instead of guessing that
+      // every successful manual synchronization created a new snapshot.
+      if (
+        resultSnapshotId &&
+        resultSnapshotId !== loadedSnapshotId.current &&
+        !displayedSnapshotIds.current.has(resultSnapshotId)
+      )
+        setUpdateAvailable(true);
+      void utils.review.revisionProbe.invalidate({
+        pullRequestId: pullRequest.id,
+      });
       void Promise.all([
         utils.review.activeSyncs.invalidate(),
         utils.review.dashboard.invalidate(),
@@ -155,6 +169,7 @@ export function useReviewSynchronizationController({
     activeSyncId,
     syncStatus.data,
     utils.review.activeSyncs.invalidate,
+    utils.review.revisionProbe.invalidate,
     utils.review.dashboard.invalidate,
     utils.review.gamification.invalidate,
     utils.review.providerConversations.invalidate,
@@ -185,6 +200,10 @@ export function useReviewSynchronizationController({
 
   /** Queues durable source synchronization. */
   async function syncExternalData(options?: { silent?: boolean }) {
+    if (activeSyncId && syncStatus.isError) {
+      await syncStatus.refetch();
+      return false;
+    }
     if (syncing || activeSyncId || queueInFlight.current) return false;
     queueInFlight.current = true;
     if (!options?.silent) {
@@ -195,6 +214,7 @@ export function useReviewSynchronizationController({
     try {
       await pollLatestPullRequest.mutateAsync({
         pullRequestId: pullRequest.id,
+        verifySources: !options?.silent,
       });
       if (!options?.silent) {
         toast.info("Pull request synchronization queued", {
@@ -306,7 +326,7 @@ export function useReviewSynchronizationController({
     rememberLoadedRevision();
     startLoadingChanges(() => {
       setUpdateAvailable(false);
-      router.refresh();
+      if (!stagedRevisionAvailable) router.refresh();
     });
   }
 
@@ -331,10 +351,17 @@ export function useReviewSynchronizationController({
     markUpdateAvailable: () => setUpdateAvailable(true),
     resetReview,
     syncExternalData,
+    syncDetail:
+      syncStatus.isError && activeSyncId
+        ? "Could not read synchronization progress. Click to reconnect to the running job."
+        : activeSyncId && syncStatus.data
+          ? `${syncProgressLabel(syncStatus.data.status, syncStatus.data.progress)}${syncStatus.data.startedAt ? ` · ${Math.max(0, Math.floor((Date.now() - syncStatus.data.startedAt.getTime()) / 1000))}s` : ""}${syncStatus.data.attempt > 1 ? ` · attempt ${syncStatus.data.attempt}` : ""}`
+          : undefined,
     syncStatus: reviewSyncStatus({
       loadingChanges,
-      probeFailed: revisionProbe.isError && !syncing,
-      syncing,
+      probeFailed:
+        (revisionProbe.isError || syncStatus.isError) && !loadingChanges,
+      syncing: syncing && !syncStatus.isError,
       updateAvailable,
     }),
     updateAvailable,

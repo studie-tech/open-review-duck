@@ -52,6 +52,12 @@ export async function startRepositoryBranchSync(
           orderBy: [desc(repositoryBranchSyncRuns.createdAt)],
         });
         if (active) {
+          // A webhook or manual request arriving during a run is not lost.
+          // The owner drains the newest request before publishing completion.
+          await tx
+            .update(syncRuns)
+            .set({ requestVersion: sql`${syncRuns.requestVersion} + 1` })
+            .where(eq(syncRuns.id, active.id));
           return reserveWorkflowStart({
             lock: () =>
               tx.execute(
@@ -148,6 +154,7 @@ export async function startPullRequestSync(
     workspaceId: string;
     repositoryId: string;
     pullRequestNumber: number;
+    verifySources?: boolean;
     queue?: {
       userId: string;
       source: ReviewQueueSource;
@@ -155,6 +162,7 @@ export async function startPullRequestSync(
     };
   },
 ) {
+  let recordedActiveId: string | undefined;
   return establishReservedWorkflow({
     reserve: () =>
       db.transaction(async (tx) => {
@@ -168,7 +176,7 @@ export async function startPullRequestSync(
           ),
         });
         if (!repository) throw new Error("Repository not found");
-        const active = await tx.query.syncRuns.findFirst({
+        let active = await tx.query.syncRuns.findFirst({
           where: and(
             eq(syncRuns.repositoryId, input.repositoryId),
             eq(syncRuns.pullRequestNumber, input.pullRequestNumber),
@@ -177,6 +185,28 @@ export async function startPullRequestSync(
           orderBy: [desc(syncRuns.createdAt)],
         });
         if (active) {
+          await tx.execute(
+            sql`select id from ${syncRuns} where id = ${active.id} for update`,
+          );
+          active = await tx.query.syncRuns.findFirst({
+            where: and(
+              eq(syncRuns.id, active.id),
+              inArray(syncRuns.status, ["queued", "running"]),
+            ),
+          });
+        }
+        if (active) {
+          // Record each caller once, even if reservation polling repeats.
+          if (recordedActiveId !== active.id) {
+            await tx
+              .update(syncRuns)
+              .set({
+                requestVersion: sql`${syncRuns.requestVersion} + 1`,
+                verifySources: sql`${syncRuns.verifySources} or ${input.verifySources ?? false}`,
+              })
+              .where(eq(syncRuns.id, active.id));
+            recordedActiveId = active.id;
+          }
           return reserveWorkflowStart({
             lock: () =>
               tx.execute(
@@ -239,6 +269,7 @@ export async function startPullRequestSync(
             workspaceId: input.workspaceId,
             repositoryId: input.repositoryId,
             pullRequestNumber: input.pullRequestNumber,
+            verifySources: input.verifySources ?? false,
             workflowStartToken: lease.startToken,
             workflowStartLeaseExpiresAt: lease.leaseExpiresAt,
           })

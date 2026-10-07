@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { VerifiedPrivateSourceCache } from "~/lib/private-source-client";
 import {
   PrivateWorkspaceSourceStore,
   type WorkspaceSourcePriority,
@@ -243,6 +244,13 @@ export function usePrivateWorkspaceSourceHydration(
   intentReady = true,
 ) {
   const snapshotId = initialData.snapshot?.id;
+  // This cache has no global owner and is discarded when this workspace
+  // unmounts or changes PR. Every snapshot still authorizes its own reads.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: PR identity bounds the lifetime of private bytes
+  const reusableSources = useMemo(
+    () => new VerifiedPrivateSourceCache(),
+    [initialData.pullRequest.id],
+  );
   const [reviewLedger, setReviewLedger] = useState(() => ({
     snapshotId,
     serverUnits: initialData.units,
@@ -275,6 +283,7 @@ export function usePrivateWorkspaceSourceHydration(
       snapshotId
         ? new PrivateWorkspaceSourceStore({
             snapshotId,
+            reusable: reusableSources,
             units: initialData.units,
             contexts: initialData.fileContexts,
             concurrency: 4,
@@ -299,7 +308,7 @@ export function usePrivateWorkspaceSourceHydration(
             },
           })
         : undefined,
-    [snapshotId],
+    [snapshotId, reusableSources],
   );
   useEffect(() => store?.retain(), [store]);
   const sourceRevision = useSyncExternalStore(

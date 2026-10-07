@@ -1,3 +1,38 @@
+/** Bounded, memory-only bytes owned by one mounted review workspace. */
+export class VerifiedPrivateSourceCache {
+  readonly #entries = new Map<string, Uint8Array>();
+  #bytes = 0;
+  /** Creates a cache with a fixed bound for this mounted workspace. */
+  constructor(readonly maximumBytes = 20_000_000) {}
+
+  /** Returns verified bytes and makes this object the most recently used entry. */
+  get(blobId: string, digest: string) {
+    const key = `${blobId}:${digest}`;
+    const bytes = this.#entries.get(key);
+    if (bytes) {
+      this.#entries.delete(key);
+      this.#entries.set(key, bytes);
+    }
+    return bytes;
+  }
+
+  /** Retains a verified object while evicting the oldest entries within the byte bound. */
+  set(blobId: string, digest: string, bytes: Uint8Array) {
+    if (bytes.byteLength > this.maximumBytes) return;
+    const key = `${blobId}:${digest}`;
+    this.#bytes -= this.#entries.get(key)?.byteLength ?? 0;
+    this.#entries.delete(key);
+    this.#entries.set(key, bytes);
+    this.#bytes += bytes.byteLength;
+    while (this.#bytes > this.maximumBytes || this.#entries.size > 48) {
+      const oldest = this.#entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.#bytes -= this.#entries.get(oldest)?.byteLength ?? 0;
+      this.#entries.delete(oldest);
+    }
+  }
+}
+
 export interface PrivateSourceRange {
   currentBlobId: string | null;
   previousBlobId: string | null;
@@ -70,6 +105,7 @@ async function privateObject(
   snapshotId: string,
   path: string,
   signal?: AbortSignal,
+  reusable?: VerifiedPrivateSourceCache,
 ) {
   const requestSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
@@ -95,6 +131,10 @@ async function privateObject(
   ) {
     throw new Error("Private source authorization response is invalid");
   }
+  // Authorization is checked again for this snapshot before any memory hit.
+  // Only bytes survive a revision change; signed URLs never enter this cache.
+  const cached = reusable?.get(blobId, metadata.digest);
+  if (cached) return cached;
   const response = await fetch(metadata.signedUrl, {
     cache: "no-store",
     credentials: "omit",
@@ -102,7 +142,9 @@ async function privateObject(
     signal: requestSignal,
   });
   if (!response.ok) throw new Error("Private source download failed");
-  return verified(await response.arrayBuffer(), metadata.digest);
+  const bytes = await verified(await response.arrayBuffer(), metadata.digest);
+  reusable?.set(blobId, metadata.digest, bytes);
+  return bytes;
 }
 
 /** Decodes one validated UTF-8 byte range. */
@@ -121,12 +163,13 @@ async function hydratePrivateReviewSource<Unit extends PrivateSourceRange>(
   snapshotId: string,
   cache: Map<string, Promise<Uint8Array>>,
   signal?: AbortSignal,
+  reusable?: VerifiedPrivateSourceCache,
 ) {
   /** Deduplicates downloads while hydrating related review units. */
   const load = (blobId: string) => {
     let pending = cache.get(blobId);
     if (!pending) {
-      pending = privateObject(blobId, snapshotId, unit.path, signal);
+      pending = privateObject(blobId, snapshotId, unit.path, signal, reusable);
       cache.set(blobId, pending);
     }
     return pending;
@@ -158,6 +201,7 @@ export async function hydratePrivateReviewSources<
   signal?: AbortSignal,
   onUnitHydrated?: (index: number, unit: Unit) => void,
   onUnitFailed?: (index: number, unit: Unit, cause: unknown) => void,
+  reusable?: VerifiedPrivateSourceCache,
 ) {
   const hydrated = new Array<Unit>(units.length);
   const failures: PrivateSourceHydrationFailure[] = [];
@@ -176,6 +220,7 @@ export async function hydratePrivateReviewSources<
           snapshotId,
           cache,
           signal,
+          reusable,
         );
         successfulIndexes.push(index);
         onUnitHydrated?.(index, hydrated[index]);

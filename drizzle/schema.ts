@@ -737,6 +737,27 @@ export const sourceBlobs = createTable(
   ],
 );
 
+/** Private, expiring checkpoints for immutable provider content and file extraction. */
+export const syncArtifacts = createTable(
+  "sync_artifact",
+  {
+    repositoryId: uuid()
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    cacheKey: varchar({ length: 64 }).notNull(),
+    sourceBlobId: uuid()
+      .notNull()
+      .references(() => sourceBlobs.id, { onDelete: "cascade" }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("sync_artifact_key_idx").on(t.repositoryId, t.cacheKey),
+    index("sync_artifact_blob_idx").on(t.sourceBlobId),
+    index("sync_artifact_expiry_idx").on(t.expiresAt),
+  ],
+);
+
 export const snapshotFiles = createTable(
   "snapshot_file",
   {
@@ -1161,6 +1182,20 @@ export const syncRuns = createTable(
     workflowStartLeaseExpiresAt: timestamp({ withTimezone: true }),
     status: workflowRunStatusEnum().notNull().default("queued"),
     progress: integer().notNull().default(0),
+    resultSnapshotId: uuid().references(() => reviewSnapshots.id, {
+      onDelete: "set null",
+    }),
+    snapshotCreated: boolean(),
+    verifySources: boolean().notNull().default(false),
+    requestVersion: integer().notNull().default(1),
+    attempt: integer().notNull().default(0),
+    metrics: jsonb().$type<{
+      sourceReused: number;
+      sourceDownloaded: number;
+      analysisReused: number;
+      analysisExtracted: number;
+      elapsedMilliseconds: number;
+    }>(),
     error: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp({ withTimezone: true }),

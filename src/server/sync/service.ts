@@ -14,16 +14,10 @@ import { mapWithLimit } from "~/lib/concurrency";
 import { pullRequestParticipantColumns } from "~/lib/pull-request-involvement";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
 import {
-  analyzeFiles,
   CURRENT_ANALYSIS_VERSION,
   changedFileLineCounts,
   reconcileSignOffs,
 } from "~/server/analysis/engine";
-import { languageAdapterForFile } from "~/server/analysis/parsers";
-import {
-  type TreeSitterLanguage,
-  withPreparedTreeSitterLanguages,
-} from "~/server/analysis/tree-sitter";
 import { type AnalyzedUnit, applySourceBudget } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { selectByIdsInChunks } from "~/server/db/select-in-chunks";
@@ -34,7 +28,12 @@ import {
   persistSourceBlob,
   prepareSourceBlobs,
 } from "~/server/storage/source-blobs";
-import { persistSnapshotAnalysis } from "./persist-snapshot-analysis";
+import { createSyncArtifactCache } from "./artifact-cache";
+import { analyzeFilesIncrementally } from "./incremental-analysis";
+import {
+  persistSnapshotAnalysis,
+  prepareSnapshotAnalysis,
+} from "./persist-snapshot-analysis";
 import { pruneExpiredReviewSnapshots } from "./retention";
 import {
   assertCompleteChangedFileSet,
@@ -53,8 +52,18 @@ export async function syncPullRequest(
   options?: {
     onProgress?: (progress: number) => Promise<void>;
     deferRetention?: boolean;
+    confirmLatest?: boolean;
+    verifySources?: boolean;
+    onMetrics?: (metrics: {
+      sourceReused: number;
+      sourceDownloaded: number;
+      analysisReused: number;
+      analysisExtracted: number;
+      elapsedMilliseconds: number;
+    }) => Promise<void>;
   },
 ) {
+  const startedAt = performance.now();
   const repository = await db.query.repositories.findFirst({
     where: eq(repositories.id, repositoryId),
   });
@@ -106,7 +115,9 @@ export async function syncPullRequest(
       db.query.reviewUnits.findMany({
         where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
       }),
-      reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id),
+      reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id, {
+        trustRecentVerification: !options?.verifySources,
+      }),
     ]);
     if (preexistingSourcesAvailable) {
       const [pullRequest] = await db
@@ -142,6 +153,13 @@ export async function syncPullRequest(
           "A newer pull request synchronization completed while metadata was loading; synchronize again",
         );
       }
+      await options?.onMetrics?.({
+        sourceReused: 0,
+        sourceDownloaded: 0,
+        analysisReused: 0,
+        analysisExtracted: 0,
+        elapsedMilliseconds: Math.round(performance.now() - startedAt),
+      });
       return {
         pullRequest,
         snapshot: preexistingSnapshot,
@@ -154,12 +172,23 @@ export async function syncPullRequest(
     }
   }
 
+  const cache = await createSyncArtifactCache(
+    db,
+    repositoryId,
+    repository.workspaceId,
+    repository.sourceRetentionDays,
+  );
   const files = await observeOperation(
     "provider.fetch-pull-request-files",
     "provider",
     () =>
       provider.getChangedFiles(repository.externalId, number, {
         maximumSourceBytes: PULL_REQUEST_SOURCE_BUDGET_BYTES,
+        loadSource: (identity, load) =>
+          cache.loadSource(
+            JSON.stringify([connection.id, repository.externalId, identity]),
+            load,
+          ),
       }),
   );
   const confirmedRemote = await observeOperation(
@@ -184,15 +213,7 @@ export async function syncPullRequest(
   const analysis = await observeOperation(
     "tree-sitter.analyze-pull-request",
     "analysis",
-    () =>
-      withPreparedTreeSitterLanguages(
-        budgetedFiles
-          .map((file) => languageAdapterForFile(file)?.language)
-          .filter((language): language is TreeSitterLanguage =>
-            Boolean(language && language !== "text"),
-          ),
-        () => analyzeFiles(budgetedFiles),
-      ),
+    () => analyzeFilesIncrementally(budgetedFiles, cache),
   );
   await options?.onProgress?.(SYNC_PROGRESS.storingSources);
   const { knownBlobs, prepared } = await prepareSourceBlobs(
@@ -220,18 +241,30 @@ export async function syncPullRequest(
     ]);
     return { file, currentBlob, previousBlob };
   });
+  await options?.onMetrics?.({
+    ...cache.metrics,
+    elapsedMilliseconds: Math.round(performance.now() - startedAt),
+  });
   const changedFileCount = Math.max(confirmedRemote.changedFiles, files.length);
   if (preexistingSnapshot && preexistingUnits === undefined) {
-    [preexistingUnits, preexistingSourcesAvailable] = await Promise.all([
-      db.query.reviewUnits.findMany({
-        where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
-      }),
-      reviewSnapshotSourcesAvailable(db, preexistingSnapshot.id),
-    ]);
+    preexistingUnits = await db.query.reviewUnits.findMany({
+      where: eq(reviewUnits.snapshotId, preexistingSnapshot.id),
+    });
   }
   preexistingUnits ??= [];
   preexistingSourcesAvailable ??= false;
 
+  const storedFileByPath = new Map(
+    storedFiles.map((file) => [file.file.path, file]),
+  );
+  const preparedAnalysis = prepareSnapshotAnalysis(
+    analysis.units,
+    budgetedFiles,
+    storedFileByPath,
+  );
+  const lineCounts = new Map(
+    budgetedFiles.map((file) => [file.path, changedFileLineCounts(file)]),
+  );
   await options?.onProgress?.(SYNC_PROGRESS.savingSnapshot);
   const result = await db.transaction(async (tx) => {
     await tx.execute(
@@ -429,7 +462,7 @@ export async function syncPullRequest(
             changeType: file.changeType ?? "modified",
             currentBlobId: currentBlob?.id,
             previousBlobId: previousBlob?.id,
-            ...changedFileLineCounts(file),
+            ...lineCounts.get(file.path),
             isBinary: file.isBinary ?? false,
             skipReason: file.skipReason,
           };
@@ -438,9 +471,6 @@ export async function syncPullRequest(
       .returning();
     const snapshotFileByPath = new Map(
       snapshotFileRows.map((file) => [file.path, file]),
-    );
-    const storedFileByPath = new Map(
-      storedFiles.map((file) => [file.file.path, file]),
     );
     const waitsByUnit = new Map<string, typeof priorWaits>();
     for (const wait of priorWaits) {
@@ -454,6 +484,7 @@ export async function syncPullRequest(
       units: analysis.units,
       snapshotFileByPath,
       storedFileByPath,
+      prepared: preparedAnalysis,
       priorByKey,
       reviewImpact,
       signOffsByUnit,
@@ -478,6 +509,21 @@ export async function syncPullRequest(
       snapshotCreated: true,
     };
   });
+  await options?.onMetrics?.({
+    ...cache.metrics,
+    elapsedMilliseconds: Math.round(performance.now() - startedAt),
+  });
+  if (options?.confirmLatest) {
+    const latest = await provider.getPullRequest(repository.externalId, number);
+    if (
+      latest.headSha !== result.snapshot.headSha ||
+      latest.baseSha !== result.snapshot.baseSha
+    ) {
+      throw new Error(
+        "New commits arrived during analysis; retrying the latest revision",
+      );
+    }
+  }
   if (!options?.deferRetention) {
     await cleanupPullRequestSources(db, repositoryId);
   }

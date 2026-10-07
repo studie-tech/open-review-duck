@@ -35,6 +35,7 @@ describe("source blob pruning", () => {
   it("keeps newly-created unreferenced blobs inside the ingestion grace period", async () => {
     let candidateQuery: { queryChunks?: unknown[] } | undefined;
     const database = {
+      delete: () => ({ where: async () => undefined }),
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
         callback({
           execute: vi.fn(async (query) => {

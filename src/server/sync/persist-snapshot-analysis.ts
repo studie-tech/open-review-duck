@@ -16,7 +16,11 @@ import {
 import type { AnalyzedUnit, SourceFile } from "~/server/analysis/types";
 import type { db as database } from "~/server/db";
 import { canCarryReviewWait } from "~/server/review/waiting";
-import { persistedUnitSourceRange, previousSourceRange } from "./source-range";
+import {
+  indexSourceLines,
+  persistedUnitSourceRange,
+  previousSourceRange,
+} from "./source-range";
 
 type Database = typeof database;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -50,8 +54,54 @@ interface PersistSnapshotAnalysisInput {
     readonly (typeof reviewWaits.$inferSelect)[]
   >;
   partitionFiles: SourceFile[];
+  prepared?: ReturnType<typeof prepareSnapshotAnalysis>;
   missingLayoutError: string;
   missingMemberError: (stableKey: string) => string;
+}
+
+/** Prepares source byte ranges and validates concepts before publication takes a database lock. */
+export function prepareSnapshotAnalysis(
+  units: AnalyzedUnit[],
+  partitionFiles: SourceFile[],
+  storedFileByPath: ReadonlyMap<string, SnapshotAnalysisStoredFile>,
+) {
+  const boundaries = new Map(
+    [...storedFileByPath].map(([path, { file }]) => [
+      path,
+      {
+        current: indexSourceLines(file.content),
+        previous:
+          file.previousContent === undefined
+            ? undefined
+            : indexSourceLines(file.previousContent),
+      },
+    ]),
+  );
+  const sourceRanges = new Map(
+    units.map((unit) => {
+      const stored = storedFileByPath.get(unit.path);
+      if (!stored) throw new Error(`Source object is missing for ${unit.path}`);
+      return [
+        unit.stableKey,
+        {
+          ...persistedUnitSourceRange(
+            stored.file,
+            unit,
+            boundaries.get(unit.path),
+          ),
+          ...previousSourceRange(
+            stored.file.previousContent ?? "",
+            unit,
+            boundaries.get(unit.path)?.previous,
+          ),
+        },
+      ];
+    }),
+  );
+  const reviewableUnits = units.filter(({ kind }) => kind !== "file");
+  const conceptDefinitions = clusterReviewConcepts(reviewableUnits);
+  validateConceptPartition(reviewableUnits, conceptDefinitions, partitionFiles);
+  return { sourceRanges, conceptDefinitions };
 }
 
 /** Persists units, concepts, and carried review state for one snapshot. */
@@ -59,6 +109,13 @@ export async function persistSnapshotAnalysis(
   tx: Transaction,
   input: PersistSnapshotAnalysisInput,
 ) {
+  const prepared =
+    input.prepared ??
+    prepareSnapshotAnalysis(
+      input.units,
+      input.partitionFiles,
+      input.storedFileByPath,
+    );
   const unitValues = input.units.map((unit) => {
     const prior = input.priorByKey.get(unit.stableKey);
     const unchanged =
@@ -69,7 +126,9 @@ export async function persistSnapshotAnalysis(
     if (!snapshotFile || !storedFile) {
       throw new Error(`Source object is missing for ${unit.path}`);
     }
-    const persistedSource = persistedUnitSourceRange(storedFile.file, unit);
+    const persistedSource = prepared.sourceRanges.get(unit.stableKey);
+    if (!persistedSource)
+      throw new Error(`Source range is missing for ${unit.stableKey}`);
     return {
       snapshotId: input.snapshotId,
       snapshotFileId: snapshotFile.id,
@@ -88,7 +147,8 @@ export async function persistSnapshotAnalysis(
       endLine: unit.endLine,
       startByte: persistedSource.startByte,
       endByte: persistedSource.endByte,
-      ...previousSourceRange(storedFile.file.previousContent ?? "", unit),
+      previousStartByte: persistedSource.previousStartByte,
+      previousEndByte: persistedSource.previousEndByte,
       relatedRanges: unit.relatedRanges,
       contentHash: unit.contentHash,
       semanticHash: unit.semanticHash,
@@ -139,15 +199,7 @@ export async function persistSnapshotAnalysis(
       );
   }
 
-  const reviewableAnalysisUnits = input.units.filter(
-    ({ kind }) => kind !== "file",
-  );
-  const conceptDefinitions = clusterReviewConcepts(reviewableAnalysisUnits);
-  validateConceptPartition(
-    reviewableAnalysisUnits,
-    conceptDefinitions,
-    input.partitionFiles,
-  );
+  const { conceptDefinitions } = prepared;
   const [baselineLayout] = await tx
     .insert(reviewConceptLayouts)
     .values({

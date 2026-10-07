@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { persistedUnitSourceRange, sourceRange } from "./source-range";
+import {
+  indexSourceLines,
+  persistedUnitSourceRange,
+  sourceRange,
+} from "./source-range";
 
 describe("persisted review-unit source ranges", () => {
   it("slices deleted units from the base object", () => {
@@ -63,5 +67,34 @@ describe("persisted review-unit source ranges", () => {
         },
       ).objectSide,
     ).toBe("current");
+  });
+});
+
+describe("indexed source ranges", () => {
+  it("matches UTF-8 slices across thousands of ranges, CRLF and trailing empty lines", () => {
+    const source =
+      Array.from(
+        { length: 10000 },
+        (_, index) => `line ${index}: 🦆 café\r`,
+      ).join("\n") + "\n";
+    const boundaries = indexSourceLines(source);
+    const lines = source.match(/[^\n]*(?:\n|$)/g) ?? [];
+    for (let index = 0; index < 1000; index++) {
+      const start = index * 10 + 1;
+      const end = start + 9;
+      const expectedStart = Buffer.byteLength(
+        lines.slice(0, start - 1).join(""),
+      );
+      const expectedEnd =
+        expectedStart + Buffer.byteLength(lines.slice(start - 1, end).join(""));
+      expect(sourceRange(source, start, end, boundaries)).toEqual({
+        startByte: expectedStart,
+        endByte: expectedEnd,
+      });
+    }
+    expect(sourceRange(source, 10001, 10001, boundaries)).toEqual({
+      startByte: Buffer.byteLength(source),
+      endByte: Buffer.byteLength(source),
+    });
   });
 });

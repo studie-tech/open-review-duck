@@ -40,15 +40,25 @@ export async function mapWithLimit<T, R>(
 ) {
   const results = new Array<R>(values.length);
   let cursor = 0;
+  let failed = false;
+  let failure: unknown;
   await Promise.all(
     Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      while (cursor < values.length) {
+      while (!failed && cursor < values.length) {
         const index = cursor;
         cursor += 1;
         const value = values[index];
-        if (value !== undefined) results[index] = await operation(value);
+        try {
+          if (value !== undefined) results[index] = await operation(value);
+        } catch (cause) {
+          if (!failed) failure = cause;
+          failed = true;
+        }
       }
     }),
   );
+  // Finish in-flight writes before rejecting; a durable retry must not overlap
+  // workers still running from the previous attempt.
+  if (failed) throw failure;
   return results;
 }
