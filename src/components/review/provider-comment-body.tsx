@@ -7,11 +7,16 @@ import {
   isValidElement,
   memo,
   type ReactNode,
+  useMemo,
 } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import {
+  markdownChangeAttributes,
+  rehypeMarkdownChanges,
+} from "~/lib/markdown-diff";
 import { isMermaidSource } from "~/lib/review-mermaid";
 import { cn } from "~/lib/utils";
 import { ReviewMermaidDiagram } from "./review-mermaid-diagram";
@@ -62,34 +67,65 @@ const markdownComponents: Options["components"] = {
       {children}
     </details>
   ),
-  h1: ({ children }) => (
-    <h1 className="text-cloud mt-4 mb-2 text-base font-semibold">{children}</h1>
+  h1: ({ children, node }) => (
+    <h1
+      {...markdownChangeAttributes(node)}
+      className="text-cloud mt-4 mb-2 text-base font-semibold"
+    >
+      {children}
+    </h1>
   ),
-  h2: ({ children }) => (
-    <h2 className="text-cloud mt-4 mb-2 text-sm font-semibold">{children}</h2>
+  h2: ({ children, node }) => (
+    <h2
+      {...markdownChangeAttributes(node)}
+      className="text-cloud mt-4 mb-2 text-sm font-semibold"
+    >
+      {children}
+    </h2>
   ),
-  h3: ({ children }) => (
-    <h3 className="text-cloud mt-3 mb-1.5 text-xs font-semibold">{children}</h3>
+  h3: ({ children, node }) => (
+    <h3
+      {...markdownChangeAttributes(node)}
+      className="text-cloud mt-3 mb-1.5 text-xs font-semibold"
+    >
+      {children}
+    </h3>
   ),
-  hr: () => <hr className="my-4 border-line" />,
+  hr: ({ node }) => (
+    <hr {...markdownChangeAttributes(node)} className="my-4 border-line" />
+  ),
   img: ProviderImagePlaceholder,
-  li: ({ children }) => <li className="ml-5 pl-0.5">{children}</li>,
+  li: ({ children, node }) => (
+    <li {...markdownChangeAttributes(node)} className="ml-5 pl-0.5">
+      {children}
+    </li>
+  ),
   ol: ({ children }) => (
     <ol className="my-2 list-decimal space-y-1">{children}</ol>
   ),
-  p: ({ children }) => <p className="my-2 first:mt-0">{children}</p>,
+  p: ({ children, node }) => (
+    <p {...markdownChangeAttributes(node)} className="my-2 first:mt-0">
+      {children}
+    </p>
+  ),
   pre: MarkdownPre,
   strong: ({ children }) => (
     <strong className="font-semibold text-cloud">{children}</strong>
   ),
-  summary: ({ children }) => (
-    <summary className="text-cloud hover:bg-surface-hover flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-xs font-medium transition select-none [&::-webkit-details-marker]:hidden">
+  summary: ({ children, node }) => (
+    <summary
+      {...markdownChangeAttributes(node)}
+      className="text-cloud hover:bg-surface-hover flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-xs font-medium transition select-none [&::-webkit-details-marker]:hidden"
+    >
       <ChevronRight
         className="text-cyan size-3.5 shrink-0 transition-transform group-open:rotate-90"
         aria-hidden="true"
       />
       <span>{children}</span>
     </summary>
+  ),
+  tr: ({ children, node }) => (
+    <tr {...markdownChangeAttributes(node)}>{children}</tr>
   ),
   table: ({ children }) => (
     <div className="my-3 overflow-x-auto rounded-lg border border-line">
@@ -111,16 +147,29 @@ const markdownComponents: Options["components"] = {
 
 const documentMarkdownComponents: Options["components"] = {
   ...markdownComponents,
-  h1: ({ children }) => (
-    <h1 className="text-cloud mt-6 mb-3 text-xl font-semibold first:mt-0">
+  h1: ({ children, node }) => (
+    <h1
+      {...markdownChangeAttributes(node)}
+      className="text-cloud mt-6 mb-3 text-xl font-semibold first:mt-0"
+    >
       {children}
     </h1>
   ),
-  h2: ({ children }) => (
-    <h2 className="text-cloud mt-5 mb-2 text-lg font-semibold">{children}</h2>
+  h2: ({ children, node }) => (
+    <h2
+      {...markdownChangeAttributes(node)}
+      className="text-cloud mt-5 mb-2 text-lg font-semibold"
+    >
+      {children}
+    </h2>
   ),
-  h3: ({ children }) => (
-    <h3 className="text-cloud mt-4 mb-2 text-base font-semibold">{children}</h3>
+  h3: ({ children, node }) => (
+    <h3
+      {...markdownChangeAttributes(node)}
+      className="text-cloud mt-4 mb-2 text-base font-semibold"
+    >
+      {children}
+    </h3>
   ),
 };
 
@@ -139,11 +188,20 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
   body,
   className,
   variant = "comment",
+  changes,
 }: {
   body: string;
   className?: string;
   variant?: "comment" | "document";
+  changes?: { lines: readonly number[]; side: "previous" | "current" };
 }) {
+  const plugins = useMemo<Options["rehypePlugins"]>(
+    () =>
+      changes
+        ? [...rehypePlugins, [rehypeMarkdownChanges, changes]]
+        : rehypePlugins,
+    [changes],
+  );
   return (
     <div
       className={cn(
@@ -156,7 +214,7 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
     >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
+        rehypePlugins={plugins}
         components={
           variant === "document"
             ? documentMarkdownComponents
@@ -186,7 +244,13 @@ function markdownText(node: ReactNode): string {
  * the time this runs, so the language class and the body both have to be
  * read off that child.
  */
-function MarkdownPre({ children }: { children?: ReactNode }) {
+function MarkdownPre({
+  children,
+  node,
+}: {
+  children?: ReactNode;
+  node?: Parameters<typeof markdownChangeAttributes>[0];
+}) {
   const code = Children.toArray(children).find((child) =>
     isValidElement<{ className?: string; children?: ReactNode }>(child),
   );
@@ -194,11 +258,18 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
     const language = /language-([^\s]+)/.exec(code.props.className ?? "")?.[1];
     const source = markdownText(code.props.children);
     if (isMermaidSource(language, source)) {
-      return <ReviewMermaidDiagram chart={source} />;
+      return (
+        <div {...markdownChangeAttributes(node)}>
+          <ReviewMermaidDiagram chart={source} />
+        </div>
+      );
     }
   }
   return (
-    <pre className="border-line bg-code my-3 overflow-x-auto rounded-lg border p-3 text-[11px] leading-5 text-cloud [&>code]:bg-transparent [&>code]:p-0">
+    <pre
+      {...markdownChangeAttributes(node)}
+      className="border-line bg-code my-3 overflow-x-auto rounded-lg border p-3 text-[11px] leading-5 text-cloud [&>code]:bg-transparent [&>code]:p-0"
+    >
       {children}
     </pre>
   );

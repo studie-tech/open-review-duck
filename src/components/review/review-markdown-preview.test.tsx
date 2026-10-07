@@ -146,3 +146,123 @@ describe("ReviewMarkdownPreview", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("rendered Markdown changes", () => {
+  it("marks changed list items without tinting unchanged siblings or headings", () => {
+    const { container } = render(
+      <ReviewMarkdownPreview
+        path="AGENTS.md"
+        previousSource={
+          "# Instructions\n\n- Keep this rule.\n- Run `make test`.\n- Keep this too."
+        }
+        currentSource={
+          "# Instructions\n\n- Keep this rule.\n- Run `make check`.\n- Keep this too."
+        }
+      />,
+    );
+    const blocks = container.querySelectorAll("[data-markdown-change]");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toHaveAttribute("data-markdown-change", "previous");
+    expect(blocks[0]).toHaveTextContent("make test");
+    expect(blocks[1]).toHaveAttribute("data-markdown-change", "current");
+    expect(blocks[1]).toHaveTextContent("make check");
+    expect(blocks[1]).not.toHaveTextContent("Keep this");
+  });
+
+  it("marks multiline paragraphs, code fences, table rows and nested lists", () => {
+    const previousSource =
+      "# Guide\n\nFirst line\nold ending.\n\n- Parent\n  - Old child\n  - Stable child\n\n```sh\nold command\n```\n\n| Name | Value |\n| --- | --- |\n| stable | old |";
+    const currentSource = previousSource
+      .replace("old ending", "new ending")
+      .replace("Old child", "New child")
+      .replace("old command", "new command")
+      .replace("stable | old", "stable | new");
+    const { container } = render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource={previousSource}
+        currentSource={currentSource}
+      />,
+    );
+    expect(
+      container.querySelectorAll('[data-markdown-change="current"]'),
+    ).toHaveLength(4);
+    expect(
+      container.querySelector('p[data-markdown-change="current"]'),
+    ).toHaveTextContent("new ending");
+    expect(
+      container.querySelector('li[data-markdown-change="current"]'),
+    ).toHaveTextContent("New child");
+    expect(
+      container.querySelector('li[data-markdown-change="current"]'),
+    ).not.toHaveTextContent("Stable child");
+    expect(
+      container.querySelector('pre[data-markdown-change="current"]'),
+    ).toHaveTextContent("new command");
+    expect(
+      container.querySelector('tr[data-markdown-change="current"]'),
+    ).toHaveTextContent("new");
+  });
+
+  it("jumps to the first marked block in the selected revision", async () => {
+    const { container } = render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource="# Before"
+        currentSource="# After"
+      />,
+    );
+    const scroll = vi.fn();
+    const first = container.querySelector("[data-markdown-change]");
+    Object.defineProperty(first, "scrollIntoView", { value: scroll });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Jump to changes" }),
+    );
+    expect(scroll).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Current Markdown" }),
+    );
+    expect(
+      container.querySelector('[data-markdown-change="previous"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-markdown-change="current"]'),
+    ).toHaveTextContent("After");
+  });
+
+  it("does not accept diff attributes or unsafe HTML from document authors", () => {
+    const source =
+      '<p data-markdown-change="current" onclick="alert(1)">Unchanged</p>\n\n<script>alert(1)</script>';
+    const { container } = render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource={source}
+        currentSource={source}
+      />,
+    );
+    expect(container.querySelector("[data-markdown-change]")).toBeNull();
+    expect(container.querySelector("[onclick], script")).toBeNull();
+  });
+
+  it("highlights an added or deleted document on its available revision", () => {
+    const { container, rerender } = render(
+      <ReviewMarkdownPreview path="added.md" currentSource="# Added" />,
+    );
+    expect(
+      container.querySelector('[data-markdown-change="current"]'),
+    ).toHaveTextContent("Added");
+    rerender(
+      <ReviewMarkdownPreview
+        path="deleted.md"
+        currentSource=""
+        previousSource="# Deleted"
+      />,
+    );
+    expect(
+      container.querySelector('[data-markdown-change="previous"]'),
+    ).toHaveTextContent("Deleted");
+  });
+});

@@ -308,3 +308,20 @@ button:not(:disabled),
     transition-duration: 0.01ms;
   }
 }
+
+/* Rendered Markdown keeps source diff cues visible in either color theme. */
+[data-markdown-change] {
+  border-inline-start: 3px solid var(--markdown-change-color);
+  background: color-mix(in srgb, var(--markdown-change-color) 12%, transparent);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--markdown-change-color) 12%, transparent);
+  scroll-margin-block: 6rem;
+}
+
+[data-markdown-change="previous"] {
+  --markdown-change-color: var(--app-coral);
+}
+
+[data-markdown-change="current"] {
+  --markdown-change-color: var(--app-addition);
+}
