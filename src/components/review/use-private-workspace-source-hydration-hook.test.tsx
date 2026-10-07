@@ -7,7 +7,8 @@ import type { RouterOutputs } from "~/trpc/react";
 
 const hydrate = vi.hoisted(() => vi.fn());
 
-vi.mock("~/lib/private-source-client", () => ({
+vi.mock("~/lib/private-source-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/private-source-client")>()),
   hydratePrivateReviewSources: hydrate,
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -46,6 +47,7 @@ function workspace(count: number, snapshotId = "snapshot"): Workspace {
     reviewUnit(index),
   );
   return {
+    pullRequest: { id: "pull-request" },
     snapshot: { id: snapshotId },
     units,
     fileContexts: units.map((unit) => ({ ...unit, kind: "file" })),

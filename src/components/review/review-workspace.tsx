@@ -3182,6 +3182,7 @@ export function ReviewWorkspace({
     resetReview,
     syncExternalData,
     syncStatus,
+    syncDetail,
     updateAvailable,
   } = useReviewSynchronizationController({
     manualSyncPending,
@@ -5970,6 +5971,7 @@ export function ReviewWorkspace({
           <ReviewSyncStatusButton
             provider={initialData.pullRequest.provider}
             status={syncStatus}
+            detail={syncDetail}
             onClick={() => void syncExternalData()}
           />
           <ReviewToolbarTooltip

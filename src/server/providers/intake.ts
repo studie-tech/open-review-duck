@@ -255,6 +255,7 @@ async function reconcileIntakeForRepository(
         workspaceId: repository.workspaceId,
         repositoryId: repository.id,
         pullRequestNumber: candidate.number,
+        verifySources: sourceRepairNumbers.has(candidate.number),
         queue: {
           userId: repository.intakeOwnerId,
           source: repository.reviewIntakeMode,

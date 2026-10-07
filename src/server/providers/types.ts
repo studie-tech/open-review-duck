@@ -55,6 +55,11 @@ export interface PullRequestListOptions {
 export interface ChangedFilesOptions {
   /** Maximum combined UTF-8 bytes retained across current and previous source. */
   maximumSourceBytes?: number;
+  /** Reuses only an immutable provider identity; a miss invokes the real loader. */
+  loadSource?: (
+    identity: string,
+    load: () => Promise<string | undefined>,
+  ) => Promise<string | undefined>;
 }
 
 /** One exact-revision source returned by a provider's bulk content API. */

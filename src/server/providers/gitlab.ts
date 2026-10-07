@@ -585,6 +585,7 @@ export class GitLabProvider implements PullRequestProvider {
         const path = change.deleted_file ? change.old_path : change.new_path;
         const ref = change.deleted_file ? pull.baseSha : pull.headSha;
         return loadChangedSource({
+          loadSource: options?.loadSource,
           path,
           previousPath: change.deleted_file ? undefined : change.old_path,
           previousFetchPath: change.old_path,

@@ -30,6 +30,7 @@ function batchedDatabase(input: {
     selectDistinctOn: vi.fn(() => ({
       from: () => ({ where: () => ({ orderBy }) }),
     })),
+    update: () => ({ set: () => ({ where: async () => undefined }) }),
     query: {
       reviewUnits: { findMany: vi.fn(async () => input.units) },
       sourceBlobs: {
@@ -37,6 +38,7 @@ function batchedDatabase(input: {
           input.blobIds.map((id) => ({
             id,
             state: "ready",
+            updatedAt: new Date(),
             storage: "local",
             objectKey: `objects/${id}`,
           })),
@@ -50,6 +52,7 @@ function batchedDatabase(input: {
 function databaseWithReadyBlobs(count: number) {
   const ids = Array.from({ length: count }, (_, index) => `blob-${index}`);
   return {
+    update: () => ({ set: () => ({ where: async () => undefined }) }),
     query: {
       reviewUnits: {
         findMany: vi.fn(async () =>
@@ -61,6 +64,7 @@ function databaseWithReadyBlobs(count: number) {
           ids.map((id) => ({
             id,
             state: "ready",
+            updatedAt: new Date(),
             storage: "local",
             objectKey: `objects/${id}`,
           })),
@@ -75,6 +79,7 @@ describe("snapshot source availability", () => {
     mocks.exists.mockReset();
     mocks.exists.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const database = {
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
       query: {
         reviewUnits: {
           findMany: vi.fn(async () => [
@@ -105,10 +110,11 @@ describe("snapshot source availability", () => {
     ).resolves.toBe(false);
   });
 
-  it("treats a probe failure as unavailable for one snapshot", async () => {
+  it("propagates storage outages instead of rebuilding a valid snapshot", async () => {
     mocks.exists.mockReset();
     mocks.exists.mockRejectedValue(new Error("probe failed"));
     const database = {
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
       query: {
         reviewUnits: {
           findMany: vi.fn(async () => [
@@ -130,13 +136,14 @@ describe("snapshot source availability", () => {
 
     await expect(
       reviewSnapshotSourcesAvailable(database as never, "snapshot"),
-    ).resolves.toBe(false);
+    ).rejects.toThrow("probe failed");
   });
 
   it("accepts a snapshot only after every referenced object exists", async () => {
     mocks.exists.mockReset();
     mocks.exists.mockResolvedValue(true);
     const database = {
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
       query: {
         reviewUnits: {
           findMany: vi.fn(async () => [
@@ -320,4 +327,19 @@ describe("snapshot source availability", () => {
       pullRequestsMissingSnapshotSources(database as never, ["pull-request-1"]),
     ).resolves.toEqual(new Set(["pull-request-1"]));
   });
+});
+
+it("trusts recent ready objects for ordinary no-op syncs and still supports explicit verification", async () => {
+  const database = databaseWithReadyBlobs(117);
+  mocks.exists.mockReset().mockResolvedValue(true);
+  await expect(
+    reviewSnapshotSourcesAvailable(database as never, "snapshot", {
+      trustRecentVerification: true,
+    }),
+  ).resolves.toBe(true);
+  expect(mocks.exists).not.toHaveBeenCalled();
+  await expect(
+    reviewSnapshotSourcesAvailable(database as never, "snapshot"),
+  ).resolves.toBe(true);
+  expect(mocks.exists).toHaveBeenCalledTimes(117);
 });

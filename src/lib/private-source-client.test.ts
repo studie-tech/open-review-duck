@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hydratePrivateReviewSources,
   prioritizePrivateReviewSources,
+  VerifiedPrivateSourceCache,
 } from "./private-source-client";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -164,5 +165,76 @@ describe("hydratePrivateReviewSources", () => {
     controller.abort();
     expect(authorizationSignal?.aborted).toBe(true);
     expect(downloadSignal?.aborted).toBe(true);
+  });
+});
+
+describe("verified bytes across revisions", () => {
+  it("reauthorizes every snapshot while downloading unchanged bytes only once", async () => {
+    const source = "private cached source";
+    const digest = createHash("sha256").update(source).digest("hex");
+    const fetchMock = vi.fn(async (input: string | URL | Request) =>
+      String(input).startsWith("/api/source/")
+        ? Response.json({ digest, signedUrl: "https://private.example/source" })
+        : new Response(source),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const reusable = new VerifiedPrivateSourceCache();
+    const unit = {
+      path: "file.ts",
+      source: "",
+      previousSource: null,
+      currentBlobId: "blob",
+      previousBlobId: null,
+      startByte: 0,
+      endByte: source.length,
+      previousStartByte: null,
+      previousEndByte: null,
+    };
+    for (const snapshot of ["old", "new"]) {
+      const result = await hydratePrivateReviewSources(
+        [unit],
+        snapshot,
+        new Map(),
+        1,
+        undefined,
+        undefined,
+        undefined,
+        reusable,
+      );
+      expect(result.units[0]?.source).toBe(source);
+    }
+    expect(
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("/api/source/"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("https://"),
+      ),
+    ).toHaveLength(1);
+    fetchMock.mockImplementation(
+      async () => new Response(null, { status: 403 }),
+    );
+    const denied = await hydratePrivateReviewSources(
+      [unit],
+      "unauthorized",
+      new Map(),
+      1,
+      undefined,
+      undefined,
+      undefined,
+      reusable,
+    );
+    expect(denied.failures).toHaveLength(1);
+  });
+
+  it("bounds retained bytes and invalidates reuse when the stated digest changes", () => {
+    const cache = new VerifiedPrivateSourceCache(3);
+    cache.set("first", "digest", new Uint8Array([1, 2]));
+    cache.set("second", "digest", new Uint8Array([3, 4]));
+    expect(cache.get("first", "digest")).toBeUndefined();
+    expect(cache.get("second", "changed-digest")).toBeUndefined();
+    expect(cache.get("second", "digest")).toEqual(new Uint8Array([3, 4]));
   });
 });

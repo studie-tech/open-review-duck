@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getWorkflowMetadata } from "workflow";
 import { syncQueueRequests, syncRuns, workflowRuns } from "@/drizzle/schema";
 import { SYNC_PROGRESS } from "~/lib/sync-progress";
@@ -38,7 +38,14 @@ export async function syncPullRequestWorkflow(
   "use workflow";
   const { workflowRunId } = getWorkflowMetadata();
   try {
-    return await executeSynchronization(syncId, workflowRunId, startToken);
+    const result = await executeSynchronization(
+      syncId,
+      workflowRunId,
+      startToken,
+    );
+    if (!("superseded" in result))
+      await finishSynchronizationMaintenance(syncId);
+    return result;
   } catch (cause) {
     await recordTerminalSynchronizationFailure(
       syncId,
@@ -74,6 +81,10 @@ async function recordTerminalSynchronizationFailure(
         inArray(workflowRuns.status, ["queued", "running"]),
       ),
     );
+  const sync = await db.query.syncRuns.findFirst({
+    where: eq(syncRuns.id, syncId),
+  });
+  if (sync) await continueAutomaticIntake(sync);
 }
 
 /** Runs one coarse, idempotent synchronization step from persisted identity. */
@@ -94,25 +105,62 @@ async function executeSynchronization(
     where: eq(syncRuns.id, syncId),
   });
   if (!sync) throw new Error("Synchronization run not found");
-  await db
+  if (sync.status === "completed") {
+    // A worker can die between the two status writes. Reentering the step
+    // repairs its mirror without publishing or downloading the source again.
+    await db
+      .update(workflowRuns)
+      .set({ status: "completed", completedAt: sync.completedAt ?? new Date() })
+      .where(eq(workflowRuns.id, workflow.id));
+    return {
+      syncId,
+      snapshotId: sync.resultSnapshotId,
+      snapshotCreated: sync.snapshotCreated,
+    };
+  }
+  if (sync.status === "failed" || sync.status === "cancelled")
+    return { syncId, superseded: true as const };
+  const started = await db
     .update(syncRuns)
     .set({
       status: "running",
       progress: SYNC_PROGRESS.fetching,
-      startedAt: new Date(),
+      startedAt: sync.startedAt ?? new Date(),
+      attempt: sql`${syncRuns.attempt} + 1`,
+      error: null,
     })
-    .where(eq(syncRuns.id, sync.id));
+    .where(
+      and(
+        eq(syncRuns.id, sync.id),
+        inArray(syncRuns.status, ["queued", "running"]),
+      ),
+    )
+    .returning();
+  if (!started.length) return { syncId, superseded: true as const };
   await db
     .update(workflowRuns)
     .set({ status: "running", startedAt: new Date() })
     .where(eq(workflowRuns.id, workflow.id));
-  try {
-    const result = await syncPullRequest(
+  let requestVersion = sync.requestVersion;
+  let verifySources = sync.verifySources;
+  let result: Awaited<ReturnType<typeof syncPullRequest>> | undefined;
+  // Bounded draining coalesces pushes; completed source and extraction are
+  // private durable checkpoints, so another pass fetches only cache misses.
+  for (let pass = 0; pass < 4; pass++) {
+    result = await syncPullRequest(
       db,
       sync.repositoryId,
       sync.pullRequestNumber,
       {
         deferRetention: true,
+        confirmLatest: true,
+        verifySources,
+        onMetrics: async (metrics) => {
+          await db
+            .update(syncRuns)
+            .set({ metrics })
+            .where(eq(syncRuns.id, sync.id));
+        },
         onProgress: async (progress) => {
           await db
             .update(syncRuns)
@@ -121,56 +169,75 @@ async function executeSynchronization(
         },
       },
     );
-    await db
-      .update(syncRuns)
-      .set({ progress: SYNC_PROGRESS.addingToQueue })
-      .where(eq(syncRuns.id, sync.id));
-    const queueRequests = await db.query.syncQueueRequests.findMany({
-      where: eq(syncQueueRequests.syncRunId, sync.id),
+    const latest = await db.query.syncRuns.findFirst({
+      where: eq(syncRuns.id, syncId),
     });
-    for (const request of queueRequests) {
-      await assignPullRequestToQueue(db, {
-        pullRequestId: result.pullRequest.id,
-        userId: request.userId,
-        source: request.source,
-        headSha: result.pullRequest.headSha,
-        explicit: request.explicit,
-      });
-    }
-    await db
-      .update(syncRuns)
-      .set({
-        status: "completed",
-        progress: SYNC_PROGRESS.completed,
-        completedAt: new Date(),
-      })
-      .where(eq(syncRuns.id, sync.id));
-    await db
-      .update(workflowRuns)
-      .set({ status: "completed", completedAt: new Date() })
-      .where(eq(workflowRuns.id, workflow.id));
-    // Source is ready now: let the UI load it before retention maintenance.
-    await cleanupPullRequestSources(db, sync.repositoryId);
-    await continueAutomaticIntake(sync);
-    return {
-      snapshotCreated: result.snapshotCreated,
-      snapshotId: result.snapshot.id,
-      syncId,
-      unitCount: result.unitCount,
-    };
-  } catch (cause) {
-    const error = synchronizationFailureText(cause);
-    await db
-      .update(syncRuns)
-      .set({ status: "failed", error, completedAt: new Date() })
-      .where(eq(syncRuns.id, sync.id));
-    await db
-      .update(workflowRuns)
-      .set({ status: "failed", error, completedAt: new Date() })
-      .where(eq(workflowRuns.id, workflow.id));
-    await continueAutomaticIntake(sync);
-    throw cause;
+    if (latest?.requestVersion === requestVersion) break;
+    requestVersion = latest?.requestVersion ?? requestVersion;
+    verifySources = latest?.verifySources ?? verifySources;
+    if (pass === 3)
+      throw new Error(
+        "New updates arrived during synchronization; retrying the latest revision",
+      );
   }
+  if (!result) throw new Error("Synchronization produced no result");
+  await db
+    .update(syncRuns)
+    .set({ progress: SYNC_PROGRESS.addingToQueue })
+    .where(eq(syncRuns.id, sync.id));
+  const queueRequests = await db.query.syncQueueRequests.findMany({
+    where: eq(syncQueueRequests.syncRunId, sync.id),
+  });
+  for (const request of queueRequests) {
+    await assignPullRequestToQueue(db, {
+      pullRequestId: result.pullRequest.id,
+      userId: request.userId,
+      source: request.source,
+      headSha: result.pullRequest.headSha,
+      explicit: request.explicit,
+    });
+  }
+  const completed = await db
+    .update(syncRuns)
+    .set({
+      status: "completed",
+      progress: SYNC_PROGRESS.completed,
+      completedAt: new Date(),
+      resultSnapshotId: result.snapshot.id,
+      snapshotCreated: result.snapshotCreated,
+    })
+    // A request racing the last metadata check must keep this owner active.
+    .where(
+      and(
+        eq(syncRuns.id, sync.id),
+        eq(syncRuns.requestVersion, requestVersion),
+        eq(syncRuns.status, "running"),
+      ),
+    )
+    .returning();
+  if (!completed.length)
+    throw new Error("A newer synchronization request is pending");
+  await db
+    .update(workflowRuns)
+    .set({ status: "completed", completedAt: new Date() })
+    .where(eq(workflowRuns.id, workflow.id));
+  return {
+    snapshotCreated: result.snapshotCreated,
+    snapshotId: result.snapshot.id,
+    syncId,
+    unitCount: result.unitCount,
+  };
+}
+
+/** Runs maintenance separately so its retries never replay source publication. */
+async function finishSynchronizationMaintenance(syncId: string) {
+  "use step";
+  const sync = await db.query.syncRuns.findFirst({
+    where: eq(syncRuns.id, syncId),
+  });
+  if (!sync) return;
+  await cleanupPullRequestSources(db, sync.repositoryId);
+  await continueAutomaticIntake(sync);
 }
 
 /** Starts the next eligible automatic review without retrying the failed head of a backlog. */

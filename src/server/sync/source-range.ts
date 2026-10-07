@@ -1,12 +1,25 @@
 import type { AnalyzedUnit, SourceFile } from "~/server/analysis/types";
 
+/** Indexes UTF-8 line boundaries once for all units of an immutable source. */
+export function indexSourceLines(source: string) {
+  const boundaries = [0];
+  let offset = 0;
+  for (const line of source.split("\n")) {
+    offset += Buffer.byteLength(line) + 1;
+    boundaries.push(offset);
+  }
+  boundaries[boundaries.length - 1] = Buffer.byteLength(source);
+  return boundaries;
+}
+
 /** Converts an inclusive line range to UTF-8 byte offsets. */
 export function sourceRange(
   source: string,
   startLine: number,
   endLine: number,
+  boundaries = indexSourceLines(source),
 ) {
-  const lineCount = source.split("\n").length;
+  const lineCount = boundaries.length - 1;
   if (
     !Number.isInteger(startLine) ||
     !Number.isInteger(endLine) ||
@@ -18,11 +31,10 @@ export function sourceRange(
       `Source range ${startLine}-${endLine} is outside a ${lineCount}-line object`,
     );
   }
-  const lines = source.match(/[^\n]*(?:\n|$)/g) ?? [];
-  const before = lines.slice(0, Math.max(0, startLine - 1)).join("");
-  const selected = lines.slice(Math.max(0, startLine - 1), endLine).join("");
-  const startByte = Buffer.byteLength(before);
-  return { startByte, endByte: startByte + Buffer.byteLength(selected) };
+  return {
+    startByte: boundaries[startLine - 1] ?? 0,
+    endByte: boundaries[endLine] ?? 0,
+  };
 }
 
 /** Selects the immutable source object and byte range for an atomic unit. */
@@ -36,6 +48,7 @@ export function persistedUnitSourceRange(
     | "previousStartLine"
     | "previousEndLine"
   >,
+  boundaries?: { current: number[]; previous?: number[] },
 ) {
   const usePrevious =
     unit.changeType === "deleted" && file.previousContent !== undefined;
@@ -50,12 +63,21 @@ export function persistedUnitSourceRange(
     : unit.endLine;
   return {
     objectSide: usePrevious ? ("previous" as const) : ("current" as const),
-    ...sourceRange(source, startLine, endLine),
+    ...sourceRange(
+      source,
+      startLine,
+      endLine,
+      usePrevious ? boundaries?.previous : boundaries?.current,
+    ),
   };
 }
 
 /** Converts an analyzed base-side line range to immutable object byte offsets. */
-export function previousSourceRange(source: string, unit: AnalyzedUnit) {
+export function previousSourceRange(
+  source: string,
+  unit: AnalyzedUnit,
+  boundaries?: number[],
+) {
   if (unit.previousSource === undefined) return {};
   if (
     unit.previousStartLine === undefined ||
@@ -67,6 +89,7 @@ export function previousSourceRange(source: string, unit: AnalyzedUnit) {
     source,
     unit.previousStartLine,
     unit.previousEndLine,
+    boundaries,
   );
   return {
     previousStartByte: range.startByte,

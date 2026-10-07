@@ -20,7 +20,12 @@ const state = vi.hoisted(() => ({
     snapshotId: "loaded",
   },
   updatedAt: 1_000,
-  status: undefined as undefined | { status: string; error?: string },
+  status: undefined as
+    | undefined
+    | { status: string; error?: string; resultSnapshotId?: string },
+  statusError: false,
+  statusOptions: {} as Record<string, unknown>,
+  refetchStatus: vi.fn(),
   probeOptions: {} as Record<string, unknown>,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -39,7 +44,16 @@ vi.mock("~/trpc/react", () => ({
         },
       },
       reset: { useMutation: () => ({ isPending: false }) },
-      syncStatus: { useQuery: () => ({ data: state.status }) },
+      syncStatus: {
+        useQuery: (_input: unknown, options: Record<string, unknown>) => {
+          state.statusOptions = options;
+          return {
+            data: state.status,
+            isError: state.statusError,
+            refetch: state.refetchStatus,
+          };
+        },
+      },
       revisionProbe: {
         useQuery: (_input: unknown, options: Record<string, unknown>) => {
           state.probeOptions = options;
@@ -86,6 +100,7 @@ beforeEach(() => {
   };
   state.updatedAt = 1_000;
   state.status = undefined;
+  state.statusError = false;
   state.queue.mockImplementation(async () => {
     state.mutationOptions?.onSuccess({ syncId: "sync" });
     return { syncId: "sync" };
@@ -108,7 +123,7 @@ describe("review synchronization", () => {
       useReviewSynchronizationController({ ...input, onBeforeLoad }),
     );
     await settle();
-    state.status = { status: "completed" };
+    state.status = { status: "completed", resultSnapshotId: "new-snapshot" };
     rerender();
     await settle();
     expect(onBeforeLoad).toHaveBeenCalledOnce();
@@ -165,7 +180,7 @@ describe("review synchronization", () => {
     );
     await settle();
     expect(onBeforeLoad).toHaveBeenCalledOnce();
-    expect(state.refresh).toHaveBeenCalledOnce();
+    expect(state.refresh).not.toHaveBeenCalled();
   });
 
   it("applies staged data automatically and ignores probes for already displayed snapshots", async () => {
@@ -195,10 +210,10 @@ describe("review synchronization", () => {
     rerender({ incoming: next, canLoadChanges: true });
     await settle();
     expect(result.current).toBe(next);
-    expect(state.refresh).toHaveBeenCalledOnce();
+    expect(state.refresh).not.toHaveBeenCalled();
     rerender({ incoming: next, canLoadChanges: true });
     await settle();
-    expect(state.refresh).toHaveBeenCalledOnce();
+    expect(state.refresh).not.toHaveBeenCalled();
   });
 
   it("checks every five seconds and always checks on focus and reconnect", async () => {
@@ -223,6 +238,7 @@ describe("review synchronization", () => {
     await settle();
     expect(state.queue).toHaveBeenCalledTimes(1);
     state.status = undefined;
+    state.statusError = false;
     state.updatedAt = 6_001;
     rerender();
     await settle();
@@ -239,6 +255,7 @@ describe("review synchronization", () => {
       rerender();
       await settle();
       state.status = undefined;
+      state.statusError = false;
       state.updatedAt += Math.min(5_000 * 2 ** (attempt - 1), 30_000) - 1;
       vi.mocked(Date.now).mockReturnValue(state.updatedAt);
       rerender();
@@ -298,15 +315,57 @@ describe("review synchronization", () => {
       useReviewSynchronizationController(input),
     );
     await settle();
-    state.status = { status: "completed" };
+    state.status = { status: "completed", resultSnapshotId: "new-snapshot" };
     rerender();
     await settle();
     expect(state.queue).toHaveBeenCalledTimes(1);
     state.status = undefined;
+    state.statusError = false;
     state.probe = { ...state.probe, baseSha: "next-base" };
     state.updatedAt += 5_000;
     rerender();
     await settle();
     expect(state.queue).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("synchronization polling recovery", () => {
+  it("does not reload the workspace when a completed run reused its displayed snapshot", async () => {
+    const { rerender } = renderHook(() =>
+      useReviewSynchronizationController(input),
+    );
+    await settle();
+    state.status = { status: "completed", resultSnapshotId: "loaded" };
+    rerender();
+    await settle();
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(input.sendReviewSession).toHaveBeenCalledWith({
+      type: "SYNC_FINISHED",
+    });
+  });
+
+  it("keeps polling and reconnects to the same job after a status request fails", async () => {
+    const { result, rerender } = renderHook(() =>
+      useReviewSynchronizationController(input),
+    );
+    await settle();
+    state.statusError = true;
+    rerender();
+    await settle();
+    expect(result.current.syncStatus).toBe("error");
+    const interval = state.statusOptions.refetchInterval as (
+      query: unknown,
+    ) => number | false;
+    expect(interval({ state: { status: "error" } })).toBe(1500);
+    await act(async () => {
+      await result.current.syncExternalData();
+    });
+    expect(state.refetchStatus).toHaveBeenCalledOnce();
+    expect(state.queue).toHaveBeenCalledOnce();
+    state.statusError = false;
+    state.status = { status: "completed", resultSnapshotId: "new-snapshot" };
+    rerender();
+    await settle();
+    expect(state.refresh).toHaveBeenCalledOnce();
   });
 });

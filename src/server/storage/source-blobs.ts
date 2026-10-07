@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
-import { sourceBlobs } from "@/drizzle/schema";
+import { sourceBlobs, syncArtifacts } from "@/drizzle/schema";
 import type { db as database } from "~/server/db";
 import { observeOperation } from "~/server/observability/sentry";
 import { sourceObjectStore } from "./index";
@@ -28,7 +28,7 @@ export function sourceDigest(bytes: Uint8Array) {
 }
 
 /** Reports whether a ready row's object was verified recently enough to trust. */
-function readyBlobIsUsable(
+export function readyBlobIsUsable(
   blob: typeof sourceBlobs.$inferSelect,
   storeKind: string,
 ) {
@@ -378,6 +378,13 @@ export async function pruneOrphanSourceBlobs(
   deadline = Number.POSITIVE_INFINITY,
 ) {
   if (Date.now() >= deadline) return 0;
+  await db.delete(syncArtifacts).where(sql`
+    ${syncArtifacts.expiresAt} <= now() or exists (
+      select 1 from open_review_duck_repository repository
+      where repository.id = ${syncArtifacts.repositoryId}
+        and ${syncArtifacts.createdAt} < now() - repository."sourceRetentionDays" * interval '24 hours'
+    )
+  `);
   const deletionLeaseToken = randomUUID();
   const claimed = await db.transaction(async (tx) => {
     const candidates = await tx.execute<{
@@ -408,6 +415,10 @@ export async function pruneOrphanSourceBlobs(
         and not exists (
           select 1 from open_review_duck_ai_job_evidence evidence
           where evidence."sourceBlobId" = blob.id
+        )
+        and not exists (
+          select 1 from open_review_duck_sync_artifact artifact
+          where artifact."sourceBlobId" = blob.id and artifact."expiresAt" > now()
         )
         and blob."updatedAt" < now() - interval '1 hour'
       order by blob."updatedAt"

@@ -1,10 +1,11 @@
 import "server-only";
 
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { reviewSnapshots, reviewUnits, sourceBlobs } from "@/drizzle/schema";
 import { mapWithLimit } from "~/lib/concurrency";
 import type { db as database } from "~/server/db";
 import { sourceObjectStore } from "./index";
+import { readyBlobIsUsable } from "./source-blobs";
 
 type Database = typeof database;
 
@@ -17,6 +18,7 @@ const SOURCE_OBJECT_PROBE_CONCURRENCY = 12;
 export async function reviewSnapshotSourcesAvailable(
   db: Database,
   snapshotId: string,
+  options?: { trustRecentVerification?: boolean },
 ) {
   const units = await db.query.reviewUnits.findMany({
     where: eq(reviewUnits.snapshotId, snapshotId),
@@ -39,6 +41,7 @@ export async function reviewSnapshotSourcesAvailable(
   if (blobs.length !== blobIds.length) return false;
   const store = await sourceObjectStore();
   let available = true;
+  const verified = new Set<string>();
   // Each worker rereads the verdict before spending a round trip, so the first
   // missing object retires the probes still queued behind it.
   await mapWithLimit(blobs, SOURCE_OBJECT_PROBE_CONCURRENCY, async (blob) => {
@@ -51,13 +54,32 @@ export async function reviewSnapshotSourcesAvailable(
       available = false;
       return;
     }
+    if (options?.trustRecentVerification && readyBlobIsUsable(blob, store.kind))
+      return;
     if (!store.exists) return;
-    try {
-      if (!(await store.exists(blob.objectKey))) available = false;
-    } catch {
+    // An outage is not proof that private objects disappeared. Let the
+    // workflow retry instead of rebuilding every source object.
+    if (!(await store.exists(blob.objectKey))) {
       available = false;
-    }
+      // Ensure the writer repairs a proven absence even after recent verification.
+      await db
+        .update(sourceBlobs)
+        .set({ updatedAt: new Date(0) })
+        .where(
+          and(eq(sourceBlobs.id, blob.id), eq(sourceBlobs.state, "ready")),
+        );
+    } else verified.add(blob.id);
   });
+  if (verified.size)
+    await db
+      .update(sourceBlobs)
+      .set({ updatedAt: new Date() })
+      .where(
+        and(
+          inArray(sourceBlobs.id, [...verified]),
+          eq(sourceBlobs.state, "ready"),
+        ),
+      );
   return available;
 }
 

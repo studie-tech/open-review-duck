@@ -99,7 +99,9 @@ export function ReviewSyncStatusButton({
   onClick,
   provider,
   status,
+  detail,
 }: {
+  detail?: string;
   onClick: () => void;
   provider: string;
   status: ReviewSyncStatus;
@@ -109,7 +111,7 @@ export function ReviewSyncStatusButton({
     status === "syncing" || status === "loading" || status === "ready";
   return (
     <ReviewToolbarTooltip
-      label={reviewSyncStatusTitle({ provider, status }).replace(
+      label={(detail ?? reviewSyncStatusTitle({ provider, status })).replace(
         / \([^()]+\)$/,
         "",
       )}
@@ -131,7 +133,7 @@ export function ReviewSyncStatusButton({
           busy && "cursor-wait",
         )}
       >
-        {busy ? (
+        {status === "syncing" || status === "loading" ? (
           <LoaderCircle className="size-4 animate-spin" />
         ) : (
           <RefreshCw className="size-4" />

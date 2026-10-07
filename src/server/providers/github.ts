@@ -754,6 +754,9 @@ export class GitHubProvider implements PullRequestProvider {
             : file.filename;
         const ref = deleted ? diffBaseSha : pull.headSha;
         return loadChangedSource({
+          loadSource: options?.loadSource,
+          contentIdentity:
+            !deleted && file.sha ? `blob:${file.sha}` : undefined,
           path,
           previousPath: deleted ? undefined : file.previous_filename,
           previousFetchPath: file.previous_filename ?? path,
