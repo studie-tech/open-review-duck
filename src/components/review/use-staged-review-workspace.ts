@@ -3,7 +3,7 @@ import type { RouterOutputs } from "~/trpc/react";
 
 type Workspace = RouterOutputs["review"]["workspace"];
 
-/** Stages new source revisions even when unrelated router refreshes deliver them. */
+/** Holds incoming source revisions until the synchronization controller can safely load them. */
 export function useStagedReviewWorkspace(incoming: Workspace) {
   const [displayed, setDisplayed] = useState(incoming);
   const loadRequested = useRef(false);

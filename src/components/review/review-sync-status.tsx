@@ -25,7 +25,7 @@ export type ReviewSyncStatus =
  * Chooses the header sync-status the reviewer should see.
  *
  * Loading and syncing outrank a ready revision so an in-flight fetch is
- * never mistaken for a clickable "load" state. Background probes stay
+ * never mistaken for an update waiting on the current action. Background probes stay
  * idle: flashing a spinner every five seconds would be noise.
  */
 export function reviewSyncStatus(input: {
@@ -65,7 +65,7 @@ export function reviewSyncStatusLabel(status: ReviewSyncStatus) {
     case "syncing":
       return "Syncing new commits";
     case "ready":
-      return "New revision ready";
+      return "Update waiting for current action";
     case "error":
       return "Could not check for updates";
     case "idle":
@@ -80,14 +80,13 @@ export function reviewSyncStatusTitle(input: {
 }) {
   const provider = providerLabel(input.provider);
   const refresh = formatShortcut(reviewShortcuts.refresh).join(" then ");
-  const load = formatShortcut(reviewShortcuts.loadChanges).join(" then ");
   switch (input.status) {
     case "loading":
       return "Loading the new review revision";
     case "syncing":
       return `Syncing the latest ${provider} commits`;
     case "ready":
-      return `Load the synced code changes (${load})`;
+      return "Changes will load automatically after your draft or pending review action finishes";
     case "error":
       return `Could not reach ${provider}. Click to try again (${refresh})`;
     case "idle":
@@ -106,18 +105,15 @@ export function ReviewSyncStatusButton({
   status: ReviewSyncStatus;
 }) {
   const label = reviewSyncStatusLabel(status);
-  const busy = status === "syncing" || status === "loading";
+  const busy =
+    status === "syncing" || status === "loading" || status === "ready";
   return (
     <ReviewToolbarTooltip
       label={reviewSyncStatusTitle({ provider, status }).replace(
         / \([^()]+\)$/,
         "",
       )}
-      shortcut={
-        status === "ready"
-          ? reviewShortcuts.loadChanges
-          : reviewShortcuts.refresh
-      }
+      shortcut={reviewShortcuts.refresh}
     >
       <button
         type="button"

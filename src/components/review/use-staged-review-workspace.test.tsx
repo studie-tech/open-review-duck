@@ -12,7 +12,7 @@ function workspace(id: string, title = id) {
 }
 
 describe("useStagedReviewWorkspace", () => {
-  it("accepts metadata but stages all newer code until explicitly loaded", () => {
+  it("accepts metadata but stages newer code until the controller requests loading", () => {
     const first = workspace("one");
     const { result, rerender } = renderHook(
       ({ incoming }) => useStagedReviewWorkspace(incoming),
@@ -36,7 +36,7 @@ describe("useStagedReviewWorkspace", () => {
     expect(result.current.displayed).toBe(third);
   });
 
-  it("permits an explicit refresh before its response arrives", () => {
+  it("permits a load request before its refresh response arrives", () => {
     const first = workspace("one");
     const { result, rerender } = renderHook(
       ({ incoming }) => useStagedReviewWorkspace(incoming),

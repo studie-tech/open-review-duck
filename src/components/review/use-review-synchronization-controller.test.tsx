@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useReviewSynchronizationController } from "./use-review-synchronization-controller";
+import { useStagedReviewWorkspace } from "./use-staged-review-workspace";
 
 const state = vi.hoisted(() => ({
   refresh: vi.fn(),
@@ -100,19 +102,21 @@ async function settle() {
 }
 
 describe("review synchronization", () => {
-  it("makes completed background work available without refreshing or acknowledging it", async () => {
-    const { rerender, result } = renderHook(() =>
-      useReviewSynchronizationController(input),
+  it("automatically loads completed background work", async () => {
+    const onBeforeLoad = vi.fn();
+    const { rerender } = renderHook(() =>
+      useReviewSynchronizationController({ ...input, onBeforeLoad }),
     );
     await settle();
     state.status = { status: "completed" };
     rerender();
     await settle();
-    expect(result.current.updateAvailable).toBe(true);
-    expect(state.refresh).not.toHaveBeenCalled();
+    expect(onBeforeLoad).toHaveBeenCalledOnce();
+    expect(state.refresh).toHaveBeenCalledOnce();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
-  it("keeps updates pending while a draft or save is active", async () => {
+  it("automatically resumes loading after a draft or save finishes", async () => {
     state.probe = { ...state.probe, current: true, snapshotId: "external" };
     const { result, rerender } = renderHook(
       ({ canLoadChanges }) =>
@@ -120,19 +124,19 @@ describe("review synchronization", () => {
       { initialProps: { canLoadChanges: false } },
     );
     await settle();
-    act(() => result.current.loadAvailableChanges());
     expect(state.refresh).not.toHaveBeenCalled();
     expect(result.current.updateAvailable).toBe(true);
+    expect(toast.info).not.toHaveBeenCalled();
     rerender({ canLoadChanges: true });
-    act(() => result.current.loadAvailableChanges());
+    await settle();
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("checks draft readiness again at click time", async () => {
+  it("rechecks draft readiness on subsequent renders without a new probe", async () => {
     state.probe = { ...state.probe, current: true, snapshotId: "external" };
-    let draftOpen = false;
+    let draftOpen = true;
     const onBeforeLoad = vi.fn();
-    const { result } = renderHook(() =>
+    const { rerender } = renderHook(() =>
       useReviewSynchronizationController({
         ...input,
         canLoadChanges: () => !draftOpen,
@@ -140,13 +144,60 @@ describe("review synchronization", () => {
       }),
     );
     await settle();
-    draftOpen = true;
-    act(() => result.current.loadAvailableChanges());
     expect(state.refresh).not.toHaveBeenCalled();
     expect(onBeforeLoad).not.toHaveBeenCalled();
     draftOpen = false;
-    act(() => result.current.loadAvailableChanges());
+    rerender();
+    await settle();
     expect(onBeforeLoad).toHaveBeenCalledOnce();
+    expect(state.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("automatically loads a revision staged by an unrelated refresh", async () => {
+    state.probe = { ...state.probe, current: true };
+    const onBeforeLoad = vi.fn();
+    renderHook(() =>
+      useReviewSynchronizationController({
+        ...input,
+        stagedRevisionAvailable: true,
+        onBeforeLoad,
+      }),
+    );
+    await settle();
+    expect(onBeforeLoad).toHaveBeenCalledOnce();
+    expect(state.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("applies staged data automatically and ignores probes for already displayed snapshots", async () => {
+    state.probe = { ...state.probe, current: true };
+    type Workspace = Parameters<typeof useStagedReviewWorkspace>[0];
+    const first = { snapshot: input.snapshot } as Workspace;
+    const next = {
+      snapshot: { ...input.snapshot, id: "external", headSha: "new" },
+    } as Workspace;
+    const { result, rerender } = renderHook(
+      ({ incoming, canLoadChanges }) => {
+        const staged = useStagedReviewWorkspace(incoming);
+        useReviewSynchronizationController({
+          ...input,
+          snapshot: staged.displayed.snapshot,
+          stagedRevisionAvailable: staged.available,
+          canLoadChanges,
+          onBeforeLoad: staged.requestLoad,
+        });
+        return staged.displayed;
+      },
+      { initialProps: { incoming: first, canLoadChanges: false } },
+    );
+    rerender({ incoming: next, canLoadChanges: false });
+    await settle();
+    expect(result.current).toBe(first);
+    rerender({ incoming: next, canLoadChanges: true });
+    await settle();
+    expect(result.current).toBe(next);
+    expect(state.refresh).toHaveBeenCalledOnce();
+    rerender({ incoming: next, canLoadChanges: true });
+    await settle();
     expect(state.refresh).toHaveBeenCalledOnce();
   });
 
@@ -228,20 +279,18 @@ describe("review synchronization", () => {
     expect(state.queue).toHaveBeenCalledTimes(5);
   });
 
-  it("announces a snapshot synced elsewhere without replacing the current review", async () => {
+  it("automatically loads a snapshot synced elsewhere once per probe", async () => {
     state.probe = { ...state.probe, current: true, snapshotId: "external" };
-    const { rerender, result } = renderHook(() =>
+    const { rerender } = renderHook(() =>
       useReviewSynchronizationController(input),
     );
     await settle();
-    expect(result.current.updateAvailable).toBe(true);
-    expect(state.refresh).not.toHaveBeenCalled();
+    expect(state.refresh).toHaveBeenCalledTimes(1);
     expect(state.queue).not.toHaveBeenCalled();
     state.updatedAt += 5_000;
     rerender();
-    expect(state.refresh).not.toHaveBeenCalled();
-    act(() => result.current.loadAvailableChanges());
-    expect(state.refresh).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(state.refresh).toHaveBeenCalledTimes(2);
   });
 
   it("syncs a moved base even if the head has already been synchronized", async () => {
