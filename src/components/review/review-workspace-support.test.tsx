@@ -862,6 +862,65 @@ describe("same-file concept cards", () => {
     expect(highlight).not.toHaveBeenCalled();
   });
 
+  it("renders notebook cards and restores JSON diffs in Raw", async () => {
+    const fileSource = JSON.stringify({
+      nbformat: 4,
+      cells: [{ cell_type: "markdown", source: "# Notebook result" }],
+    });
+    const members = [
+      {
+        id: "notebook",
+        path: "analysis.ipynb",
+        name: "analysis.ipynb",
+        changedLineCount: 1,
+        changeType: "added",
+        source: fileSource,
+        startLine: 1,
+        endLine: 1,
+        language: "json",
+        kind: "module",
+        status: "pending",
+      },
+    ] as never;
+    const { rerender } = render(
+      <ReviewConceptFileCardPreview
+        members={members}
+        index={0}
+        count={1}
+        fileSource={fileSource}
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+    await waitFor(
+      () =>
+        expect(
+          screen.getByRole("heading", { name: "Notebook result" }),
+        ).toBeVisible(),
+      { timeout: 5_000 },
+    );
+    expect(
+      screen.queryByRole("region", { name: "Added code diff" }),
+    ).toBeNull();
+    rerender(
+      <ReviewConceptFileCardPreview
+        members={members}
+        index={0}
+        count={1}
+        fileSource={fileSource}
+        markdownView="raw"
+        itemLabel="File"
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Notebook result" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Added code diff" }),
+    ).toBeVisible();
+  });
+
   it("renders Markdown neighbor cards as a document until Raw is chosen", async () => {
     const highlight = vi.mocked(useHighlightedSource);
     highlight.mockClear();

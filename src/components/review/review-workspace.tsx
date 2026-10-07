@@ -126,7 +126,8 @@ import { reviewIndexAfterRefresh } from "~/lib/review-revision-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
   isHeavyReviewSource,
-  isReviewMarkdownFile,
+  isReviewNotebookFile,
+  isReviewPreviewFile,
   reviewFileCardStartsExpanded,
   reviewSourceByteLength,
   reviewSourceLineCount,
@@ -272,7 +273,7 @@ import {
 } from "./review-workspace-hooks";
 import {
   ProviderCommentBody,
-  ReviewMarkdownPreview,
+  ReviewDocumentPreview,
 } from "./review-workspace-markdown";
 import {
   CopyRepositoryUrlButton,
@@ -1354,20 +1355,20 @@ export function ReviewWorkspace({
         activeUnit.changeType === "added" ||
         Boolean(activeModule?.previousSource)),
   );
-  const activeFileIsMarkdown = Boolean(
+  const activeFileIsPreviewable = Boolean(
     activeUnit &&
-      isReviewMarkdownFile({
+      isReviewPreviewFile({
         language: activeUnit.language,
         path: activeUnit.path,
       }),
   );
-  const markdownPreviewVisible = Boolean(
-    activeFileIsMarkdown &&
+  const documentPreviewVisible = Boolean(
+    activeFileIsPreviewable &&
       markdownView === "preview" &&
       activeUnit?.kind !== "binary",
   );
   const sideBySideVisible =
-    !markdownPreviewVisible && showDiff && diffAvailable;
+    !documentPreviewVisible && showDiff && diffAvailable;
   const importsVisible = activeUnit
     ? importContextUnitIds.has(activeUnit.id)
     : false;
@@ -3062,7 +3063,7 @@ export function ReviewWorkspace({
       });
       if (thread.side === "left") setShowDiff(true);
       if (
-        isReviewMarkdownFile({
+        isReviewPreviewFile({
           language: targetUnit.language,
           path: targetUnit.path,
         })
@@ -4602,7 +4603,7 @@ export function ReviewWorkspace({
   /** Opens an inline question at the visible in-scope line nearest the reader. */
   function openAiQuestion() {
     if (!activeUnit || activeUnit.kind === "binary") return;
-    if (markdownPreviewVisible) changeMarkdownView("raw");
+    if (documentPreviewVisible) changeMarkdownView("raw");
     openAiQuestionAt(centredReviewLine());
   }
 
@@ -4644,7 +4645,7 @@ export function ReviewWorkspace({
   /** Opens the provider comment composer on the line the reviewer is reading. */
   function openCentredInlineComment() {
     if (!activeUnit || activeUnit.kind === "binary") return;
-    if (markdownPreviewVisible) changeMarkdownView("raw");
+    if (documentPreviewVisible) changeMarkdownView("raw");
     commentOnCardLine(
       closestReviewLine(
         centredReviewLine(),
@@ -5102,7 +5103,7 @@ export function ReviewWorkspace({
   /** Opens inline commenting at the first eligible source line. */
   function beginKeyboardComment() {
     if (!activeUnit) return;
-    if (markdownPreviewVisible) changeMarkdownView("raw");
+    if (documentPreviewVisible) changeMarkdownView("raw");
     const firstChangedLine = [...changedCurrentLines]
       .filter(isPrimaryReviewLine)
       .sort((left, right) => left - right)[0];
@@ -6827,13 +6828,18 @@ export function ReviewWorkspace({
                   >
                     <GitBranch className="size-3.5" />
                   </button>
-                  {activeFileIsMarkdown && (
+                  {activeFileIsPreviewable && (
                     <ReviewMarkdownViewSwitch
+                      documentLabel={
+                        isReviewNotebookFile({ path: activeUnit?.path })
+                          ? "Notebook"
+                          : "Markdown"
+                      }
                       view={markdownView}
                       onChange={changeMarkdownView}
                     />
                   )}
-                  {diffAvailable && !markdownPreviewVisible && (
+                  {diffAvailable && !documentPreviewVisible && (
                     <ReviewCodeViewSwitch
                       diffVisible={sideBySideVisible}
                       onChange={(diffVisible) => {
@@ -7069,7 +7075,7 @@ export function ReviewWorkspace({
                       actions={
                         selectedFileSourceExpanded &&
                         activeUnit.kind !== "binary" &&
-                        !markdownPreviewVisible ? (
+                        !documentPreviewVisible ? (
                           <ReviewUnitViewOptions
                             importsVisible={importsVisible}
                             fullFileVisible={fullFileVisible}
@@ -7097,7 +7103,7 @@ export function ReviewWorkspace({
                         ) : undefined
                       }
                     />
-                    {!markdownPreviewVisible && (
+                    {!documentPreviewVisible && (
                       <ReviewScrollOverviewStrip
                         className="px-3 py-2 sm:px-3 lg:px-3"
                         label={
@@ -7143,14 +7149,16 @@ export function ReviewWorkspace({
                     />
                   ) : null}
                   {selectedFileSourceExpanded &&
-                    markdownPreviewVisible &&
+                    documentPreviewVisible &&
                     activeFileCardSourceAvailable &&
                     activeUnit && (
-                      <ReviewMarkdownPreview
+                      <ReviewDocumentPreview
                         key={activeUnit.path}
                         path={activeUnit.path}
                         currentSource={
-                          activeModule?.source ?? activeUnit.source
+                          activeUnit.changeType === "deleted"
+                            ? ""
+                            : diffCurrentSource
                         }
                         previousSource={
                           activeModule?.previousSource ??
@@ -7160,7 +7168,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
-                    !markdownPreviewVisible &&
+                    !documentPreviewVisible &&
                     sideBySideVisible && (
                       <ReviewDiffWithLineHistory
                         ignoreWhitespace={ignoreWhitespace}
@@ -7270,7 +7278,7 @@ export function ReviewWorkspace({
                     )}
                   {selectedFileSourceExpanded &&
                     importsVisible &&
-                    !markdownPreviewVisible &&
+                    !documentPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeModule && (
@@ -7292,7 +7300,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
-                    !markdownPreviewVisible &&
+                    !documentPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     contextAvailable &&
@@ -7315,7 +7323,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
-                    !markdownPreviewVisible &&
+                    !documentPreviewVisible &&
                     !sideBySideVisible &&
                     activeFileCardSourceAvailable &&
                     activeUnit.kind !== "binary" && (
@@ -7558,7 +7566,7 @@ export function ReviewWorkspace({
                       />
                     )}
                   {selectedFileSourceExpanded &&
-                    !markdownPreviewVisible &&
+                    !documentPreviewVisible &&
                     !sideBySideVisible &&
                     contextAvailable &&
                     !fullFileVisible && (

@@ -52,6 +52,19 @@ export function isReviewMarkdownFile(input: {
   return MARKDOWN_REVIEW_EXTENSIONS.has(reviewPathExtension(input.path ?? ""));
 }
 
+/** Identifies Jupyter notebooks independently of their JSON parser language. */
+export function isReviewNotebookFile(input: { path?: string }) {
+  return reviewPathExtension(input.path ?? "") === "ipynb";
+}
+
+/** Identifies documents with a rendered presentation and a Raw source view. */
+export function isReviewPreviewFile(input: {
+  language?: string;
+  path?: string;
+}) {
+  return isReviewMarkdownFile(input) || isReviewNotebookFile(input);
+}
+
 /**
  * Reports whether a path is serialized data rather than reviewable logic.
  *
