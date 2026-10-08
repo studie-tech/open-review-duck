@@ -78,7 +78,10 @@ import {
 } from "~/lib/import-navigation";
 import { takeOptimisticActionBatch } from "~/lib/optimistic-action-queue";
 import { providerLabel } from "~/lib/provider-labels";
-import { followPendingProviderLifecycle } from "~/lib/provider-lifecycle";
+import {
+  followPendingProviderLifecycle,
+  PROVIDER_STATUS_REFRESH_MS,
+} from "~/lib/provider-lifecycle";
 import {
   FILES_VIEWER_PAGE_SIZE,
   FILES_VIEWER_PREFETCH_RADIUS,
@@ -1185,6 +1188,7 @@ export function ReviewWorkspace({
       refetchOnMount: "always",
       refetchOnWindowFocus: true,
       staleTime: 0,
+      refetchInterval: PROVIDER_STATUS_REFRESH_MS,
     },
   );
   const setProviderReviewDecision =
@@ -3033,7 +3037,6 @@ export function ReviewWorkspace({
     settledUnitId: settledActiveUnitId,
     unitPathById,
     visibleUnitIds: visibleConversationUnitIds,
-    waitingCount,
   });
   const providerDiscussionThreads = providerConversations.data?.threads ?? [];
   const openProviderDiscussionCount = providerDiscussionThreads.filter(

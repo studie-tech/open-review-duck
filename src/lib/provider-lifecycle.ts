@@ -67,7 +67,10 @@ export function providerLifecycleSummaryLabel(
   return "No checks reported";
 }
 
-/** Polls while CI is still running or mergeability has not been computed. */
+/** Refresh cadence for provider status after checks and mergeability settle. */
+export const PROVIDER_STATUS_REFRESH_MS = 45_000;
+
+/** Follows external changes, with faster polling while CI or mergeability settles. */
 export function followPendingProviderLifecycle(query: {
   state: {
     data?: {
@@ -78,7 +81,13 @@ export function followPendingProviderLifecycle(query: {
   };
 }) {
   const data = query.state.data;
-  if (!data) return false;
+  if (!data) return PROVIDER_STATUS_REFRESH_MS;
+  if (
+    data.pullRequestState === "closed" ||
+    data.pullRequestState === "merged"
+  ) {
+    return false;
+  }
   if (data.summary === "pending") return 8_000;
   if (
     data.mergeable === null &&
@@ -86,5 +95,5 @@ export function followPendingProviderLifecycle(query: {
   ) {
     return 8_000;
   }
-  return false;
+  return PROVIDER_STATUS_REFRESH_MS;
 }

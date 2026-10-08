@@ -18,6 +18,12 @@ It works with GitHub, GitLab, and Azure DevOps. You can comment, approve, make
 the other review decisions supported by your provider, and keep its review
 state in sync from the same screen.
 
+While the review tab is active, discussions refresh every 45 seconds, including
+after code review is complete. The completion page also refreshes approvals and
+merge readiness every 45 seconds, with faster checks while CI runs. Returning to
+the tab refreshes provider status too, so external updates appear without a page
+reload.
+
 Use the hosted app at [reviewduck.ai](https://reviewduck.ai), or run the local
 appliance below.
 
