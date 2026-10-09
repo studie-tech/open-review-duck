@@ -1234,7 +1234,6 @@ export function ReviewWorkspace({
   const providerLifecycle = api.review.providerLifecycle.useQuery(
     { pullRequestId: initialData.pullRequest.id },
     {
-      enabled: reviewComplete,
       retry: false,
       refetchOnMount: "always",
       refetchOnWindowFocus: true,
