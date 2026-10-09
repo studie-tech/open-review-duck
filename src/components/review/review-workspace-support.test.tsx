@@ -4248,6 +4248,7 @@ describe("PullRequestDetailsDialog", () => {
   ): WorkspacePullRequest {
     return {
       id: "pull-request-1",
+      state: "open",
       number: 42,
       title: "Keep the waiting concept out of the review path",
       description: "## Why\n\nA waiting concept was still offered as work.",

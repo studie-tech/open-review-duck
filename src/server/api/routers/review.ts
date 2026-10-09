@@ -367,6 +367,7 @@ export const reviewRouter = createTRPCRouter({
             number: pullRequests.number,
             title: pullRequests.title,
             description: pullRequests.description,
+            state: pullRequests.state,
             authorLogin: pullRequests.authorLogin,
             sourceBranch: pullRequests.sourceBranch,
             targetBranch: pullRequests.targetBranch,
