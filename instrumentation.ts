@@ -17,7 +17,8 @@ export async function register() {
     // standalone trace; getWorld selects it through WORKFLOW_TARGET_WORLD.
     await import("@workflow/world-postgres");
     const { getWorld } = await import("workflow/runtime");
-    await getWorld().start?.();
+    const world = await getWorld();
+    await world.start?.();
   }
   if (process.env.DEPLOYMENT_MODE !== "saas" || !process.env.SENTRY_DSN) {
     return;

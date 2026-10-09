@@ -28,7 +28,6 @@ async function configureWorkflowDuration() {
   const generated = JSON.parse(
     await readFile(WORKFLOW_FUNCTION_CONFIG, "utf8"),
   );
-  generated.steps.maxDuration = WORKFLOW_MAX_DURATION_SECONDS;
   generated.workflows.maxDuration = WORKFLOW_MAX_DURATION_SECONDS;
   await writeFile(
     WORKFLOW_FUNCTION_CONFIG,
@@ -49,7 +48,7 @@ const config = {
     "/api/*": ["**/route_client-reference-manifest.js"],
   },
   outputFileTracingIncludes: {
-    "/.well-known/workflow/v1/step": ["./public/tree-sitter/**/*.wasm"],
+    "/.well-known/workflow/v1/flow": ["./public/tree-sitter/**/*.wasm"],
   },
   pageExtensions: [
     "shared.tsx",
