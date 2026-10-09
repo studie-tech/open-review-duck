@@ -28,7 +28,6 @@ interface ProviderConversationControllerInput {
   settledUnitId?: string;
   unitPathById: ReadonlyMap<string, string>;
   visibleUnitIds: readonly string[];
-  waitingCount: number;
 }
 
 /**
@@ -44,7 +43,6 @@ export function useProviderConversationController({
   settledUnitId,
   unitPathById,
   visibleUnitIds,
-  waitingCount,
 }: ProviderConversationControllerInput) {
   const utils = api.useUtils();
   const [pendingThreads, setPendingThreads] = useState<
@@ -60,7 +58,7 @@ export function useProviderConversationController({
       retry: false,
       staleTime: refreshIntervalMs,
       refetchOnWindowFocus: true,
-      refetchInterval: waitingCount > 0 ? refreshIntervalMs : false,
+      refetchInterval: refreshIntervalMs,
     },
   );
 
