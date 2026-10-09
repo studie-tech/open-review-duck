@@ -15,6 +15,7 @@ import {
   FileX2,
   FolderInput,
   GitBranch,
+  GitMerge,
   Info,
   Keyboard,
   LoaderCircle,
@@ -183,6 +184,11 @@ import {
   reviewFailureClassCopy,
 } from "./deep-review-findings";
 import { HighlightedTokens } from "./highlighted-tokens";
+import {
+  MergedReviewFooter,
+  MergedReviewNotice,
+  reviewIsMerged,
+} from "./merged-review-notice";
 import { ProviderLifecycle } from "./provider-lifecycle";
 import { ProviderReviewDecision } from "./provider-review-decision";
 import { findNextReview, ReviewCompletion } from "./review-completion";
@@ -1235,6 +1241,10 @@ export function ReviewWorkspace({
       staleTime: 0,
       refetchInterval: followPendingProviderLifecycle,
     },
+  );
+  const isMerged = reviewIsMerged(
+    incomingData.pullRequest.state,
+    providerLifecycle.data?.pullRequestState,
   );
   const markReadyForReview = api.review.markReadyForReview.useMutation({
     onSuccess: () => {
@@ -4371,9 +4381,12 @@ export function ReviewWorkspace({
     reviewComplete,
   });
   const completionVisible =
-    reviewComplete && completionOpen && footerSaveState === "idle";
+    !isMerged && reviewComplete && completionOpen && footerSaveState === "idle";
   const waitingCompletionVisible =
-    reviewCaughtUp && waitingCompletionOpen && footerSaveState === "idle";
+    !isMerged &&
+    reviewCaughtUp &&
+    waitingCompletionOpen &&
+    footerSaveState === "idle";
   const completionChromeHidden = completionVisible || waitingCompletionVisible;
   useEffect(() => {
     if (completionChromeHidden) setDiscussionsOpen(false);
@@ -5748,6 +5761,11 @@ export function ReviewWorkspace({
     return (
       <main className="bg-ink grid min-h-screen place-items-center p-6 text-center">
         <div>
+          {isMerged && (
+            <MergedReviewNotice
+              targetBranch={incomingData.pullRequest.targetBranch}
+            />
+          )}
           <FileCode2 className="text-lime mx-auto size-8" />
           <h1 className="mt-5 text-xl font-medium">
             No reviewable symbols yet
@@ -5823,9 +5841,20 @@ export function ReviewWorkspace({
     // shell and leave the review jammed into the top of the window.
     <div
       data-review-workspace
-      className="bg-ink fixed inset-0 flex min-h-0 flex-col overflow-clip"
+      data-pull-request-state={
+        isMerged ? "merged" : incomingData.pullRequest.state
+      }
+      className={cn(
+        "bg-ink fixed inset-0 flex min-h-0 flex-col overflow-clip",
+        isMerged && "border-violet/60 border-t-4",
+      )}
     >
-      <header className="flex h-16 items-center gap-4 border-b border-line px-4 sm:px-6">
+      <header
+        className={cn(
+          "flex h-16 shrink-0 items-center gap-4 border-b border-line px-4 sm:px-6",
+          isMerged && "bg-violet/[.06]",
+        )}
+      >
         <Link
           href="/pullrequests"
           aria-label="Back to pull requests"
@@ -5860,7 +5889,18 @@ export function ReviewWorkspace({
             />
           </div>
         </div>
-        <div className="hidden items-center gap-3 sm:flex">
+        {isMerged && (
+          <Badge className="border-violet/30 bg-violet/15 text-violet shrink-0">
+            <GitMerge aria-hidden="true" className="size-3.5" />
+            Merged
+          </Badge>
+        )}
+        <div
+          className={cn(
+            "hidden items-center gap-3 sm:flex",
+            isMerged && "sm:hidden",
+          )}
+        >
           <span className="text-mist text-xs">
             {signedConceptCount}/{initialData.concepts.length} concepts ·{" "}
             {progress}%
@@ -6002,6 +6042,12 @@ export function ReviewWorkspace({
         </ReviewToolbar>
       </header>
 
+      {isMerged && (
+        <MergedReviewNotice
+          targetBranch={incomingData.pullRequest.targetBranch}
+        />
+      )}
+
       {revisionNotice && (
         <ReviewRevisionLoadedNotice
           key={initialData.snapshot.id}
@@ -6039,7 +6085,7 @@ export function ReviewWorkspace({
           } as CSSProperties
         }
         className={cn(
-          "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
+          "relative grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
           !completionChromeHidden &&
             (insightsPanelCollapsed
               ? "xl:grid-cols-[minmax(0,1fr)]"
@@ -6059,7 +6105,7 @@ export function ReviewWorkspace({
             type="button"
             aria-label={`Close ${reviewMode === "path" ? "review path" : "changed files"}`}
             onClick={() => setPathPanelOpen(false)}
-            className="fixed top-16 right-0 bottom-0 left-0 z-30 bg-black/55 backdrop-blur-[2px] 2xl:hidden"
+            className="absolute inset-0 z-30 bg-black/55 backdrop-blur-[2px] 2xl:hidden"
           />
         )}
         {insightsPanelOpen && !completionChromeHidden && (
@@ -6067,7 +6113,7 @@ export function ReviewWorkspace({
             type="button"
             aria-label="Close AI assistance"
             onClick={() => setInsightsPanelOpen(false)}
-            className="fixed top-16 right-0 bottom-0 left-0 z-30 bg-black/55 backdrop-blur-[2px] xl:hidden"
+            className="absolute inset-0 z-30 bg-black/55 backdrop-blur-[2px] xl:hidden"
           />
         )}
         <aside
@@ -6078,7 +6124,7 @@ export function ReviewWorkspace({
             completionChromeHidden
               ? "hidden"
               : pathPanelOpen
-                ? "fixed top-16 bottom-0 left-0 z-40 flex w-[min(320px,calc(100vw-3rem))] shadow-2xl"
+                ? "absolute inset-y-0 left-0 z-40 flex w-[min(320px,calc(100vw-3rem))] shadow-2xl"
                 : "hidden",
             !completionChromeHidden &&
               (pathPanelCollapsed
@@ -7645,7 +7691,21 @@ export function ReviewWorkspace({
                 className: "size-11 border border-line",
               })}
             </div>
-            <div className="bg-panel/45 flex items-center justify-end gap-2 border-t border-line px-3 py-3 sm:gap-3 sm:px-7 sm:py-4">
+            {isMerged && (
+              <MergedReviewFooter
+                signedCount={signedCount}
+                totalCount={units.length}
+                navigationPending={navigationPending}
+                onBack={openPullRequests}
+              />
+            )}
+            <div
+              hidden={isMerged}
+              className={cn(
+                "bg-panel/45 flex items-center justify-end gap-2 border-t border-line px-3 py-3 sm:gap-3 sm:px-7 sm:py-4",
+                isMerged && "hidden",
+              )}
+            >
               <div className="text-fog mr-auto hidden min-w-0 items-center gap-4 text-[9px] sm:flex">
                 {reviewComplete ? (
                   <span
@@ -8036,7 +8096,7 @@ export function ReviewWorkspace({
             completionChromeHidden
               ? "hidden"
               : insightsPanelOpen
-                ? "fixed top-16 right-0 bottom-0 z-40 flex w-[min(360px,calc(100vw-3rem))] shadow-2xl"
+                ? "absolute inset-y-0 right-0 z-40 flex w-[min(360px,calc(100vw-3rem))] shadow-2xl"
                 : "hidden",
             !completionChromeHidden &&
               (insightsPanelCollapsed
