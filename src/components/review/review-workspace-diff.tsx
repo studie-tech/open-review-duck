@@ -262,6 +262,7 @@ export interface SideBySideUnitDiffProps {
   onSelectReviewLine: (line: number) => void;
   isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
+  unitMarkerLines?: ReadonlySet<number>;
   renderLineDetails?: (line: number) => ReactNode;
   /** Mounts leftover previous-side conversations when that line is not the review line. */
   renderPreviousLineDetails?: (line: number) => ReactNode;
@@ -843,6 +844,7 @@ export const SideBySideUnitDiff = forwardRef<
     onSelectReviewLine,
     isReviewLineCollapsed,
     renderBeforeLine,
+    unitMarkerLines,
     renderLineDetails,
     renderPreviousLineDetails,
     emitReviewLineAnchors = true,
@@ -1004,6 +1006,16 @@ export const SideBySideUnitDiff = forwardRef<
     );
     const hasFocusWindow = hasExplicitFocus && focusEnd > focusStart;
     return compactSideBySideDiff(visibleRows, 3, {
+      pinnedRowIndexes: unitMarkerLines
+        ? visibleRows.flatMap((row, index) =>
+            (row.currentIndex !== undefined &&
+              unitMarkerLines.has(currentStartLine + row.currentIndex)) ||
+            (row.previousIndex !== undefined &&
+              unitMarkerLines.has(previousStartLine + row.previousIndex))
+              ? [index]
+              : [],
+          )
+        : undefined,
       // Keep undiffed focus windows fully expanded.
       requiredRange:
         hasFocusWindow && !explicitFocusHasDiff
@@ -1023,6 +1035,9 @@ export const SideBySideUnitDiff = forwardRef<
   }, [
     explicitFocusHasDiff,
     expanded,
+    unitMarkerLines,
+    currentStartLine,
+    previousStartLine,
     focusRange.end,
     focusRange.ownRegions,
     focusRange.start,

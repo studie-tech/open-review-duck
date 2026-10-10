@@ -497,6 +497,7 @@ export function ReviewFileCardHeader({
 export function ReviewFileUnitMarker({
   collapsed = false,
   member,
+  relatedRange,
   onToggleReview,
   onStopWaiting,
   onToggleCollapsed,
@@ -505,16 +506,18 @@ export function ReviewFileUnitMarker({
 }: {
   collapsed?: boolean;
   member: ReviewUnit;
+  relatedRange?: { startLine: number; endLine: number };
   onToggleReview?: () => void;
   onStopWaiting?: () => void;
   onToggleCollapsed?: () => void;
   reviewActionDisabled?: boolean;
   reviewActionPending?: boolean;
 }) {
+  const range = relatedRange ?? member;
   const lineLabel =
-    member.endLine > member.startLine
-      ? `L${member.startLine}–${member.endLine}`
-      : `L${member.startLine}`;
+    range.endLine > range.startLine
+      ? `L${range.startLine}–${range.endLine}`
+      : `L${range.startLine}`;
   return (
     <div
       data-review-unit-start={member.id}
@@ -553,6 +556,14 @@ export function ReviewFileUnitMarker({
             {lineLabel}
           </span>
         </>
+      )}
+      {relatedRange && (
+        <span
+          className="text-cyan shrink-0 text-[9px]"
+          title={`Related code reviewed with ${member.name}`}
+        >
+          Related changes
+        </span>
       )}
       {member.changedLineCount > 0 && (
         <span

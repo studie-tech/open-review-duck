@@ -59,6 +59,7 @@ import {
   ReviewUnitViewOptions,
   reviewCardMemberForLine,
   reviewCardUnitMarkerLines,
+  reviewCardUnitMarkers,
   SplitActionButton,
 } from "./review-workspace-source";
 
@@ -254,6 +255,7 @@ describe("same-file concept cards", () => {
   const units = [
     {
       id: "configuration",
+      stableKey: "configuration",
       path: "src/preview.ts",
       name: "configuration",
       changedLineCount: 1,
@@ -268,6 +270,7 @@ describe("same-file concept cards", () => {
     },
     {
       id: "other-file",
+      stableKey: "other-file",
       path: "src/other.ts",
       name: "other",
       changedLineCount: 1,
@@ -282,6 +285,7 @@ describe("same-file concept cards", () => {
     },
     {
       id: "main",
+      stableKey: "main",
       path: "src/preview.ts",
       name: "main",
       changedLineCount: 1,
@@ -447,6 +451,125 @@ describe("same-file concept cards", () => {
       ),
     ).toBe(15);
   });
+
+  it("labels related import ranges without duplicating shared ownership", () => {
+    const relatedRanges = [
+      { startLine: 24, endLine: 24 },
+      { startLine: 50, endLine: 110 },
+      { startLine: 300, endLine: 320 },
+    ];
+    const first = {
+      id: "a",
+      stableKey: "a",
+      startLine: 300,
+      endLine: 320,
+      changeType: "modified",
+      relatedRanges,
+    };
+    const second = {
+      id: "b",
+      stableKey: "b",
+      startLine: 400,
+      endLine: 420,
+      changeType: "modified",
+      relatedRanges: [
+        ...relatedRanges.slice(0, 2),
+        { startLine: 400, endLine: 420 },
+      ],
+    };
+    for (const members of [
+      [first, second],
+      [second, first],
+    ]) {
+      const markers = reviewCardUnitMarkers(
+        members as never,
+        new Set([24, 63, 101, 310, 410]),
+      );
+      expect(markers.get(24)?.map(({ member }) => member.id)).toEqual(["a"]);
+      expect(markers.get(50)?.map(({ member }) => member.id)).toEqual(["a"]);
+      expect(markers.get(300)?.map(({ member }) => member.id)).toEqual(["a"]);
+      expect(markers.get(400)?.map(({ member }) => member.id)).toEqual(["b"]);
+      expect(markers.get(50)?.[0]?.relatedRange).toEqual({
+        startLine: 50,
+        endLine: 110,
+      });
+    }
+  });
+
+  it.each([true, false])(
+    "keeps import and declaration markers visible through folded context (wide=%s)",
+    (wide) => {
+      setViewportWide(wide);
+      const previousLines = Array.from(
+        { length: 80 },
+        (_, index) => `// unchanged line ${index + 1}`,
+      );
+      previousLines[0] = 'import type { CombatStatName } from "./constants";';
+      previousLines[24] = "import {";
+      previousLines[41] = "  UserItem,";
+      previousLines[44] = '} from "./schema";';
+      previousLines[64] = "export function refreshProfile() {";
+      previousLines[74] = "  return previousProfile;";
+      previousLines[79] = "}";
+      const currentLines = [...previousLines];
+      currentLines[0] =
+        'import type { CombatStatName, MasteryName } from "./constants";';
+      currentLines[41] = "  UserQueue,";
+      currentLines[74] = "  return queuedProfile;";
+      const member = {
+        id: "profile",
+        stableKey: "profile",
+        name: "refreshProfile",
+        path: "profile.ts",
+        kind: "function",
+        language: "typescript",
+        startLine: 65,
+        endLine: 80,
+        changeType: "modified",
+        changedLineCount: 6,
+        status: "changed",
+        revisionState: "updated",
+        relatedRanges: [
+          {
+            startLine: 1,
+            endLine: 1,
+            previousStartLine: 1,
+            previousEndLine: 1,
+          },
+          {
+            startLine: 25,
+            endLine: 45,
+            previousStartLine: 25,
+            previousEndLine: 45,
+          },
+          {
+            startLine: 65,
+            endLine: 80,
+            previousStartLine: 65,
+            previousEndLine: 80,
+          },
+        ],
+      };
+      render(
+        <ReviewConceptFileCardPreview
+          members={[member] as never}
+          index={0}
+          count={1}
+          fileSource={currentLines.join("\n")}
+          previousFileSource={previousLines.join("\n")}
+          onSelect={vi.fn()}
+        />,
+      );
+      expect(screen.getAllByText("refreshProfile")).toHaveLength(3);
+      expect(screen.getAllByText("Related changes")).toHaveLength(2);
+      expect(screen.getByText("L25–45")).toBeInTheDocument();
+      expect(screen.getByText("L65–80")).toBeInTheDocument();
+      expect(screen.getAllByText("Not reviewed")).toHaveLength(3);
+      expect(
+        screen.getAllByText(/unchanged lines hidden/).length,
+      ).toBeGreaterThan(0);
+    },
+  );
 
   it("leaves the gap between two atomic members unowned", () => {
     const sameFile = [units[0], units[2]] as never;
@@ -824,7 +947,12 @@ describe("same-file concept cards", () => {
       />,
     );
 
-    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Reviewed").closest("[data-review-unit-start]"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("Not reviewed").closest("[data-review-unit-start]"),
+    ).not.toBeNull();
     expect(screen.getByRole("article")).toHaveTextContent("const main = true;");
     expect(screen.queryByText(/Folded after review/)).not.toBeInTheDocument();
   });
