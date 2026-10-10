@@ -2179,6 +2179,8 @@ describe("provider normalization", () => {
     const provider = new GitHubProvider("token");
 
     await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      mergeBypassPermission: "unknown",
+      canBypassMergeRequirements: false,
       checks: [
         {
           id: "check-1",
@@ -2322,6 +2324,8 @@ describe("provider normalization", () => {
     const provider = new GitHubProvider("token");
 
     await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      mergeBypassPermission: "unknown",
+      canBypassMergeRequirements: false,
       checks: [
         {
           id: "check-1",
@@ -2634,6 +2638,8 @@ describe("provider normalization", () => {
     const provider = new GitLabProvider("token");
 
     await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      mergeBypassPermission: "unsupported",
+      canBypassMergeRequirements: false,
       checks: [
         {
           id: "pipeline-80",
@@ -2730,6 +2736,8 @@ describe("provider normalization", () => {
     const provider = new GitLabProvider("token");
 
     await expect(provider.getPullRequestLifecycle("42", 12)).resolves.toEqual({
+      mergeBypassPermission: "unsupported",
+      canBypassMergeRequirements: false,
       checks: [
         {
           id: "pipeline-80",
@@ -2844,6 +2852,8 @@ describe("provider normalization", () => {
 
     await expect(provider.getPullRequestLifecycle("repo", 12)).resolves.toEqual(
       {
+        mergeBypassPermission: "unknown",
+        canBypassMergeRequirements: false,
         checks: [
           {
             id: "status-2",
@@ -2974,6 +2984,8 @@ describe("provider normalization", () => {
 
     await expect(provider.getPullRequestLifecycle("repo", 12)).resolves.toEqual(
       {
+        mergeBypassPermission: "unknown",
+        canBypassMergeRequirements: false,
         checks: [
           {
             id: "status-4",
@@ -3079,6 +3091,8 @@ describe("provider normalization", () => {
 
     await expect(provider.getPullRequestLifecycle("repo", 12)).resolves.toEqual(
       {
+        mergeBypassPermission: "unknown",
+        canBypassMergeRequirements: false,
         checks: [
           {
             id: "status-4",

@@ -511,6 +511,8 @@ export class GitLabProvider implements PullRequestProvider {
       headSha: mergeRequest.diff_refs?.head_sha ?? mergeRequest.sha,
       mergeable: merge.mergeable,
       canMerge: merge.canMerge && hasMergePermission,
+      mergeBypassPermission: "unsupported",
+      canBypassMergeRequirements: false,
       mergeBlockedReason: merge.mergeBlockedReason,
       mergeBlockedFix: merge.mergeBlockedFix,
       mergeActionLabel: "Merge",
@@ -548,7 +550,15 @@ export class GitLabProvider implements PullRequestProvider {
     repositoryExternalId: string;
     pullRequestNumber: number;
     headSha: string;
+    bypassRequirements?: boolean;
+    bypassReason?: string;
   }) {
+    if (input.bypassRequirements) {
+      throw new ProviderError(
+        this.name,
+        "GitLab does not support bypassing merge requirements through its merge API",
+      );
+    }
     await providerFetch<GitLabMergeRequest>(
       this.name,
       `${this.apiUrl}/projects/${encodeURIComponent(input.repositoryExternalId)}/merge_requests/${input.pullRequestNumber}/merge`,

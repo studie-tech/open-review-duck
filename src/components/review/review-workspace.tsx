@@ -6619,9 +6619,10 @@ export function ReviewWorkspace({
                       }
                     });
                   }}
-                  onMerge={() =>
+                  onMerge={(options) =>
                     mergePullRequest.mutate({
                       pullRequestId: initialData.pullRequest.id,
+                      ...options,
                     })
                   }
                 />

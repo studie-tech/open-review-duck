@@ -31,6 +31,11 @@ export const reviewWorkspaceSchema = z.object({
   pullRequestId: z.string().uuid(),
 });
 
+export const mergePullRequestSchema = reviewWorkspaceSchema.extend({
+  bypassRequirements: z.boolean().default(false),
+  bypassReason: z.string().trim().max(500).optional(),
+});
+
 export const fileLineHistorySchema = reviewWorkspaceSchema.extend({
   path: z.string().trim().min(1).max(1_024),
 });

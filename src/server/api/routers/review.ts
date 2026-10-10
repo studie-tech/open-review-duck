@@ -92,6 +92,7 @@ import {
 import { projectImportMaps } from "~/server/review/project-import-maps";
 import {
   accessiblePullRequest,
+  assertProviderMergeAllowed,
   attachedProviderThread,
   providerLifecycleForConnection,
   providerOperationError,
@@ -156,6 +157,7 @@ import {
   fileLineHistorySchema,
   importTargetSchema,
   improveConceptGroupingSchema,
+  mergePullRequestSchema,
   providerReviewDecisionSchema,
   publishReviewCommentSchema,
   releaseReviewWaitsSchema,
@@ -901,7 +903,7 @@ export const reviewRouter = createTRPCRouter({
     }),
 
   mergePullRequest: protectedProcedure
-    .input(reviewWorkspaceSchema)
+    .input(mergePullRequestSchema)
     .mutation(async ({ ctx, input }) => {
       await enforceRateLimit(
         ctx.db,
@@ -957,7 +959,8 @@ export const reviewRouter = createTRPCRouter({
         );
         if (
           remotePullRequest.headSha !== scope.headSha ||
-          remotePullRequest.baseSha !== scope.baseSha
+          remotePullRequest.baseSha !== scope.baseSha ||
+          currentLifecycle.headSha !== scope.headSha
         ) {
           throw new TRPCError({
             code: "CONFLICT",
@@ -976,18 +979,17 @@ export const reviewRouter = createTRPCRouter({
             remotePullRequest,
           );
         }
-        if (!currentLifecycle.canMerge) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message:
-              currentLifecycle.mergeBlockedReason ??
-              "The provider is not ready to merge this pull request",
-          });
-        }
+        assertProviderMergeAllowed(
+          currentLifecycle,
+          input,
+          scope.connection.provider,
+        );
         await provider.mergePullRequest({
           repositoryExternalId: scope.repositoryExternalId,
           pullRequestNumber: scope.pullRequestNumber,
           headSha: scope.headSha,
+          bypassRequirements: input.bypassRequirements,
+          bypassReason: input.bypassReason,
         });
         let updatedLifecycle: ProviderPullRequestLifecycle;
         try {
