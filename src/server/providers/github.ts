@@ -229,6 +229,7 @@ interface GitHubMergeGateResponse {
   data?: {
     repository?: {
       pullRequest?: {
+        viewerCanMergeAsAdmin?: boolean;
         reviewDecision?: GitHubReviewDecision | null;
         statusCheckRollup?: {
           contexts?: { nodes?: Array<GitHubStatusCheckNode | null> };
@@ -597,7 +598,7 @@ export class GitHubProvider implements PullRequestProvider {
       gate?.requiredByName ?? new Map(),
       gate?.requiredById,
     );
-    const merge = githubMergeGate({
+    const mergeInput = {
       merged: Boolean(pull.merged_at),
       closed: pull.state === "closed",
       draft: pull.draft,
@@ -607,9 +608,23 @@ export class GitHubProvider implements PullRequestProvider {
       rebaseable: pull.rebaseable,
       reviewDecision: gate?.reviewDecision,
       checks,
-    });
+    };
+    const merge = githubMergeGate(mergeInput);
     const hasMergePermission =
       await this.repositoryHasMergePermission(repositoryExternalId);
+    const mergeBypassPermission =
+      typeof gate?.viewerCanMergeAsAdmin === "boolean"
+        ? gate.viewerCanMergeAsAdmin
+          ? "allowed"
+          : "denied"
+        : "unknown";
+    const canBypassMergeRequirements =
+      mergeBypassPermission === "allowed" &&
+      hasMergePermission &&
+      !merge.canMerge &&
+      (pull.mergeable_state === "blocked" ||
+        pull.mergeable_state === "behind") &&
+      githubMergeGate({ ...mergeInput, mergeableState: "clean" }).canMerge;
     return buildProviderLifecycle({
       checks,
       pullRequestState: pull.merged_at
@@ -622,6 +637,8 @@ export class GitHubProvider implements PullRequestProvider {
       headSha: sha,
       mergeable: merge.mergeable,
       canMerge: merge.canMerge && hasMergePermission,
+      mergeBypassPermission,
+      canBypassMergeRequirements,
       mergeBlockedReason: merge.mergeBlockedReason,
       mergeBlockedFix: merge.mergeBlockedFix,
       mergeActionLabel: "Merge",
@@ -679,14 +696,20 @@ export class GitHubProvider implements PullRequestProvider {
     }
   }
 
-  /** Merges the pull request at the exact reviewed GitHub commit. */
+  /**
+   * Merges the exact reviewed commit. GitHub applies the authenticated actor's
+   * bypass rights on this same endpoint; explicit consent and live permission
+   * are checked by the caller because REST has no separate bypass flag.
+   */
   async mergePullRequest(input: {
     repositoryExternalId: string;
     pullRequestNumber: number;
     headSha: string;
+    bypassRequirements?: boolean;
+    bypassReason?: string;
   }) {
     const repository = await this.repository(input.repositoryExternalId);
-    await providerFetch<{ merged?: boolean }>(
+    const result = await providerFetch<{ merged?: boolean }>(
       this.name,
       `${this.apiUrl}/repositories/${input.repositoryExternalId}/pulls/${input.pullRequestNumber}/merge`,
       {
@@ -701,6 +724,12 @@ export class GitHubProvider implements PullRequestProvider {
         }),
       },
     );
+    if (result.merged !== true) {
+      throw new ProviderError(
+        this.name,
+        "GitHub did not merge this pull request",
+      );
+    }
   }
 
   /** Resolves the common ancestor without confusing the target tip with the PR base. */
@@ -1518,7 +1547,7 @@ export class GitHubProvider implements PullRequestProvider {
           },
           body: JSON.stringify({
             query:
-              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired } ... on StatusContext { context isRequired } } } } } } }",
+              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { viewerCanMergeAsAdmin reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired } ... on StatusContext { context isRequired } } } } } } }",
             variables: { owner, name, number },
           }),
         },
@@ -1538,6 +1567,7 @@ export class GitHubProvider implements PullRequestProvider {
         if (node.context) requiredByName.set(node.context, node.isRequired);
       }
       return {
+        viewerCanMergeAsAdmin: pullRequest.viewerCanMergeAsAdmin,
         reviewDecision: pullRequest.reviewDecision ?? null,
         requiredByName,
         requiredById,

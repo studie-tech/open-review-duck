@@ -46,6 +46,7 @@ const githubConnection = {
 
 const githubLifecycle: LifecycleState = {
   canMerge: true,
+  canBypassMergeRequirements: false,
   connection: githubConnection,
   hasMergePermission: true,
   checks: [
@@ -671,4 +672,176 @@ describe("ProviderLifecycle", () => {
         ).toBeDisabled();
     },
   );
+});
+
+const bypassLifecycle: LifecycleState = {
+  ...githubLifecycle,
+  canMerge: false,
+  canBypassMergeRequirements: true,
+  mergeBypassPermission: "allowed",
+  mergeBlockedReason: "Branch is behind the target and must be updated",
+};
+
+/** Creates callbacks for the bypass UI without making any provider requests. */
+function bypassProps() {
+  return {
+    loading: false,
+    mutationPending: false,
+    pullRequest: githubPullRequest,
+    onMerge: vi.fn(),
+    onRefresh: vi.fn(),
+  };
+}
+
+describe("explicit merge bypass", () => {
+  it("requires opt-in and a separate confirmation before requesting bypass", async () => {
+    const props = bypassProps();
+    render(<ProviderLifecycle {...props} state={bypassLifecycle} />);
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox"));
+    expect(props.onMerge).not.toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Merge with bypass" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading")).toHaveTextContent(
+      "Merge with bypass on GitHub?",
+    );
+    expect(dialog).toHaveTextContent("Branch is behind the target");
+    expect(dialog).toHaveTextContent(
+      "Required checks, approvals, or branch policies may remain unmet",
+    );
+    expect(props.onMerge).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Merge with bypass/ }),
+    );
+    expect(props.onMerge).toHaveBeenCalledExactlyOnceWith({
+      bypassRequirements: true,
+    });
+  });
+
+  it("resets consent when cancelled or when the revision changes", async () => {
+    const props = bypassProps();
+    const { rerender } = render(
+      <ProviderLifecycle {...props} state={bypassLifecycle} />,
+    );
+    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Merge with bypass" }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    await userEvent.click(screen.getByRole("checkbox"));
+    rerender(
+      <ProviderLifecycle
+        {...props}
+        state={{ ...bypassLifecycle, headSha: "new-head" }}
+      />,
+    );
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+  });
+
+  it.each(["denied", "unknown", "unsupported"] as const)(
+    "offers no bypass when permission is %s",
+    (permission) => {
+      render(
+        <ProviderLifecycle
+          {...bypassProps()}
+          state={{
+            ...bypassLifecycle,
+            mergeBypassPermission: permission,
+            canBypassMergeRequirements: false,
+          }}
+        />,
+      );
+      expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+    },
+  );
+
+  it("disables an open confirmation if bypass permission is revoked", async () => {
+    const props = bypassProps();
+    const { rerender } = render(
+      <ProviderLifecycle {...props} state={bypassLifecycle} />,
+    );
+    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Merge with bypass" }),
+    );
+    rerender(
+      <ProviderLifecycle
+        {...props}
+        state={{
+          ...bypassLifecycle,
+          mergeBypassPermission: "denied",
+          canBypassMergeRequirements: false,
+        }}
+      />,
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByRole("button", { name: /Merge/ }),
+    ).toBeDisabled();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(props.onMerge).not.toHaveBeenCalled();
+  });
+
+  it("never offers bypass for a stale revision and disables submission during refresh", async () => {
+    const props = bypassProps();
+    const { rerender } = render(
+      <ProviderLifecycle
+        {...props}
+        state={{ ...bypassLifecycle, revisionCurrent: false }}
+      />,
+    );
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    rerender(<ProviderLifecycle {...props} state={bypassLifecycle} />);
+    await userEvent.click(screen.getByRole("checkbox"));
+    rerender(<ProviderLifecycle {...props} state={bypassLifecycle} loading />);
+    expect(
+      screen.getByRole("button", { name: "Merge with bypass" }),
+    ).toBeDisabled();
+  });
+
+  it("requires and submits an Azure bypass reason", async () => {
+    const props = { ...bypassProps(), pullRequest: azurePullRequest };
+    render(
+      <ProviderLifecycle
+        {...props}
+        state={{
+          ...bypassLifecycle,
+          provider: "azure_devops",
+          mergeActionLabel: "Complete",
+        }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("checkbox"));
+    expect(
+      screen.getByRole("button", { name: "Complete with bypass" }),
+    ).toBeDisabled();
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Reason for bypassing policies/ }),
+      "Emergency fix",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Complete with bypass" }),
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Reason: Emergency fix",
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /Complete with bypass/,
+      }),
+    );
+    expect(props.onMerge).toHaveBeenCalledExactlyOnceWith({
+      bypassRequirements: true,
+      bypassReason: "Emergency fix",
+    });
+  });
 });

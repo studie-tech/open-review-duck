@@ -340,13 +340,17 @@ export function scopedProviderLifecycle(
   lifecycle: ProviderPullRequestLifecycle,
   remote: { headSha: string; baseSha: string },
 ) {
-  const revisionCurrent = providerRevisionIsCurrent(scope, remote);
+  const revisionCurrent =
+    providerRevisionIsCurrent(scope, remote) &&
+    lifecycle.headSha === scope.headSha;
   return {
     ...lifecycle,
     provider: scope.connection.provider,
     revisionCurrent,
     syncedAt: new Date(),
     canMerge: revisionCurrent && lifecycle.canMerge,
+    canBypassMergeRequirements:
+      revisionCurrent && lifecycle.canBypassMergeRequirements === true,
     mergeBlockedReason: revisionCurrent
       ? lifecycle.mergeBlockedReason
       : "The provider has a newer revision. Synchronize this pull request before merging.",
@@ -356,4 +360,49 @@ export function scopedProviderLifecycle(
       scope.connection,
     ),
   };
+}
+
+/** Authorizes an ordinary merge or an explicitly requested provider bypass. */
+export function assertProviderMergeAllowed(
+  lifecycle: ProviderPullRequestLifecycle,
+  input: { bypassRequirements?: boolean; bypassReason?: string },
+  provider: ProviderName,
+) {
+  if (input.bypassRequirements) {
+    if (
+      lifecycle.mergeBypassPermission !== "allowed" ||
+      lifecycle.hasMergePermission === false
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "The connected provider credential does not have verified permission to bypass merge requirements",
+      });
+    }
+    if (
+      lifecycle.pullRequestState !== "open" ||
+      (!lifecycle.canMerge && !lifecycle.canBypassMergeRequirements)
+    ) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          lifecycle.mergeBlockedReason ?? "This merge cannot be bypassed",
+      });
+    }
+    if (provider === "azure_devops" && !input.bypassReason?.trim()) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Enter a reason for bypassing Azure DevOps branch policies",
+      });
+    }
+    return;
+  }
+  if (!lifecycle.canMerge) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        lifecycle.mergeBlockedReason ??
+        "The provider is not ready to merge this pull request",
+    });
+  }
 }

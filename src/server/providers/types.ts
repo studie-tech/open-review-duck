@@ -141,6 +141,10 @@ export interface ProviderPullRequestLifecycle {
   headSha: string;
   mergeable: boolean | null;
   canMerge: boolean;
+  /** Permission of the connected credential, never inferred from an admin role. */
+  mergeBypassPermission?: "allowed" | "denied" | "unknown" | "unsupported";
+  /** True only when unmet requirements are the remaining merge block. */
+  canBypassMergeRequirements?: boolean;
   mergeBlockedReason?: string;
   /** The branch change that would lift the block, when a commit can. */
   mergeBlockedFix?: ProviderMergeBlockedFix;
@@ -220,6 +224,8 @@ export interface PullRequestProvider {
     repositoryExternalId: string;
     pullRequestNumber: number;
     headSha: string;
+    bypassRequirements?: boolean;
+    bypassReason?: string;
   }): Promise<void>;
   /** Fetches the changed source files required for static analysis. */
   getChangedFiles(

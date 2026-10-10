@@ -473,13 +473,14 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       `${endpoint}?api-version=7.1`,
       { headers: this.headers },
     );
-    const [statuses, evaluations] = await Promise.all([
+    const [statuses, evaluations, mergeBypassPermission] = await Promise.all([
       optionalProviderFetch<{ value: AzurePullStatus[] }>(
         this.name,
         `${endpoint}/statuses?api-version=7.1`,
         { headers: this.headers },
       ),
       this.policyEvaluations(pull, number),
+      this.mergeBypassPermission(pull, repositoryExternalId),
     ]);
     const policies = this.normalizePolicies(evaluations);
     const merge = azureMergeGate({
@@ -509,6 +510,17 @@ export class AzureDevOpsProvider implements PullRequestProvider {
       headSha: pull.lastMergeSourceCommit.commitId,
       mergeable: merge.mergeable,
       canMerge: merge.canMerge,
+      mergeBypassPermission,
+      canBypassMergeRequirements:
+        mergeBypassPermission === "allowed" &&
+        !merge.canMerge &&
+        (pull.mergeStatus === "succeeded" ||
+          pull.mergeStatus === "rejectedByPolicy") &&
+        azureMergeGate({
+          status: pull.status,
+          isDraft: pull.isDraft,
+          mergeStatus: "succeeded",
+        }).canMerge,
       mergeBlockedReason: merge.mergeBlockedReason,
       mergeBlockedFix: merge.mergeBlockedFix,
       mergeActionLabel: "Complete",
@@ -541,7 +553,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
     repositoryExternalId: string;
     pullRequestNumber: number;
     headSha: string;
+    bypassRequirements?: boolean;
+    bypassReason?: string;
   }) {
+    if (input.bypassRequirements && !input.bypassReason?.trim()) {
+      throw new ProviderError(this.name, "A policy bypass reason is required");
+    }
     await providerFetch<AzurePull>(
       this.name,
       `${this.organizationUrl}/_apis/git/repositories/${input.repositoryExternalId}/pullRequests/${input.pullRequestNumber}?api-version=7.1`,
@@ -557,10 +574,68 @@ export class AzureDevOpsProvider implements PullRequestProvider {
           completionOptions: {
             mergeStrategy: "noFastForward",
             deleteSourceBranch: false,
+            ...(input.bypassRequirements
+              ? { bypassPolicy: true, bypassReason: input.bypassReason?.trim() }
+              : {}),
           },
         }),
       },
     );
+  }
+
+  /** Evaluates the connected actor's effective policy bypass on the target branch. */
+  private async mergeBypassPermission(
+    pull: AzurePull,
+    repositoryExternalId: string,
+  ): Promise<ProviderPullRequestLifecycle["mergeBypassPermission"]> {
+    const projectId = pull.repository.project?.id;
+    if (!projectId || !pull.targetRefName.startsWith("refs/heads/")) {
+      return "unknown";
+    }
+    // Git security tokens preserve slashes and encode case-sensitive branch
+    // segments as UTF-16LE hex; repository permissions alone miss branch denies.
+    const branch = pull.targetRefName
+      .slice("refs/heads/".length)
+      .split("/")
+      .map((part) => Buffer.from(part, "utf16le").toString("hex"))
+      .join("/");
+    const token = `repoV2/${projectId}/${repositoryExternalId}/refs/heads/${branch}/`;
+    const securityNamespaceId = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
+    const permissions = 32768; // PullRequestBypassPolicy, not push-policy bypass.
+    try {
+      const result = await providerFetch<{
+        evaluations?: Array<{
+          securityNamespaceId?: string;
+          token?: string;
+          permissions?: number;
+          value?: boolean;
+        }>;
+      }>(
+        this.name,
+        `${this.organizationUrl}/_apis/security/permissionevaluationbatch?api-version=7.1`,
+        {
+          method: "POST",
+          headers: { ...this.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            alwaysAllowAdministrators: false,
+            evaluations: [{ securityNamespaceId, token, permissions }],
+          }),
+        },
+      );
+      const evaluation = result.evaluations?.find(
+        (item) =>
+          item.securityNamespaceId === securityNamespaceId &&
+          item.token === token &&
+          item.permissions === permissions,
+      );
+      return typeof evaluation?.value === "boolean"
+        ? evaluation.value
+          ? "allowed"
+          : "denied"
+        : "unknown";
+    } catch {
+      return "unknown";
+    }
   }
 
   /** Resolves the common ancestor of the exact target and source revisions. */

@@ -18,6 +18,14 @@ It works with GitHub, GitLab, and Azure DevOps. You can comment, approve, make
 the other review decisions supported by your provider, and keep its review
 state in sync from the same screen.
 
+After completing a review, you can merge from the completion page. For GitHub
+and Azure DevOps, ReviewDuck offers an explicit option to bypass unmet merge
+requirements when the connected credential has verified bypass permission.
+The option is unchecked by default and requires confirmation; Azure DevOps also
+requires a reason saved with the completion. GitLab's merge API does not offer
+an equivalent general bypass. Conflicts, drafts, stale revisions, and incomplete
+ReviewDuck reviews remain blocked.
+
 While the review tab is active, discussions refresh every 45 seconds, including
 after code review is complete. The completion page also refreshes approvals and
 merge readiness every 45 seconds, with faster checks while CI runs. Returning to

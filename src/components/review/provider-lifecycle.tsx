@@ -9,9 +9,10 @@ import {
   LoaderCircle,
   MinusCircle,
   RefreshCw,
+  ShieldAlert,
   XCircle,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
@@ -56,7 +57,10 @@ export function ProviderLifecycle({
   error?: string;
   loading: boolean;
   mutationPending: boolean;
-  onMerge: () => void;
+  onMerge: (options?: {
+    bypassRequirements: boolean;
+    bypassReason?: string;
+  }) => void;
   onMarkReady?: () => void;
   readyError?: string;
   onRefresh: () => void;
@@ -66,6 +70,9 @@ export function ProviderLifecycle({
   state?: LifecycleState;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [bypassSelected, setBypassSelected] = useState(false);
+  const [bypassReason, setBypassReason] = useState("");
+  const consentScope = useRef("");
   const provider = pullRequest.provider;
   const pullRequestUrl = pullRequest.webUrl;
   const providerName = providerLabel(provider);
@@ -89,8 +96,27 @@ export function ProviderLifecycle({
       (error && (permissionDenied || !state)),
   );
   const mergeReady = Boolean(state?.canMerge && !merged && !closed);
+  const bypassAvailable = Boolean(
+    state?.canBypassMergeRequirements &&
+      state.mergeBypassPermission === "allowed" &&
+      state.revisionCurrent &&
+      !missingMergePermission &&
+      !merged &&
+      !closed &&
+      !draft &&
+      !state.canMerge,
+  );
+  const bypassActive = bypassAvailable && bypassSelected;
+  const bypassNeedsReason = bypassActive && provider === "azure_devops";
+  const canSubmitMerge = Boolean(
+    state?.revisionCurrent &&
+      !loading &&
+      (mergeReady || bypassActive) &&
+      (!bypassNeedsReason || bypassReason.trim()),
+  );
   const actionableError =
-    error && !(state && !state.canMerge && state.mergeBlockedReason)
+    error &&
+    (bypassSelected || !(state && !state.canMerge && state.mergeBlockedReason))
       ? error
       : undefined;
   const summaryLabel = providerLifecycleSummaryLabel(
@@ -122,6 +148,15 @@ export function ProviderLifecycle({
     if (mutationPending || !confirming) return;
     if (state?.pullRequestState === "merged") setConfirming(false);
   }, [confirming, mutationPending, state?.pullRequestState]);
+
+  const bypassConsentScope = `${pullRequestUrl}:${state?.headSha}:${state?.connection.connectionId}:${bypassAvailable}`;
+  useEffect(() => {
+    // Consent belongs to this revision and credential permission only.
+    if (consentScope.current === bypassConsentScope) return;
+    consentScope.current = bypassConsentScope;
+    setBypassSelected(false);
+    setBypassReason("");
+  }, [bypassConsentScope]);
 
   return (
     <>
@@ -238,6 +273,21 @@ export function ProviderLifecycle({
                   !missingMergePermission && (
                     <div className="text-mist mt-3 rounded-xl border border-line bg-surface/50 px-3 py-2 text-[10px] leading-4">
                       <p>{state.mergeBlockedReason}</p>
+                      {!bypassAvailable &&
+                        state.mergeable !== false &&
+                        !draft &&
+                        !closed &&
+                        !state.canMerge && (
+                          <p className="mt-1">
+                            {state.mergeBypassPermission === "unsupported"
+                              ? `${providerName} does not offer a merge-requirements bypass through its API.`
+                              : state.mergeBypassPermission === "denied"
+                                ? "The connected provider credential cannot bypass merge requirements."
+                                : state.mergeBypassPermission === "unknown"
+                                  ? "Bypass permission could not be verified for the connected provider credential."
+                                  : null}
+                          </p>
+                        )}
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                         <a
                           href={pullRequestUrl}
@@ -287,6 +337,44 @@ export function ProviderLifecycle({
           </div>
           {approval && <div className="min-w-0">{approval}</div>}
         </div>
+        {bypassAvailable && (
+          <div className="mt-4 rounded-xl border border-coral/25 bg-coral/5 p-3">
+            <label className="text-coral flex cursor-pointer items-start gap-2 text-xs leading-5">
+              <input
+                type="checkbox"
+                className="mt-1 accent-coral"
+                checked={bypassSelected}
+                disabled={loading || mutationPending}
+                onChange={(event) => setBypassSelected(event.target.checked)}
+              />
+              <span>
+                Merge without waiting for requirements to be met (bypass rules)
+              </span>
+            </label>
+            <p className="text-mist mt-1 pl-5 text-[10px] leading-4">
+              {providerName} confirms that the connected credential can bypass
+              requirements. Required checks, approvals, or branch policies may
+              remain unmet.
+            </p>
+            {bypassNeedsReason && (
+              <label className="text-mist mt-3 block text-xs">
+                Reason for bypassing policies
+                <textarea
+                  className="text-cloud mt-1 block w-full rounded-lg border border-line-strong bg-surface p-2 text-xs"
+                  maxLength={500}
+                  required
+                  rows={2}
+                  value={bypassReason}
+                  disabled={mutationPending || loading}
+                  onChange={(event) => setBypassReason(event.target.value)}
+                />
+                <span className="mt-1 block text-[10px]">
+                  Saved in Azure DevOps with the completion.
+                </span>
+              </label>
+            )}
+          </div>
+        )}
         {state && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {merged ? (
@@ -311,11 +399,12 @@ export function ProviderLifecycle({
               <Button
                 type="button"
                 size="sm"
-                disabled={mutationPending || !state.canMerge}
+                variant={bypassActive ? "danger" : "primary"}
+                disabled={mutationPending || !canSubmitMerge}
                 onClick={() => setConfirming(true)}
               >
                 <GitMerge className="size-3.5" />
-                {mergeLabel}
+                {bypassActive ? `${mergeLabel} with bypass` : mergeLabel}
               </Button>
             )}
             {mutationPending && (
@@ -334,19 +423,35 @@ export function ProviderLifecycle({
       {confirming && state && (
         <ConfirmationDialog
           title={
-            state.canMerge
-              ? `${mergeLabel} on ${providerName}?`
-              : `${mergeLabel} is blocked on ${providerName}`
+            bypassActive
+              ? `${mergeLabel} with bypass on ${providerName}?`
+              : state.canMerge
+                ? `${mergeLabel} on ${providerName}?`
+                : `${mergeLabel} is blocked on ${providerName}`
           }
           description={
             <>
               <p>
-                {!state.canMerge
-                  ? `${providerName} is not ready to accept this ${mergeLabel.toLowerCase()}. ReviewDuck refreshed the latest provider state so you can see what needs attention.`
-                  : mergeLabel === "Complete"
-                    ? "This completes the pull request on Azure DevOps against the exact revision you finished reviewing. The action cannot be undone from ReviewDuck."
-                    : `This merges the exact revision you finished reviewing on ${providerName}. The action cannot be undone from ReviewDuck.`}
+                {bypassActive
+                  ? `This bypasses unmet ${providerName} requirements and merges the exact revision you reviewed. The action cannot be undone from ReviewDuck.`
+                  : !state.canMerge
+                    ? `${providerName} is not ready to accept this ${mergeLabel.toLowerCase()}. ReviewDuck refreshed the latest provider state so you can see what needs attention.`
+                    : mergeLabel === "Complete"
+                      ? "This completes the pull request on Azure DevOps against the exact revision you finished reviewing. The action cannot be undone from ReviewDuck."
+                      : `This merges the exact revision you finished reviewing on ${providerName}. The action cannot be undone from ReviewDuck.`}
               </p>
+              {bypassActive && (
+                <div className="text-coral mt-3 rounded-xl border border-coral/25 bg-coral/10 px-3 py-2 text-xs leading-5">
+                  <p>{state.mergeBlockedReason}</p>
+                  <p>
+                    Required checks, approvals, or branch policies may remain
+                    unmet.
+                  </p>
+                  {bypassNeedsReason && (
+                    <p className="mt-2">Reason: {bypassReason.trim()}</p>
+                  )}
+                </div>
+              )}
               {actionableError && (
                 <p
                   role="alert"
@@ -355,7 +460,7 @@ export function ProviderLifecycle({
                   {actionableError}
                 </p>
               )}
-              {!state.canMerge && state.mergeBlockedReason && (
+              {!bypassActive && !state.canMerge && state.mergeBlockedReason && (
                 <div
                   role="alert"
                   className="text-coral mt-3 rounded-xl border border-coral/25 bg-coral/10 px-3 py-2 text-xs leading-5"
@@ -384,8 +489,9 @@ export function ProviderLifecycle({
               )}
             </>
           }
-          confirmLabel={mergeLabel}
-          confirmDisabled={!state.canMerge}
+          confirmLabel={bypassActive ? `${mergeLabel} with bypass` : mergeLabel}
+          confirmVariant={bypassActive ? "danger" : "primary"}
+          confirmDisabled={!canSubmitMerge}
           pending={mutationPending}
           pendingLabel={
             <span className="flex items-center gap-2">
@@ -393,10 +499,30 @@ export function ProviderLifecycle({
               Updating…
             </span>
           }
-          icon={<GitMerge className="text-cyan size-5" />}
-          iconClassName="bg-cyan/10"
-          onCancel={() => setConfirming(false)}
-          onConfirm={onMerge}
+          icon={
+            bypassActive ? (
+              <ShieldAlert className="text-coral size-5" />
+            ) : (
+              <GitMerge className="text-cyan size-5" />
+            )
+          }
+          iconClassName={bypassActive ? "bg-coral/10" : "bg-cyan/10"}
+          onCancel={() => {
+            setConfirming(false);
+            setBypassSelected(false);
+            setBypassReason("");
+          }}
+          onConfirm={() => {
+            if (!canSubmitMerge) return;
+            if (bypassActive) {
+              onMerge({
+                bypassRequirements: true,
+                ...(bypassNeedsReason
+                  ? { bypassReason: bypassReason.trim() }
+                  : {}),
+              });
+            } else onMerge();
+          }}
         />
       )}
     </>
