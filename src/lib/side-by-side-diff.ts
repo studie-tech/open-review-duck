@@ -427,6 +427,8 @@ export function compactSideBySideDiff(
     | { start: number; end: number }
     | {
         requiredRange?: { start: number; end: number };
+        /** Rows carrying unit labels stay visible when surrounding context folds. */
+        pinnedRowIndexes?: readonly number[];
         /**
          * Only allow collapse inside this half-open range. Rows outside are
          * always shown — used so paged file context never recollapses.
@@ -447,7 +449,8 @@ export function compactSideBySideDiff(
     options &&
     ("collapseWithin" in options ||
       "requiredRange" in options ||
-      "ownRegions" in options)
+      "ownRegions" in options ||
+      "pinnedRowIndexes" in options)
       ? options
       : options && "start" in options && "end" in options
         ? { requiredRange: options }
@@ -465,6 +468,9 @@ export function compactSideBySideDiff(
   }
 
   const visible = new Uint8Array(rows.length);
+  for (const index of normalized.pinnedRowIndexes ?? []) {
+    if (index >= 0 && index < rows.length) visible[index] = 1;
+  }
   if (collapseWithin) {
     const from = Math.max(0, collapseWithin.start);
     const to = Math.min(rows.length, collapseWithin.end);

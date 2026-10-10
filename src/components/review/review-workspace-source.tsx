@@ -7,6 +7,7 @@ import {
   FileCode2,
 } from "lucide-react";
 import {
+  Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
@@ -28,12 +29,14 @@ import {
   reviewSourceByteLength,
   reviewSourceKindLabel,
 } from "~/lib/review-source-display";
+import { currentChangedLineIndexes } from "~/lib/side-by-side-diff";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 import { HighlightedTokens } from "./highlighted-tokens";
 import {
   ReviewFileCardHeader,
+  ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
   reviewFileCardIsDeleted,
@@ -151,6 +154,51 @@ export function reviewCardUnitMarkerLines(
   return markers;
 }
 
+/** Labels every owned related range as well as the declaration's main change. */
+export function reviewCardUnitMarkers(
+  members: readonly ReviewUnit[],
+  changedLines: ReadonlySet<number>,
+) {
+  const primaryLines = reviewCardUnitMarkerLines(members, changedLines);
+  const markers = new Map<
+    number,
+    Array<{
+      member: ReviewUnit;
+      relatedRange?: { startLine: number; endLine: number };
+    }>
+  >();
+  for (const member of members) {
+    const primaryLine = primaryLines.get(member.id) ?? member.startLine;
+    const primary = markers.get(primaryLine) ?? [];
+    primary.push({ member });
+    markers.set(primaryLine, primary);
+    for (const range of reviewCardRanges(
+      [member],
+      member.changeType === "deleted" ? "previous" : "current",
+    )) {
+      if (
+        range.startLine <= member.startLine &&
+        range.endLine >= member.startLine
+      )
+        continue;
+      if (range.startLine === primaryLine) continue;
+      // Shared imports have one displayed owner, matching comment and fold ownership.
+      if (
+        reviewCardMemberForLine(
+          members,
+          range.startLine,
+          member.changeType === "deleted" ? "previous" : "current",
+        )?.id !== member.id
+      )
+        continue;
+      const related = markers.get(range.startLine) ?? [];
+      related.push({ member, relatedRange: range });
+      markers.set(range.startLine, related);
+    }
+  }
+  return markers;
+}
+
 /**
  * Replaces mounted source on a folded file card.
  *
@@ -225,6 +273,7 @@ function ReviewConceptFileCardFallbackMember({
   const lines = useHighlightedSource(member.source, member.language);
   return (
     <div className="border-b border-line/60 last:border-b-0">
+      <ReviewFileUnitMarker member={member} />
       <SourceLineWindow
         items={lines}
         rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
@@ -309,20 +358,27 @@ function ReviewConceptFileCardSource({
         .join("\n"),
     [endLine, fileSource, startLine],
   );
+  const unitMarkers = useMemo(
+    () => reviewCardUnitMarkers(members, new Set()),
+    [members],
+  );
   const first = members[0];
   const lines = useHighlightedSource(source, first?.language ?? "text");
-  // Every rendered line asks which member owns it, so ownership is indexed
-  // once per member rather than scanned per line. Where member ranges overlap
-  // the earliest member in the card owns the shared lines.
+  // Use the same smallest-range ownership as the active card, indexed once.
   const ownerByLine = useMemo(() => {
     const owners = new Map<number, ReviewUnit>();
-    for (const member of members) {
-      for (const { startLine: from, endLine: to } of reviewCardRanges([
-        member,
-      ])) {
-        for (let line = from; line <= to; line += 1) {
-          if (!owners.has(line)) owners.set(line, member);
-        }
+    const ownedRanges = members
+      .flatMap((member) =>
+        reviewCardRanges([member]).map((range) => ({ member, ...range })),
+      )
+      .sort(
+        (left, right) =>
+          left.endLine - left.startLine - (right.endLine - right.startLine) ||
+          left.member.stableKey.localeCompare(right.member.stableKey),
+      );
+    for (const { member, startLine, endLine } of ownedRanges) {
+      for (let line = startLine; line <= endLine; line += 1) {
+        if (!owners.has(line)) owners.set(line, member);
       }
     }
     return owners;
@@ -341,50 +397,62 @@ function ReviewConceptFileCardSource({
             const owner = ownerByLine.get(lineNumber);
             const markers = rightLineCommentMarkers?.get(lineNumber);
             return (
-              <div
-                key={`${members[0]?.id}-${lineNumber}`}
-                className={cn(
-                  "group relative grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
-                  !owner && "bg-surface-subtle/15 opacity-45 hover:opacity-75",
-                  owner &&
-                    (deleted
-                      ? "border-l-2 border-l-coral/40 bg-coral/[.08] hover:bg-coral/[.12]"
-                      : "border-l-2 border-l-cyan/30 bg-cyan/[.012]"),
-                )}
-              >
-                {markers && onOpenLineComment ? (
-                  <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
-                    <ReviewLineCommentMarkers
-                      markers={markers}
-                      onOpen={onOpenLineComment}
+              <Fragment key={`${members[0]?.id}-${lineNumber}`}>
+                {(unitMarkers.get(lineNumber) ?? []).map(
+                  ({ member, relatedRange }) => (
+                    <ReviewFileUnitMarker
+                      key={member.id}
+                      member={member}
+                      relatedRange={relatedRange}
                     />
-                  </div>
-                ) : null}
-                {owner && onCommentLine ? (
-                  <button
-                    type="button"
-                    aria-label={`Open actions for line ${lineNumber} of ${owner.name}`}
-                    onClick={() => onCommentLine(owner.id, lineNumber)}
-                    className="hover:text-cyan text-fog flex items-start justify-end pr-3 text-right transition select-none"
-                  >
-                    <span>{lineNumber}</span>
-                  </button>
-                ) : (
-                  <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
-                    {lineNumber}
-                  </span>
+                  ),
                 )}
-                <pre
+                <div
+                  key={`${members[0]?.id}-${lineNumber}`}
                   className={cn(
-                    "syntax-code overflow-visible text-cloud",
-                    deleted &&
-                      owner &&
-                      "text-cloud/80 line-through decoration-coral/35",
+                    "group relative grid grid-cols-[55px_1fr] px-3 hover:bg-surface-subtle",
+                    !owner &&
+                      "bg-surface-subtle/15 opacity-45 hover:opacity-75",
+                    owner &&
+                      (deleted
+                        ? "border-l-2 border-l-coral/40 bg-coral/[.08] hover:bg-coral/[.12]"
+                        : "border-l-2 border-l-cyan/30 bg-cyan/[.012]"),
                   )}
                 >
-                  <HighlightedTokens tokens={line.tokens} />
-                </pre>
-              </div>
+                  {markers && onOpenLineComment ? (
+                    <div className="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+                      <ReviewLineCommentMarkers
+                        markers={markers}
+                        onOpen={onOpenLineComment}
+                      />
+                    </div>
+                  ) : null}
+                  {owner && onCommentLine ? (
+                    <button
+                      type="button"
+                      aria-label={`Open actions for line ${lineNumber} of ${owner.name}`}
+                      onClick={() => onCommentLine(owner.id, lineNumber)}
+                      className="hover:text-cyan text-fog flex items-start justify-end pr-3 text-right transition select-none"
+                    >
+                      <span>{lineNumber}</span>
+                    </button>
+                  ) : (
+                    <span className="text-fog flex items-start justify-end pr-3 text-right select-none">
+                      {lineNumber}
+                    </span>
+                  )}
+                  <pre
+                    className={cn(
+                      "syntax-code overflow-visible text-cloud",
+                      deleted &&
+                        owner &&
+                        "text-cloud/80 line-through decoration-coral/35",
+                    )}
+                  >
+                    <HighlightedTokens tokens={line.tokens} />
+                  </pre>
+                </div>
+              </Fragment>
             );
           }}
         />
@@ -488,6 +556,19 @@ export function ReviewConceptFileCardPreview({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  const unitMarkers = useMemo(
+    () =>
+      reviewCardUnitMarkers(
+        members,
+        new Set(
+          [...currentChangedLineIndexes(previousFileSource, fileSource)].map(
+            (index) => index + 1,
+          ),
+        ),
+      ),
+    [members, previousFileSource, fileSource],
+  );
+  const markerLines = useMemo(() => new Set(unitMarkers.keys()), [unitMarkers]);
   const lineCommentMarkers = useMemo(
     () => reviewLineCommentMarkersBySide(commentThreads ?? []),
     [commentThreads],
@@ -638,6 +719,18 @@ export function ReviewConceptFileCardPreview({
               leftLineCommentMarkers={lineCommentMarkers.left}
               rightLineCommentMarkers={lineCommentMarkers.right}
               onOpenLineComment={onOpenLineComment}
+              unitMarkerLines={markerLines}
+              renderBeforeLine={(line) =>
+                (unitMarkers.get(line) ?? []).map(
+                  ({ member, relatedRange }) => (
+                    <ReviewFileUnitMarker
+                      key={member.id}
+                      member={member}
+                      relatedRange={relatedRange}
+                    />
+                  ),
+                )
+              }
               emitReviewLineAnchors={false}
               className="rounded-none border-0"
             />

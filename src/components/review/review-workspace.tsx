@@ -301,7 +301,7 @@ import {
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   reviewCardMemberForLine,
-  reviewCardUnitMarkerLines,
+  reviewCardUnitMarkers,
   SplitActionButton,
 } from "./review-workspace-source";
 import { liveConceptStatus } from "./review-workspace-stream";
@@ -3474,8 +3474,12 @@ export function ReviewWorkspace({
     [visibleProviderThreads],
   );
   const fileUnitMarkerLines = useMemo(
-    () => reviewCardUnitMarkerLines(activeFileCardMembers, changedCurrentLines),
+    () => reviewCardUnitMarkers(activeFileCardMembers, changedCurrentLines),
     [activeFileCardMembers, changedCurrentLines],
+  );
+  const pinnedFileUnitMarkerLines = useMemo(
+    () => new Set(fileUnitMarkerLines.keys()),
+    [fileUnitMarkerLines],
   );
   const displayedLineEntries = useMemo(
     () =>
@@ -3496,9 +3500,7 @@ export function ReviewWorkspace({
               signOffOrigin: owner.signOffOrigin,
             })
           : false;
-        const opensUnit = activeFileCardMembers.some(
-          (member) => fileUnitMarkerLines.get(member.id) === lineNumber,
-        );
+        const opensUnit = fileUnitMarkerLines.has(lineNumber);
         return collapsed && !opensUnit ? [] : [{ line, lineNumber }];
       }),
     [
@@ -3596,9 +3598,7 @@ export function ReviewWorkspace({
 
   /** Units whose labels open here, including a file with a single unit. */
   function fileUnitsStartingAt(lineNumber: number) {
-    return activeFileCardMembers.filter(
-      (member) => fileUnitMarkerLines.get(member.id) === lineNumber,
-    );
+    return fileUnitMarkerLines.get(lineNumber) ?? [];
   }
 
   /** Reports whether the atomic owner of a rendered card line is folded. */
@@ -3609,11 +3609,12 @@ export function ReviewWorkspace({
 
   /** Renders the persistent opener for each atomic unit in a file card. */
   function renderFileUnitMarkers(lineNumber: number) {
-    return fileUnitsStartingAt(lineNumber).map((member) => (
+    return fileUnitsStartingAt(lineNumber).map(({ member, relatedRange }) => (
       <ReviewFileUnitMarker
         key={member.id}
         collapsed={unitIsCollapsed(member)}
         member={member}
+        relatedRange={relatedRange}
         onToggleCollapsed={() => toggleUnitCollapsed(member)}
         onToggleReview={() => toggleUnitReview(member)}
         onStopWaiting={
@@ -7276,6 +7277,7 @@ export function ReviewWorkspace({
                         }
                         onOpenLineComment={openLineCommentThread}
                         renderBeforeLine={renderFileUnitMarkers}
+                        unitMarkerLines={pinnedFileUnitMarkerLines}
                         renderLineDetails={renderReviewLineDetails}
                         renderPreviousLineDetails={
                           renderPreviousSideConversations
