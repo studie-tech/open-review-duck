@@ -1853,7 +1853,7 @@ export function ReviewWorkspace({
       sourceStatus,
     ],
   );
-  /** Opens a chosen file's card and every unit so the reviewer can read it. */
+  /** Opens a file for inspection while preserving earlier sign-off folds. */
   const inspectReviewFile = useCallback(
     (path: string, unitIds: readonly string[]) => {
       setInspectedFilePath(path);
@@ -3489,6 +3489,7 @@ export function ReviewWorkspace({
               inspected: inspectedFilePath === owner.path,
               override: unitFoldOverrides.get(owner.id),
               startsCollapsed: reviewUnitStartsCollapsed(owner),
+              signOffOrigin: owner.signOffOrigin,
             })
           : false;
         const opensUnit = activeFileCardMembers.some(
@@ -3513,6 +3514,7 @@ export function ReviewWorkspace({
       inspected: inspectedFilePath === member.path,
       override: unitFoldOverrides.get(member.id),
       startsCollapsed: reviewUnitStartsCollapsed(member),
+      signOffOrigin: member.signOffOrigin,
     });
   }
 
@@ -3527,6 +3529,7 @@ export function ReviewWorkspace({
           inspected: inspectedFilePath === member.path,
           override: current.get(member.id),
           startsCollapsed: reviewUnitStartsCollapsed(member),
+          signOffOrigin: member.signOffOrigin,
         }),
       );
       return next;
@@ -4068,6 +4071,7 @@ export function ReviewWorkspace({
     setImportContextUnitIds(new Set());
     setFullFileUnitIds(new Set());
     setUnitFoldOverrides(new Map());
+    setInspectedFilePath(undefined);
     signOffUndoHistoryRef.current = [];
     setSignOffUndoHistory([]);
     setSessionId(undefined);

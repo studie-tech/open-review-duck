@@ -38,16 +38,22 @@ export function reviewUnitStartsCollapsed(member: ReviewCardMemberState) {
  *
  * An explicit fold from the unit chevron wins. Visible conversations and
  * a file the reviewer just chose to inspect stay open. Otherwise signed-off
- * units start collapsed.
+ * units start collapsed. Preserved sign-offs stay folded when their file is
+ * selected; their own chevron or a visible conversation can reopen them.
  */
 export function reviewUnitIsCollapsed(input: {
   hasVisibleConversation: boolean;
   inspected: boolean;
   override?: boolean;
   startsCollapsed: boolean;
+  signOffOrigin?: string;
 }) {
   if (input.override !== undefined) return input.override;
-  if (input.hasVisibleConversation || input.inspected) return false;
+  if (
+    input.hasVisibleConversation ||
+    (input.inspected && input.signOffOrigin !== "preserved")
+  )
+    return false;
   return input.startsCollapsed;
 }
 
@@ -547,6 +553,15 @@ export function ReviewFileUnitMarker({
             {lineLabel}
           </span>
         </>
+      )}
+      {member.changedLineCount > 0 && (
+        <span
+          className="text-fog shrink-0 text-[9px]"
+          title="Changes owned by this unit, including changes further down in its body"
+        >
+          {member.changedLineCount} changed{" "}
+          {member.changedLineCount === 1 ? "line" : "lines"}
+        </span>
       )}
       <span className="h-px min-w-3 flex-1 bg-line" />
       {member.revisionState === "new" && (

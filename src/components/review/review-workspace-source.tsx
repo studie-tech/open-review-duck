@@ -100,12 +100,22 @@ export function reviewCardMemberForLine(
   line: number,
   side: "current" | "previous" = "current",
 ) {
-  return members.find((member) => {
-    const ranges = reviewCardRanges([member], side);
-    return ranges.some(
-      ({ startLine, endLine }) => line >= startLine && line <= endLine,
-    );
-  });
+  let owner: ReviewUnit | undefined;
+  let ownerSize = Number.POSITIVE_INFINITY;
+  for (const member of members) {
+    for (const { startLine, endLine } of reviewCardRanges([member], side)) {
+      if (line < startLine || line > endLine) continue;
+      const size = endLine - startLine;
+      if (
+        size < ownerSize ||
+        (size === ownerSize && member.stableKey < (owner?.stableKey ?? ""))
+      ) {
+        owner = member;
+        ownerSize = size;
+      }
+    }
+  }
+  return owner;
 }
 
 /**
