@@ -36,6 +36,7 @@ import {
   ConceptMoveDialog,
   PullRequestDetailsDialog,
 } from "./review-workspace-dialogs";
+import { ReviewFileUnitMarker } from "./review-file-card";
 import {
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
@@ -57,6 +58,7 @@ import {
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   reviewCardMemberForLine,
+  reviewCardUnitMarkerLines,
   SplitActionButton,
 } from "./review-workspace-source";
 
@@ -394,6 +396,56 @@ describe("same-file concept cards", () => {
       ).toBe("child");
       expect(reviewCardMemberForLine(members as never, 845)?.id).toBe("parent");
     }
+  });
+
+  it("anchors the parent label to its own change after a reviewed nested hook", () => {
+    const members = [
+      {
+        id: "parent",
+        stableKey: "parent",
+        startLine: 727,
+        endLine: 1066,
+        changeType: "modified",
+      },
+      {
+        id: "hook",
+        stableKey: "hook",
+        startLine: 733,
+        endLine: 733,
+        changeType: "added",
+      },
+    ];
+    const markers = reviewCardUnitMarkerLines(
+      members as never,
+      new Set([733, 845, 846, 847, 848]),
+    );
+    expect(markers.get("parent")).toBe(845);
+    expect(markers.get("hook")).toBe(733);
+    expect(markers.get("parent")).not.toBe(727);
+  });
+
+  it("keeps a parent marker on its own earlier change when it precedes the child", () => {
+    const members = [
+      {
+        id: "parent",
+        stableKey: "parent",
+        startLine: 10,
+        endLine: 100,
+        changeType: "modified",
+      },
+      {
+        id: "child",
+        stableKey: "child",
+        startLine: 30,
+        endLine: 40,
+        changeType: "modified",
+      },
+    ];
+    expect(
+      reviewCardUnitMarkerLines(members as never, new Set([35, 15])).get(
+        "parent",
+      ),
+    ).toBe(15);
   });
 
   it("leaves the gap between two atomic members unowned", () => {
@@ -3293,6 +3345,52 @@ describe("SideBySideUnitDiff", () => {
     const diff = screen.getByRole("region", { name: "Added code diff" });
     expect(diff.textContent?.indexOf("TypePlot section")).toBeLessThan(
       diff.textContent?.indexOf("export const TypePlot") ?? -1,
+    );
+  });
+
+  it("marks the start of a single updated unit above its first diff hunk", () => {
+    const member = {
+      id: "clan",
+      stableKey: "clan",
+      name: "ClanInfo",
+      startLine: 1098,
+      endLine: 1101,
+      status: "changed",
+      revisionState: "updated",
+      changedLineCount: 2,
+      changeType: "modified",
+    };
+    const markers = reviewCardUnitMarkerLines(
+      [member] as never,
+      new Set([1100]),
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource={
+          "export const ClanInfo = () => {\n  // Destructure\n  const { userData } = useRequireInVillage();\n};"
+        }
+        currentSource={
+          "export const ClanInfo = () => {\n  // Destructure\n  const { userData, onMutate } = useRequireInVillage();\n};"
+        }
+        language="typescript"
+        previousStartLine={1098}
+        currentStartLine={1098}
+        currentFocusStartLine={1098}
+        currentFocusEndLine={1101}
+        onSelectReviewLine={vi.fn()}
+        renderBeforeLine={(line) =>
+          markers.get(member.id) === line ? (
+            <ReviewFileUnitMarker member={member as never} />
+          ) : null
+        }
+      />,
+    );
+    const diff = screen.getByRole("region", { name: "Side-by-side code diff" });
+    expect(diff).toHaveTextContent("ClanInfo");
+    expect(diff).toHaveTextContent("Updated");
+    expect(diff).toHaveTextContent("Not reviewed");
+    expect(diff.textContent?.indexOf("Not reviewed")).toBeLessThan(
+      diff.textContent?.indexOf("export const ClanInfo") ?? -1,
     );
   });
 
