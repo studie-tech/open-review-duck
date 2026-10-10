@@ -3476,6 +3476,40 @@ describe("SideBySideUnitDiff", () => {
     );
   });
 
+  it.each([true, false])(
+    "keeps previous and current unit labels when aligned lines differ (wide=%s)",
+    (wide) => {
+      setViewportWide(wide);
+      render(
+        <SideBySideUnitDiff
+          previousSource={"const value = 1;\nreturn value;"}
+          currentSource={"const value = 2;\nreturn value;"}
+          language="typescript"
+          previousStartLine={10}
+          currentStartLine={12}
+          previousFocusRanges={[{ startLine: 10, endLine: 11 }]}
+          currentFocusRanges={[{ startLine: 12, endLine: 13 }]}
+          unitMarkerLines={new Set([10, 12])}
+          onSelectReviewLine={vi.fn()}
+          renderBeforeLine={(line) => (
+            <div>
+              {line === 10 ? "Deleted unit label" : "Modified unit label"}
+            </div>
+          )}
+        />,
+      );
+
+      const diff = screen.getByRole("region", {
+        name: "Side-by-side code diff",
+      });
+      expect(screen.getAllByText("Deleted unit label")).toHaveLength(1);
+      expect(screen.getAllByText("Modified unit label")).toHaveLength(1);
+      expect(diff.textContent?.indexOf("Deleted unit label")).toBeLessThan(
+        diff.textContent?.indexOf("const value = 2;") ?? -1,
+      );
+    },
+  );
+
   it("marks the start of a single updated unit above its first diff hunk", () => {
     const member = {
       id: "clan",
