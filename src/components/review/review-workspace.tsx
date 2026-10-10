@@ -301,6 +301,7 @@ import {
   ReviewRevisionLoadedNotice,
   ReviewUnitViewOptions,
   reviewCardMemberForLine,
+  reviewCardUnitMarkerLines,
   SplitActionButton,
 } from "./review-workspace-source";
 import { liveConceptStatus } from "./review-workspace-stream";
@@ -3472,11 +3473,14 @@ export function ReviewWorkspace({
     () => new Set(visibleProviderThreads.map(({ unitId }) => unitId)),
     [visibleProviderThreads],
   );
+  const fileUnitMarkerLines = useMemo(
+    () => reviewCardUnitMarkerLines(activeFileCardMembers, changedCurrentLines),
+    [activeFileCardMembers, changedCurrentLines],
+  );
   const displayedLineEntries = useMemo(
     () =>
       lines.flatMap((line, index) => {
         const lineNumber = visibleStartLine + index;
-        if (activeFileCardMembers.length <= 1) return [{ line, lineNumber }];
         const owner = reviewCardMemberForLine(
           activeFileCardMembers,
           lineNumber,
@@ -3493,12 +3497,13 @@ export function ReviewWorkspace({
             })
           : false;
         const opensUnit = activeFileCardMembers.some(
-          (member) => member.startLine === lineNumber,
+          (member) => fileUnitMarkerLines.get(member.id) === lineNumber,
         );
         return collapsed && !opensUnit ? [] : [{ line, lineNumber }];
       }),
     [
       activeFileCardMembers,
+      fileUnitMarkerLines,
       inspectedFilePath,
       lines,
       unitFoldOverrides,
@@ -3589,17 +3594,15 @@ export function ReviewWorkspace({
     );
   }
 
-  /** Units that open on this line when a card contains more than one. */
+  /** Units whose labels open here, including a file with a single unit. */
   function fileUnitsStartingAt(lineNumber: number) {
-    if (activeFileCardMembers.length <= 1) return [];
     return activeFileCardMembers.filter(
-      (member) => member.startLine === lineNumber,
+      (member) => fileUnitMarkerLines.get(member.id) === lineNumber,
     );
   }
 
   /** Reports whether the atomic owner of a rendered card line is folded. */
   function isFileUnitLineCollapsed(lineNumber: number) {
-    if (activeFileCardMembers.length <= 1) return false;
     const owner = reviewCardMemberForLine(activeFileCardMembers, lineNumber);
     return owner ? unitIsCollapsed(owner) : false;
   }

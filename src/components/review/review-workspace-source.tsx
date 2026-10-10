@@ -118,6 +118,39 @@ export function reviewCardMemberForLine(
   return owner;
 }
 
+/** Anchors enclosing unit labels to their own changes, past nested units. */
+export function reviewCardUnitMarkerLines(
+  members: readonly ReviewUnit[],
+  changedLines: ReadonlySet<number>,
+) {
+  const markers = new Map(
+    members.map((member) => [member.id, member.startLine]),
+  );
+  const enclosing = new Set(
+    members
+      .filter((parent) =>
+        members.some(
+          (child) =>
+            child.id !== parent.id &&
+            child.startLine >= parent.startLine &&
+            child.endLine <= parent.endLine &&
+            (child.startLine > parent.startLine ||
+              child.endLine < parent.endLine),
+        ),
+      )
+      .map(({ id }) => id),
+  );
+  if (enclosing.size === 0) return markers;
+  const anchored = new Set<string>();
+  for (const line of [...changedLines].sort((left, right) => left - right)) {
+    const owner = reviewCardMemberForLine(members, line);
+    if (!owner || !enclosing.has(owner.id) || anchored.has(owner.id)) continue;
+    markers.set(owner.id, line);
+    anchored.add(owner.id);
+  }
+  return markers;
+}
+
 /**
  * Replaces mounted source on a folded file card.
  *
