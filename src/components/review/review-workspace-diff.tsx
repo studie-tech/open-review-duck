@@ -1423,6 +1423,33 @@ export const SideBySideUnitDiff = forwardRef<
   const renderedDetailLines = new Set<number>();
   const renderedBeforeLines = new Set<number>();
 
+  /** Keeps labels from both diff sides when their line numbers diverge. */
+  function renderRowUnitMarkers(
+    row: (typeof rows)[number],
+    reviewLine: number | undefined,
+  ) {
+    const markerLines = unitMarkerLines
+      ? [
+          row.previousIndex === undefined
+            ? undefined
+            : previousStartLine + row.previousIndex,
+          row.currentIndex === undefined
+            ? undefined
+            : currentStartLine + row.currentIndex,
+        ].filter(
+          (line): line is number =>
+            line !== undefined && unitMarkerLines.has(line),
+        )
+      : reviewLine !== undefined
+        ? [reviewLine]
+        : [];
+    return markerLines.map((line) => {
+      if (renderedBeforeLines.has(line)) return null;
+      renderedBeforeLines.add(line);
+      return <Fragment key={line}>{renderBeforeLine?.(line)}</Fragment>;
+    });
+  }
+
   if (additionOnly) {
     return (
       <section
@@ -1477,9 +1504,6 @@ export const SideBySideUnitDiff = forwardRef<
           const rendersLineDetails =
             reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
           if (rendersLineDetails) renderedDetailLines.add(reviewLine);
-          const rendersBeforeLine =
-            reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
-          if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
           const lineCollapsed =
             reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
           const absoluteRowIndex = visibleRowStart + item.rowIndex;
@@ -1498,7 +1522,7 @@ export const SideBySideUnitDiff = forwardRef<
               {startsScope && (
                 <ReviewScopeMarker edge="start" line={scopeStartLine} />
               )}
-              {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
+              {renderRowUnitMarkers(row, reviewLine)}
               {!lineCollapsed && (
                 <>
                   <AddedUnitDiffRow
@@ -1611,9 +1635,6 @@ export const SideBySideUnitDiff = forwardRef<
         const rendersLineDetails =
           reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
         if (rendersLineDetails) renderedDetailLines.add(reviewLine);
-        const rendersBeforeLine =
-          reviewLine !== undefined && !renderedBeforeLines.has(reviewLine);
-        if (rendersBeforeLine) renderedBeforeLines.add(reviewLine);
         const lineCollapsed =
           reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
         const currentIsReviewLine =
@@ -1644,7 +1665,7 @@ export const SideBySideUnitDiff = forwardRef<
             {startsScope && (
               <ReviewScopeMarker edge="start" line={scopeStartLine} />
             )}
-            {rendersBeforeLine && renderBeforeLine?.(reviewLine)}
+            {renderRowUnitMarkers(row, reviewLine)}
             {!lineCollapsed && (
               <>
                 {rendersLineDetails && emitReviewLineAnchors && (
