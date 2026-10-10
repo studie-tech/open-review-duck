@@ -447,6 +447,51 @@ describe("ReviewFileUnitMarker", () => {
     ).toBe(true);
   });
 
+  it("keeps preserved sign-offs folded when their file is inspected", () => {
+    const preserved = {
+      hasVisibleConversation: false,
+      inspected: true,
+      startsCollapsed: true,
+      signOffOrigin: "preserved",
+    };
+    expect(reviewUnitIsCollapsed(preserved)).toBe(true);
+    expect(reviewUnitIsCollapsed({ ...preserved, override: false })).toBe(
+      false,
+    );
+    expect(
+      reviewUnitIsCollapsed({ ...preserved, hasVisibleConversation: true }),
+    ).toBe(false);
+    expect(
+      reviewUnitIsCollapsed({
+        ...preserved,
+        startsCollapsed: false,
+        signOffOrigin: "none",
+      }),
+    ).toBe(false);
+  });
+
+  it("shows changes owned by a unit even when its visible header is unchanged", () => {
+    render(
+      <ReviewFileUnitMarker
+        member={
+          {
+            id: "component",
+            name: "KageChallenge",
+            startLine: 727,
+            endLine: 1066,
+            changedLineCount: 5,
+            status: "pending",
+          } as never
+        }
+      />,
+    );
+    expect(screen.getByText("5 changed lines")).toHaveAttribute(
+      "title",
+      "Changes owned by this unit, including changes further down in its body",
+    );
+    expect(screen.getByText("Not reviewed")).toBeInTheDocument();
+  });
+
   it("labels the unit as a section with its line span instead of a card title", () => {
     render(
       <ReviewFileUnitMarker

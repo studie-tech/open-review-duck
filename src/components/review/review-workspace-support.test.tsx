@@ -348,6 +348,54 @@ describe("same-file concept cards", () => {
     ]);
   });
 
+  it("gives nested units their own lines regardless of review order", () => {
+    const parent = {
+      id: "parent",
+      stableKey: "parent",
+      startLine: 727,
+      endLine: 1066,
+      previousSource: "header\nbody",
+      previousStartByte: 0,
+      status: "pending",
+      changeType: "modified",
+      relatedRanges: [
+        {
+          startLine: 727,
+          endLine: 1066,
+          previousStartLine: 727,
+          previousEndLine: 1065,
+        },
+      ],
+    };
+    const child = {
+      id: "child",
+      stableKey: "child",
+      startLine: 733,
+      endLine: 740,
+      status: "signed_off",
+      signOffOrigin: "preserved",
+      changeType: "modified",
+      relatedRanges: [
+        {
+          startLine: 733,
+          endLine: 740,
+          previousStartLine: 733,
+          previousEndLine: 739,
+        },
+      ],
+    };
+    for (const members of [
+      [parent, child],
+      [child, parent],
+    ]) {
+      expect(reviewCardMemberForLine(members as never, 735)?.id).toBe("child");
+      expect(
+        reviewCardMemberForLine(members as never, 735, "previous")?.id,
+      ).toBe("child");
+      expect(reviewCardMemberForLine(members as never, 845)?.id).toBe("parent");
+    }
+  });
+
   it("leaves the gap between two atomic members unowned", () => {
     const sameFile = [units[0], units[2]] as never;
 
