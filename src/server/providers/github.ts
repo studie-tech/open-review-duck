@@ -1527,6 +1527,8 @@ export class GitHubProvider implements PullRequestProvider {
 
   /**
    * Loads GraphQL required-check flags and reviewDecision.
+   * Each isRequired field needs the PR number; omitting it makes GitHub reject
+   * check contexts and discards the accompanying bypass permission as well.
    * REST mergeable_state is "blocked" while optional checks are still queued,
    * so these fields are what let merge follow GitHub's own required-only rule.
    */
@@ -1547,7 +1549,7 @@ export class GitHubProvider implements PullRequestProvider {
           },
           body: JSON.stringify({
             query:
-              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { viewerCanMergeAsAdmin reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired } ... on StatusContext { context isRequired } } } } } } }",
+              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { viewerCanMergeAsAdmin reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired(pullRequestNumber: $number) } ... on StatusContext { context isRequired(pullRequestNumber: $number) } } } } } } }",
             variables: { owner, name, number },
           }),
         },

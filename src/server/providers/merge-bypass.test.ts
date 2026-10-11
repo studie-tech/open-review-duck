@@ -33,6 +33,7 @@ function githubFixture(
     noMethod?: boolean;
     push?: boolean;
     graphqlError?: boolean;
+    checkContexts?: boolean;
   } = {},
 ) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -57,23 +58,74 @@ function githubFixture(
         rebaseable: options.rebaseable,
       });
     if (url.endsWith("/graphql")) {
-      expect(JSON.parse(String(init?.body)).query).toContain(
-        "viewerCanMergeAsAdmin",
-      );
+      const { query, variables } = JSON.parse(String(init?.body));
+      expect(query).toContain("viewerCanMergeAsAdmin");
+      if (
+        options.checkContexts &&
+        (variables.number !== 12 ||
+          !query.includes("name isRequired(pullRequestNumber: $number)") ||
+          !query.includes("context isRequired(pullRequestNumber: $number)"))
+      ) {
+        return json({
+          errors: [
+            {
+              message: "A pull request ID or pull request number is required.",
+            },
+          ],
+        });
+      }
       return json({
         data: {
           repository: {
             pullRequest: {
               viewerCanMergeAsAdmin: options.permission,
               reviewDecision: "REVIEW_REQUIRED",
+              ...(options.checkContexts
+                ? {
+                    statusCheckRollup: {
+                      contexts: {
+                        nodes: [
+                          {
+                            __typename: "CheckRun",
+                            databaseId: 1,
+                            name: "required build",
+                            isRequired: true,
+                          },
+                          {
+                            __typename: "StatusContext",
+                            context: "optional preview",
+                            isRequired: false,
+                          },
+                        ],
+                      },
+                    },
+                  }
+                : {}),
             },
           },
         },
         ...(options.graphqlError ? { errors: [{ message: "Forbidden" }] } : {}),
       });
     }
-    if (url.includes("/check-runs")) return json({ check_runs: [] });
-    if (url.endsWith("/status")) return json({ statuses: [] });
+    if (url.includes("/check-runs"))
+      return json({
+        check_runs: options.checkContexts
+          ? [
+              {
+                id: 1,
+                name: "required build",
+                status: "completed",
+                conclusion: "success",
+              },
+            ]
+          : [],
+      });
+    if (url.endsWith("/status"))
+      return json({
+        statuses: options.checkContexts
+          ? [{ id: 2, context: "optional preview", state: "pending" }]
+          : [],
+      });
     if (url.endsWith("/merge")) return json({ merged: true });
     throw new Error(`Unexpected request ${url}`);
   });
@@ -82,6 +134,21 @@ function githubFixture(
 }
 
 describe("GitHub merge requirements bypass", () => {
+  it("verifies bypass and required flags when the PR has check contexts", async () => {
+    const { provider } = githubFixture({
+      permission: true,
+      checkContexts: true,
+    });
+    expect(await provider.getPullRequestLifecycle("42", 12)).toMatchObject({
+      mergeBypassPermission: "allowed",
+      canBypassMergeRequirements: true,
+      checks: [
+        { name: "required build", state: "success", required: true },
+        { name: "optional preview", state: "in_progress", required: false },
+      ],
+    });
+  });
+
   it.each(["behind", "blocked"])(
     "offers explicit bypass for %s only with provider permission",
     async (state) => {
