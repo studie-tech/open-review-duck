@@ -17,7 +17,22 @@ import {
   InlineLineActionSurface,
 } from "./review-workspace-ai-conversation";
 
-afterEach(cleanup);
+const previewDomApis = [
+  { target: HTMLElement.prototype, key: "scrollIntoView" },
+  { target: HTMLDialogElement.prototype, key: "showModal" },
+  { target: window, key: "matchMedia" },
+].map((api) => ({
+  ...api,
+  descriptor: Object.getOwnPropertyDescriptor(api.target, api.key),
+}));
+
+afterEach(() => {
+  cleanup();
+  for (const { target, key, descriptor } of previewDomApis) {
+    if (descriptor) Object.defineProperty(target, key, descriptor);
+    else Reflect.deleteProperty(target, key);
+  }
+});
 
 describe("defaultMarkdownPreviewVersion", () => {
   it("compares when both revisions have prose", () => {
