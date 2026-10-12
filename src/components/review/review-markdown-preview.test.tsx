@@ -60,6 +60,138 @@ describe("ReviewMarkdownViewSwitch", () => {
 });
 
 describe("ReviewMarkdownPreview", () => {
+  it("comments on an exact line in a rendered multiline paragraph", async () => {
+    const showModal = vi.fn(function (this: HTMLDialogElement) {
+      this.open = true;
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: showModal,
+    });
+    const onCommentLine = vi.fn();
+    const { rerender } = render(
+      <ReviewMarkdownPreview
+        path="README.md"
+        currentSource={"# Guide\n\nFirst source line\nsecond source line."}
+        lineActions={{
+          currentStartLine: 20,
+          canCommentLine: (line, side) => side === "current" && line >= 22,
+          onCommentLine,
+        }}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", {
+        name: "Comment on current Markdown lines 20–20",
+      }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown lines 22–23",
+      }),
+    );
+    expect(showModal).toHaveBeenCalled();
+    expect(
+      screen.getByRole("dialog", {
+        name: "Comment on current Markdown source",
+      }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown line 23",
+      }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith(23, "current");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    rerender(
+      <ReviewMarkdownPreview
+        path="README.md"
+        currentSource="# Guide"
+        lineActions={{
+          canCommentLine: () => true,
+          onCommentLine,
+          selectedLine: 23,
+          renderLineDetails: (line) => <div>Composer on line {line}</div>,
+        }}
+      />,
+    );
+    expect(screen.getByText("Composer on line 23")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Guide" })).toBeVisible();
+  });
+
+  it("keeps previous and current comment anchors separate in compares", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLDialogElement) {
+        this.open = true;
+      }),
+    });
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        previousSource={"# Before\n\nRemoved text."}
+        currentSource={"# After\n\nAdded text."}
+        lineActions={{ canCommentLine: (line) => line === 3, onCommentLine }}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on previous Markdown lines 3–3",
+      }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on previous Markdown line 3",
+      }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith(3, "previous");
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown lines 3–3",
+      }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown line 3",
+      }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith(3, "current");
+  });
+
+  it("offers exact code fence lines without trusting author-supplied line attributes", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLDialogElement) {
+        this.open = true;
+      }),
+    });
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        currentSource={
+          '<p data-markdown-start-line="999">Text</p>\n\n```sh\nrun first\nrun second\n```'
+        }
+        lineActions={{ canCommentLine: () => true, onCommentLine }}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /999/ }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown lines 3–6",
+      }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown line 5",
+      }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith(5, "current");
+  });
+
   it("renders a compare of both Markdown revisions", async () => {
     render(
       <ReviewMarkdownPreview

@@ -4,9 +4,11 @@ import { ChevronRight } from "lucide-react";
 import {
   Children,
   type ComponentPropsWithoutRef,
+  createContext,
   isValidElement,
   memo,
   type ReactNode,
+  useContext,
   useMemo,
 } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
@@ -20,6 +22,25 @@ import {
 import { isMermaidSource } from "~/lib/review-mermaid";
 import { cn } from "~/lib/utils";
 import { ReviewMermaidDiagram } from "./review-mermaid-diagram";
+
+const MarkdownSourceActionContext = createContext<
+  ((startLine: number, endLine: number) => ReactNode) | undefined
+>(undefined);
+
+/** Offers source actions using parser positions rather than author-supplied attributes. */
+function MarkdownSourceAction({
+  node,
+}: {
+  node?: Parameters<typeof markdownChangeAttributes>[0];
+}) {
+  const renderAction = useContext(MarkdownSourceActionContext);
+  const position = node?.position;
+  return position && renderAction ? (
+    <span className="float-right ml-2 font-sans text-xs font-normal">
+      {renderAction(position.start.line, position.end.line)}
+    </span>
+  ) : null;
+}
 
 const providerCommentSchema = {
   ...defaultSchema,
@@ -97,6 +118,7 @@ const markdownComponents: Options["components"] = {
   img: ProviderImagePlaceholder,
   li: ({ children, node }) => (
     <li {...markdownChangeAttributes(node)} className="ml-5 pl-0.5">
+      <MarkdownSourceAction node={node} />
       {children}
     </li>
   ),
@@ -105,6 +127,7 @@ const markdownComponents: Options["components"] = {
   ),
   p: ({ children, node }) => (
     <p {...markdownChangeAttributes(node)} className="my-2 first:mt-0">
+      <MarkdownSourceAction node={node} />
       {children}
     </p>
   ),
@@ -132,11 +155,15 @@ const markdownComponents: Options["components"] = {
       <table className="w-full border-collapse text-left">{children}</table>
     </div>
   ),
-  td: ({ children }) => (
-    <td className="border-t border-line px-2 py-1.5">{children}</td>
+  td: ({ children, node }) => (
+    <td className="border-t border-line px-2 py-1.5">
+      <MarkdownSourceAction node={node} />
+      {children}
+    </td>
   ),
-  th: ({ children }) => (
+  th: ({ children, node }) => (
     <th className="bg-surface-subtle px-2 py-1.5 font-semibold text-cloud">
+      <MarkdownSourceAction node={node} />
       {children}
     </th>
   ),
@@ -148,28 +175,37 @@ const markdownComponents: Options["components"] = {
 const documentMarkdownComponents: Options["components"] = {
   ...markdownComponents,
   h1: ({ children, node }) => (
-    <h1
-      {...markdownChangeAttributes(node)}
-      className="text-cloud mt-6 mb-3 text-xl font-semibold first:mt-0"
-    >
-      {children}
-    </h1>
+    <>
+      <MarkdownSourceAction node={node} />
+      <h1
+        {...markdownChangeAttributes(node)}
+        className="text-cloud mt-6 mb-3 text-xl font-semibold first:mt-0"
+      >
+        {children}
+      </h1>
+    </>
   ),
   h2: ({ children, node }) => (
-    <h2
-      {...markdownChangeAttributes(node)}
-      className="text-cloud mt-5 mb-2 text-lg font-semibold"
-    >
-      {children}
-    </h2>
+    <>
+      <MarkdownSourceAction node={node} />
+      <h2
+        {...markdownChangeAttributes(node)}
+        className="text-cloud mt-5 mb-2 text-lg font-semibold"
+      >
+        {children}
+      </h2>
+    </>
   ),
   h3: ({ children, node }) => (
-    <h3
-      {...markdownChangeAttributes(node)}
-      className="text-cloud mt-4 mb-2 text-base font-semibold"
-    >
-      {children}
-    </h3>
+    <>
+      <MarkdownSourceAction node={node} />
+      <h3
+        {...markdownChangeAttributes(node)}
+        className="text-cloud mt-4 mb-2 text-base font-semibold"
+      >
+        {children}
+      </h3>
+    </>
   ),
 };
 
@@ -189,11 +225,13 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
   className,
   variant = "comment",
   changes,
+  renderSourceAction,
 }: {
   body: string;
   className?: string;
   variant?: "comment" | "document";
   changes?: { lines: readonly number[]; side: "previous" | "current" };
+  renderSourceAction?: (startLine: number, endLine: number) => ReactNode;
 }) {
   const plugins = useMemo<Options["rehypePlugins"]>(
     () =>
@@ -212,17 +250,19 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
         className,
       )}
     >
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={plugins}
-        components={
-          variant === "document"
-            ? documentMarkdownComponents
-            : markdownComponents
-        }
-      >
-        {body}
-      </ReactMarkdown>
+      <MarkdownSourceActionContext.Provider value={renderSourceAction}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={plugins}
+          components={
+            variant === "document"
+              ? documentMarkdownComponents
+              : markdownComponents
+          }
+        >
+          {body}
+        </ReactMarkdown>
+      </MarkdownSourceActionContext.Provider>
     </div>
   );
 });
@@ -260,18 +300,22 @@ function MarkdownPre({
     if (isMermaidSource(language, source)) {
       return (
         <div {...markdownChangeAttributes(node)}>
+          <MarkdownSourceAction node={node} />
           <ReviewMermaidDiagram chart={source} />
         </div>
       );
     }
   }
   return (
-    <pre
-      {...markdownChangeAttributes(node)}
-      className="border-line bg-code my-3 overflow-x-auto rounded-lg border p-3 text-[11px] leading-5 text-cloud [&>code]:bg-transparent [&>code]:p-0"
-    >
-      {children}
-    </pre>
+    <>
+      <MarkdownSourceAction node={node} />
+      <pre
+        {...markdownChangeAttributes(node)}
+        className="border-line bg-code my-3 overflow-x-auto rounded-lg border p-3 text-[11px] leading-5 text-cloud [&>code]:bg-transparent [&>code]:p-0"
+      >
+        {children}
+      </pre>
+    </>
   );
 }
 

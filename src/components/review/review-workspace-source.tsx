@@ -672,6 +672,37 @@ export function ReviewConceptFileCardPreview({
         ) : expanded && showDocumentPreview && first ? (
           <ReviewDocumentPreview
             path={first.path}
+            lineActions={
+              fileSource || previousFileSource
+                ? {
+                    canCommentLine: (line, side) =>
+                      Boolean(
+                        onCommentLine &&
+                          reviewCardMemberForLine(
+                            members.filter((member) =>
+                              side === "previous"
+                                ? member.changeType === "deleted"
+                                : member.changeType !== "deleted",
+                            ),
+                            line,
+                            side,
+                          ),
+                      ),
+                    onCommentLine: (line, side) => {
+                      const owner = reviewCardMemberForLine(
+                        members.filter((member) =>
+                          side === "previous"
+                            ? member.changeType === "deleted"
+                            : member.changeType !== "deleted",
+                        ),
+                        line,
+                        side,
+                      );
+                      if (owner) onCommentLine?.(owner.id, line);
+                    },
+                  }
+                : undefined
+            }
             currentSource={
               deleted
                 ? ""

@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { isReviewNotebookFile } from "~/lib/review-source-display";
+import type { MarkdownPreviewLineActions } from "./review-markdown-preview";
 
 /**
  * Loads Markdown only when a reviewer opens generated or provider-authored text.
@@ -55,6 +56,7 @@ export function ReviewDocumentPreview(props: {
   currentSource: string;
   previousSource?: string;
   path: string;
+  lineActions?: MarkdownPreviewLineActions;
 }) {
   return isReviewNotebookFile(props) ? (
     <ReviewNotebookPreview {...props} />
