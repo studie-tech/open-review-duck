@@ -108,6 +108,20 @@ describe("file card review state", () => {
 });
 
 describe("reviewCardRanges", () => {
+  it("preserves all deleted-unit lines when only file-level source is available", () => {
+    const member = {
+      ...units[0],
+      changeType: "deleted",
+      startLine: 2,
+      endLine: 5,
+      previousSource: null,
+    } as never;
+    expect(reviewCardRanges([member], "previous")).toEqual([
+      { startLine: 2, endLine: 5 },
+    ]);
+    expect(reviewCardRanges([member], "current")).toEqual([]);
+  });
+
   it("keeps the gap between two members outside both atomic ranges", () => {
     expect(reviewCardRanges([units[0], units[1]] as never)).toEqual([
       { startLine: 2, endLine: 2 },

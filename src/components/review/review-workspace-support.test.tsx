@@ -4019,7 +4019,23 @@ describe("SideBySideUnitDiff", () => {
       const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
       Object.defineProperty(down, "pointerId", { value: 1 });
       fireEvent(screen.getByText("const added = true;"), down);
-      const up = new MouseEvent("pointerup", { bubbles: true, button: 0 });
+      const stationaryUp = new MouseEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+      });
+      Object.defineProperty(stationaryUp, "pointerId", { value: 1 });
+      fireEvent(region, stationaryUp);
+      expect(onRequest).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("button", { name: "Show 1 commit" }),
+      ).not.toBeInTheDocument();
+      fireEvent(screen.getByText("const added = true;"), down);
+      const up = new MouseEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: 20,
+        clientY: 30,
+      });
       Object.defineProperty(up, "pointerId", { value: 1 });
       fireEvent(region, up);
       fireEvent.click(
