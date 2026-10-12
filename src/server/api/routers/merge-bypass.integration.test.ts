@@ -182,6 +182,13 @@ describe("merge bypass authorization and review invariants", () => {
       }),
     ).toMatchObject({ pullRequestState: "merged" });
     expect(remote.load).toHaveBeenCalledOnce();
+    expect(remote.load).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ id: fixture.connectionId }),
+      "42",
+      12,
+      fixture.userId,
+    );
     expect(remote.merge).toHaveBeenCalledExactlyOnceWith({
       repositoryExternalId: "42",
       pullRequestNumber: 12,

@@ -26,6 +26,11 @@ requires a reason saved with the completion. GitLab's merge API does not offer
 an equivalent general bypass. Conflicts, drafts, stale revisions, and incomplete
 ReviewDuck reviews remain blocked.
 
+GitHub App connections use your connected personal GitHub account for merge
+checks and merges when available, so GitHub evaluates your own bypass rights.
+Without a personal account, merges use the shared app installation's rights.
+An expired personal authorization must be reconnected before merging.
+
 While the review tab is active, discussions refresh every 45 seconds, including
 after code review is complete. The completion page also refreshes approvals and
 merge readiness every 45 seconds, with faster checks while CI runs. Returning to

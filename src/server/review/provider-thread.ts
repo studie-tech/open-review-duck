@@ -21,6 +21,7 @@ import type {
   ProviderPullRequestLifecycle,
   PullRequestProvider,
 } from "~/server/providers/types";
+import { providerForReviewDecision } from "~/server/providers/user-credentials";
 import { enforceRateLimit } from "~/server/security/rate-limit";
 import { providerSyncErrorMessage } from "~/server/sync/error";
 
@@ -219,7 +220,9 @@ const githubAppMergeRemints = new Map<string, number>();
 const GITHUB_APP_MERGE_REMINT_MS = 60_000;
 
 /**
- * Reloads GitHub App lifecycle after Contents write is granted on the install.
+ * Uses the connected GitHub reviewer for merge permission and the merge itself.
+ * App installation tokens do not inherit the reviewer's admin bypass rights.
+ * Without a personal account, preserves the shared installation behavior.
  *
  * Cached installation tokens can still be Contents: read from before the
  * grant. Remint at most once a minute so pending-check polling does not mint
@@ -230,12 +233,22 @@ export async function providerLifecycleForConnection(
   connection: typeof providerConnections.$inferSelect,
   repositoryExternalId: string,
   pullRequestNumber: number,
+  userId: string,
 ) {
+  const reviewer =
+    connection.provider === "github" &&
+    connection.credentialKind === "github_app"
+      ? await providerForReviewDecision(db, connection, userId)
+      : undefined;
+  const personalProvider =
+    reviewer && !reviewer.personalAccountRequired
+      ? reviewer.provider
+      : undefined;
   /** Loads merge state, optionally reminting a GitHub App installation token. */
   const load = async (refreshInstallation?: boolean) => {
-    const provider = await providerForConnection(db, connection, {
-      refreshInstallation,
-    });
+    const provider =
+      personalProvider ??
+      (await providerForConnection(db, connection, { refreshInstallation }));
     const [lifecycle, remotePullRequest] = await Promise.all([
       provider.getPullRequestLifecycle(repositoryExternalId, pullRequestNumber),
       provider.getPullRequest(repositoryExternalId, pullRequestNumber),
@@ -245,6 +258,7 @@ export async function providerLifecycleForConnection(
 
   const first = await load();
   if (
+    personalProvider ||
     first.lifecycle.hasMergePermission !== false ||
     connection.credentialKind !== "github_app" ||
     !connection.installationId
