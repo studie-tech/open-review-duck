@@ -60,6 +60,40 @@ describe("ReviewMarkdownViewSwitch", () => {
 });
 
 describe("ReviewMarkdownPreview", () => {
+  it.each([
+    "#### Heading",
+    "##### Heading",
+    "###### Heading",
+    "---",
+    "<details><summary>Summary</summary>Body</details>",
+  ])("offers a source-line comment for %s", async (currentSource) => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLDialogElement) {
+        this.open = true;
+      }),
+    });
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewMarkdownPreview
+        path="guide.md"
+        currentSource={currentSource}
+        lineActions={{ canCommentLine: () => true, onCommentLine }}
+      />,
+    );
+    const action = screen.getAllByRole("button", {
+      name: "Comment on current Markdown lines 1–1",
+    })[0];
+    if (!action) throw new Error("Expected a Markdown source action");
+    await userEvent.click(action);
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown line 1",
+      }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith(1, "current");
+  });
+
   it("comments on an exact line in a rendered multiline paragraph", async () => {
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.open = true;

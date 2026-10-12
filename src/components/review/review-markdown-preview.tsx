@@ -187,7 +187,11 @@ function MarkdownPreviewPane({
           aria-label={`Comment on ${side} Markdown lines ${startLine + start - 1}–${startLine + end - 1}`}
           title="Comment on a source line"
           className="rounded p-1 text-cyan hover:bg-surface-hover"
-          onClick={() => setPickedBlock({ start, end })}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setPickedBlock({ start, end });
+          }}
         >
           <MessageSquare className="size-3.5" aria-hidden="true" />
         </button>
