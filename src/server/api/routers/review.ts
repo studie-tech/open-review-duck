@@ -819,6 +819,7 @@ export const reviewRouter = createTRPCRouter({
             scope.connection,
             scope.repositoryExternalId,
             scope.pullRequestNumber,
+            ctx.auth.userId,
           );
         return scopedProviderLifecycle(scope, lifecycle, remotePullRequest);
       } catch (cause) {
@@ -956,6 +957,7 @@ export const reviewRouter = createTRPCRouter({
           scope.connection,
           scope.repositoryExternalId,
           scope.pullRequestNumber,
+          ctx.auth.userId,
         );
         if (
           remotePullRequest.headSha !== scope.headSha ||
