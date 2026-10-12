@@ -7214,6 +7214,43 @@ export function ReviewWorkspace({
                       <ReviewDocumentPreview
                         key={activeUnit.path}
                         path={activeUnit.path}
+                        lineActions={{
+                          currentStartLine: activeModule
+                            ? 1
+                            : activeUnit.startLine,
+                          previousStartLine: activeModule
+                            ? 1
+                            : previousUnitStartLine,
+                          canCommentLine: (line, side) =>
+                            Boolean(
+                              reviewCardMemberForLine(
+                                activeFileCardMembers.filter((member) =>
+                                  side === "previous"
+                                    ? member.changeType === "deleted"
+                                    : member.changeType !== "deleted",
+                                ),
+                                line,
+                                side,
+                              ),
+                            ),
+                          onCommentLine: (line, side) => {
+                            const owner = reviewCardMemberForLine(
+                              activeFileCardMembers.filter((member) =>
+                                side === "previous"
+                                  ? member.changeType === "deleted"
+                                  : member.changeType !== "deleted",
+                              ),
+                              line,
+                              side,
+                            );
+                            if (!owner) return;
+                            if (owner.id === activeUnitId)
+                              openInlineComment(line);
+                            else commentOnMemberLine(owner.id, line);
+                          },
+                          selectedLine,
+                          renderLineDetails: renderReviewLineDetails,
+                        }}
                         currentSource={
                           activeUnit.changeType === "deleted"
                             ? ""

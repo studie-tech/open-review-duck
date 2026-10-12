@@ -3960,6 +3960,103 @@ describe("SideBySideUnitDiff", () => {
     expect(selectLine).toHaveBeenCalledWith(1);
   });
 
+  it.each(["", "const before = true;\nconst other = true;"])(
+    "shows commits when code text is selected against base %j",
+    async (previousSource) => {
+      const selectLine = vi.fn();
+      const onRequest = vi.fn();
+      const { container } = render(
+        <SideBySideUnitDiff
+          previousSource={previousSource}
+          currentSource={"const added = true;\nreturn added;"}
+          language="typescript"
+          previousStartLine={1}
+          currentStartLine={18}
+          onSelectReviewLine={selectLine}
+          lineHistory={{
+            status: "ready",
+            truncated: false,
+            unmapped: false,
+            onRequest,
+            commits: [
+              {
+                sha: "add1234abcdef",
+                shortSha: "add1234",
+                author: "reviewer",
+                authoredAt: "2026-10-12T12:00:00.000Z",
+                subject: "Add the new entry point",
+                body: "Keep the feature isolated.",
+                baseLines: [],
+                headLines: [18, 19],
+                mapped: true,
+              },
+              {
+                sha: "other123abcdef",
+                shortSha: "other12",
+                author: "reviewer",
+                authoredAt: "2026-10-12T12:00:00.000Z",
+                subject: "Unrelated file lines",
+                body: "",
+                baseLines: [],
+                headLines: [30],
+                mapped: true,
+              },
+            ],
+          }}
+        />,
+      );
+      const first = screen.getByText("const added = true;").firstChild;
+      const last = screen.getByText("return added;").firstChild;
+      if (!first || !last) throw new Error("Expected selectable source text");
+      const range = document.createRange();
+      range.setStart(first, 0);
+      range.setEnd(last, last.textContent?.length ?? 0);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const region = container.querySelector("section");
+      if (!region) throw new Error("Expected the diff region");
+      const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
+      Object.defineProperty(down, "pointerId", { value: 1 });
+      fireEvent(screen.getByText("const added = true;"), down);
+      const up = new MouseEvent("pointerup", { bubbles: true, button: 0 });
+      Object.defineProperty(up, "pointerId", { value: 1 });
+      fireEvent(region, up);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Open actions for current line 19",
+        }),
+        { detail: 1 },
+      );
+
+      expect(selectLine).not.toHaveBeenCalled();
+      expect(selection?.toString()).toContain("return added;");
+      await waitFor(() => expect(onRequest).toHaveBeenCalled());
+      await userEvent.click(
+        screen.getByRole("button", { name: "Show 1 commit" }),
+      );
+      expect(screen.getByText("Add the new entry point")).toBeVisible();
+      expect(
+        screen.queryByText("Unrelated file lines"),
+      ).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      expect(
+        screen.queryByRole("button", { name: "Show 1 commit" }),
+      ).not.toBeInTheDocument();
+      fireEvent(region, up);
+      expect(
+        screen.queryByRole("button", { name: "Show 1 commit" }),
+      ).not.toBeInTheDocument();
+      selection?.removeAllRanges();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Open actions for current line 18",
+        }),
+      );
+      expect(selectLine).toHaveBeenCalledWith(18);
+    },
+  );
+
   it("keeps gaps between related ranges visible but non-commentable", async () => {
     const selectLine = vi.fn();
     const user = userEvent.setup();

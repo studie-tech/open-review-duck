@@ -1218,6 +1218,7 @@ export const SideBySideUnitDiff = forwardRef<
     moved: boolean;
   } | null>(null);
   const suppressHistoryClick = useRef(false);
+  const historyTextPointerRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (historyRange) lineHistory?.onRequest();
   }, [historyRange, lineHistory]);
@@ -1270,6 +1271,13 @@ export const SideBySideUnitDiff = forwardRef<
   /** Starts a line-range drag from a gutter pointer. */
   const beginHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (!lineHistory || event.button !== 0 || event.shiftKey) return;
+    const target = event.target;
+    historyTextPointerRef.current =
+      target instanceof Element &&
+      target.closest(".syntax-code") &&
+      event.currentTarget.contains(target)
+        ? event.pointerId
+        : undefined;
     const row = historyRowAt(event.clientX, event.clientY);
     if (row === undefined) return;
     historyDragRef.current = {
@@ -1291,14 +1299,40 @@ export const SideBySideUnitDiff = forwardRef<
   };
   /** Keeps a finished drag from also opening the line actions. */
   const endHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const selectedCode =
+      historyTextPointerRef.current !== undefined &&
+      historyTextPointerRef.current === event.pointerId;
+    historyTextPointerRef.current = undefined;
     const drag = historyDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    historyDragRef.current = null;
-    if (!drag.moved) return;
-    suppressHistoryClick.current = true;
-    window.setTimeout(() => {
-      suppressHistoryClick.current = false;
-    }, 0);
+    if (drag?.pointerId === event.pointerId) {
+      historyDragRef.current = null;
+      if (drag.moved) {
+        suppressHistoryClick.current = true;
+        window.setTimeout(() => {
+          suppressHistoryClick.current = false;
+        }, 0);
+        return;
+      }
+    }
+    if (!lineHistory || !selectedCode || event.type === "pointercancel") return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    /** Maps a selected code endpoint to a row in this diff only. */
+    const selectedRow = (node: Node | null) => {
+      const element = node instanceof Element ? node : node?.parentElement;
+      if (!element?.closest(".syntax-code")) return undefined;
+      const row = element.closest<HTMLElement>("[data-history-row]");
+      if (!row || !event.currentTarget.contains(row)) return undefined;
+      const index = Number(row.dataset.historyRow);
+      return Number.isInteger(index) ? index : undefined;
+    };
+    const start = selectedRow(selection.anchorNode);
+    const end = selectedRow(selection.focusNode);
+    if (start === undefined || end === undefined) return;
+    historyAnchorRef.current = start;
+    setHistoryRange({ start, end });
+    setHistoryOpen(false);
+    setHoveredCommit(undefined);
   };
 
   const historySelection = useMemo(() => {
