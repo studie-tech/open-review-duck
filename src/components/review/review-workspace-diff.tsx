@@ -1218,7 +1218,14 @@ export const SideBySideUnitDiff = forwardRef<
     moved: boolean;
   } | null>(null);
   const suppressHistoryClick = useRef(false);
-  const historyTextPointerRef = useRef<number | undefined>(undefined);
+  const historyTextPointerRef = useRef<
+    | {
+        pointerId: number;
+        x: number;
+        y: number;
+      }
+    | undefined
+  >(undefined);
   useEffect(() => {
     if (historyRange) lineHistory?.onRequest();
   }, [historyRange, lineHistory]);
@@ -1276,7 +1283,7 @@ export const SideBySideUnitDiff = forwardRef<
       target instanceof Element &&
       target.closest(".syntax-code") &&
       event.currentTarget.contains(target)
-        ? event.pointerId
+        ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
         : undefined;
     const row = historyRowAt(event.clientX, event.clientY);
     if (row === undefined) return;
@@ -1299,9 +1306,11 @@ export const SideBySideUnitDiff = forwardRef<
   };
   /** Keeps a finished drag from also opening the line actions. */
   const endHistoryDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const textStart = historyTextPointerRef.current;
     const selectedCode =
-      historyTextPointerRef.current !== undefined &&
-      historyTextPointerRef.current === event.pointerId;
+      textStart !== undefined &&
+      textStart.pointerId === event.pointerId &&
+      Math.hypot(event.clientX - textStart.x, event.clientY - textStart.y) > 4;
     historyTextPointerRef.current = undefined;
     const drag = historyDragRef.current;
     if (drag?.pointerId === event.pointerId) {

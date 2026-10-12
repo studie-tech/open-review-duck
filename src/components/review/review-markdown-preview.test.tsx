@@ -3,12 +3,19 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SideBySideUnitDiff } from "./review-workspace-diff";
+import { useInlineAiQuestionController } from "./use-inline-ai-question-controller";
 import {
   defaultMarkdownPreviewVersion,
   ReviewMarkdownPreview,
   ReviewMarkdownViewSwitch,
 } from "./review-markdown-preview";
+import {
+  InlineAiQuestion,
+  InlineLineActionSurface,
+} from "./review-workspace-ai-conversation";
 
 afterEach(cleanup);
 
@@ -60,6 +67,130 @@ describe("ReviewMarkdownViewSwitch", () => {
 });
 
 describe("ReviewMarkdownPreview", () => {
+  it("opens a movable AI composer in Raw from the Markdown line chooser", async () => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLDialogElement) {
+        this.open = true;
+      }),
+    });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: () => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+    /** Exercises the real chooser, diff anchors and AI movement controller. */
+    function PreviewWithComposers() {
+      const [selectedLine, setSelectedLine] = useState<number>();
+      const [preview, setPreview] = useState(true);
+      const codeScrollRef = useRef<HTMLDivElement>(null);
+      const ai = useInlineAiQuestionController({
+        activeUnit: { id: "markdown-unit", startLine: 1, endLine: 3 } as never,
+        codeScrollRef,
+        isReviewLine: (line) => line >= 1 && line <= 3,
+        liveQuestions: [],
+        primaryStart: 1,
+        primaryEnd: 3,
+        pullRequestId: "markdown-pr",
+      });
+      const source = "# Guide\n\nReview this paragraph.";
+      /** Renders the same shared composers in both document presentations. */
+      function renderLineDetails(line: number) {
+        return selectedLine === line ? (
+          <InlineLineActionSurface
+            canAsk
+            initialDraft=""
+            line={line}
+            path="guide.md"
+            pending={false}
+            posting={false}
+            provider="github"
+            onAskAi={() => {
+              setPreview(false);
+              setSelectedLine(undefined);
+              ai.openAt(line);
+            }}
+            onCancel={() => setSelectedLine(undefined)}
+            onDraftChange={vi.fn()}
+            onPost={vi.fn()}
+          />
+        ) : ai.line === line ? (
+          <InlineAiQuestion
+            canAsk
+            entries={[]}
+            initialDraft=""
+            line={line}
+            minimumLine={1}
+            maximumLine={3}
+            onAsk={() => true}
+            onClose={() => ai.setLine(undefined)}
+            onDraftChange={vi.fn()}
+            onMove={ai.move}
+            onPreview={ai.setPreviewLine}
+            onStep={ai.step}
+          />
+        ) : null;
+      }
+      return (
+        <div ref={codeScrollRef}>
+          {preview ? (
+            <ReviewMarkdownPreview
+              path="guide.md"
+              currentSource={source}
+              lineActions={{
+                canCommentLine: () => true,
+                onCommentLine: setSelectedLine,
+                selectedLine,
+                renderLineDetails,
+              }}
+            />
+          ) : (
+            <SideBySideUnitDiff
+              previousSource=""
+              currentSource={source}
+              language="markdown"
+              previousStartLine={1}
+              currentStartLine={1}
+              onSelectReviewLine={setSelectedLine}
+              renderLineDetails={renderLineDetails}
+            />
+          )}
+        </div>
+      );
+    }
+    render(<PreviewWithComposers />);
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown lines 3–3",
+      }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Comment on current Markdown line 3",
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^Ask AI/ }));
+    expect(
+      screen.getByRole("textbox", { name: "Ask AI about line 3" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("region", { name: "Added code diff" }),
+    ).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Move AI question one line up" }),
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Ask AI about line 2" }),
+    ).toBeVisible();
+  });
+
   it.each([
     "#### Heading",
     "##### Heading",

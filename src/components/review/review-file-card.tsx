@@ -163,7 +163,9 @@ export function reviewCardRanges(
             startLine,
             endLine: member.previousSource
               ? sourceEndLine(member.previousSource, startLine)
-              : startLine,
+              : member.changeType === "deleted"
+                ? member.endLine
+                : startLine,
           },
         ];
       }

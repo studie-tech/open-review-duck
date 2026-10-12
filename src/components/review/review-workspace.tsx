@@ -4683,6 +4683,7 @@ export function ReviewWorkspace({
   /** Opens the inline AI conversation anchored to one chosen review line. */
   function openAiQuestionAt(line: number) {
     if (!activeUnit || activeUnit.kind === "binary") return;
+    if (documentPreviewVisible) changeMarkdownView("raw");
     dismissedAiQuestionUnits.current.delete(activeUnit.id);
     setSelectedLine(undefined);
     setKeyboardLine(undefined);
