@@ -113,7 +113,10 @@ const markdownComponents: Options["components"] = {
     </h3>
   ),
   hr: ({ node }) => (
-    <hr {...markdownChangeAttributes(node)} className="my-4 border-line" />
+    <>
+      <MarkdownSourceAction node={node} />
+      <hr {...markdownChangeAttributes(node)} className="my-4 border-line" />
+    </>
   ),
   img: ProviderImagePlaceholder,
   li: ({ children, node }) => (
@@ -145,6 +148,7 @@ const markdownComponents: Options["components"] = {
         aria-hidden="true"
       />
       <span>{children}</span>
+      <MarkdownSourceAction node={node} />
     </summary>
   ),
   tr: ({ children, node }) => (
@@ -205,6 +209,39 @@ const documentMarkdownComponents: Options["components"] = {
       >
         {children}
       </h3>
+    </>
+  ),
+  h4: ({ children, node }) => (
+    <>
+      <MarkdownSourceAction node={node} />
+      <h4
+        {...markdownChangeAttributes(node)}
+        className="text-cloud mt-3 mb-2 text-sm font-semibold"
+      >
+        {children}
+      </h4>
+    </>
+  ),
+  h5: ({ children, node }) => (
+    <>
+      <MarkdownSourceAction node={node} />
+      <h5
+        {...markdownChangeAttributes(node)}
+        className="text-cloud mt-3 mb-2 text-sm font-semibold"
+      >
+        {children}
+      </h5>
+    </>
+  ),
+  h6: ({ children, node }) => (
+    <>
+      <MarkdownSourceAction node={node} />
+      <h6
+        {...markdownChangeAttributes(node)}
+        className="text-cloud mt-3 mb-2 text-sm font-semibold"
+      >
+        {children}
+      </h6>
     </>
   ),
 };
