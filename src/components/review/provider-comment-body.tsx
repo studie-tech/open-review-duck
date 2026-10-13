@@ -16,6 +16,7 @@ import ReactMarkdown, { type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { canAutomaticallyPreviewCommentImage } from "~/lib/comment-images";
 import {
   markdownChangeAttributes,
   rehypeMarkdownChanges,
@@ -291,6 +292,7 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
     return imageMode === "preview"
       ? {
           ...base,
+          a: (props) => <SafeProviderLink {...props} imagePreviews />,
           img: (props) => (
             <ProviderImagePreview
               {...props}
@@ -377,18 +379,44 @@ function MarkdownPre({
 }
 
 /** Keeps provider links inert unless sanitization retained a safe URL. */
-function SafeProviderLink({ children, href }: ComponentPropsWithoutRef<"a">) {
+function SafeProviderLink({
+  children,
+  href,
+  imagePreviews = false,
+}: ComponentPropsWithoutRef<"a"> & { imagePreviews?: boolean }) {
   if (!href) return <span>{children}</span>;
   const external = href.startsWith("http://") || href.startsWith("https://");
-  return (
+  const link = (
     <a
       href={href}
       target={external ? "_blank" : undefined}
       rel={external ? "noopener noreferrer" : undefined}
       className="text-cyan underline decoration-cyan/30 underline-offset-2 transition hover:decoration-cyan"
     >
-      {children}
+      {imagePreviews && containsMarkdownImage(children)
+        ? "Open linked page"
+        : children}
     </a>
+  );
+  return imagePreviews && containsMarkdownImage(children) ? (
+    <span className="inline-flex max-w-full flex-col items-start">
+      {children}
+      {link}
+    </span>
+  ) : (
+    link
+  );
+}
+
+/** Finds rendered Markdown image nodes before wrapping their preview controls. */
+function containsMarkdownImage(children: ReactNode): boolean {
+  return Children.toArray(children).some(
+    (child) =>
+      isValidElement<{ node?: { tagName?: string }; children?: ReactNode }>(
+        child,
+      ) &&
+      (child.props.node?.tagName === "img" ||
+        containsMarkdownImage(child.props.children)),
   );
 }
 
@@ -426,18 +454,46 @@ function ProviderImagePreview({
   onOpen?: (image: { src: string; alt: string }) => void;
   baseUrl?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string>();
+  const [loadedUrl, setLoadedUrl] = useState<string>();
   const label = alt?.trim() || title?.trim() || "Attached image";
   const imageUrl =
     typeof src === "string" ? providerImageUrl(src, baseUrl) : undefined;
   if (/^P[0-4]$/iu.test(label) || !imageUrl) {
     return <ProviderImagePlaceholder alt={alt} title={title} />;
   }
-  if (failed) {
+  if (failedUrl === imageUrl) {
     return (
       <span className="border-line bg-surface-subtle my-3 flex flex-wrap items-center gap-2 rounded-lg border p-3 text-xs">
         <ImageIcon className="size-4" aria-hidden="true" />
         <span>{label} · Preview unavailable</span>
+        <SafeProviderLink href={imageUrl}>Open image</SafeProviderLink>
+      </span>
+    );
+  }
+  if (
+    !canAutomaticallyPreviewCommentImage(imageUrl, baseUrl) &&
+    loadedUrl !== imageUrl
+  ) {
+    const url = new URL(imageUrl);
+    return (
+      <span className="border-line bg-surface-subtle my-3 inline-flex max-w-full flex-wrap items-center gap-3 rounded-lg border p-3 text-xs">
+        <ImageIcon className="text-fog size-4" aria-hidden="true" />
+        <span>
+          <span className="text-cloud block font-medium">{label}</span>
+          <span className="text-fog text-[10px]">
+            External image · {url.host}
+          </span>
+        </span>
+        {url.protocol === "https:" && (
+          <button
+            type="button"
+            onClick={() => setLoadedUrl(imageUrl)}
+            className="text-cyan rounded-md px-2 py-1 text-xs! font-medium hover:bg-cyan/10"
+          >
+            Load image
+          </button>
+        )}
         <SafeProviderLink href={imageUrl}>Open image</SafeProviderLink>
       </span>
     );
@@ -452,7 +508,7 @@ function ProviderImagePreview({
         title={title}
         loading="lazy"
         referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
+        onError={() => setFailedUrl(imageUrl)}
         className="max-h-80 w-auto max-w-full rounded-t-lg object-contain"
       />
       <span className="text-mist flex items-center justify-between gap-3 border-t border-line px-3 py-2 text-[11px]">

@@ -114,6 +114,7 @@ describe("ProviderCommentBody", () => {
     const { container } = render(
       <ProviderCommentBody
         imageMode="preview"
+        imageBaseUrl="https://example.com/review/12"
         onOpenImage={onOpenImage}
         body={
           '<img src="https://example.com/screenshot.png" onerror="alert(1)" alt="Screenshot">\n<img src="https://example.com/badge.svg" alt="P2">\n<img src="javascript:alert(1)" alt="Unsafe">'
@@ -137,6 +138,7 @@ describe("ProviderCommentBody", () => {
     render(
       <ProviderCommentBody
         imageMode="preview"
+        imageBaseUrl="https://example.com/review/12"
         body="![Screenshot](https://example.com/private.png)"
       />,
     );
@@ -173,5 +175,89 @@ describe("ProviderCommentBody", () => {
       />,
     );
     expect(container.querySelector("img")).not.toBeInTheDocument();
+  });
+
+  it("waits for an explicit click before loading an external HTTPS image", () => {
+    const { container } = render(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://github.com/acme/review/pull/12"
+        body="![Screenshot](https://example.com/screenshot.png)"
+      />,
+    );
+    expect(container.querySelector("img")).not.toBeInTheDocument();
+    expect(screen.getByText("External image · example.com")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Load image" }));
+    expect(screen.getByRole("img", { name: "Screenshot" })).toHaveAttribute(
+      "src",
+      "https://example.com/screenshot.png",
+    );
+  });
+
+  it("leaves plaintext HTTP attachments as links without fetching them", () => {
+    const { container } = render(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://github.com/acme/review/pull/12"
+        body="![Screenshot](http://example.com/screenshot.png)"
+      />,
+    );
+    expect(container.querySelector("img")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Load image" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open image" })).toHaveAttribute(
+      "href",
+      "http://example.com/screenshot.png",
+    );
+  });
+
+  it("separates a linked image from preview controls and fallback links", () => {
+    const onOpenImage = vi.fn();
+    const { container } = render(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://example.com/review/12"
+        onOpenImage={onOpenImage}
+        body="[![Screenshot](https://example.com/screenshot.png)](https://example.com/full.png)"
+      />,
+    );
+    const button = screen.getByRole("button", {
+      name: "Enlarge image: Screenshot",
+    });
+    expect(button.closest("a")).toBeNull();
+    fireEvent.click(button);
+    expect(onOpenImage).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole("link", { name: "Open linked page" }),
+    ).toHaveAttribute("href", "https://example.com/full.png");
+    fireEvent.error(screen.getByRole("img", { name: "Screenshot" }));
+    expect(container.querySelector("a a")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open image" })).toHaveAttribute(
+      "href",
+      "https://example.com/screenshot.png",
+    );
+  });
+
+  it("renders a replacement attachment after the previous URL failed", () => {
+    const { rerender } = render(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://example.com/review/12"
+        body="![Screenshot](https://example.com/before.png)"
+      />,
+    );
+    fireEvent.error(screen.getByRole("img", { name: "Screenshot" }));
+    rerender(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://example.com/review/12"
+        body="![Screenshot](https://example.com/after.png)"
+      />,
+    );
+    expect(screen.getByRole("img", { name: "Screenshot" })).toHaveAttribute(
+      "src",
+      "https://example.com/after.png",
+    );
   });
 });

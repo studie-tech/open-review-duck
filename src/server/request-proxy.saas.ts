@@ -1,6 +1,9 @@
 import { clerkMiddleware } from "@clerk/nextjs/server";
 import { env } from "~/env";
-import { PRIVATE_SOURCE_CONNECT_ORIGIN } from "~/lib/content-security-policy";
+import {
+  COMMENT_IMAGE_CSP_SOURCES,
+  PRIVATE_SOURCE_CONNECT_ORIGIN,
+} from "~/lib/content-security-policy";
 import { sentryIngestOrigin } from "~/lib/sentry-safety";
 
 const sentryOrigin = sentryIngestOrigin(env.NEXT_PUBLIC_SENTRY_DSN);
@@ -17,6 +20,7 @@ export const deploymentProxy = clerkMiddleware({
         ...(sentryOrigin ? [sentryOrigin] : []),
       ],
       "frame-ancestors": ["'none'"],
+      "img-src": [...COMMENT_IMAGE_CSP_SOURCES],
       "object-src": ["'none'"],
       "script-src": ["'wasm-unsafe-eval'"],
     },

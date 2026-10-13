@@ -22,6 +22,15 @@ describe("localContentSecurityPolicy", () => {
     );
   });
 
+  it("permits HTTPS attachment images while keeping scripts and connections confined", () => {
+    const policy = localContentSecurityPolicy("nonce", false);
+    expect(policy).toContain("img-src 'self' blob: data: https:");
+    expect(policy).not.toContain("img-src 'self' blob: data: http:");
+    expect(policy).toContain("connect-src 'self' ws: wss:");
+    expect(policy).toContain("frame-src 'none'");
+    expect(policy).toContain("object-src 'none'");
+  });
+
   it("limits private source downloads to UploadThing's object host", () => {
     expect(PRIVATE_SOURCE_CONNECT_ORIGIN).toBe("https://*.ufs.sh");
   });

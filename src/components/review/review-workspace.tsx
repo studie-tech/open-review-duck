@@ -275,6 +275,7 @@ import {
 } from "./review-workspace-diff";
 import {
   aiJobActive,
+  providerThreadsByPath,
   reviewCardPinTarget,
   useReviewExitPrefetch,
   useReviewFileAdvance,
@@ -680,6 +681,7 @@ export function ReviewWorkspace({
     setSplitConceptDialogOpen,
     splitConceptDialogOpen,
   } = useReviewDialogController({
+    discussionsOpen,
     importPreviewOpen: importPreview !== undefined,
     lineActionOpen: selectedLine !== undefined,
     linePickerOpen: keyboardLine !== undefined,
@@ -3095,15 +3097,10 @@ export function ReviewWorkspace({
     },
     [changeMarkdownView, selectUnit, unitIndexById, units],
   );
-  const commentThreadsByPath = useMemo(() => {
-    const byPath = new Map<string, ProviderDiscussionThread[]>();
-    for (const thread of providerDiscussionThreads) {
-      const group = byPath.get(thread.path) ?? [];
-      group.push(thread);
-      byPath.set(thread.path, group);
-    }
-    return byPath;
-  }, [providerDiscussionThreads]);
+  const commentThreadsByPath = useMemo(
+    () => providerThreadsByPath(providerDiscussionThreads),
+    [providerDiscussionThreads],
+  );
   const visibleLineCommentMarkers = useMemo(
     () => reviewLineCommentMarkersBySide(visibleProviderThreads),
     [visibleProviderThreads],
