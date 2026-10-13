@@ -3055,7 +3055,9 @@ export function ReviewWorkspace({
   /** Leaves summary UI and returns to the exact unit carrying a discussion. */
   const openProviderDiscussion = useCallback(
     (thread: ProviderDiscussionThread) => {
-      const index = unitIndexById.get(thread.unitId) ?? -1;
+      const unitId = thread.unitId;
+      if (!unitId) return;
+      const index = unitIndexById.get(unitId) ?? -1;
       if (index < 0) return;
       const targetUnit = units[index];
       if (!targetUnit) return;
@@ -3071,7 +3073,7 @@ export function ReviewWorkspace({
       });
       setUnitFoldOverrides((current) => {
         const next = new Map(current);
-        next.set(thread.unitId, false);
+        next.set(unitId, false);
         return next;
       });
       if (thread.side === "left") setShowDiff(true);
@@ -3086,7 +3088,7 @@ export function ReviewWorkspace({
       setPendingProviderThread({
         externalId: thread.externalId,
         line: thread.line,
-        unitId: thread.unitId,
+        unitId,
       });
       selectUnit(index);
       setFocusedProviderThreadId(thread.externalId);
@@ -3630,24 +3632,28 @@ export function ReviewWorkspace({
 
   /** Mounts leftover provider conversations for the given threads. */
   function renderProviderConversations(threads: typeof visibleProviderThreads) {
-    return threads.map((thread) => (
-      <ProviderConversation
-        key={thread.externalId}
-        onUploadImage={(file) => uploadCommentImage(thread.unitId, file)}
-        pullRequest={initialData.pullRequest}
-        revealed={focusedProviderThreadId === thread.externalId}
-        thread={thread}
-        newSince={
-          activeUnit?.status === "waiting" ? activeUnit.waitingSince : null
-        }
-        managing={managingThread(thread.externalId)}
-        replying={replyingToThread(thread.externalId)}
-        {...providerThreadActions(thread.unitId, thread.externalId)}
-        publishedByReviewDuck={publishedProviderThreadIds.has(
-          thread.externalId,
-        )}
-      />
-    ));
+    return threads.map((thread) => {
+      const unitId = thread.unitId;
+      if (!unitId) return null;
+      return (
+        <ProviderConversation
+          key={thread.externalId}
+          onUploadImage={(file) => uploadCommentImage(unitId, file)}
+          pullRequest={initialData.pullRequest}
+          revealed={focusedProviderThreadId === thread.externalId}
+          thread={thread}
+          newSince={
+            activeUnit?.status === "waiting" ? activeUnit.waitingSince : null
+          }
+          managing={managingThread(thread.externalId)}
+          replying={replyingToThread(thread.externalId)}
+          {...providerThreadActions(unitId, thread.externalId)}
+          publishedByReviewDuck={publishedProviderThreadIds.has(
+            thread.externalId,
+          )}
+        />
+      );
+    });
   }
 
   /** Mounts previous-side conversations that the current-line details would miss. */
