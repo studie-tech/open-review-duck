@@ -20,7 +20,9 @@ import {
   discussionFixPrompt,
 } from "~/lib/ai-fix-prompt";
 import { providerCommentHasImages } from "~/lib/comment-images";
+import { matchesShortcutStroke } from "~/lib/keyboard-shortcuts";
 import { providerLabel } from "~/lib/provider-labels";
+import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
@@ -367,6 +369,15 @@ export function ReviewDiscussionsPanel({
       }}
       onKeyDown={(event) => {
         event.stopPropagation();
+        const [toggleShortcut] = reviewShortcuts.discussions;
+        if (
+          toggleShortcut &&
+          matchesShortcutStroke(event.nativeEvent, toggleShortcut)
+        ) {
+          event.preventDefault();
+          onClose();
+          return;
+        }
         if (
           event.target instanceof Element &&
           event.target.closest("dialog") !== event.currentTarget
