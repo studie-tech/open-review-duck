@@ -22,6 +22,7 @@ import {
   commitsForSelection,
   type LineHistorySelection,
 } from "~/lib/line-commit-history";
+import { isMovedCodeLine, type MovedCodeRanges } from "~/lib/moved-code";
 import type { IndexedReviewUnit } from "~/lib/review-navigation";
 import { reviewShortcuts } from "~/lib/review-shortcuts";
 import {
@@ -244,6 +245,8 @@ function highlightsReviewLine(
 
 export interface SideBySideUnitDiffProps {
   ignoreWhitespace?: boolean;
+  /** Absolute snapshot ranges shared by Files and Guided, independent of focus. */
+  movedLines?: MovedCodeRanges;
   previousSource: string;
   currentSource: string;
   language: string;
@@ -336,6 +339,16 @@ interface DiffRowHighlightProps {
   selected: boolean;
 }
 
+/** Keeps selection, keyboard focus and findings colored above movement dimming. */
+function movedRowClass(moved: boolean, highlights: DiffRowHighlightProps) {
+  return moved &&
+    !highlights.isFinding &&
+    !highlights.keyboardFocused &&
+    !highlights.selected
+    ? "grayscale"
+    : undefined;
+}
+
 interface DiffRowActionProps {
   onSelect: (
     event: ReactMouseEvent<HTMLElement>,
@@ -361,6 +374,7 @@ interface HistoryRowProps {
  */
 const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   added,
+  moved,
   anchored,
   isFinding,
   keyboardFocused,
@@ -379,6 +393,7 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
   DiffRowActionProps &
   HistoryRowProps & {
     added: boolean;
+    moved: boolean;
     anchored: boolean;
     line: HighlightedLine | undefined;
     lineNumber: number | undefined;
@@ -402,6 +417,7 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
         onOpen={onOpenLineComment}
       />
       <LineContainer
+        data-moved-code={moved || undefined}
         {...(reviewLine !== undefined
           ? {
               type: "button" as const,
@@ -415,6 +431,7 @@ const AddedUnitDiffRow = memo(function AddedUnitDiffRow({
         className={cn(
           "grid w-full grid-cols-[82px_minmax(0,1fr)] text-left",
           added ? "bg-addition/15" : "bg-surface-subtle/20",
+          movedRowClass(moved, { isFinding, keyboardFocused, selected }),
           reviewLine !== undefined &&
             "cursor-pointer transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
           isFinding && FINDING_LINE_HIGHLIGHT,
@@ -469,6 +486,7 @@ function serverSideBySideWidth() {
  */
 const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   currentLine,
+  currentMoved,
   currentLineNumber,
   currentMarkers,
   currentReviewLine,
@@ -482,6 +500,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   onOpenLineComment,
   onSelect,
   previousLine,
+  previousMoved,
   previousLineNumber,
   previousMarkers,
   previousReviewLine,
@@ -491,12 +510,14 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   DiffRowActionProps &
   HistoryRowProps & {
     currentLine: HighlightedLine | undefined;
+    currentMoved: boolean;
     currentLineNumber: number | undefined;
     currentMarkers?: readonly ReviewLineCommentMarker[];
     currentReviewLine: number | undefined;
     kind: SideBySideDiffRow["kind"];
     onOpenLineComment: (threadExternalId: string) => void;
     previousLine: HighlightedLine | undefined;
+    previousMoved: boolean;
     previousLineNumber: number | undefined;
     previousMarkers?: readonly ReviewLineCommentMarker[];
     previousReviewLine: number | undefined;
@@ -505,6 +526,16 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
   // A row commentable on both sides is commented through the head line, so at
   // most one side carries the provider line and the other is always unset.
   const reviewLine = currentReviewLine ?? previousReviewLine;
+  const previousMoveClass = movedRowClass(previousMoved, {
+    isFinding,
+    keyboardFocused,
+    selected,
+  });
+  const currentMoveClass = movedRowClass(currentMoved, {
+    isFinding,
+    keyboardFocused,
+    selected,
+  });
   const historyAttributes = {
     "data-current-line": currentLineNumber,
     "data-history-row": historyRow,
@@ -537,6 +568,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         />
         {previousReviewLine !== undefined ? (
           <button
+            data-moved-code={previousMoved || undefined}
             type="button"
             aria-label={`Open actions for deleted line ${previousReviewLine}`}
             onClick={(event) =>
@@ -544,6 +576,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             }
             className={cn(
               "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+              previousMoveClass,
               isFinding && FINDING_LINE_HIGHLIGHT,
               selected && "bg-violet/[.055]",
               keyboardFocused &&
@@ -558,18 +591,22 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
         ) : (
           <>
             <span
+              data-moved-code={previousMoved || undefined}
               className={cn(
                 "flex justify-end border-r border-line/60 px-2 text-fog select-none",
                 (kind === "deleted" || kind === "modified") &&
                   "bg-red-400/10 text-red-700 dark:text-red-200",
+                previousMoveClass,
               )}
             >
               {previousLineNumber}
             </span>
             <div
+              data-moved-code={previousMoved || undefined}
               className={cn(
                 "min-w-0 border-r border-line",
                 (kind === "deleted" || kind === "modified") && "bg-red-400/15",
+                previousMoveClass,
               )}
             >
               <HighlightedDiffLine line={previousLine} />
@@ -580,9 +617,11 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
           <span className="col-span-2" />
         ) : currentReviewLine === undefined ? (
           <div
+            data-moved-code={currentMoved || undefined}
             className={cn(
               "col-span-2 grid min-w-0 grid-cols-[56px_minmax(0,1fr)] text-fog",
               (kind === "added" || kind === "modified") && "bg-addition/15",
+              currentMoveClass,
             )}
           >
             <span
@@ -603,6 +642,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
           </div>
         ) : (
           <button
+            data-moved-code={currentMoved || undefined}
             type="button"
             aria-label={`Open actions for current line ${currentReviewLine}`}
             onClick={(event) =>
@@ -612,6 +652,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
               "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] text-left text-fog transition select-text hover:bg-cyan/[.045] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
               (kind === "added" || kind === "modified") &&
                 "bg-addition/15 hover:bg-addition/22",
+              currentMoveClass,
               isFinding && FINDING_LINE_HIGHLIGHT,
               selected && "bg-violet/[.055]",
               keyboardFocused &&
@@ -652,8 +693,14 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
     >
       {kind === "unchanged" ? (
         <div
+          data-moved-code={currentMoved || previousMoved || undefined}
           className={cn(
             "relative grid grid-cols-[56px_56px_minmax(0,1fr)]",
+            movedRowClass(currentMoved || previousMoved, {
+              isFinding,
+              keyboardFocused,
+              selected,
+            }),
             isFinding && FINDING_LINE_HIGHLIGHT,
             selected && "bg-violet/[.055]",
             keyboardFocused &&
@@ -717,6 +764,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                   onOpen={onOpenLineComment}
                 />
                 <button
+                  data-moved-code={previousMoved || undefined}
                   type="button"
                   aria-label={`Open actions for deleted line ${previousReviewLine}`}
                   onClick={(event) =>
@@ -724,6 +772,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                   }
                   className={cn(
                     "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    previousMoveClass,
                     isFinding && FINDING_LINE_HIGHLIGHT,
                     selected && "bg-violet/[.055]",
                     keyboardFocused &&
@@ -740,7 +789,13 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                 </button>
               </div>
             ) : (
-              <div className="relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15">
+              <div
+                data-moved-code={previousMoved || undefined}
+                className={cn(
+                  "relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15",
+                  previousMoveClass,
+                )}
+              >
                 <LineCommentGutter
                   className="left-0.5"
                   markers={previousMarkers}
@@ -764,6 +819,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                   onOpen={onOpenLineComment}
                 />
                 <button
+                  data-moved-code={currentMoved || undefined}
                   type="button"
                   aria-label={`Open actions for current line ${currentReviewLine}`}
                   onClick={(event) =>
@@ -771,6 +827,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                   }
                   className={cn(
                     "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15 text-left transition select-text hover:bg-addition/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
+                    currentMoveClass,
                     isFinding && FINDING_LINE_HIGHLIGHT,
                     selected && "bg-violet/[.055]",
                     keyboardFocused &&
@@ -792,7 +849,13 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                 </button>
               </div>
             ) : (
-              <div className="relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15">
+              <div
+                data-moved-code={currentMoved || undefined}
+                className={cn(
+                  "relative grid grid-cols-[56px_56px_minmax(0,1fr)] bg-addition/15",
+                  currentMoveClass,
+                )}
+              >
                 <LineCommentGutter
                   className="left-0.5"
                   markers={currentMarkers}
@@ -840,6 +903,7 @@ export const SideBySideUnitDiff = forwardRef<
     keyboardLine,
     findingLine,
     ignoreWhitespace = false,
+    movedLines,
     expanded = false,
     onSelectReviewLine,
     isReviewLineCollapsed,
@@ -1570,6 +1634,7 @@ export const SideBySideUnitDiff = forwardRef<
                 <>
                   <AddedUnitDiffRow
                     added={row.kind === "added"}
+                    moved={isMovedCodeLine(movedLines?.current, lineNumber)}
                     anchored={emitReviewLineAnchors && rendersLineDetails}
                     isFinding={highlightsReviewLine(findingLine, reviewLine)}
                     keyboardFocused={highlightsReviewLine(
@@ -1720,6 +1785,10 @@ export const SideBySideUnitDiff = forwardRef<
                 )}
                 <SplitUnitDiffRow
                   currentLine={currentLine}
+                  currentMoved={isMovedCodeLine(
+                    movedLines?.current,
+                    currentLineNumber,
+                  )}
                   currentLineNumber={currentLineNumber}
                   currentMarkers={
                     currentLineNumber === undefined
@@ -1738,6 +1807,10 @@ export const SideBySideUnitDiff = forwardRef<
                   onOpenLineComment={openLineComment}
                   onSelect={selectReviewLine}
                   previousLine={previousLine}
+                  previousMoved={isMovedCodeLine(
+                    movedLines?.previous,
+                    previousLineNumber,
+                  )}
                   previousLineNumber={previousLineNumber}
                   previousMarkers={
                     previousLineNumber === undefined
