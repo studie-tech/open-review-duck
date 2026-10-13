@@ -59,7 +59,10 @@ export function providerThreadsForVisibleUnits(
 ) {
   if (!threads?.length || visibleUnitIds.length === 0) return [];
   const visible = new Set(visibleUnitIds);
-  return threads.filter((thread) => visible.has(thread.unitId));
+  return threads.filter(
+    (thread): thread is ProviderConversationThread & { unitId: string } =>
+      thread.unitId !== null && visible.has(thread.unitId),
+  );
 }
 
 /** Keeps a just-published conversation visible until the provider lists it. */

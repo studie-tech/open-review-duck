@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, ImageIcon, Maximize2 } from "lucide-react";
 import {
   Children,
   type ComponentPropsWithoutRef,
@@ -10,6 +10,7 @@ import {
   type ReactNode,
   useContext,
   useMemo,
+  useState,
 } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -263,12 +264,19 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
   variant = "comment",
   changes,
   renderSourceAction,
+  imageMode = "placeholder",
+  imageBaseUrl,
+  onOpenImage,
 }: {
   body: string;
   className?: string;
   variant?: "comment" | "document";
   changes?: { lines: readonly number[]; side: "previous" | "current" };
   renderSourceAction?: (startLine: number, endLine: number) => ReactNode;
+  imageMode?: "placeholder" | "preview";
+  /** Resolves provider-relative attachment paths without using the app origin. */
+  imageBaseUrl?: string;
+  onOpenImage?: (image: { src: string; alt: string }) => void;
 }) {
   const plugins = useMemo<Options["rehypePlugins"]>(
     () =>
@@ -277,6 +285,22 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
         : rehypePlugins,
     [changes],
   );
+  const components = useMemo<Options["components"]>(() => {
+    const base =
+      variant === "document" ? documentMarkdownComponents : markdownComponents;
+    return imageMode === "preview"
+      ? {
+          ...base,
+          img: (props) => (
+            <ProviderImagePreview
+              {...props}
+              baseUrl={imageBaseUrl}
+              onOpen={onOpenImage}
+            />
+          ),
+        }
+      : base;
+  }, [imageMode, imageBaseUrl, onOpenImage, variant]);
   return (
     <div
       className={cn(
@@ -291,11 +315,7 @@ export const ProviderCommentBody = memo(function ProviderCommentBody({
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={plugins}
-          components={
-            variant === "document"
-              ? documentMarkdownComponents
-              : markdownComponents
-          }
+          components={components}
         >
           {body}
         </ReactMarkdown>
@@ -393,4 +413,95 @@ function ProviderImagePlaceholder({
       {label}
     </span>
   );
+}
+
+/** Displays sanitized attachments without forwarding the review page referrer. */
+function ProviderImagePreview({
+  src,
+  alt,
+  title,
+  onOpen,
+  baseUrl,
+}: ComponentPropsWithoutRef<"img"> & {
+  onOpen?: (image: { src: string; alt: string }) => void;
+  baseUrl?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const label = alt?.trim() || title?.trim() || "Attached image";
+  const imageUrl =
+    typeof src === "string" ? providerImageUrl(src, baseUrl) : undefined;
+  if (/^P[0-4]$/iu.test(label) || !imageUrl) {
+    return <ProviderImagePlaceholder alt={alt} title={title} />;
+  }
+  if (failed) {
+    return (
+      <span className="border-line bg-surface-subtle my-3 flex flex-wrap items-center gap-2 rounded-lg border p-3 text-xs">
+        <ImageIcon className="size-4" aria-hidden="true" />
+        <span>{label} · Preview unavailable</span>
+        <SafeProviderLink href={imageUrl}>Open image</SafeProviderLink>
+      </span>
+    );
+  }
+  const preview = (
+    <>
+      {/* Provider URLs require browser credentials and cannot use Next's image proxy. */}
+      {/* biome-ignore lint/performance/noImgElement: preserve provider image access rules */}
+      <img
+        src={imageUrl}
+        alt={label}
+        title={title}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="max-h-80 w-auto max-w-full rounded-t-lg object-contain"
+      />
+      <span className="text-mist flex items-center justify-between gap-3 border-t border-line px-3 py-2 text-[11px]">
+        <span className="truncate">{label}</span>
+        <Maximize2 className="size-3.5 shrink-0" aria-hidden="true" />
+      </span>
+    </>
+  );
+  const className =
+    "border-line bg-surface my-3 inline-flex max-w-full flex-col overflow-hidden rounded-lg border text-left transition hover:border-cyan/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan";
+  return onOpen ? (
+    <button
+      type="button"
+      className={className}
+      aria-label={`Enlarge image: ${label}`}
+      onClick={() => onOpen({ src: imageUrl, alt: label })}
+    >
+      {preview}
+    </button>
+  ) : (
+    <a
+      href={imageUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+    >
+      {preview}
+    </a>
+  );
+}
+
+/** Resolves sanitized provider image sources while rejecting credential URLs. */
+function providerImageUrl(src: string, baseUrl?: string) {
+  if (!src.trim()) return undefined;
+  try {
+    // GitLab Markdown uploads use project-relative /uploads paths.
+    const source =
+      baseUrl?.includes("/-/merge_requests/") && src.startsWith("/uploads/")
+        ? `${baseUrl.split("/-/merge_requests/")[0]}${src}`
+        : src;
+    const url = new URL(source, baseUrl);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password
+    )
+      return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
 }

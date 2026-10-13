@@ -1433,7 +1433,6 @@ export const reviewRouter = createTRPCRouter({
         .from(reviewUnits)
         .where(eq(reviewUnits.snapshotId, snapshot.id));
       const units = allUnits.filter(({ kind }) => kind !== "file");
-      const paths = new Set(units.map(({ path }) => path));
       try {
         const provider = await providerForConnection(ctx.db, scope.connection);
         const threads = await provider.listInlineCommentThreads(
@@ -1502,6 +1501,9 @@ export const reviewRouter = createTRPCRouter({
           units,
           explicitUnitByThreadId,
         );
+        const unitIdByThreadId = new Map(
+          assignedThreads.map(({ externalId, unitId }) => [externalId, unitId]),
+        );
         const unitById = new Map(units.map((unit) => [unit.id, unit]));
         const answeredUnitIds: string[] = [];
         for (const wait of waits) {
@@ -1534,28 +1536,29 @@ export const reviewRouter = createTRPCRouter({
         );
         return {
           provider: scope.connection.provider,
-          threads: assignedThreads
-            .filter((thread) => paths.has(thread.path))
-            .map((thread) => ({
-              ...thread,
-              comments: thread.comments.map((comment, index) => {
-                // A root comment is recorded against the conversation it
-                // opened; a reply against itself.
-                const publisher =
-                  publisherByProviderId.get(comment.externalId) ??
-                  (index === 0
-                    ? publisherByProviderId.get(thread.externalId)
-                    : undefined);
-                return {
-                  ...comment,
-                  body: visibleProviderCommentBody(comment.body),
-                  // Absent means nobody here published it, which leaves it as
-                  // open to change as the provider itself would leave it.
-                  publishedByAnotherReviewer:
-                    publisher !== undefined && publisher !== ctx.auth.userId,
-                };
-              }),
-            })),
+          // PR-wide browsing also includes outdated and unassigned threads.
+          // Code navigation is offered only when a current unit owns the thread.
+          threads: threads.map((thread) => ({
+            ...thread,
+            unitId: unitIdByThreadId.get(thread.externalId) ?? null,
+            comments: thread.comments.map((comment, index) => {
+              // A root comment is recorded against the conversation it
+              // opened; a reply against itself.
+              const publisher =
+                publisherByProviderId.get(comment.externalId) ??
+                (index === 0
+                  ? publisherByProviderId.get(thread.externalId)
+                  : undefined);
+              return {
+                ...comment,
+                body: visibleProviderCommentBody(comment.body),
+                // Absent means nobody here published it, which leaves it as
+                // open to change as the provider itself would leave it.
+                publishedByAnotherReviewer:
+                  publisher !== undefined && publisher !== ctx.auth.userId,
+              };
+            }),
+          })),
           syncedAt: new Date(),
           answeredUnitIds: answeredWaits.map(({ unitId }) => unitId),
         };

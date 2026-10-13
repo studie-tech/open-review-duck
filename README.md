@@ -37,6 +37,15 @@ merge readiness every 45 seconds, with faster checks while CI runs. Returning to
 the tab refreshes provider status too, so external updates appear without a page
 reload.
 
+Open Discussions to browse every provider review thread in a full-screen view,
+including older threads without a matching current review unit. The thread list
+starts with open conversations when any exist, or all conversations otherwise,
+ordered by recent activity. Search includes every reply, author, and file path;
+filters narrow by status, file, participant, or image attachments. Select a
+thread to read its full Markdown conversation and enlarge attached images.
+Use **View in code** to reply or manage a thread at its review line, or follow
+the provider link when its code is no longer in the current revision.
+
 Use the hosted app at [reviewduck.ai](https://reviewduck.ai), or run the local
 appliance below.
 

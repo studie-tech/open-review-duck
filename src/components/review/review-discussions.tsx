@@ -1,31 +1,39 @@
 "use client";
 
 import {
+  ArrowDownWideNarrow,
   Check,
   ChevronRight,
   CircleDot,
   ExternalLink,
+  ImageIcon,
   LoaderCircle,
   MessageSquareText,
   RefreshCw,
+  Search,
   X,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Badge } from "~/components/ui/badge";
-import { Button } from "~/components/ui/button";
 import {
   type AiFixPromptPullRequest,
   discussionFixPrompt,
 } from "~/lib/ai-fix-prompt";
+import { providerCommentHasImages } from "~/lib/comment-images";
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
 import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
+import {
+  discussionTimestamp,
+  ReviewDiscussionDetail,
+} from "./review-discussion-detail";
 
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
 export type ProviderDiscussionThread = ProviderConversations["threads"][number];
 
-type DiscussionTab = "open" | "resolved";
+type DiscussionTab = "all" | "open" | "resolved";
+type DiscussionSort = "recent" | "oldest" | "file";
 
 /** Treats provider-unknown resolution as active so it can never disappear. */
 export function isOpenProviderDiscussion(thread: ProviderDiscussionThread) {
@@ -45,15 +53,6 @@ export function orderProviderDiscussions(threads: ProviderDiscussionThread[]) {
 /** Returns the latest provider comment, falling back safely for empty threads. */
 function latestDiscussionComment(thread: ProviderDiscussionThread) {
   return thread.comments.at(-1);
-}
-
-/** Formats compact provider activity timestamps in the reviewer's locale. */
-function discussionTimestamp(value: string | undefined) {
-  if (!value) return undefined;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
 }
 
 /** Renders one compact PR-wide conversation entry. */
@@ -83,6 +82,7 @@ function DiscussionRow({
         <button
           type="button"
           onClick={onOpen}
+          disabled={!thread.unitId}
           aria-label={`Open conversation in ${thread.path} at line ${thread.line}`}
           className="min-w-0 flex-1 rounded-lg p-1.5 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-cyan/50"
         >
@@ -102,8 +102,8 @@ function DiscussionRow({
           <span
             id={commentId}
             className={cn(
-              "text-mist mt-2 block whitespace-pre-wrap text-[11px] leading-5",
-              !commentExpanded && "line-clamp-2",
+              "text-mist mt-2 whitespace-pre-wrap text-[11px] leading-5",
+              commentExpanded ? "block" : "line-clamp-2",
             )}
           >
             {commentBody}
@@ -116,9 +116,9 @@ function DiscussionRow({
             prompt={() => discussionFixPrompt(pullRequest, thread)}
           />
         )}
-        {thread.webUrl && (
+        {(thread.webUrl || pullRequest.webUrl) && (
           <a
-            href={thread.webUrl}
+            href={thread.webUrl || pullRequest.webUrl}
             target="_blank"
             rel="noreferrer"
             aria-label={`Open the conversation in ${thread.path} on the provider`}
@@ -154,20 +154,68 @@ function DiscussionRow({
             {commentExpanded ? "Show less" : "Show more"}
           </button>
         )}
-        <button
-          type="button"
-          onClick={onOpen}
-          className="text-cyan hover:bg-cyan/10 flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-semibold transition"
-        >
-          Open
-          <ChevronRight className="size-3" aria-hidden="true" />
-        </button>
+        {thread.unitId && (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="text-cyan hover:bg-cyan/10 flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-semibold transition"
+          >
+            Open
+            <ChevronRight className="size-3" aria-hidden="true" />
+          </button>
+        )}
       </div>
     </article>
   );
 }
 
-/** Shows every provider conversation in a PR-wide review drawer. */
+/** Removes presentation syntax from the thread list while retaining readable text. */
+function discussionPreview(body: string, query = "") {
+  const text = body
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/[`#*_>]/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const index = query.trim()
+    ? text.toLocaleLowerCase().indexOf(query.trim().toLocaleLowerCase())
+    : -1;
+  return index > 80 ? `…${text.slice(index - 60)}` : text;
+}
+
+/** Reads the latest activity time independently of provider comment ordering. */
+function discussionActivity(thread: ProviderDiscussionThread) {
+  return Math.max(
+    0,
+    ...thread.comments.map(({ createdAt }) => Date.parse(createdAt) || 0),
+  );
+}
+
+/** Highlights literal search terms in compact list previews. */
+function DiscussionSearchText({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
+  const term = query.trim();
+  const index = term
+    ? text.toLocaleLowerCase().indexOf(term.toLocaleLowerCase())
+    : -1;
+  if (index < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="bg-cyan/15 rounded-sm text-cloud">
+        {text.slice(index, index + term.length)}
+      </mark>
+      {text.slice(index + term.length)}
+    </>
+  );
+}
+
+/** Browses complete PR-wide conversations in a responsive full-screen dialog. */
 export function ReviewDiscussionsPanel({
   error,
   loading,
@@ -185,31 +233,122 @@ export function ReviewDiscussionsPanel({
   pullRequest: AiFixPromptPullRequest;
   threads: ProviderDiscussionThread[];
 }) {
-  const [tab, setTab] = useState<DiscussionTab>("open");
+  const [status, setStatus] = useState<DiscussionTab | "auto">("auto");
+  const [query, setQuery] = useState("");
+  const [path, setPath] = useState("");
+  const [author, setAuthor] = useState("");
+  const [imagesOnly, setImagesOnly] = useState(false);
+  const [sort, setSort] = useState<DiscussionSort>("recent");
+  const [selectedId, setSelectedId] = useState<string>();
+  const [mobileDetail, setMobileDetail] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const titleId = `${useId()}-title`;
+  const searchInput = useRef<HTMLInputElement>(null);
+  const wasViewingDetail = useRef(false);
+  const id = useId();
+  const titleId = `${id}-title`;
+  const listId = `${id}-threads`;
   const ordered = useMemo(() => orderProviderDiscussions(threads), [threads]);
-  const openThreads = ordered.filter(isOpenProviderDiscussion);
-  const resolvedThreads = ordered.filter(
-    (thread) => !isOpenProviderDiscussion(thread),
+  const openCount = ordered.filter(isOpenProviderDiscussion).length;
+  // Searching from the default view includes resolved replies; an explicit status stays put.
+  const tab =
+    status === "auto"
+      ? query.trim() || openCount === 0
+        ? "all"
+        : "open"
+      : status;
+  const term = query.trim().toLocaleLowerCase();
+  const indexed = useMemo(
+    () =>
+      ordered.map((thread) => ({
+        thread,
+        activity: discussionActivity(thread),
+        images: thread.comments.some(({ body }) =>
+          providerCommentHasImages(body),
+        ),
+        text: [
+          thread.path,
+          ...thread.comments.flatMap(({ author, body }) => [author, body]),
+        ]
+          .join(" ")
+          .toLocaleLowerCase(),
+      })),
+    [ordered],
   );
-  const visibleThreads = tab === "open" ? openThreads : resolvedThreads;
+  const paths = [...new Set(ordered.map(({ path }) => path))];
+  const authors = [
+    ...new Set(
+      ordered
+        .flatMap(({ comments }) => comments.map(({ author }) => author))
+        .filter(Boolean),
+    ),
+  ].sort();
+  const visible = indexed
+    .filter(
+      ({ thread, text, images }) =>
+        (tab === "all" ||
+          (tab === "open"
+            ? isOpenProviderDiscussion(thread)
+            : !isOpenProviderDiscussion(thread))) &&
+        (!path || thread.path === path) &&
+        (!author ||
+          thread.comments.some((comment) => comment.author === author)) &&
+        (!imagesOnly || images) &&
+        (!term || text.includes(term)),
+    )
+    .sort((left, right) =>
+      sort === "file"
+        ? 0
+        : sort === "recent"
+          ? right.activity - left.activity
+          : left.activity - right.activity,
+    );
+  const selected =
+    visible.find(({ thread }) => thread.externalId === selectedId)?.thread ??
+    visible[0]?.thread;
+  const selectedThreadId = selected?.externalId;
+  const hasFilters = Boolean(query || path || author || imagesOnly);
   const providerName = providerLabel(pullRequest.provider);
+  const filterClass =
+    "border-line bg-surface text-mist focus:border-cyan h-8 min-w-0 rounded-lg border px-2 text-[11px]! outline-none focus-visible:ring-2 focus-visible:ring-cyan/30";
+
+  useEffect(() => {
+    if (selectedThreadId) setSelectedId(selectedThreadId);
+  }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (!mobileDetail && wasViewingDetail.current && selectedThreadId) {
+      document.getElementById(`${id}-thread-${selectedThreadId}`)?.focus();
+    }
+    wasViewingDetail.current = mobileDetail;
+  }, [mobileDetail, selectedThreadId, id]);
 
   useEffect(() => {
     const element = dialog.current;
     const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     if (element && !element.open) {
       if (typeof element.showModal === "function") element.showModal();
       else element.setAttribute("open", "");
       closeButton.current?.focus();
     }
     return () => {
+      document.body.style.overflow = previousOverflow;
       if (element?.open && typeof element.close === "function") element.close();
       previousFocus?.focus();
     };
   }, []);
+
+  /** Restores the default scope and clears every content filter together. */
+  function resetFilters() {
+    setQuery("");
+    setPath("");
+    setAuthor("");
+    setImagesOnly(false);
+    setStatus("auto");
+    setMobileDetail(false);
+  }
 
   return (
     <dialog
@@ -221,131 +360,452 @@ export function ReviewDiscussionsPanel({
         event.preventDefault();
         onClose();
       }}
-      className="bg-panel fixed top-16 right-0 bottom-0 left-auto z-50 m-0 hidden h-[calc(100dvh-4rem)] max-h-none w-[min(420px,calc(100vw-2rem))] flex-col border-0 border-l border-line p-0 shadow-2xl open:flex backdrop:bg-black/45 backdrop:backdrop-blur-[2px]"
+      onKeyDown={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "f") {
+          event.preventDefault();
+          searchInput.current?.focus();
+          searchInput.current?.select();
+        }
+      }}
+      className="bg-panel text-cloud fixed inset-0 z-50 m-0 hidden h-dvh max-h-none w-screen max-w-none flex-col overflow-hidden border-0 p-0 shadow-2xl open:flex backdrop:bg-black/45"
     >
-      <header className="shrink-0 border-b border-line px-4 pt-4 sm:px-5">
-        <div className="flex items-start gap-3">
-          <span className="bg-cyan/10 text-cyan grid size-9 shrink-0 place-items-center rounded-xl">
-            <MessageSquareText className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-fog text-[9px] font-semibold tracking-[.14em] uppercase">
-              {providerName} · PR-wide
-            </p>
-            <h2 id={titleId} className="text-cloud mt-1 text-sm font-medium">
-              Discussions
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={loading}
-            aria-label="Refresh pull request discussions"
-            title="Refresh discussions"
-            className="text-mist hover:text-cloud grid size-8 place-items-center rounded-lg transition hover:bg-surface-hover disabled:cursor-wait disabled:opacity-50"
+      <header className="border-line flex shrink-0 items-center gap-3 border-b px-4 py-4 sm:px-6">
+        <span className="bg-cyan/10 text-cyan grid size-10 shrink-0 place-items-center rounded-xl">
+          <MessageSquareText className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2
+            id={titleId}
+            className="text-cloud text-lg font-semibold tracking-tight"
           >
-            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-          </button>
-          <button
-            ref={closeButton}
-            type="button"
-            onClick={onClose}
-            aria-label="Close pull request discussions"
-            className="text-mist hover:text-cloud grid size-8 place-items-center rounded-lg transition hover:bg-surface-hover"
-          >
-            <X className="size-4" />
-          </button>
+            Discussions
+          </h2>
+          <p className="text-fog mt-0.5 truncate text-xs">
+            {pullRequest.repositoryOwner}/{pullRequest.repositoryName}
+            <span aria-hidden="true"> · </span>#{pullRequest.number}
+            <span className="hidden sm:inline"> · {pullRequest.title}</span>
+          </p>
         </div>
-        <div
-          className="mt-4 flex gap-5"
-          role="tablist"
-          aria-label="Discussion status"
+        <span className="text-fog mr-2 hidden items-center gap-1.5 text-[11px] lg:flex">
+          <span className="bg-cyan size-1.5 rounded-full" /> {providerName}{" "}
+          discussions
+        </span>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          aria-label="Refresh pull request discussions"
+          title="Refresh discussions"
+          className="text-mist hover:text-cloud flex h-9 items-center gap-2 rounded-lg px-2.5 transition hover:bg-surface-hover disabled:cursor-wait disabled:opacity-50"
         >
-          {(
-            [
-              ["open", `Open ${openThreads.length}`],
-              ["resolved", `Resolved ${resolvedThreads.length}`],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={tab === value}
-              onClick={() => setTab(value)}
-              className={cn(
-                "border-b-2 px-0.5 pb-3 text-[10px] font-semibold transition",
-                tab === value
-                  ? "border-cyan text-cyan"
-                  : "text-fog hover:text-mist border-transparent",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+          <span className="hidden text-xs sm:inline">Refresh</span>
+        </button>
+        <span className="bg-line mx-1 h-6 w-px" aria-hidden="true" />
+        <button
+          ref={closeButton}
+          type="button"
+          onClick={onClose}
+          aria-label="Close pull request discussions"
+          className="text-mist hover:text-cloud flex h-9 items-center gap-2 rounded-lg px-2.5 transition hover:bg-surface-hover"
+        >
+          <span className="hidden text-xs sm:inline">Back to review</span>
+          <X className="size-4" />
+        </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4">
-        {error ? (
-          <div className="border-coral/20 bg-coral/[.055] rounded-xl border p-4">
-            <p className="text-coral text-xs font-medium">
-              Discussions could not be synchronized
-            </p>
-            <p className="text-mist mt-2 text-[10px] leading-5">{error}</p>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="mt-4"
-              onClick={onRefresh}
+      <div
+        className={cn(
+          "border-line bg-panel shrink-0 border-b px-4 py-4 sm:px-6",
+          mobileDetail && selected && "hidden md:block",
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="border-line bg-surface focus-within:border-cyan flex h-10 min-w-0 flex-[1_1_280px] items-center gap-2.5 rounded-xl border px-3">
+            <Search className="text-fog size-4 shrink-0" aria-hidden="true" />
+            <input
+              ref={searchInput}
+              type="search"
+              aria-label="Search discussions"
+              placeholder="Search threads, replies, people, or files…"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setMobileDetail(false);
+              }}
+              className="text-cloud placeholder:text-fog min-w-0 flex-1 bg-transparent text-xs! outline-none [&::-webkit-search-cancel-button]:hidden"
+            />
+            {query ? (
+              <button
+                type="button"
+                aria-label="Clear discussion search"
+                onClick={() => {
+                  setQuery("");
+                  searchInput.current?.focus();
+                }}
+                className="text-fog hover:text-cloud"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : (
+              <kbd className="text-fog hidden text-[10px] sm:inline">
+                ⌘ / Ctrl F
+              </kbd>
+            )}
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <select
+              aria-label="Filter discussions by file"
+              className={cn(filterClass, "max-w-48")}
+              value={path}
+              onChange={(event) => {
+                setPath(event.target.value);
+                setMobileDetail(false);
+              }}
             >
-              <RefreshCw className="size-3.5" />
-              Try again
-            </Button>
+              <option value="">All files</option>
+              {paths.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter discussions by participant"
+              className={cn(filterClass, "max-w-40")}
+              value={author}
+              onChange={(event) => {
+                setAuthor(event.target.value);
+                setMobileDetail(false);
+              }}
+            >
+              <option value="">Anyone</option>
+              {authors.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-pressed={imagesOnly}
+              onClick={() => {
+                setImagesOnly((value) => !value);
+                setMobileDetail(false);
+              }}
+              className={cn(
+                filterClass,
+                "flex items-center gap-1.5",
+                imagesOnly && "border-cyan/40 bg-cyan/10 text-cyan",
+              )}
+            >
+              <ImageIcon className="size-3.5" /> With images
+            </button>
           </div>
-        ) : loading && threads.length === 0 ? (
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div
-            role="status"
-            className="text-mist flex items-center justify-center gap-2 py-16 text-xs"
+            className="flex items-center gap-1"
+            role="tablist"
+            aria-label="Discussion status"
           >
-            <LoaderCircle className="size-4 animate-spin" />
-            Synchronizing discussions…
-          </div>
-        ) : visibleThreads.length > 0 ? (
-          <div className="space-y-2.5">
-            {visibleThreads.map((thread) => (
-              <DiscussionRow
-                key={thread.externalId}
-                pullRequest={pullRequest}
-                resolved={tab === "resolved"}
-                thread={thread}
-                onOpen={() => onOpenThread(thread)}
-              />
+            {(
+              [
+                ["all", "All", threads.length],
+                ["open", "Open", openCount],
+                ["resolved", "Resolved", threads.length - openCount],
+              ] as const
+            ).map(([value, label, count], index) => (
+              <button
+                key={value}
+                id={`${id}-${value}`}
+                type="button"
+                role="tab"
+                aria-label={`${label} ${count}`}
+                aria-selected={tab === value}
+                aria-controls={listId}
+                tabIndex={tab === value ? 0 : -1}
+                onClick={() => {
+                  setStatus(value);
+                  setMobileDetail(false);
+                }}
+                onKeyDown={(event) => {
+                  const next =
+                    event.key === "ArrowRight"
+                      ? (index + 1) % 3
+                      : event.key === "ArrowLeft"
+                        ? (index + 2) % 3
+                        : event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? 2
+                            : undefined;
+                  if (next === undefined) return;
+                  event.preventDefault();
+                  const value = (["all", "open", "resolved"] as const)[next];
+                  if (!value) return;
+                  setStatus(value);
+                  setMobileDetail(false);
+                  document.getElementById(`${id}-${value}`)?.focus();
+                }}
+                className={cn(
+                  "flex h-8 items-center gap-2 rounded-lg px-3 text-xs! font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan",
+                  tab === value
+                    ? "bg-cyan/10 text-cyan"
+                    : "text-mist hover:bg-surface-hover",
+                )}
+              >
+                {label}
+                <span
+                  className={cn(
+                    "rounded-md px-1.5 py-0.5 text-[10px] tabular-nums",
+                    tab === value ? "bg-cyan/10" : "bg-surface-subtle text-fog",
+                  )}
+                >
+                  {count}
+                </span>
+              </button>
             ))}
           </div>
-        ) : (
-          <div className="grid place-items-center px-6 py-16 text-center">
-            <span className="border-lime/20 bg-lime/[.07] text-lime grid size-11 place-items-center rounded-2xl border">
-              <Check className="size-5" />
-            </span>
-            <p className="text-cloud mt-4 text-sm font-medium">
-              {tab === "open"
-                ? "No open discussions"
-                : "No resolved discussions yet"}
-            </p>
-            <p className="text-mist mt-2 text-[10px] leading-5">
-              {tab === "open"
-                ? "The collaboration loop is clear at the current provider state."
-                : "Resolved conversations will remain available here for audit."}
-            </p>
+          <div className="flex items-center gap-3">
+            {hasFilters && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="text-cyan text-[11px]! hover:underline"
+              >
+                Clear filters
+              </button>
+            )}
+            <label className="text-fog flex items-center gap-1.5">
+              <ArrowDownWideNarrow className="size-3.5" aria-hidden="true" />
+              <select
+                aria-label="Sort discussions"
+                value={sort}
+                onChange={(event) =>
+                  setSort(event.target.value as DiscussionSort)
+                }
+                className="text-mist max-w-36 bg-transparent text-[11px]! outline-none focus-visible:ring-2 focus-visible:ring-cyan"
+              >
+                <option value="recent">Recently active</option>
+                <option value="oldest">Oldest activity</option>
+                <option value="file">File and line</option>
+              </select>
+            </label>
           </div>
-        )}
+        </div>
       </div>
 
-      <footer className="text-fog shrink-0 border-t border-line bg-surface/45 px-4 py-3 text-[9px] leading-4 sm:px-5">
-        Resolved discussions stay folded by default. Opening a discussion
-        returns to its exact review unit and line.
-      </footer>
+      {error && (
+        <div
+          role="alert"
+          className="border-coral/20 bg-coral/5 text-mist flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-6 py-2.5 text-xs"
+        >
+          <span className="text-coral font-medium">
+            Couldn’t refresh discussions.
+          </span>
+          <span>
+            {threads.length ? "Showing the last loaded conversations. " : ""}
+            {error}
+          </span>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={onRefresh}
+            className="text-cyan ml-auto text-xs! font-medium hover:underline"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        <aside
+          id={listId}
+          role="tabpanel"
+          aria-labelledby={`${id}-${tab}`}
+          className={cn(
+            "border-line bg-panel flex w-full shrink-0 flex-col md:w-[320px] md:border-r lg:w-[370px]",
+            mobileDetail && selected && "hidden md:flex",
+          )}
+        >
+          <div className="text-fog flex shrink-0 items-center justify-between px-5 py-3 text-[11px]">
+            <span role="status" aria-live="polite">
+              {visible.length} {visible.length === 1 ? "thread" : "threads"}
+              {hasFilters ? ` matching of ${threads.length}` : ""}
+            </span>
+            {loading && threads.length > 0 && (
+              <span className="flex items-center gap-1.5">
+                <LoaderCircle className="size-3 animate-spin" /> Refreshing
+              </span>
+            )}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
+            {loading && threads.length === 0 ? (
+              <div
+                role="status"
+                className="text-mist flex items-center justify-center gap-2 px-4 py-16 text-xs"
+              >
+                <LoaderCircle className="size-4 animate-spin" /> Loading
+                discussions…
+              </div>
+            ) : visible.length ? (
+              <ul aria-label="Discussion threads" className="space-y-1">
+                {visible.map(({ thread, images, activity }) => {
+                  const first = thread.comments[0];
+                  const match = term
+                    ? thread.comments.find(({ body }) =>
+                        body.toLocaleLowerCase().includes(term),
+                      )
+                    : undefined;
+                  const preview = discussionPreview(
+                    (match ?? first)?.body || "No visible comments",
+                    query,
+                  );
+                  const resolved = !isOpenProviderDiscussion(thread);
+                  return (
+                    <li key={thread.externalId}>
+                      <button
+                        type="button"
+                        aria-pressed={
+                          selected?.externalId === thread.externalId
+                        }
+                        id={`${id}-thread-${thread.externalId}`}
+                        aria-label={`Read discussion in ${thread.path} at line ${thread.line}`}
+                        onClick={() => {
+                          setSelectedId(thread.externalId);
+                          setMobileDetail(true);
+                        }}
+                        className={cn(
+                          "w-full rounded-xl border p-3.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan",
+                          selected?.externalId === thread.externalId
+                            ? "border-cyan/25 bg-cyan/[.065]"
+                            : "border-transparent hover:border-line hover:bg-surface",
+                        )}
+                      >
+                        <span className="flex items-center gap-2">
+                          {resolved ? (
+                            <Check className="text-addition size-3.5 shrink-0" />
+                          ) : (
+                            <CircleDot className="text-cyan size-3.5 shrink-0" />
+                          )}
+                          <span
+                            title={thread.path}
+                            className="text-cloud min-w-0 flex-1 truncate font-mono text-[11px] font-medium"
+                          >
+                            <DiscussionSearchText
+                              text={thread.path}
+                              query={query}
+                            />
+                          </span>
+                          <span className="text-fog text-[10px]">
+                            L{thread.line}
+                          </span>
+                        </span>
+                        <span className="text-mist mt-2.5 line-clamp-3 text-xs leading-5">
+                          <DiscussionSearchText text={preview} query={query} />
+                        </span>
+                        <span className="text-fog mt-3 flex items-center gap-2 text-[10px]">
+                          <span className="min-w-0 flex-1 truncate">
+                            {match?.author ?? first?.author ?? "Unknown author"}
+                          </span>
+                          {images && (
+                            <ImageIcon
+                              className="size-3"
+                              aria-label="Has image attachments"
+                            />
+                          )}
+                          <span className="flex items-center gap-1">
+                            <MessageSquareText
+                              className="size-3"
+                              aria-hidden="true"
+                            />
+                            {thread.comments.length}
+                          </span>
+                        </span>
+                        <span className="text-fog mt-1.5 block text-[10px]">
+                          {activity
+                            ? `Updated ${discussionTimestamp(new Date(activity).toISOString())}`
+                            : "Time unavailable"}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <div className="text-mist px-5 py-12 text-center">
+                <Search className="text-fog mx-auto size-6" />
+                <p className="text-cloud mt-4 text-sm font-medium">
+                  {hasFilters
+                    ? "No matching discussions"
+                    : threads.length === 0
+                      ? "No discussions yet"
+                      : `No ${tab} discussions`}
+                </p>
+                <p className="mt-2 text-xs leading-5">
+                  {hasFilters
+                    ? "Try another search or broaden your filters."
+                    : threads.length === 0
+                      ? "Provider conversations will appear here when someone comments on the code."
+                      : "You can still browse the complete conversation history."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetFilters();
+                    setStatus("all");
+                  }}
+                  className="text-cyan mt-4 text-xs! font-medium hover:underline"
+                >
+                  {hasFilters
+                    ? "Clear filters and show all"
+                    : "Show all discussions"}
+                </button>
+              </div>
+            )}
+          </div>
+          <footer className="border-line text-fog shrink-0 border-t px-5 py-3 text-[10px] leading-4">
+            {tab === "open"
+              ? "Open threads first. Resolved conversations are in All."
+              : "Every reply is included. Select a thread to read it in full."}
+          </footer>
+        </aside>
+        <div
+          className={cn(
+            "min-h-0 min-w-0 flex-1",
+            !mobileDetail && "hidden md:block",
+          )}
+        >
+          {selected ? (
+            <ReviewDiscussionDetail
+              key={selected.externalId}
+              thread={selected}
+              pullRequest={pullRequest}
+              query={query}
+              onOpenThread={onOpenThread}
+              onBack={() => setMobileDetail(false)}
+              focusConversation={mobileDetail}
+            />
+          ) : (
+            <div className="bg-surface text-fog grid h-full place-content-center px-8 text-center">
+              <MessageSquareText className="mx-auto size-8 opacity-40" />
+              <p className="text-cloud mt-5 text-base font-medium">
+                {loading
+                  ? "Loading conversations"
+                  : hasFilters
+                    ? "No threads match these filters"
+                    : "Your conversation history, in one place"}
+              </p>
+              <p className="mt-2 max-w-sm text-xs leading-6">
+                {hasFilters
+                  ? "Clear a filter to see more conversations."
+                  : "Read every reply, inspect attachments, and return to the exact line of code when you’re ready."}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </dialog>
   );
 }

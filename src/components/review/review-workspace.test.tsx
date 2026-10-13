@@ -364,6 +364,17 @@ describe("reshapeProviderThreads", () => {
     expect(providerThreadsForVisibleUnits(threads, [])).toEqual([]);
   });
 
+  it("keeps unassigned PR-wide threads out of inline conversation actions", () => {
+    const first = threads[0];
+    if (!first) throw new Error("Missing conversation fixture");
+    expect(
+      providerThreadsForVisibleUnits(
+        [...threads, { ...first, externalId: "outdated", unitId: null }],
+        ["unit-1", "unit-2"],
+      ),
+    ).toHaveLength(2);
+  });
+
   it("hides a just-published conversation that belongs to another file card", () => {
     const pending = pendingProviderThreadFromComment(
       {

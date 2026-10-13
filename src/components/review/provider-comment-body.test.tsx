@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import mermaid from "mermaid";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderCommentBody } from "./provider-comment-body";
@@ -107,5 +107,71 @@ describe("ProviderCommentBody", () => {
 
     expect(screen.getByRole("img", { name: "P2" })).toHaveTextContent("P2");
     expect(document.querySelector("img")).not.toBeInTheDocument();
+  });
+
+  it("previews sanitized attachments when requested and opens the original image", () => {
+    const onOpenImage = vi.fn();
+    const { container } = render(
+      <ProviderCommentBody
+        imageMode="preview"
+        onOpenImage={onOpenImage}
+        body={
+          '<img src="https://example.com/screenshot.png" onerror="alert(1)" alt="Screenshot">\n<img src="https://example.com/badge.svg" alt="P2">\n<img src="javascript:alert(1)" alt="Unsafe">'
+        }
+      />,
+    );
+    const image = screen.getByRole("img", { name: "Screenshot" });
+    expect(image).toHaveAttribute("referrerPolicy", "no-referrer");
+    expect(image).not.toHaveAttribute("onerror");
+    expect(container.querySelectorAll("img")).toHaveLength(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enlarge image: Screenshot" }),
+    );
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "https://example.com/screenshot.png",
+      alt: "Screenshot",
+    });
+  });
+
+  it("provides an original-image link when the provider blocks an attachment preview", () => {
+    render(
+      <ProviderCommentBody
+        imageMode="preview"
+        body="![Screenshot](https://example.com/private.png)"
+      />,
+    );
+    fireEvent.error(screen.getByRole("img", { name: "Screenshot" }));
+    expect(screen.getByText("Screenshot · Preview unavailable")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open image" })).toHaveAttribute(
+      "href",
+      "https://example.com/private.png",
+    );
+  });
+
+  it("resolves native GitLab uploads and reference images against the provider", () => {
+    render(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://gitlab.example/team/project/-/merge_requests/12"
+        body={"![Screenshot][upload]\n\n[upload]: /uploads/abc/screenshot.png"}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "Screenshot" })).toHaveAttribute(
+      "src",
+      "https://gitlab.example/team/project/uploads/abc/screenshot.png",
+    );
+  });
+
+  it("does not fetch unsafe or credential-bearing attachments in preview mode", () => {
+    const { container } = render(
+      <ProviderCommentBody
+        imageMode="preview"
+        imageBaseUrl="https://github.com/acme/review/pull/12"
+        body={
+          '<img src="javascript:alert(1)" alt="Unsafe">\n<img src="https://user:password@example.com/image.png" alt="Credential">'
+        }
+      />,
+    );
+    expect(container.querySelector("img")).not.toBeInTheDocument();
   });
 });
