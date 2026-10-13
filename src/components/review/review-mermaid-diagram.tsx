@@ -64,9 +64,9 @@ async function renderMermaidDiagram(chart: string) {
 /**
  * Turns a Mermaid fence into an SVG inside the Markdown preview.
  *
- * The library stays on a separate chunk until a documentation file actually
- * contains a diagram. The source stays visible until the SVG is ready so a
- * Compare pane cannot look empty while Mermaid loads or remounts.
+ * Mermaid can fetch images while measuring nodes, before sanitizing its SVG.
+ * Keep the source visible and require an explicit choice before loading the
+ * runtime or parsing any author-controlled configuration or diagram content.
  */
 export function ReviewMermaidDiagram({
   chart,
@@ -78,13 +78,19 @@ export function ReviewMermaidDiagram({
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<DiagramStatus>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [consentedSource, setConsentedSource] = useState<string>();
   const source = prepareMermaidSource(chart);
+  const paused = Boolean(source) && consentedSource !== source;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!source) {
       setStatus("error");
       setError("This Mermaid diagram is empty.");
+      if (host) host.replaceChildren();
+      return;
+    }
+    if (consentedSource !== source) {
       if (host) host.replaceChildren();
       return;
     }
@@ -118,7 +124,7 @@ export function ReviewMermaidDiagram({
     return () => {
       cancelled = true;
     };
-  }, [source]);
+  }, [source, consentedSource]);
 
   return (
     <figure
@@ -127,9 +133,22 @@ export function ReviewMermaidDiagram({
         className,
       )}
     >
-      {status !== "ready" ? (
+      {paused || status !== "ready" ? (
         <div>
-          {status === "loading" ? (
+          {paused ? (
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setConsentedSource(source)}
+                className="text-cyan rounded-md px-2 py-1 text-xs! font-medium hover:bg-cyan/10"
+              >
+                Render diagram
+              </button>
+              <p className="text-fog text-[11px]">
+                Rendering may load external images.
+              </p>
+            </div>
+          ) : status === "loading" ? (
             <p className="text-fog mb-2 text-[11px]" role="status">
               Drawing diagram…
             </p>
@@ -147,7 +166,7 @@ export function ReviewMermaidDiagram({
         ref={hostRef}
         role="img"
         aria-label="Mermaid diagram"
-        hidden={status !== "ready"}
+        hidden={paused || status !== "ready"}
         className="text-cloud [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
       />
     </figure>

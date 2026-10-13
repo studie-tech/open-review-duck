@@ -74,6 +74,7 @@ describe("ProviderCommentBody", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Render diagram" }));
     expect(
       await screen.findByRole("img", { name: "Mermaid diagram" }),
     ).toBeVisible();
@@ -92,6 +93,7 @@ describe("ProviderCommentBody", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Render diagram" }));
     expect(await screen.findByText("Parse error on line 1")).toBeVisible();
     expect(screen.getByText(/flowchart LR/)).toBeVisible();
     expect(screen.getByText(/A --> B/)).toBeVisible();

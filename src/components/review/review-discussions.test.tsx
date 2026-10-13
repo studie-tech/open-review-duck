@@ -607,6 +607,25 @@ describe("ReviewDiscussionsPanel", () => {
     }
   });
 
+  it("keeps the discussions toggle available while modal review commands are isolated", () => {
+    const onClose = vi.fn();
+    renderPanel([discussion()], { onClose });
+    const event = new KeyboardEvent("keydown", {
+      key: "d",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(screen.getByRole("dialog", { name: "Discussions" }), event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onClose).toHaveBeenCalledOnce();
+    fireEvent.keyDown(screen.getByRole("searchbox"), {
+      key: "d",
+      metaKey: true,
+    });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
   it("uses a matching excerpt from deep inside a long reply", async () => {
     const user = userEvent.setup();
     renderPanel([
