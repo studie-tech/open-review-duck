@@ -244,7 +244,7 @@ export function ReviewDiscussionsPanel({
   const dialog = useRef<HTMLDialogElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const wasViewingDetail = useRef(false);
+  const focusAfterNavigation = useRef<"list" | "search" | undefined>(undefined);
   const id = useId();
   const titleId = `${id}-title`;
   const listId = `${id}-threads`;
@@ -317,10 +317,15 @@ export function ReviewDiscussionsPanel({
   }, [selectedThreadId]);
 
   useEffect(() => {
-    if (!mobileDetail && wasViewingDetail.current && selectedThreadId) {
-      document.getElementById(`${id}-thread-${selectedThreadId}`)?.focus();
+    if (!mobileDetail && focusAfterNavigation.current) {
+      if (focusAfterNavigation.current === "search") {
+        searchInput.current?.focus();
+        searchInput.current?.select();
+      } else if (selectedThreadId) {
+        document.getElementById(`${id}-thread-${selectedThreadId}`)?.focus();
+      }
+      focusAfterNavigation.current = undefined;
     }
-    wasViewingDetail.current = mobileDetail;
   }, [mobileDetail, selectedThreadId, id]);
 
   useEffect(() => {
@@ -361,10 +366,21 @@ export function ReviewDiscussionsPanel({
         onClose();
       }}
       onKeyDown={(event) => {
+        event.stopPropagation();
+        if (
+          event.target instanceof Element &&
+          event.target.closest("dialog") !== event.currentTarget
+        )
+          return;
         if ((event.metaKey || event.ctrlKey) && event.key === "f") {
           event.preventDefault();
-          searchInput.current?.focus();
-          searchInput.current?.select();
+          if (mobileDetail) {
+            focusAfterNavigation.current = "search";
+            setMobileDetail(false);
+          } else {
+            searchInput.current?.focus();
+            searchInput.current?.select();
+          }
         }
       }}
       className="bg-panel text-cloud fixed inset-0 z-50 m-0 hidden h-dvh max-h-none w-screen max-w-none flex-col overflow-hidden border-0 p-0 shadow-2xl open:flex backdrop:bg-black/45"
@@ -784,7 +800,10 @@ export function ReviewDiscussionsPanel({
               pullRequest={pullRequest}
               query={query}
               onOpenThread={onOpenThread}
-              onBack={() => setMobileDetail(false)}
+              onBack={() => {
+                focusAfterNavigation.current = "list";
+                setMobileDetail(false);
+              }}
               focusConversation={mobileDetail}
             />
           ) : (

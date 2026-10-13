@@ -43,6 +43,8 @@ starts with open conversations when any exist, or all conversations otherwise,
 ordered by recent activity. Search includes every reply, author, and file path;
 filters narrow by status, file, participant, or image attachments. Select a
 thread to read its full Markdown conversation and enlarge attached images.
+HTTPS provider attachments load inline; other HTTPS image hosts require an
+explicit **Load image** click, and HTTP images remain available as links.
 Use **View in code** to reply or manage a thread at its review line, or follow
 the provider link when its code is no longer in the current revision.
 

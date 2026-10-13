@@ -24,6 +24,7 @@ import {
   aiJobActive,
   mergePendingProviderThreads,
   pendingProviderThreadFromComment,
+  providerThreadsByPath,
   providerThreadsForVisibleUnits,
   reshapeProviderThreads,
   restoreProviderThread,
@@ -373,6 +374,19 @@ describe("reshapeProviderThreads", () => {
         ["unit-1", "unit-2"],
       ),
     ).toHaveLength(2);
+  });
+
+  it("groups only assigned threads into clickable file preview markers", () => {
+    const first = threads[0];
+    if (!first) throw new Error("Missing conversation fixture");
+    const grouped = providerThreadsByPath([
+      ...threads,
+      { ...first, externalId: "outdated", unitId: null },
+    ]);
+    expect(
+      grouped.get(first.path)?.map(({ externalId }) => externalId),
+    ).toEqual(threads.map(({ externalId }) => externalId));
+    expect(providerThreadsByPath([{ ...first, unitId: null }]).size).toBe(0);
   });
 
   it("hides a just-published conversation that belongs to another file card", () => {

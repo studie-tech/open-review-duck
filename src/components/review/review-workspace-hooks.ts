@@ -65,6 +65,20 @@ export function providerThreadsForVisibleUnits(
   );
 }
 
+/** Groups navigable conversations by file for clickable code preview markers. */
+export function providerThreadsByPath(
+  threads: readonly ProviderConversationThread[],
+) {
+  const byPath = new Map<string, ProviderConversationThread[]>();
+  for (const thread of threads) {
+    if (!thread.unitId) continue;
+    const group = byPath.get(thread.path) ?? [];
+    group.push(thread);
+    byPath.set(thread.path, group);
+  }
+  return byPath;
+}
+
 /** Keeps a just-published conversation visible until the provider lists it. */
 export function mergePendingProviderThreads(
   threads: readonly ProviderConversationThread[],

@@ -4613,7 +4613,7 @@ describe("CopyRepositoryUrlButton", () => {
       );
     });
     expect(
-      screen.getByRole("button", { name: "Repository URL copied" }),
+      await screen.findByRole("button", { name: "Repository URL copied" }),
     ).toBeInTheDocument();
   });
 
@@ -4637,7 +4637,7 @@ describe("CopyRepositoryUrlButton", () => {
       );
     });
     expect(
-      screen.getByRole("button", { name: "Pull request URL copied" }),
+      await screen.findByRole("button", { name: "Pull request URL copied" }),
     ).toBeInTheDocument();
   });
 

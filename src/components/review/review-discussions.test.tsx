@@ -331,7 +331,7 @@ describe("ReviewDiscussionsPanel", () => {
             ...baseComment,
             externalId: "reply",
             author: "Noah",
-            body: "![Cache diagram](https://example.com/cache.png)",
+            body: "![Cache diagram](https://user-images.githubusercontent.com/cache.png)",
           },
         ],
       }),
@@ -386,7 +386,7 @@ describe("ReviewDiscussionsPanel", () => {
           comments: [
             {
               ...baseComment,
-              body: "![Screenshot](https://example.com/screenshot.png)",
+              body: "![Screenshot](https://user-images.githubusercontent.com/screenshot.png)",
             },
           ],
         }),
@@ -554,6 +554,57 @@ describe("ReviewDiscussionsPanel", () => {
     ).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "All threads" }));
     expect(row).toHaveFocus();
+  });
+
+  it("returns to the visible search controls when finding from a full conversation", async () => {
+    const user = userEvent.setup();
+    renderPanel([discussion()]);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Read discussion in src/retry.ts at line 17",
+      }),
+    );
+    const search = screen.getByRole("searchbox");
+    expect(search.closest(".border-b")).toHaveClass("hidden");
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Discussions" }), {
+      key: "f",
+      ctrlKey: true,
+    });
+    expect(search.closest(".border-b")).not.toHaveClass("hidden");
+    expect(search).toHaveFocus();
+  });
+
+  it("does not move focus away when searching after selecting a desktop thread", async () => {
+    const user = userEvent.setup();
+    renderPanel([discussion()]);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Read discussion in src/retry.ts at line 17",
+      }),
+    );
+    await user.type(screen.getByRole("searchbox"), "retry");
+    expect(screen.getByRole("searchbox")).toHaveFocus();
+  });
+
+  it("keeps modal keyboard commands from reaching the review beneath it", () => {
+    const outside = vi.fn();
+    window.addEventListener("keydown", outside);
+    try {
+      renderPanel([
+        discussion(),
+        discussion({ externalId: "resolved", status: "resolved" }),
+      ]);
+      fireEvent.keyDown(screen.getByRole("tab", { name: "Open 1" }), {
+        key: "ArrowRight",
+      });
+      expect(screen.getByRole("tab", { name: "Resolved 1" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(outside).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", outside);
+    }
   });
 
   it("uses a matching excerpt from deep inside a long reply", async () => {

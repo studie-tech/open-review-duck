@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 interface ReviewDialogControllerInput {
+  discussionsOpen?: boolean;
   importPreviewOpen: boolean;
   lineActionOpen?: boolean;
   linePickerOpen: boolean;
@@ -10,6 +11,7 @@ interface ReviewDialogControllerInput {
 
 /** Owns modal visibility and the command-center suspension derived from it. */
 export function useReviewDialogController({
+  discussionsOpen = false,
   importPreviewOpen,
   lineActionOpen = false,
   linePickerOpen,
@@ -26,6 +28,7 @@ export function useReviewDialogController({
   return {
     aiReviewDialogOpen,
     commandBindingsSuspended:
+      discussionsOpen ||
       lineActionOpen ||
       linePickerOpen ||
       importPreviewOpen ||
