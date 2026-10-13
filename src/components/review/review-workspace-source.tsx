@@ -501,6 +501,7 @@ export function ReviewConceptFileCardPreview({
   previousFileSource = "",
   diffVisible = true,
   ignoreWhitespace = false,
+  movedLines,
   onSelect,
   onCommentLine,
   onOpenLineComment,
@@ -520,6 +521,7 @@ export function ReviewConceptFileCardPreview({
   previousFileSource?: string;
   diffVisible?: boolean;
   ignoreWhitespace?: boolean;
+  movedLines?: SideBySideUnitDiffProps["movedLines"];
   onSelect: () => void;
   onCommentLine?: (unitId: string, line: number) => void;
   onOpenLineComment?: (threadExternalId: string) => void;
@@ -722,10 +724,11 @@ export function ReviewConceptFileCardPreview({
           canShowDiff && first ? (
             <ReviewConceptFileDiff
               ignoreWhitespace={ignoreWhitespace}
+              movedLines={movedLines}
               pullRequestId={pullRequestId}
               path={first.path}
               previousSource={previousFileSource}
-              currentSource={fileSource}
+              currentSource={deleted ? "" : fileSource}
               language={first.language ?? "text"}
               previousStartLine={1}
               currentStartLine={1}

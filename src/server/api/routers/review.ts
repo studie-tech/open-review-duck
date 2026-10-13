@@ -89,6 +89,7 @@ import {
   recomputeReviewStats,
   reviewExperience,
 } from "~/server/review/experience";
+import { snapshotMovedCode } from "~/server/review/moved-code";
 import { projectImportMaps } from "~/server/review/project-import-maps";
 import {
   accessiblePullRequest,
@@ -710,6 +711,29 @@ export const reviewRouter = createTRPCRouter({
         concepts,
         units: workspaceUnits,
       };
+    }),
+
+  movedCode: protectedProcedure
+    .input(
+      z.object({
+        pullRequestId: z.string().uuid(),
+        snapshotId: z.string().uuid(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
+        where: and(
+          eq(reviewSnapshots.id, input.snapshotId),
+          eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+        ),
+      });
+      if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      return snapshotMovedCode(ctx.db, snapshot.id);
     }),
 
   providerReviewState: protectedProcedure

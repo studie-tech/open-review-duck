@@ -218,6 +218,7 @@ import {
 import { ReviewDiffWithLineHistory } from "./review-line-history";
 import { ReviewMarkdownViewSwitch } from "./review-markdown-preview";
 import { ReviewModeSwitch } from "./review-mode-switch";
+import { ReviewMovedCodeToggle } from "./review-moved-code-toggle";
 import {
   REVIEW_INSIGHTS_PANEL_WIDTHS,
   REVIEW_PATH_PANEL_WIDTHS,
@@ -318,6 +319,7 @@ import {
 } from "./symbol-peek";
 import { useAiQuestionStreamController } from "./use-ai-question-stream-controller";
 import { useDeepReviewFindingController } from "./use-deep-review-finding-controller";
+import { useDimMovedCode } from "./use-dim-moved-code";
 import {
   closestReviewLine,
   useInlineAiQuestionController,
@@ -574,6 +576,22 @@ export function ReviewWorkspace({
   const unreviewRollbacks = useRef(new Map<string, ReviewUnit[]>());
   const [showDiff, setShowDiff] = useState(true);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
+  const { dimMovedCode, changeDimMovedCode } = useDimMovedCode();
+  const movedCode = api.review.movedCode.useQuery(
+    { pullRequestId: initialData.pullRequest.id, snapshotId: snapshotId ?? "" },
+    {
+      enabled: dimMovedCode && Boolean(snapshotId),
+      staleTime: Number.POSITIVE_INFINITY,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const movedCodeByPath = useMemo(
+    () =>
+      new Map(
+        dimMovedCode ? movedCode.data?.map((file) => [file.path, file]) : [],
+      ),
+    [dimMovedCode, movedCode.data],
+  );
   const [markdownView, setMarkdownView] =
     useState<MarkdownReviewView>("preview");
   /** Changes only the Markdown presentation and remembers it for later reviews. */
@@ -3152,6 +3170,7 @@ export function ReviewWorkspace({
             previousFileSource={fileContext?.previousSource ?? ""}
             diffVisible={showDiff}
             ignoreWhitespace={ignoreWhitespace}
+            movedLines={movedCodeByPath.get(card.path)}
             itemLabel={itemLabel}
             onSelect={openCard}
             onCommentLine={commentOnMemberLine}
@@ -3183,6 +3202,7 @@ export function ReviewWorkspace({
       viewerCardWindow.cards,
       viewerCardWindow.start,
       ignoreWhitespace,
+      movedCodeByPath,
     ],
   );
   const manualSyncPending = reviewSession === "synchronizing";
@@ -6914,10 +6934,16 @@ export function ReviewWorkspace({
                     />
                   )}
                   {sideBySideVisible && (
-                    <ReviewWhitespaceToggle
-                      checked={ignoreWhitespace}
-                      onChange={setIgnoreWhitespace}
-                    />
+                    <>
+                      <ReviewWhitespaceToggle
+                        checked={ignoreWhitespace}
+                        onChange={setIgnoreWhitespace}
+                      />
+                      <ReviewMovedCodeToggle
+                        checked={dimMovedCode}
+                        onChange={changeDimMovedCode}
+                      />
+                    </>
                   )}
                   <button
                     type="button"
@@ -7272,6 +7298,7 @@ export function ReviewWorkspace({
                     sideBySideVisible && (
                       <ReviewDiffWithLineHistory
                         ignoreWhitespace={ignoreWhitespace}
+                        movedLines={movedCodeByPath.get(activeUnit.path)}
                         key={activeUnit.id}
                         ref={diffContextRef}
                         pullRequestId={initialData.pullRequest.id}
