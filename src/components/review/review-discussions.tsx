@@ -32,22 +32,44 @@ import {
 } from "./review-discussion-detail";
 
 type ProviderConversations = RouterOutputs["review"]["providerConversations"];
-export type ProviderDiscussionThread = ProviderConversations["threads"][number];
+export type ProviderDiscussionThread =
+  ProviderConversations["threads"][number] & {
+    kind?: "code";
+  };
+type PullRequestComment = ProviderConversations["pullRequestComments"][number];
+const emptyPullRequestComments: PullRequestComment[] = [];
+export type ProviderDiscussionConversation =
+  | ProviderDiscussionThread
+  | {
+      kind: "pull_request";
+      externalId: string;
+      webUrl?: string;
+      comments: PullRequestComment[];
+      path?: never;
+      line?: never;
+      side?: never;
+      status?: never;
+      unitId?: never;
+    };
 
-type DiscussionTab = "all" | "open" | "resolved";
+type DiscussionTab = "all" | "open" | "resolved" | "comments";
 type DiscussionSort = "recent" | "oldest" | "file";
 
 /** Treats provider-unknown resolution as active so it can never disappear. */
-export function isOpenProviderDiscussion(thread: ProviderDiscussionThread) {
-  return thread.status !== "resolved";
+export function isOpenProviderDiscussion(
+  thread: ProviderDiscussionConversation,
+) {
+  return thread.kind !== "pull_request" && thread.status !== "resolved";
 }
 
 /** Orders discussions deterministically by file, line, then provider identity. */
-export function orderProviderDiscussions(threads: ProviderDiscussionThread[]) {
+export function orderProviderDiscussions<
+  T extends ProviderDiscussionConversation,
+>(threads: T[]) {
   return [...threads].sort(
     (left, right) =>
-      left.path.localeCompare(right.path) ||
-      left.line - right.line ||
+      (left.path ?? "").localeCompare(right.path ?? "") ||
+      (left.line ?? 0) - (right.line ?? 0) ||
       left.externalId.localeCompare(right.externalId),
   );
 }
@@ -186,7 +208,7 @@ function discussionPreview(body: string, query = "") {
 }
 
 /** Reads the latest activity time independently of provider comment ordering. */
-function discussionActivity(thread: ProviderDiscussionThread) {
+function discussionActivity(thread: ProviderDiscussionConversation) {
   return Math.max(
     0,
     ...thread.comments.map(({ createdAt }) => Date.parse(createdAt) || 0),
@@ -225,6 +247,7 @@ export function ReviewDiscussionsPanel({
   onOpenThread,
   onRefresh,
   pullRequest,
+  pullRequestComments = emptyPullRequestComments,
   threads,
 }: {
   error?: string;
@@ -233,6 +256,7 @@ export function ReviewDiscussionsPanel({
   onOpenThread: (thread: ProviderDiscussionThread) => void;
   onRefresh: () => void;
   pullRequest: AiFixPromptPullRequest;
+  pullRequestComments?: PullRequestComment[];
   threads: ProviderDiscussionThread[];
 }) {
   const [status, setStatus] = useState<DiscussionTab | "auto">("auto");
@@ -250,15 +274,37 @@ export function ReviewDiscussionsPanel({
   const id = useId();
   const titleId = `${id}-title`;
   const listId = `${id}-threads`;
-  const ordered = useMemo(() => orderProviderDiscussions(threads), [threads]);
+  const ordered = useMemo(
+    () =>
+      orderProviderDiscussions<ProviderDiscussionConversation>([
+        ...threads,
+        ...pullRequestComments.map((comment) => ({
+          kind: "pull_request" as const,
+          externalId: `pull-request:${comment.externalId}`,
+          webUrl: comment.webUrl,
+          comments: [comment],
+        })),
+      ]),
+    [threads, pullRequestComments],
+  );
   const openCount = ordered.filter(isOpenProviderDiscussion).length;
+  const resolvedCount = threads.filter(
+    ({ status }) => status === "resolved",
+  ).length;
+  const totalCount = ordered.length;
   // Searching from the default view includes resolved replies; an explicit status stays put.
   const tab =
     status === "auto"
-      ? query.trim() || openCount === 0
+      ? query.trim() || pullRequestComments.length > 0 || openCount === 0
         ? "all"
         : "open"
       : status;
+  const entryName =
+    tab === "comments"
+      ? "comment"
+      : tab === "all" && pullRequestComments.length
+        ? "conversation"
+        : "thread";
   const term = query.trim().toLocaleLowerCase();
   const indexed = useMemo(
     () =>
@@ -277,7 +323,7 @@ export function ReviewDiscussionsPanel({
       })),
     [ordered],
   );
-  const paths = [...new Set(ordered.map(({ path }) => path))];
+  const paths = [...new Set(threads.map(({ path }) => path))];
   const authors = [
     ...new Set(
       ordered
@@ -291,7 +337,9 @@ export function ReviewDiscussionsPanel({
         (tab === "all" ||
           (tab === "open"
             ? isOpenProviderDiscussion(thread)
-            : !isOpenProviderDiscussion(thread))) &&
+            : tab === "resolved"
+              ? thread.status === "resolved"
+              : thread.kind === "pull_request")) &&
         (!path || thread.path === path) &&
         (!author ||
           thread.comments.some((comment) => comment.author === author)) &&
@@ -532,15 +580,16 @@ export function ReviewDiscussionsPanel({
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div
-            className="flex items-center gap-1"
+            className="flex max-w-full flex-wrap items-center gap-1"
             role="tablist"
-            aria-label="Discussion status"
+            aria-label="Discussion view"
           >
             {(
               [
-                ["all", "All", threads.length],
+                ["all", "All", totalCount],
                 ["open", "Open", openCount],
-                ["resolved", "Resolved", threads.length - openCount],
+                ["resolved", "Resolved", resolvedCount],
+                ["comments", "PR comments", pullRequestComments.length],
               ] as const
             ).map(([value, label, count], index) => (
               <button
@@ -559,17 +608,19 @@ export function ReviewDiscussionsPanel({
                 onKeyDown={(event) => {
                   const next =
                     event.key === "ArrowRight"
-                      ? (index + 1) % 3
+                      ? (index + 1) % 4
                       : event.key === "ArrowLeft"
-                        ? (index + 2) % 3
+                        ? (index + 3) % 4
                         : event.key === "Home"
                           ? 0
                           : event.key === "End"
-                            ? 2
+                            ? 3
                             : undefined;
                   if (next === undefined) return;
                   event.preventDefault();
-                  const value = (["all", "open", "resolved"] as const)[next];
+                  const value = (
+                    ["all", "open", "resolved", "comments"] as const
+                  )[next];
                   if (!value) return;
                   setStatus(value);
                   setMobileDetail(false);
@@ -632,7 +683,7 @@ export function ReviewDiscussionsPanel({
             Couldn’t refresh discussions.
           </span>
           <span>
-            {threads.length ? "Showing the last loaded conversations. " : ""}
+            {totalCount ? "Showing the last loaded conversations. " : ""}
             {error}
           </span>
           <button
@@ -658,17 +709,18 @@ export function ReviewDiscussionsPanel({
         >
           <div className="text-fog flex shrink-0 items-center justify-between px-5 py-3 text-[11px]">
             <span role="status" aria-live="polite">
-              {visible.length} {visible.length === 1 ? "thread" : "threads"}
-              {hasFilters ? ` matching of ${threads.length}` : ""}
+              {visible.length} {entryName}
+              {visible.length === 1 ? "" : "s"}
+              {hasFilters ? ` matching of ${totalCount}` : ""}
             </span>
-            {loading && threads.length > 0 && (
+            {loading && totalCount > 0 && (
               <span className="flex items-center gap-1.5">
                 <LoaderCircle className="size-3 animate-spin" /> Refreshing
               </span>
             )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
-            {loading && threads.length === 0 ? (
+            {loading && totalCount === 0 ? (
               <div
                 role="status"
                 className="text-mist flex items-center justify-center gap-2 px-4 py-16 text-xs"
@@ -689,7 +741,14 @@ export function ReviewDiscussionsPanel({
                     (match ?? first)?.body || "No visible comments",
                     query,
                   );
-                  const resolved = !isOpenProviderDiscussion(thread);
+                  const general = thread.kind === "pull_request";
+                  const resolved = thread.status === "resolved";
+                  const label =
+                    thread.kind === "pull_request"
+                      ? thread.comments[0]?.kind === "review"
+                        ? "Review summary"
+                        : "PR comment"
+                      : thread.path;
                   return (
                     <li key={thread.externalId}>
                       <button
@@ -698,7 +757,11 @@ export function ReviewDiscussionsPanel({
                           selected?.externalId === thread.externalId
                         }
                         id={`${id}-thread-${thread.externalId}`}
-                        aria-label={`Read discussion in ${thread.path} at line ${thread.line}`}
+                        aria-label={
+                          general
+                            ? `Read PR comment by ${first?.author ?? "Unknown author"}: ${preview.slice(0, 70)}`
+                            : `Read discussion in ${thread.path} at line ${thread.line}`
+                        }
                         onClick={() => {
                           setSelectedId(thread.externalId);
                           setMobileDetail(true);
@@ -711,23 +774,24 @@ export function ReviewDiscussionsPanel({
                         )}
                       >
                         <span className="flex items-center gap-2">
-                          {resolved ? (
+                          {general ? (
+                            <MessageSquareText className="text-violet size-3.5 shrink-0" />
+                          ) : resolved ? (
                             <Check className="text-addition size-3.5 shrink-0" />
                           ) : (
                             <CircleDot className="text-cyan size-3.5 shrink-0" />
                           )}
                           <span
-                            title={thread.path}
+                            title={label}
                             className="text-cloud min-w-0 flex-1 truncate font-mono text-[11px] font-medium"
                           >
-                            <DiscussionSearchText
-                              text={thread.path}
-                              query={query}
-                            />
+                            <DiscussionSearchText text={label} query={query} />
                           </span>
-                          <span className="text-fog text-[10px]">
-                            L{thread.line}
-                          </span>
+                          {!general && (
+                            <span className="text-fog text-[10px]">
+                              L{thread.line}
+                            </span>
+                          )}
                         </span>
                         <span className="text-mist mt-2.5 line-clamp-3 text-xs leading-5">
                           <DiscussionSearchText text={preview} query={query} />
@@ -766,15 +830,17 @@ export function ReviewDiscussionsPanel({
                 <p className="text-cloud mt-4 text-sm font-medium">
                   {hasFilters
                     ? "No matching discussions"
-                    : threads.length === 0
+                    : totalCount === 0
                       ? "No discussions yet"
-                      : `No ${tab} discussions`}
+                      : tab === "comments"
+                        ? "No PR comments"
+                        : `No ${tab} discussions`}
                 </p>
                 <p className="mt-2 text-xs leading-5">
                   {hasFilters
                     ? "Try another search or broaden your filters."
-                    : threads.length === 0
-                      ? "Provider conversations will appear here when someone comments on the code."
+                    : totalCount === 0
+                      ? "PR comments and code discussions will appear here when someone joins the conversation."
                       : "You can still browse the complete conversation history."}
                 </p>
                 <button
@@ -795,7 +861,7 @@ export function ReviewDiscussionsPanel({
           <footer className="border-line text-fog shrink-0 border-t px-5 py-3 text-[10px] leading-4">
             {tab === "open"
               ? "Open threads first. Resolved conversations are in All."
-              : "Every reply is included. Select a thread to read it in full."}
+              : "PR comments and code discussions are included. Select one to read it in full."}
           </footer>
         </aside>
         <div

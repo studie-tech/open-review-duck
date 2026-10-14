@@ -1442,6 +1442,7 @@ export const reviewRouter = createTRPCRouter({
         return {
           provider: scope.connection.provider,
           threads: [],
+          pullRequestComments: [],
           syncedAt: new Date(),
           answeredUnitIds: [],
         };
@@ -1459,10 +1460,16 @@ export const reviewRouter = createTRPCRouter({
       const units = allUnits.filter(({ kind }) => kind !== "file");
       try {
         const provider = await providerForConnection(ctx.db, scope.connection);
-        const threads = await provider.listInlineCommentThreads(
-          scope.repositoryExternalId,
-          scope.pullRequestNumber,
-        );
+        const [threads, pullRequestComments] = await Promise.all([
+          provider.listInlineCommentThreads(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ),
+          provider.listPullRequestComments?.(
+            scope.repositoryExternalId,
+            scope.pullRequestNumber,
+          ) ?? [],
+        ]);
         const [waits, localComments] = units.length
           ? await Promise.all([
               ctx.db
@@ -1560,6 +1567,10 @@ export const reviewRouter = createTRPCRouter({
         );
         return {
           provider: scope.connection.provider,
+          pullRequestComments: pullRequestComments.map((comment) => ({
+            ...comment,
+            body: visibleProviderCommentBody(comment.body),
+          })),
           // PR-wide browsing also includes outdated and unassigned threads.
           // Code navigation is offered only when a current unit owns the thread.
           threads: threads.map((thread) => ({

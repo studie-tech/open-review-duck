@@ -38,11 +38,15 @@ the tab refreshes provider status too, so external updates appear without a page
 reload.
 
 Open Discussions to browse every provider review thread in a full-screen view,
-including older threads without a matching current review unit. The thread list
-starts with open conversations when any exist, or all conversations otherwise,
-ordered by recent activity. Search includes every reply, author, and file path;
-filters narrow by status, file, participant, or image attachments. Select a
-thread to read its full Markdown conversation and enlarge attached images.
+including older threads without a matching current review unit. GitHub PR
+conversation comments and non-empty submitted review summaries appear alongside
+code threads, including commentary and screenshots. **PR comments** shows just
+that conversation; **Open** and **Resolved** count only code threads.
+The list starts in **All** when PR comments exist; otherwise it starts with
+open threads when any exist, or all threads otherwise. Recent activity comes
+first. Search includes every comment, reply, author, and file path; filters
+narrow by view, file, participant, or image attachments. Select a conversation
+to read its full Markdown contents and enlarge attached images.
 HTTPS provider attachments load inline; other HTTPS image hosts require an
 explicit **Load image** click, and HTTP images remain available as links.
 Mermaid diagrams keep their source visible until you choose **Render diagram**,

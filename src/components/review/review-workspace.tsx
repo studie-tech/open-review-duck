@@ -3072,6 +3072,9 @@ export function ReviewWorkspace({
   const openProviderDiscussionCount = providerDiscussionThreads.filter(
     isOpenProviderDiscussion,
   ).length;
+  const pullRequestCommentCount =
+    providerConversations.data?.pullRequestComments?.length ?? 0;
+  const discussionCountLabel = `${openProviderDiscussionCount} open${pullRequestCommentCount ? `, ${pullRequestCommentCount} PR ${pullRequestCommentCount === 1 ? "comment" : "comments"}` : ""}`;
   /** Leaves summary UI and returns to the exact unit carrying a discussion. */
   const openProviderDiscussion = useCallback(
     (thread: ProviderDiscussionThread) => {
@@ -5952,13 +5955,13 @@ export function ReviewWorkspace({
           {!completionChromeHidden && (
             <ReviewToolbarTooltip
               shortcut={reviewShortcuts.discussions}
-              label={`${openProviderDiscussionCount} open ${openProviderDiscussionCount === 1 ? "discussion" : "discussions"}`}
+              label={`${openProviderDiscussionCount} open code ${openProviderDiscussionCount === 1 ? "thread" : "threads"} · ${pullRequestCommentCount} PR ${pullRequestCommentCount === 1 ? "comment" : "comments"}`}
             >
               <button
                 type="button"
                 aria-controls="review-discussions-panel"
                 aria-expanded={discussionsOpen}
-                aria-label={`Show pull request discussions, ${openProviderDiscussionCount} open`}
+                aria-label={`Show pull request discussions, ${discussionCountLabel}`}
                 onClick={toggleDiscussions}
                 className={cn(
                   REVIEW_TOOLBAR_BUTTON_CLASS,
@@ -6102,6 +6105,7 @@ export function ReviewWorkspace({
           loading={providerConversations.isFetching}
           pullRequest={initialData.pullRequest}
           threads={providerDiscussionThreads}
+          pullRequestComments={providerConversations.data?.pullRequestComments}
           onClose={() => setDiscussionsOpen(false)}
           onOpenThread={openProviderDiscussion}
           onRefresh={() => void providerConversations.refetch()}
