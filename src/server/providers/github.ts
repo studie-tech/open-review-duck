@@ -27,6 +27,7 @@ import {
   ProviderError,
   type ProviderFileCommit,
   type ProviderPullRequestCheck,
+  type ProviderPullRequestComment,
   type ProviderPullRequestLifecycle,
   type ProviderPullRequestReviewState,
   type ProviderReviewAction,
@@ -98,6 +99,8 @@ interface GitHubPull {
 }
 interface GitHubReview {
   id: number;
+  body?: string | null;
+  html_url?: string;
   state:
     | "APPROVED"
     | "CHANGES_REQUESTED"
@@ -105,7 +108,14 @@ interface GitHubReview {
     | "DISMISSED"
     | "PENDING";
   submitted_at?: string;
-  user: { id: number; login: string };
+  user: { id: number; login: string; avatar_url?: string };
+}
+interface GitHubIssueComment {
+  id: number;
+  body: string | null;
+  created_at: string;
+  html_url: string;
+  user: { login: string; avatar_url?: string } | null;
 }
 interface GitHubFile {
   filename: string;
@@ -1012,6 +1022,51 @@ export class GitHubProvider implements PullRequestProvider {
       },
     );
     return { externalId: String(comment.id) };
+  }
+
+  /** Reads paginated general PR comments and non-empty submitted review summaries. */
+  async listPullRequestComments(
+    repositoryExternalId: string,
+    pullRequestNumber: number,
+  ): Promise<ProviderPullRequestComment[]> {
+    const [comments, reviews] = await Promise.all([
+      this.getAllPages<GitHubIssueComment>(
+        `${this.apiUrl}/repositories/${repositoryExternalId}/issues/${pullRequestNumber}/comments?per_page=100`,
+      ),
+      this.getAllPages<GitHubReview>(
+        `${this.apiUrl}/repositories/${repositoryExternalId}/pulls/${pullRequestNumber}/reviews?per_page=100`,
+      ),
+    ]);
+    return [
+      ...comments.map((comment) => ({
+        externalId: `issue-comment:${comment.id}`,
+        kind: "comment" as const,
+        body: comment.body ?? "",
+        author: comment.user?.login ?? "Deleted user",
+        authorAvatarUrl: comment.user?.avatar_url,
+        createdAt: comment.created_at,
+        webUrl: comment.html_url,
+      })),
+      ...reviews.flatMap((review) =>
+        review.state !== "PENDING" && review.body?.trim()
+          ? [
+              {
+                externalId: `review:${review.id}`,
+                kind: "review" as const,
+                body: review.body,
+                author: review.user?.login ?? "Deleted user",
+                authorAvatarUrl: review.user?.avatar_url,
+                createdAt: review.submitted_at ?? "",
+                webUrl: review.html_url,
+              },
+            ]
+          : [],
+      ),
+    ].sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.externalId.localeCompare(right.externalId),
+    );
   }
 
   /** Lists and normalizes inline review conversations from the provider. */

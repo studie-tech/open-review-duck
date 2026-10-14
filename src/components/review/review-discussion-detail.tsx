@@ -18,7 +18,10 @@ import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
 import { ProviderCommentBody } from "./provider-comment-body";
-import type { ProviderDiscussionThread } from "./review-discussions";
+import type {
+  ProviderDiscussionConversation,
+  ProviderDiscussionThread,
+} from "./review-discussions";
 
 /** Formats valid comment times and tolerates incomplete provider metadata. */
 export function discussionTimestamp(value: string | undefined) {
@@ -38,7 +41,7 @@ export function ReviewDiscussionDetail({
   onBack,
   focusConversation = false,
 }: {
-  thread: ProviderDiscussionThread;
+  thread: ProviderDiscussionConversation;
   pullRequest: AiFixPromptPullRequest;
   query: string;
   onOpenThread: (thread: ProviderDiscussionThread) => void;
@@ -51,6 +54,11 @@ export function ReviewDiscussionDetail({
     setImage(value);
   }, []);
   const resolved = thread.status === "resolved";
+  const general = thread.kind === "pull_request";
+  const generalLabel =
+    thread.kind === "pull_request" && thread.comments[0]?.kind === "review"
+      ? "Review summary"
+      : "PR comment";
   const authors = new Set(thread.comments.map(({ author }) => author));
 
   useEffect(() => {
@@ -74,9 +82,11 @@ export function ReviewDiscussionDetail({
           <span
             className={cn(
               "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium",
-              resolved
-                ? "border-addition/20 bg-addition/5 text-addition"
-                : "border-cyan/20 bg-cyan/5 text-cyan",
+              general
+                ? "border-violet/20 bg-violet/5 text-violet"
+                : resolved
+                  ? "border-addition/20 bg-addition/5 text-addition"
+                  : "border-cyan/20 bg-cyan/5 text-cyan",
             )}
           >
             {resolved ? (
@@ -84,11 +94,13 @@ export function ReviewDiscussionDetail({
             ) : (
               <MessageSquareText className="size-3" />
             )}
-            {resolved
-              ? "Resolved"
-              : thread.status === "unknown"
-                ? "Status unavailable"
-                : "Open"}
+            {general
+              ? generalLabel
+              : resolved
+                ? "Resolved"
+                : thread.status === "unknown"
+                  ? "Status unavailable"
+                  : "Open"}
           </span>
           <span className="text-fog">
             {thread.comments.length}{" "}
@@ -103,13 +115,16 @@ export function ReviewDiscussionDetail({
             tabIndex={-1}
             className="text-cloud min-w-0 break-all font-mono text-sm font-medium outline-none"
           >
-            {thread.path}
-            <span className="text-fog ml-2 whitespace-nowrap text-xs font-normal">
-              {thread.side === "left" ? "Previous" : "Current"} · L{thread.line}
-            </span>
+            {general ? "Pull request conversation" : thread.path}
+            {!general && (
+              <span className="text-fog ml-2 whitespace-nowrap text-xs font-normal">
+                {thread.side === "left" ? "Previous" : "Current"} · L
+                {thread.line}
+              </span>
+            )}
           </h3>
           <div className="flex flex-wrap items-center gap-2">
-            {!resolved && (
+            {thread.kind !== "pull_request" && !resolved && (
               <CopyAiFixPromptButton
                 variant="button"
                 className="h-8 px-2.5 text-[11px]!"
@@ -128,20 +143,22 @@ export function ReviewDiscussionDetail({
                 <ExternalLink className="size-3" />
               </a>
             )}
-            <Button
-              size="sm"
-              variant="secondary"
-              className="text-xs!"
-              disabled={!thread.unitId}
-              title={
-                !thread.unitId
-                  ? "This thread has no matching review unit. Open it on the provider."
-                  : undefined
-              }
-              onClick={() => onOpenThread(thread)}
-            >
-              <Code2 className="size-3.5" /> View in code
-            </Button>
+            {thread.kind !== "pull_request" && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="text-xs!"
+                disabled={!thread.unitId}
+                title={
+                  !thread.unitId
+                    ? "This thread has no matching review unit. Open it on the provider."
+                    : undefined
+                }
+                onClick={() => onOpenThread(thread)}
+              >
+                <Code2 className="size-3.5" /> View in code
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -198,9 +215,11 @@ export function ReviewDiscussionDetail({
                           </span>
                         )}
                         <span className="text-fog text-[10px]">
-                          {index === 0
-                            ? "Started this thread"
-                            : `Reply ${index}`}
+                          {general
+                            ? generalLabel
+                            : index === 0
+                              ? "Started this thread"
+                              : `Reply ${index}`}
                         </span>
                       </header>
                       <div className="px-4 py-4 sm:px-5">
@@ -224,9 +243,11 @@ export function ReviewDiscussionDetail({
             ) : (
               <MessageSquareText className="size-3.5" />
             )}
-            {resolved
-              ? "This conversation is resolved."
-              : "Continue this conversation or manage it in the code view."}
+            {general
+              ? "This comment is part of the pull request conversation."
+              : resolved
+                ? "This conversation is resolved."
+                : "Continue this conversation or manage it in the code view."}
           </div>
         </div>
       </div>

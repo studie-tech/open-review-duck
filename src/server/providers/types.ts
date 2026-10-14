@@ -79,6 +79,17 @@ interface ProviderReviewComment {
   webUrl?: string;
 }
 
+/** A general PR comment or submitted review body, with no code-line anchor. */
+export interface ProviderPullRequestComment {
+  externalId: string;
+  kind: "comment" | "review";
+  body: string;
+  author: string;
+  authorAvatarUrl?: string;
+  createdAt: string;
+  webUrl?: string;
+}
+
 export interface ProviderReviewThread {
   externalId: string;
   path: string;
@@ -278,6 +289,11 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     pullRequestNumber: number,
   ): Promise<ProviderReviewThread[]>;
+  /** Lists general PR conversation comments separately from resolvable code threads. */
+  listPullRequestComments?(
+    repositoryExternalId: string,
+    pullRequestNumber: number,
+  ): Promise<ProviderPullRequestComment[]>;
   /** Uploads an image into the provider so comments retain its access rules. */
   uploadCommentImage?(input: {
     repositoryExternalId: string;
