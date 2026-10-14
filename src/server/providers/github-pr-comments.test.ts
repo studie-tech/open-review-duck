@@ -156,7 +156,7 @@ describe("GitHub PR conversation comments", () => {
     ).rejects.toThrow("unsafe pagination URL");
     expect(
       fetchMock.mock.calls.some(([input]) =>
-        input.startsWith("https://attacker.example"),
+        new URL(input).origin === "https://attacker.example",
       ),
     ).toBe(false);
   });
