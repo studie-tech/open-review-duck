@@ -335,8 +335,7 @@ export function DiscussionImageViewer({
         )}
         onDoubleClick={() => {
           if (!ready) return;
-          if (view.scale === null)
-            setView({ scale: Math.max(1, fitScale * 2), x: 0, y: 0 });
+          if (view.scale === null) setView({ scale: 1, x: 0, y: 0 });
           else fitImage();
         }}
         onPointerDown={(event) => {

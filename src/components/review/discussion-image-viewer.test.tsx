@@ -27,8 +27,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** Loads a large attachment into the measured viewport without network requests. */
-function renderLoadedViewer() {
+/** Loads an attachment into the measured viewport without network requests. */
+function renderLoadedViewer(size = { width: 2000, height: 1000 }) {
   const onClose = vi.fn();
   render(
     <DiscussionImageViewer
@@ -38,8 +38,8 @@ function renderLoadedViewer() {
   );
   const image = screen.getByAltText("War room");
   Object.defineProperties(image, {
-    naturalWidth: { value: 2000 },
-    naturalHeight: { value: 1000 },
+    naturalWidth: { value: size.width },
+    naturalHeight: { value: size.height },
   });
   fireEvent.load(image);
   return { image, onClose };
@@ -120,6 +120,20 @@ describe("DiscussionImageViewer", () => {
     viewportHeight = 400;
     fireEvent(window, new Event("resize"));
     expect(screen.getByLabelText("Zoom level")).toHaveTextContent("23%");
+  });
+
+  it("keeps double-click at actual size for images that already fit", () => {
+    renderLoadedViewer({ width: 400, height: 200 });
+    const canvas = screen.getByRole("region", { name: "Image canvas" });
+    fireEvent.doubleClick(canvas);
+    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    expect(
+      screen.getByRole("button", { name: "View image at actual size" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    fireEvent.doubleClick(canvas);
+    expect(
+      screen.getByRole("button", { name: "Fit image to view" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows a useful fallback when an attachment fails and keeps original access", () => {
