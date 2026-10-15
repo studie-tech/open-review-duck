@@ -46,7 +46,11 @@ The list starts in **All** when PR comments exist; otherwise it starts with
 open threads when any exist, or all threads otherwise. Recent activity comes
 first. Search includes every comment, reply, author, and file path; filters
 narrow by view, file, participant, or image attachments. Select a conversation
-to read its full Markdown contents and enlarge attached images.
+to read its full Markdown contents across the available pane width. Open an
+attachment with **View & zoom** to inspect it in the image viewer: scroll or
+pinch to zoom, drag to pan, and use **Fit** or **100%** to reset the view.
+Keyboard controls include `+` / `-` to zoom, `0` to fit, `1` for actual size,
+arrow keys to pan, and `Esc` to close the viewer and return to the discussion.
 HTTPS provider attachments load inline; other HTTPS image hosts require an
 explicit **Load image** click, and HTTP images remain available as links.
 Mermaid diagrams keep their source visible until you choose **Render diagram**,
