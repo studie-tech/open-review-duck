@@ -6,7 +6,6 @@ import {
   Code2,
   ExternalLink,
   MessageSquareText,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -17,6 +16,7 @@ import {
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import { CopyAiFixPromptButton } from "./copy-ai-fix-prompt-button";
+import { DiscussionImageViewer } from "./discussion-image-viewer";
 import { ProviderCommentBody } from "./provider-comment-body";
 import type {
   ProviderDiscussionConversation,
@@ -164,7 +164,7 @@ export function ReviewDiscussionDetail({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 lg:px-8">
-        <div className="mx-auto max-w-[860px]">
+        <div className="w-full min-w-0">
           {thread.comments.length === 0 ? (
             <p className="text-mist py-12 text-center text-sm">
               This provider conversation has no visible comments.
@@ -253,78 +253,11 @@ export function ReviewDiscussionDetail({
       </div>
       {image && (
         <DiscussionImageViewer
+          key={image.src}
           image={image}
           onClose={() => setImage(undefined)}
         />
       )}
     </section>
-  );
-}
-
-/** Enlarges an attachment in a nested native modal with its own Escape handling. */
-function DiscussionImageViewer({
-  image,
-  onClose,
-}: {
-  image: { src: string; alt: string };
-  onClose: () => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const close = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    if (element && !element.open) {
-      if (typeof element.showModal === "function") element.showModal();
-      else element.setAttribute("open", "");
-      close.current?.focus();
-    }
-    return () => {
-      if (element?.open && typeof element.close === "function") element.close();
-      previousFocus?.focus();
-    };
-  }, []);
-  return (
-    <dialog
-      ref={dialog}
-      aria-label={`Image preview: ${image.alt}`}
-      aria-modal="true"
-      onCancel={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-      className="bg-panel border-line fixed inset-0 m-auto hidden max-h-[94dvh] w-[min(1100px,94vw)] max-w-none flex-col overflow-hidden rounded-xl border p-0 text-cloud shadow-2xl open:flex backdrop:bg-black/70"
-    >
-      <header className="border-line flex items-center gap-3 border-b px-5 py-3">
-        <p className="min-w-0 flex-1 truncate text-sm">{image.alt}</p>
-        <a
-          href={image.src}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-cyan flex items-center gap-1.5 text-xs"
-        >
-          Open original <ExternalLink className="size-3" />
-        </a>
-        <button
-          ref={close}
-          type="button"
-          aria-label="Close image preview"
-          onClick={onClose}
-          className="hover:bg-surface-hover grid size-8 place-items-center rounded-lg"
-        >
-          <X className="size-4" />
-        </button>
-      </header>
-      <div className="bg-code min-h-0 overflow-auto p-4">
-        {/* biome-ignore lint/performance/noImgElement: load the original provider attachment directly */}
-        <img
-          src={image.src}
-          alt={image.alt}
-          referrerPolicy="no-referrer"
-          className="mx-auto max-h-[78dvh] max-w-full object-contain"
-        />
-      </div>
-    </dialog>
   );
 }

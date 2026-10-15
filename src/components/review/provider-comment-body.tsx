@@ -509,11 +509,14 @@ function ProviderImagePreview({
         loading="lazy"
         referrerPolicy="no-referrer"
         onError={() => setFailedUrl(imageUrl)}
-        className="max-h-80 w-auto max-w-full rounded-t-lg object-contain"
+        className="max-h-[min(56vh,560px)] w-auto max-w-full rounded-t-lg bg-surface-subtle/60 object-contain"
       />
       <span className="text-mist flex items-center justify-between gap-3 border-t border-line px-3 py-2 text-[11px]">
         <span className="truncate">{label}</span>
-        <Maximize2 className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="text-cyan flex shrink-0 items-center gap-1.5 font-medium">
+          <Maximize2 className="size-3.5" aria-hidden="true" />
+          {onOpen ? "View & zoom" : "Open image"}
+        </span>
       </span>
     </>
   );
