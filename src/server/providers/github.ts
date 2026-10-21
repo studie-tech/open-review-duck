@@ -12,6 +12,7 @@ import {
 import { githubViewerCanMerge } from "~/lib/provider-permission-recovery";
 import { providerAccountIds } from "~/lib/pull-request-involvement";
 import { normalizePullRequestLabels } from "~/lib/pull-request-labels";
+import { providerConnectionErrorMessage } from "./connection-error";
 import {
   optionalProviderFetch,
   providerBytes,
@@ -493,8 +494,12 @@ export class GitHubProvider implements PullRequestProvider {
                 : null,
           );
         }
-      } catch {
+      } catch (cause) {
         // Listing PRs still works if GraphQL is unavailable for this account.
+        console.warn("GitHub merge-conflict lookup failed", {
+          batchOffset: offset,
+          message: providerConnectionErrorMessage(this.name, cause),
+        });
       }
     }
     return conflicts;

@@ -7,7 +7,10 @@ vi.mock("~/server/security/remote-url", () => ({
   safeRemoteFetch: (url: string, init: RequestInit) =>
     globalThis.fetch(url, init),
 }));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 /** Returns a real JSON response so provider pagination and decoding are exercised. */
 function json(body: unknown) {
@@ -74,6 +77,7 @@ describe("inbox merge conflicts", () => {
   });
 
   it("preserves PR visibility when GraphQL fails or omits a node", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(json([githubPull(1)]))
@@ -84,6 +88,13 @@ describe("inbox merge conflicts", () => {
     });
     expect(result).toHaveLength(1);
     expect(result[0]?.hasMergeConflicts).toBeNull();
+    expect(warning).toHaveBeenCalledWith(
+      "GitHub merge-conflict lookup failed",
+      {
+        batchOffset: 0,
+        message: expect.stringContaining("GitHub"),
+      },
+    );
 
     fetch
       .mockResolvedValueOnce(json([githubPull(1)]))
@@ -95,6 +106,24 @@ describe("inbox merge conflicts", () => {
         })
       )[0]?.hasMergeConflicts,
     ).toBeNull();
+  });
+
+  it("logs a sanitized diagnostic rather than raw errors or credentials", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json([githubPull(1)]))
+        .mockRejectedValueOnce(new Error("Bearer secret-test-token")),
+    );
+    await new GitHubProvider("secret-test-token").listOpenPullRequests("1", {
+      includeMergeConflictStatus: true,
+    });
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(
+      "secret-test-token",
+    );
   });
 
   it("does not request GitHub conflict status for ordinary intake reads", async () => {

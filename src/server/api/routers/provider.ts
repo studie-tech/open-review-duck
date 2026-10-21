@@ -32,6 +32,7 @@ import {
   revokeProviderOAuth,
 } from "~/server/providers/credentials";
 import { exportRepositoryReviewData } from "~/server/providers/export";
+import { cachedInboxDiscovery } from "~/server/providers/inbox-cache";
 import {
   reconcileRepositoryIntake,
   reconcileWorkspaceIntake,
@@ -847,201 +848,229 @@ export const providerRouter = createTRPCRouter({
 
   listUnimportedPullRequests: protectedProcedure.query(async ({ ctx }) => {
     const workspace = await ensurePersonalWorkspace(ctx.db, ctx.auth.userId);
-    await enforceRateLimit(
+    return cachedInboxDiscovery(
       ctx.db,
-      `unimported-pull-requests:${workspace.id}`,
-      20,
-      5 * 60_000,
-    );
-    const inboxRepositories = await ctx.db
-      .select({
-        id: repositories.id,
-        externalId: repositories.externalId,
-        owner: repositories.owner,
-        name: repositories.name,
-        connectionId: repositories.connectionId,
-        provider: providerConnections.provider,
-      })
-      .from(repositories)
-      .innerJoin(
-        providerConnections,
-        eq(repositories.connectionId, providerConnections.id),
-      )
-      .where(eq(repositories.workspaceId, workspace.id));
-    if (inboxRepositories.length === 0) {
-      return {
-        pullRequests: [],
-        errors: [],
-        repositoryCount: 0,
-        mergeConflictKeys: [] as string[],
-      };
-    }
-    const imported = await ctx.db
-      .select({
-        repositoryId: pullRequests.repositoryId,
-        number: pullRequests.number,
-      })
-      .from(pullRequests)
-      .innerJoin(
-        reviewQueueItems,
-        and(
-          eq(reviewQueueItems.pullRequestId, pullRequests.id),
-          eq(reviewQueueItems.userId, ctx.auth.userId),
-        ),
-      )
-      .where(
-        inArray(
-          pullRequests.repositoryId,
-          inboxRepositories.map((repository) => repository.id),
-        ),
-      );
-    const importedByRepository = new Map<string, Set<number>>();
-    for (const row of imported) {
-      const numbers = importedByRepository.get(row.repositoryId) ?? new Set();
-      numbers.add(row.number);
-      importedByRepository.set(row.repositoryId, numbers);
-    }
-    const connectionIds = [
-      ...new Set(
-        inboxRepositories
-          .map((repository) => repository.connectionId)
-          .filter((connectionId): connectionId is string =>
-            Boolean(connectionId),
-          ),
-      ),
-    ];
-    const connections = await ctx.db.query.providerConnections.findMany({
-      where: inArray(providerConnections.id, connectionIds),
-    });
-    const connectionById = new Map(
-      connections.map((connection) => [connection.id, connection]),
-    );
-    const personalCredentials =
-      connectionIds.length === 0
-        ? []
-        : await ctx.db
-            .select({
-              connectionId: userProviderCredentials.connectionId,
-              displayLogin: userProviderCredentials.displayLogin,
-              externalAccountId: userProviderCredentials.externalAccountId,
-            })
-            .from(userProviderCredentials)
-            .where(
-              and(
-                eq(userProviderCredentials.userId, ctx.auth.userId),
-                inArray(userProviderCredentials.connectionId, connectionIds),
+      workspace.id,
+      ctx.auth.userId,
+      async () => {
+        await enforceRateLimit(
+          ctx.db,
+          `unimported-pull-requests:${workspace.id}`,
+          20,
+          5 * 60_000,
+        );
+        const inboxRepositories = await ctx.db
+          .select({
+            id: repositories.id,
+            externalId: repositories.externalId,
+            owner: repositories.owner,
+            name: repositories.name,
+            connectionId: repositories.connectionId,
+            provider: providerConnections.provider,
+          })
+          .from(repositories)
+          .innerJoin(
+            providerConnections,
+            eq(repositories.connectionId, providerConnections.id),
+          )
+          .where(eq(repositories.workspaceId, workspace.id));
+        if (inboxRepositories.length === 0) {
+          return {
+            pullRequests: [],
+            errors: [],
+            repositoryCount: 0,
+            mergeConflictKeys: [] as string[],
+          };
+        }
+        const imported = await ctx.db
+          .select({
+            repositoryId: pullRequests.repositoryId,
+            number: pullRequests.number,
+          })
+          .from(pullRequests)
+          .innerJoin(
+            reviewQueueItems,
+            and(
+              eq(reviewQueueItems.pullRequestId, pullRequests.id),
+              eq(reviewQueueItems.userId, ctx.auth.userId),
+            ),
+          )
+          .where(
+            inArray(
+              pullRequests.repositoryId,
+              inboxRepositories.map((repository) => repository.id),
+            ),
+          );
+        const importedByRepository = new Map<string, Set<number>>();
+        for (const row of imported) {
+          const numbers =
+            importedByRepository.get(row.repositoryId) ?? new Set();
+          numbers.add(row.number);
+          importedByRepository.set(row.repositoryId, numbers);
+        }
+        const connectionIds = [
+          ...new Set(
+            inboxRepositories
+              .map((repository) => repository.connectionId)
+              .filter((connectionId): connectionId is string =>
+                Boolean(connectionId),
               ),
-            );
-    const credentialByConnection = new Map(
-      personalCredentials.map((credential) => [
-        credential.connectionId,
-        credential,
-      ]),
-    );
-    const grouped = new Map<string, typeof inboxRepositories>();
-    for (const repository of inboxRepositories) {
-      if (!repository.connectionId) continue;
-      const group = grouped.get(repository.connectionId) ?? [];
-      group.push(repository);
-      grouped.set(repository.connectionId, group);
-    }
-    const collected: Array<{
-      additions: number;
-      assignedToViewer: boolean;
-      authorAvatarUrl: string | null;
-      authorLogin: string;
-      authoredByViewer: boolean;
-      deletions: number;
-      externalId: string;
-      labels: PullRequestLabel[];
-      hasMergeConflicts: boolean | null;
-      number: number;
-      provider: (typeof inboxRepositories)[number]["provider"];
-      repositoryId: string;
-      repositoryName: string;
-      repositoryOwner: string;
-      sourceBranch: string;
-      state: "open" | "merged" | "closed" | "draft";
-      targetBranch: string;
-      title: string;
-      webUrl: string;
-    }> = [];
-    const mergeConflictKeys: string[] = [];
-    const errors: Array<{
-      message: string;
-      repositoryId: string;
-      repositoryName: string;
-      repositoryOwner: string;
-    }> = [];
-    await Promise.all(
-      [...grouped.entries()].map(
-        async ([connectionId, repositoriesForConnection]) => {
-          const connection = connectionById.get(connectionId);
-          if (!connection) return;
-          try {
-            const provider = await providerForConnection(ctx.db, connection);
-            await Promise.all(
-              repositoriesForConnection.map(async (repository) => {
-                try {
-                  const allOpen = await provider.listOpenPullRequests(
-                    repository.externalId,
-                    { includeMergeConflictStatus: true },
-                  );
-                  for (const pullRequest of allOpen) {
-                    if (pullRequest.hasMergeConflicts !== true) continue;
-                    mergeConflictKeys.push(
-                      `${priorityInboxRepositoryKey({
-                        provider: repository.provider,
-                        repositoryOwner: repository.owner,
+          ),
+        ];
+        const connections = await ctx.db.query.providerConnections.findMany({
+          where: inArray(providerConnections.id, connectionIds),
+        });
+        const connectionById = new Map(
+          connections.map((connection) => [connection.id, connection]),
+        );
+        const personalCredentials =
+          connectionIds.length === 0
+            ? []
+            : await ctx.db
+                .select({
+                  connectionId: userProviderCredentials.connectionId,
+                  displayLogin: userProviderCredentials.displayLogin,
+                  externalAccountId: userProviderCredentials.externalAccountId,
+                })
+                .from(userProviderCredentials)
+                .where(
+                  and(
+                    eq(userProviderCredentials.userId, ctx.auth.userId),
+                    inArray(
+                      userProviderCredentials.connectionId,
+                      connectionIds,
+                    ),
+                  ),
+                );
+        const credentialByConnection = new Map(
+          personalCredentials.map((credential) => [
+            credential.connectionId,
+            credential,
+          ]),
+        );
+        const grouped = new Map<string, typeof inboxRepositories>();
+        for (const repository of inboxRepositories) {
+          if (!repository.connectionId) continue;
+          const group = grouped.get(repository.connectionId) ?? [];
+          group.push(repository);
+          grouped.set(repository.connectionId, group);
+        }
+        const collected: Array<{
+          additions: number;
+          assignedToViewer: boolean;
+          authorAvatarUrl: string | null;
+          authorLogin: string;
+          authoredByViewer: boolean;
+          deletions: number;
+          externalId: string;
+          labels: PullRequestLabel[];
+          hasMergeConflicts: boolean | null;
+          number: number;
+          provider: (typeof inboxRepositories)[number]["provider"];
+          repositoryId: string;
+          repositoryName: string;
+          repositoryOwner: string;
+          sourceBranch: string;
+          state: "open" | "merged" | "closed" | "draft";
+          targetBranch: string;
+          title: string;
+          webUrl: string;
+        }> = [];
+        const mergeConflictKeys: string[] = [];
+        const errors: Array<{
+          message: string;
+          repositoryId: string;
+          repositoryName: string;
+          repositoryOwner: string;
+        }> = [];
+        await Promise.all(
+          [...grouped.entries()].map(
+            async ([connectionId, repositoriesForConnection]) => {
+              const connection = connectionById.get(connectionId);
+              if (!connection) return;
+              try {
+                const provider = await providerForConnection(
+                  ctx.db,
+                  connection,
+                );
+                await Promise.all(
+                  repositoriesForConnection.map(async (repository) => {
+                    try {
+                      const allOpen = await provider.listOpenPullRequests(
+                        repository.externalId,
+                        { includeMergeConflictStatus: true },
+                      );
+                      for (const pullRequest of allOpen) {
+                        if (pullRequest.hasMergeConflicts !== true) continue;
+                        mergeConflictKeys.push(
+                          `${priorityInboxRepositoryKey({
+                            provider: repository.provider,
+                            repositoryOwner: repository.owner,
+                            repositoryName: repository.name,
+                          })}:${pullRequest.number}`,
+                        );
+                      }
+                      const open = excludeImportedPullRequests(
+                        allOpen,
+                        importedByRepository.get(repository.id) ?? new Set(),
+                      );
+                      for (const pullRequest of open) {
+                        const credential = credentialByConnection.get(
+                          connection.id,
+                        );
+                        const involvement = viewerOwnsPullRequest({
+                          accountIds: [
+                            connection.externalAccountId,
+                            credential?.externalAccountId,
+                          ],
+                          assigneeExternalIds: pullRequest.assigneeExternalIds,
+                          authorExternalId: pullRequest.authorExternalId,
+                          authorLogin: pullRequest.authorLogin,
+                          logins: [
+                            connection.displayName,
+                            credential?.displayLogin,
+                          ],
+                          reviewerExternalIds: pullRequest.reviewerExternalIds,
+                        });
+                        collected.push({
+                          additions: pullRequest.additions,
+                          assignedToViewer: involvement.assignedToViewer,
+                          authorAvatarUrl: pullRequest.authorAvatarUrl ?? null,
+                          authorLogin: pullRequest.authorLogin,
+                          authoredByViewer: involvement.authoredByViewer,
+                          deletions: pullRequest.deletions,
+                          externalId: pullRequest.externalId,
+                          labels: pullRequest.labels,
+                          hasMergeConflicts:
+                            pullRequest.hasMergeConflicts ?? null,
+                          number: pullRequest.number,
+                          provider: repository.provider,
+                          repositoryId: repository.id,
+                          repositoryName: repository.name,
+                          repositoryOwner: repository.owner,
+                          sourceBranch: pullRequest.sourceBranch,
+                          state:
+                            pullRequest.state === "draft" ? "draft" : "open",
+                          targetBranch: pullRequest.targetBranch,
+                          title: pullRequest.title,
+                          webUrl: pullRequest.webUrl,
+                        });
+                      }
+                    } catch (cause) {
+                      errors.push({
+                        message: providerConnectionErrorMessage(
+                          connection.provider,
+                          cause,
+                        ),
+                        repositoryId: repository.id,
                         repositoryName: repository.name,
-                      })}:${pullRequest.number}`,
-                    );
-                  }
-                  const open = excludeImportedPullRequests(
-                    allOpen,
-                    importedByRepository.get(repository.id) ?? new Set(),
-                  );
-                  for (const pullRequest of open) {
-                    const credential = credentialByConnection.get(
-                      connection.id,
-                    );
-                    const involvement = viewerOwnsPullRequest({
-                      accountIds: [
-                        connection.externalAccountId,
-                        credential?.externalAccountId,
-                      ],
-                      assigneeExternalIds: pullRequest.assigneeExternalIds,
-                      authorExternalId: pullRequest.authorExternalId,
-                      authorLogin: pullRequest.authorLogin,
-                      logins: [
-                        connection.displayName,
-                        credential?.displayLogin,
-                      ],
-                      reviewerExternalIds: pullRequest.reviewerExternalIds,
-                    });
-                    collected.push({
-                      additions: pullRequest.additions,
-                      assignedToViewer: involvement.assignedToViewer,
-                      authorAvatarUrl: pullRequest.authorAvatarUrl ?? null,
-                      authorLogin: pullRequest.authorLogin,
-                      authoredByViewer: involvement.authoredByViewer,
-                      deletions: pullRequest.deletions,
-                      externalId: pullRequest.externalId,
-                      labels: pullRequest.labels,
-                      hasMergeConflicts: pullRequest.hasMergeConflicts ?? null,
-                      number: pullRequest.number,
-                      provider: repository.provider,
-                      repositoryId: repository.id,
-                      repositoryName: repository.name,
-                      repositoryOwner: repository.owner,
-                      sourceBranch: pullRequest.sourceBranch,
-                      state: pullRequest.state === "draft" ? "draft" : "open",
-                      targetBranch: pullRequest.targetBranch,
-                      title: pullRequest.title,
-                      webUrl: pullRequest.webUrl,
-                    });
-                  }
-                } catch (cause) {
+                        repositoryOwner: repository.owner,
+                      });
+                    }
+                  }),
+                );
+              } catch (cause) {
+                for (const repository of repositoriesForConnection) {
                   errors.push({
                     message: providerConnectionErrorMessage(
                       connection.provider,
@@ -1052,30 +1081,18 @@ export const providerRouter = createTRPCRouter({
                     repositoryOwner: repository.owner,
                   });
                 }
-              }),
-            );
-          } catch (cause) {
-            for (const repository of repositoriesForConnection) {
-              errors.push({
-                message: providerConnectionErrorMessage(
-                  connection.provider,
-                  cause,
-                ),
-                repositoryId: repository.id,
-                repositoryName: repository.name,
-                repositoryOwner: repository.owner,
-              });
-            }
-          }
-        },
-      ),
+              }
+            },
+          ),
+        );
+        return {
+          pullRequests: sortUnimportedPullRequests(collected),
+          errors,
+          repositoryCount: inboxRepositories.length,
+          mergeConflictKeys,
+        };
+      },
     );
-    return {
-      pullRequests: sortUnimportedPullRequests(collected),
-      errors,
-      repositoryCount: inboxRepositories.length,
-      mergeConflictKeys,
-    };
   }),
 
   previewRepositoryIntake: protectedProcedure

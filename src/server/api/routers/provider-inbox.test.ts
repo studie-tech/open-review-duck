@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCallerFactory } from "~/server/api/trpc";
 import type { db as database } from "~/server/db";
 import type { PullRequestSummary } from "~/server/providers/types";
+import { enforceRateLimit } from "~/server/security/rate-limit";
 import { providerRouter } from "./provider";
 
 const provider = vi.hoisted(() => ({ listOpenPullRequests: vi.fn() }));
@@ -77,9 +78,39 @@ function inbox(repositories: unknown[], queued: unknown[] = []) {
   return { caller, predicates, joins };
 }
 
-beforeEach(() => provider.listOpenPullRequests.mockReset());
+beforeEach(() => {
+  provider.listOpenPullRequests.mockReset();
+  vi.mocked(enforceRateLimit).mockClear();
+});
 
 describe("provider inbox discovery", () => {
+  it("deduplicates refreshes before consuming the unchanged workspace rate limit", async () => {
+    const test = inbox([
+      {
+        id: "repo",
+        externalId: "remote",
+        connectionId: "connection",
+        provider: "github",
+        owner: "acme",
+        name: "app",
+      },
+    ]);
+    provider.listOpenPullRequests.mockResolvedValue([pullRequest(42)]);
+    const [first, second] = await Promise.all([
+      test.caller.listUnimportedPullRequests(),
+      test.caller.listUnimportedPullRequests(),
+    ]);
+    expect(second).toEqual(first);
+    await test.caller.listUnimportedPullRequests();
+    expect(provider.listOpenPullRequests).toHaveBeenCalledTimes(1);
+    expect(enforceRateLimit).toHaveBeenCalledTimes(1);
+    expect(enforceRateLimit).toHaveBeenCalledWith(
+      expect.anything(),
+      "unimported-pull-requests:workspace",
+      20,
+      5 * 60_000,
+    );
+  });
   it("lists open PRs for every intake mode and excludes only the viewer's queue", async () => {
     const test = inbox(
       ["manual", "assigned", "all_open"].map((mode) => ({

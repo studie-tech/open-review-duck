@@ -952,6 +952,40 @@ describe("PullRequestsContent", () => {
     expect(queryState.failuresRefetch).toHaveBeenCalledTimes(1);
   });
 
+  it("hides a cached unprepared listing once the PR appears in the reviewer's queue", () => {
+    queryState.activeSyncs = [];
+    const queued = pullRequest({ id: "prepared", title: "Prepared feature" });
+    queryState.unimported = {
+      repositoryCount: 1,
+      errors: [],
+      mergeConflictKeys: [],
+      pullRequests: [
+        {
+          ...queued,
+          externalId: "remote",
+          repositoryId: "repo",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          title: "Stale cached listing",
+        },
+      ],
+    };
+    render(
+      <PullRequestsContent
+        initialPullRequests={[queued]}
+        fetchedAt={Date.now()}
+      />,
+    );
+    expect(screen.getByText("Prepared feature")).toBeVisible();
+    expect(screen.queryByText("Stale cached listing")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Needs review, 1" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Add for review" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps the drafts switch available for un-imported pull requests", async () => {
     queryState.activeSyncs = [];
     queryState.unimported = {
