@@ -90,12 +90,12 @@ export function followPendingProviderLifecycle(query: {
   ) {
     return false;
   }
-  if (data.summary === "pending") return 8_000;
   if (
     data.mergeable === null &&
     (data.pullRequestState === "open" || data.pullRequestState === "draft")
   ) {
-    return 8_000;
+    return 3_000;
   }
+  if (data.summary === "pending") return 8_000;
   return PROVIDER_STATUS_REFRESH_MS;
 }

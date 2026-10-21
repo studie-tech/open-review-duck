@@ -239,6 +239,10 @@ interface GitHubMergeGateResponse {
   data?: {
     repository?: {
       pullRequest?: {
+        headRefOid?: string;
+        baseRefOid?: string;
+        mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+        mergeStateStatus?: string;
         viewerCanMergeAsAdmin?: boolean;
         reviewDecision?: GitHubReviewDecision | null;
         statusCheckRollup?: {
@@ -608,12 +612,26 @@ export class GitHubProvider implements PullRequestProvider {
       gate?.requiredByName ?? new Map(),
       gate?.requiredById,
     );
+    // REST can still report "unknown" after GraphQL has settled. Only fill
+    // missing mergeability from a settled result for these exact branch tips.
+    const settledGate =
+      gate?.headSha === sha &&
+      gate.baseSha === pull.base.sha &&
+      gate.mergeable !== null &&
+      ["clean", "unstable", "has_hooks", "blocked", "behind", "dirty"].includes(
+        gate.mergeableState,
+      )
+        ? gate
+        : undefined;
     const mergeInput = {
       merged: Boolean(pull.merged_at),
       closed: pull.state === "closed",
       draft: pull.draft,
-      mergeable: pull.mergeable ?? null,
-      mergeableState: pull.mergeable_state,
+      mergeable: pull.mergeable ?? settledGate?.mergeable ?? null,
+      mergeableState:
+        !pull.mergeable_state || pull.mergeable_state === "unknown"
+          ? settledGate?.mergeableState
+          : pull.mergeable_state,
       mergeMethod,
       rebaseable: pull.rebaseable,
       reviewDecision: gate?.reviewDecision,
@@ -632,8 +650,8 @@ export class GitHubProvider implements PullRequestProvider {
       mergeBypassPermission === "allowed" &&
       hasMergePermission &&
       !merge.canMerge &&
-      (pull.mergeable_state === "blocked" ||
-        pull.mergeable_state === "behind") &&
+      (mergeInput.mergeableState === "blocked" ||
+        mergeInput.mergeableState === "behind") &&
       githubMergeGate({ ...mergeInput, mergeableState: "clean" }).canMerge;
     return buildProviderLifecycle({
       checks,
@@ -1581,7 +1599,7 @@ export class GitHubProvider implements PullRequestProvider {
   }
 
   /**
-   * Loads GraphQL required-check flags and reviewDecision.
+   * Loads GraphQL mergeability, required-check flags, and reviewDecision.
    * Each isRequired field needs the PR number; omitting it makes GitHub reject
    * check contexts and discards the accompanying bypass permission as well.
    * REST mergeable_state is "blocked" while optional checks are still queued,
@@ -1604,7 +1622,7 @@ export class GitHubProvider implements PullRequestProvider {
           },
           body: JSON.stringify({
             query:
-              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { viewerCanMergeAsAdmin reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired(pullRequestNumber: $number) } ... on StatusContext { context isRequired(pullRequestNumber: $number) } } } } } } }",
+              "query PullRequestMergeGate($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid baseRefOid mergeable mergeStateStatus viewerCanMergeAsAdmin reviewDecision statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId name isRequired(pullRequestNumber: $number) } ... on StatusContext { context isRequired(pullRequestNumber: $number) } } } } } } }",
             variables: { owner, name, number },
           }),
         },
@@ -1624,6 +1642,16 @@ export class GitHubProvider implements PullRequestProvider {
         if (node.context) requiredByName.set(node.context, node.isRequired);
       }
       return {
+        headSha: pullRequest.headRefOid,
+        baseSha: pullRequest.baseRefOid,
+        mergeable:
+          pullRequest.mergeable === "MERGEABLE"
+            ? true
+            : pullRequest.mergeable === "CONFLICTING"
+              ? false
+              : null,
+        mergeableState:
+          pullRequest.mergeStateStatus?.toLowerCase() ?? "unknown",
         viewerCanMergeAsAdmin: pullRequest.viewerCanMergeAsAdmin,
         reviewDecision: pullRequest.reviewDecision ?? null,
         requiredByName,
