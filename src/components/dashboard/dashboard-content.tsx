@@ -293,6 +293,16 @@ export function PullRequestsContent({
       ),
     [failedSyncs, synchronizing],
   );
+  const queuedKeys = useMemo(
+    () =>
+      new Set(
+        reviews.map(
+          (pullRequest) =>
+            `${priorityInboxRepositoryKey(pullRequest)}:${pullRequest.number}`,
+        ),
+      ),
+    [reviews],
+  );
   useEffect(() => {
     setPendingPreparationKeys((current) => {
       const next = new Set(current);
@@ -304,9 +314,12 @@ export function PullRequestsContent({
     () =>
       unimportedSource.filter(
         (pullRequest) =>
-          !preparationKeys.has(unimportedPullRequestKey(pullRequest)),
+          !preparationKeys.has(unimportedPullRequestKey(pullRequest)) &&
+          !queuedKeys.has(
+            `${priorityInboxRepositoryKey(pullRequest)}:${pullRequest.number}`,
+          ),
       ),
-    [preparationKeys, unimportedSource],
+    [preparationKeys, queuedKeys, unimportedSource],
   );
   const preparationFilters = useMemo(
     () => ({
