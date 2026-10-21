@@ -16,6 +16,7 @@ export interface UnimportedPullRequest {
   deletions: number;
   externalId: string;
   labels: PullRequestLabel[];
+  hasMergeConflicts?: boolean | null;
   number: number;
   provider: PriorityInboxItem["provider"];
   repositoryId: string;

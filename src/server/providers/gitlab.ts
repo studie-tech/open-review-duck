@@ -968,6 +968,16 @@ export class GitLabProvider implements PullRequestProvider {
   private normalize(item: GitLabMergeRequest): PullRequestSummary {
     return {
       externalId: String(item.id),
+      hasMergeConflicts:
+        item.has_conflicts === true ||
+        item.detailed_merge_status === "conflict" ||
+        (!item.detailed_merge_status &&
+          item.has_conflicts !== false &&
+          item.merge_status === "cannot_be_merged")
+          ? true
+          : item.has_conflicts === false
+            ? false
+            : null,
       number: item.iid,
       title: item.title,
       description: item.description ?? undefined,

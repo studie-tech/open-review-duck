@@ -429,6 +429,9 @@ export class GitHubProvider implements PullRequestProvider {
       `${this.apiUrl}/repositories/${repositoryExternalId}/pulls?state=open&per_page=100`,
     );
     const reviewerId = options.reviewerExternalAccountId;
+    const conflicts = options.includeMergeConflictStatus
+      ? await this.pullRequestMergeConflicts(pulls)
+      : new Map<string, boolean | null>();
     return pulls
       .filter(
         (pull) =>
@@ -440,7 +443,61 @@ export class GitHubProvider implements PullRequestProvider {
             (assignee) => String(assignee.id) === reviewerId,
           ),
       )
-      .map((pull) => this.normalizePullRequest(pull));
+      .map((pull) => ({
+        ...this.normalizePullRequest(pull),
+        ...(options.includeMergeConflictStatus && {
+          hasMergeConflicts: conflicts.get(pull.node_id ?? "") ?? null,
+        }),
+      }));
+  }
+
+  /** Reads conflict status in batches, without fetching each PR's CI or diff. */
+  private async pullRequestMergeConflicts(pulls: GitHubPull[]) {
+    const conflicts = new Map<string, boolean | null>();
+    const byId = new Map(pulls.map((pull) => [pull.node_id, pull]));
+    const ids = pulls.flatMap((pull) => (pull.node_id ? [pull.node_id] : []));
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      try {
+        const response = await providerFetch<{
+          data?: {
+            nodes?: Array<{
+              id: string;
+              headRefOid: string;
+              baseRefOid: string;
+              mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+            } | null>;
+          };
+        }>(this.name, this.graphqlUrl(), {
+          method: "POST",
+          headers: { ...this.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query:
+              "query PullRequestMergeConflicts($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { id headRefOid baseRefOid mergeable } } }",
+            variables: { ids: ids.slice(offset, offset + 100) },
+          }),
+        });
+        for (const node of response.data?.nodes ?? []) {
+          if (!node) continue;
+          const pull = byId.get(node.id);
+          if (
+            pull?.head.sha !== node.headRefOid ||
+            pull.base.sha !== node.baseRefOid
+          )
+            continue;
+          conflicts.set(
+            node.id,
+            node.mergeable === "CONFLICTING"
+              ? true
+              : node.mergeable === "MERGEABLE"
+                ? false
+                : null,
+          );
+        }
+      } catch {
+        // Listing PRs still works if GraphQL is unavailable for this account.
+      }
+    }
+    return conflicts;
   }
 
   /** Fetches normalized metadata for one pull request. */

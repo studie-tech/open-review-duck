@@ -14,6 +14,7 @@ import {
   workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
+import { priorityInboxRepositoryKey } from "~/lib/priority-inbox";
 import { supportsTokenReplacement } from "~/lib/provider-credential-recovery";
 import { viewerOwnsPullRequest } from "~/lib/pull-request-involvement";
 import type { PullRequestLabel } from "~/lib/pull-request-labels";
@@ -852,7 +853,7 @@ export const providerRouter = createTRPCRouter({
       20,
       5 * 60_000,
     );
-    const manualRepositories = await ctx.db
+    const inboxRepositories = await ctx.db
       .select({
         id: repositories.id,
         externalId: repositories.externalId,
@@ -866,17 +867,13 @@ export const providerRouter = createTRPCRouter({
         providerConnections,
         eq(repositories.connectionId, providerConnections.id),
       )
-      .where(
-        and(
-          eq(repositories.workspaceId, workspace.id),
-          eq(repositories.reviewIntakeMode, "manual"),
-        ),
-      );
-    if (manualRepositories.length === 0) {
+      .where(eq(repositories.workspaceId, workspace.id));
+    if (inboxRepositories.length === 0) {
       return {
         pullRequests: [],
         errors: [],
-        manualRepositoryCount: 0,
+        repositoryCount: 0,
+        mergeConflictKeys: [] as string[],
       };
     }
     const imported = await ctx.db
@@ -885,10 +882,17 @@ export const providerRouter = createTRPCRouter({
         number: pullRequests.number,
       })
       .from(pullRequests)
+      .innerJoin(
+        reviewQueueItems,
+        and(
+          eq(reviewQueueItems.pullRequestId, pullRequests.id),
+          eq(reviewQueueItems.userId, ctx.auth.userId),
+        ),
+      )
       .where(
         inArray(
           pullRequests.repositoryId,
-          manualRepositories.map((repository) => repository.id),
+          inboxRepositories.map((repository) => repository.id),
         ),
       );
     const importedByRepository = new Map<string, Set<number>>();
@@ -899,7 +903,7 @@ export const providerRouter = createTRPCRouter({
     }
     const connectionIds = [
       ...new Set(
-        manualRepositories
+        inboxRepositories
           .map((repository) => repository.connectionId)
           .filter((connectionId): connectionId is string =>
             Boolean(connectionId),
@@ -934,8 +938,8 @@ export const providerRouter = createTRPCRouter({
         credential,
       ]),
     );
-    const grouped = new Map<string, typeof manualRepositories>();
-    for (const repository of manualRepositories) {
+    const grouped = new Map<string, typeof inboxRepositories>();
+    for (const repository of inboxRepositories) {
       if (!repository.connectionId) continue;
       const group = grouped.get(repository.connectionId) ?? [];
       group.push(repository);
@@ -950,8 +954,9 @@ export const providerRouter = createTRPCRouter({
       deletions: number;
       externalId: string;
       labels: PullRequestLabel[];
+      hasMergeConflicts: boolean | null;
       number: number;
-      provider: (typeof manualRepositories)[number]["provider"];
+      provider: (typeof inboxRepositories)[number]["provider"];
       repositoryId: string;
       repositoryName: string;
       repositoryOwner: string;
@@ -961,6 +966,7 @@ export const providerRouter = createTRPCRouter({
       title: string;
       webUrl: string;
     }> = [];
+    const mergeConflictKeys: string[] = [];
     const errors: Array<{
       message: string;
       repositoryId: string;
@@ -977,8 +983,22 @@ export const providerRouter = createTRPCRouter({
             await Promise.all(
               repositoriesForConnection.map(async (repository) => {
                 try {
+                  const allOpen = await provider.listOpenPullRequests(
+                    repository.externalId,
+                    { includeMergeConflictStatus: true },
+                  );
+                  for (const pullRequest of allOpen) {
+                    if (pullRequest.hasMergeConflicts !== true) continue;
+                    mergeConflictKeys.push(
+                      `${priorityInboxRepositoryKey({
+                        provider: repository.provider,
+                        repositoryOwner: repository.owner,
+                        repositoryName: repository.name,
+                      })}:${pullRequest.number}`,
+                    );
+                  }
                   const open = excludeImportedPullRequests(
-                    await provider.listOpenPullRequests(repository.externalId),
+                    allOpen,
                     importedByRepository.get(repository.id) ?? new Set(),
                   );
                   for (const pullRequest of open) {
@@ -1008,6 +1028,7 @@ export const providerRouter = createTRPCRouter({
                       deletions: pullRequest.deletions,
                       externalId: pullRequest.externalId,
                       labels: pullRequest.labels,
+                      hasMergeConflicts: pullRequest.hasMergeConflicts ?? null,
                       number: pullRequest.number,
                       provider: repository.provider,
                       repositoryId: repository.id,
@@ -1052,7 +1073,8 @@ export const providerRouter = createTRPCRouter({
     return {
       pullRequests: sortUnimportedPullRequests(collected),
       errors,
-      manualRepositoryCount: manualRepositories.length,
+      repositoryCount: inboxRepositories.length,
+      mergeConflictKeys,
     };
   }),
 

@@ -15,6 +15,7 @@ import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 
 import type { CommandCenterItem } from "~/components/command-center";
+import { MergeConflictBadge } from "~/components/dashboard/merge-conflict-badge";
 import { PullRequestLabelPills } from "~/components/dashboard/pull-request-label-pills";
 import { usePendingNavigation } from "~/components/navigation-progress";
 import { usePageCommandCenter } from "~/components/page-command-center";
@@ -27,7 +28,10 @@ import { Badge } from "~/components/ui/badge";
 import { ConfirmationDialog } from "~/components/ui/confirmation-dialog";
 import { LinkNavigationStatus } from "~/components/ui/link-status";
 import { Spinner } from "~/components/ui/spinner";
-import { priorityInboxGroup } from "~/lib/priority-inbox";
+import {
+  priorityInboxGroup,
+  priorityInboxRepositoryKey,
+} from "~/lib/priority-inbox";
 import { providerLabel } from "~/lib/provider-labels";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
@@ -73,6 +77,7 @@ export function PullRequestList({
   compact = false,
   canStartAiReview = false,
   aiReviewDisabled = false,
+  mergeConflictKeys,
 }: {
   pullRequests: PullRequests;
   kind: PullRequestListKind;
@@ -83,6 +88,7 @@ export function PullRequestList({
   compact?: boolean;
   canStartAiReview?: boolean;
   aiReviewDisabled?: boolean;
+  mergeConflictKeys?: ReadonlySet<string>;
 }) {
   const { navigate } = usePendingNavigation();
   const [pullRequestToRemove, setPullRequestToRemove] =
@@ -265,7 +271,17 @@ export function PullRequestList({
                         −{pullRequest.deletions}
                       </span>
                     </span>
-                    <PullRequestLabelPills labels={pullRequest.labels} />
+                    <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {(pullRequest.state === "open" ||
+                        pullRequest.state === "draft") &&
+                        mergeConflictKeys?.has(
+                          `${priorityInboxRepositoryKey(pullRequest)}:${pullRequest.number}`,
+                        ) && <MergeConflictBadge />}
+                      <PullRequestLabelPills
+                        labels={pullRequest.labels}
+                        className="mt-0"
+                      />
+                    </span>
                   </span>
                   <span
                     className={cn(
