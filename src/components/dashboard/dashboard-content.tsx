@@ -134,12 +134,14 @@ export function PullRequestsContent({
   const pullRequests = api.review.dashboard.useQuery(undefined, {
     ...hydratedQueryOptions(initialPullRequests, fetchedAt),
     enabled: activeSyncs.isFetched,
+    refetchInterval: 60_000,
   });
   const unimportedPullRequests =
     api.provider.listUnimportedPullRequests.useQuery(undefined, {
       staleTime: 30_000,
       retry: false,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
+      refetchInterval: 60_000,
     });
   const aiConfiguration = api.ai.configuration.useQuery();
   const canStartAiReview = aiConfiguration.data?.deepReviewAvailable ?? false;
@@ -269,6 +271,10 @@ export function PullRequestsContent({
     [needsReview],
   );
   const unimportedSource = unimportedPullRequests.data?.pullRequests ?? [];
+  const mergeConflictKeys = useMemo(
+    () => new Set(unimportedPullRequests.data?.mergeConflictKeys ?? []),
+    [unimportedPullRequests.data?.mergeConflictKeys],
+  );
   const synchronizingKeys = useMemo(
     () =>
       new Set(
@@ -385,7 +391,8 @@ export function PullRequestsContent({
   const workCounts = {
     all:
       applySharedFilters(prioritizedNeedsReview, "all").length +
-      visiblePreparationCount,
+      visiblePreparationCount +
+      visibleUnimported.length,
     continue: applySharedFilters(prioritizedNeedsReview, "continue").length,
     ready: applySharedFilters(prioritizedNeedsReview, "ready").length,
     unreviewable: applySharedFilters(prioritizedNeedsReview, "unreviewable")
@@ -395,8 +402,8 @@ export function PullRequestsContent({
     removed: applySharedFilters(removed, "all").length,
     unimported: visibleUnimported.length,
   };
-  const hasManualRepositories =
-    (unimportedPullRequests.data?.manualRepositoryCount ?? 0) > 0;
+  const hasConnectedRepositories =
+    (unimportedPullRequests.data?.repositoryCount ?? 0) > 0;
   const repositorySource = useMemo(
     () =>
       isHistoryView(workView)
@@ -489,25 +496,30 @@ export function PullRequestsContent({
     involvement !== "all";
   const hasImportedWork =
     needsReview.length + reviewed.length + closed.length + removed.length > 0;
-  const hasUnimportedQueryError = unimportedPullRequests.isError;
+  const hasUnimportedQueryError =
+    unimportedPullRequests.isError ||
+    (unimportedPullRequests.data?.errors.length ?? 0) > 0;
   const hasPreparationWork =
     synchronizing.length + actionableFailedSyncs.length > 0;
   const hasWorkNav =
     hasImportedWork ||
     hasPreparationWork ||
-    hasManualRepositories ||
+    hasConnectedRepositories ||
     hasUnimportedQueryError;
   const showCatchUpEmpty =
     !isHistoryView(workView) &&
     workView !== "unimported" &&
     needsReview.length === 0 &&
     !hasPreparationWork &&
-    !(workView === "all" && availableUnimported.length > 0) &&
+    !(
+      workView === "all" &&
+      (availableUnimported.length > 0 || unimportedPullRequests.isLoading)
+    ) &&
     !hasUnimportedQueryError;
   const showListFilters = isHistoryView(workView)
     ? sourceItems.length > 0 || filtersActive
     : workView === "unimported"
-      ? hasManualRepositories || filtersActive
+      ? hasConnectedRepositories || filtersActive
       : needsReview.length > 0 ||
         hasPreparationWork ||
         availableUnimported.length > 0;
@@ -517,13 +529,17 @@ export function PullRequestsContent({
     workView === "unimported"
       ? visibleUnimported.length
       : visibleItems.length +
-        (workView === "all" ? visiblePreparationCount : 0);
+        (workView === "all"
+          ? visiblePreparationCount + visibleUnimported.length
+          : 0);
   const listedTotal =
     workView === "unimported"
       ? availableUnimported.length
       : sourceItems.length +
         (workView === "all"
-          ? synchronizing.length + actionableFailedSyncs.length
+          ? synchronizing.length +
+            actionableFailedSyncs.length +
+            availableUnimported.length
           : 0);
   const filterScopeItems = useMemo(() => {
     if (workView === "unimported") {
@@ -595,15 +611,33 @@ export function PullRequestsContent({
             What needs your attention.
           </h1>
         </div>
-        <Button asChild>
-          <Link href="/settings/providers">
-            <LinkNavigationStatus
-              idle={<Plus className="size-4" />}
-              pending={<LinkPendingSpinner />}
-            />{" "}
-            Add repository
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            aria-label="Refresh pull requests"
+            loading={
+              unimportedPullRequests.isFetching || pullRequests.isFetching
+            }
+            onClick={() => {
+              void pullRequests.refetch();
+              void unimportedPullRequests.refetch();
+              void activeSyncs.refetch();
+              void recentSyncFailures.refetch();
+            }}
+          >
+            <RefreshCw className="size-4" />
+            Refresh
+          </Button>
+          <Button asChild>
+            <Link href="/settings/providers">
+              <LinkNavigationStatus
+                idle={<Plus className="size-4" />}
+                pending={<LinkPendingSpinner />}
+              />{" "}
+              Add repository
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <section className="mt-8">
@@ -641,7 +675,8 @@ export function PullRequestsContent({
                     onSelect={() => setWorkView(view)}
                   />
                 ))}
-                {(hasManualRepositories || unimportedPullRequests.isError) && (
+                {(hasConnectedRepositories ||
+                  unimportedPullRequests.isError) && (
                   <WorkTab
                     label="Un-imported"
                     count={workCounts.unimported}
@@ -843,7 +878,9 @@ export function PullRequestsContent({
                   !(workView === "all" && visiblePreparationCount > 0) &&
                   !(
                     workView === "all" &&
-                    (availableUnimported.length > 0 || hasUnimportedQueryError)
+                    (availableUnimported.length > 0 ||
+                      hasUnimportedQueryError ||
+                      unimportedPullRequests.isLoading)
                   ) ? (
                   <div className="bg-surface/45 grid min-h-56 place-items-center rounded-2xl border border-dashed border-line-strong p-6 text-center">
                     <div>
@@ -910,6 +947,7 @@ export function PullRequestsContent({
                         pendingPullRequestId={pendingPullRequestId}
                         canStartAiReview={canStartAiReview}
                         aiReviewDisabled={aiReviewDisabled}
+                        mergeConflictKeys={mergeConflictKeys}
                         onRemove={
                           listKind === "active" || listKind === "reviewed"
                             ? (pullRequest) =>
@@ -930,6 +968,7 @@ export function PullRequestsContent({
                     )}
                     {workView === "all" &&
                       (availableUnimported.length > 0 ||
+                        unimportedPullRequests.isLoading ||
                         unimportedPullRequests.isError ||
                         (unimportedPullRequests.data?.errors.length ?? 0) >
                           0) && (
@@ -1028,14 +1067,18 @@ function UnimportedInboxSection({
             <GitPullRequest className="text-fog mx-auto size-5" />
             <h3 className="mt-3 text-sm font-medium">
               {totalCount === 0
-                ? "No un-imported pull requests"
+                ? isError || errors.length > 0
+                  ? "Some repositories could not be checked"
+                  : "No un-imported pull requests"
                 : draftsHidden
                   ? "Draft pull requests are hidden"
                   : "No pull requests match"}
             </h3>
             <p className="text-mist mt-1 text-xs">
               {totalCount === 0
-                ? "Every open pull request from your manual repositories is already in the inbox."
+                ? isError || errors.length > 0
+                  ? "Refresh to check for open pull requests again."
+                  : "Every open pull request from your connected repositories is already in your queue or history."
                 : draftsHidden
                   ? "Turn on Drafts to include them in this list."
                   : inboxInvolvementEmptyDetail(involvement)}

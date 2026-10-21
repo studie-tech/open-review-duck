@@ -40,9 +40,13 @@ export interface PullRequestSummary {
   deletions: number;
   changedFiles: number;
   labels: PullRequestLabel[];
+  /** Confirmed branch conflicts; null or absent while unknown or computing. */
+  hasMergeConflicts?: boolean | null;
 }
 
 export interface PullRequestListOptions {
+  /** Includes live conflict status when it requires an additional batch read. */
+  includeMergeConflictStatus?: boolean;
   /**
    * Restricts results to pull requests assigned to the connected reviewer.
    *

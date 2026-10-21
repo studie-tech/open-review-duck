@@ -2,6 +2,7 @@
 
 import { ExternalLink, GitPullRequest } from "lucide-react";
 
+import { MergeConflictBadge } from "~/components/dashboard/merge-conflict-badge";
 import { PullRequestLabelPills } from "~/components/dashboard/pull-request-label-pills";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -68,7 +69,15 @@ export function UnimportedPullRequestList({
                     {pullRequest.state === "draft" ? " · Draft" : ""} ·{" "}
                     {pullRequest.sourceBranch} → {pullRequest.targetBranch}
                   </span>
-                  <PullRequestLabelPills labels={pullRequest.labels} />
+                  <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {pullRequest.hasMergeConflicts === true && (
+                      <MergeConflictBadge />
+                    )}
+                    <PullRequestLabelPills
+                      labels={pullRequest.labels}
+                      className="mt-0"
+                    />
+                  </span>
                 </span>
                 <span className="col-start-2 flex min-w-0 flex-col items-end text-right sm:col-auto sm:ml-auto sm:shrink-0">
                   <span className="text-mist text-[10px]">

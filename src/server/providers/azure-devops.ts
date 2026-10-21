@@ -1195,6 +1195,12 @@ export class AzureDevOpsProvider implements PullRequestProvider {
         ? `${this.organizationUrl}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(repositoryName)}`
         : `${this.organizationUrl}/_git/${encodeURIComponent(item.repository.id ?? repositoryName ?? "repository")}`);
     return {
+      hasMergeConflicts:
+        item.mergeStatus === "conflicts"
+          ? true
+          : item.mergeStatus === "succeeded"
+            ? false
+            : null,
       externalId: String(item.pullRequestId),
       number: item.pullRequestId,
       title: item.title,

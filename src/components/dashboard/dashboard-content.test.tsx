@@ -38,6 +38,7 @@ const queryState = vi.hoisted(() => ({
   recentSyncFailures: [] as Array<Record<string, unknown>>,
   failuresRefetch: vi.fn(),
   dashboardRefetch: vi.fn(),
+  activeSyncsRefetch: vi.fn(),
   dashboardSetData: vi.fn(),
   dashboardInvalidate: vi.fn(),
   removeMutate: vi.fn(),
@@ -46,7 +47,8 @@ const queryState = vi.hoisted(() => ({
   unimported: {
     pullRequests: [] as Array<Record<string, unknown>>,
     errors: [] as Array<Record<string, unknown>>,
-    manualRepositoryCount: 0,
+    repositoryCount: 0,
+    mergeConflictKeys: [] as string[],
   },
   unimportedError: undefined as { message: string } | undefined,
   unimportedRefetch: vi.fn(),
@@ -104,6 +106,7 @@ vi.mock("~/trpc/react", () => ({
         useQuery: vi.fn(() => ({
           data: queryState.activeSyncs,
           isFetched: true,
+          refetch: queryState.activeSyncsRefetch,
         })),
       },
       recentSyncFailures: {
@@ -206,6 +209,7 @@ afterEach(() => {
   queryState.recentSyncFailures = [];
   queryState.failuresRefetch.mockReset();
   queryState.dashboardRefetch.mockReset();
+  queryState.activeSyncsRefetch.mockReset();
   queryState.dashboardSetData.mockReset();
   queryState.dashboardInvalidate.mockReset();
   queryState.removeMutate.mockReset();
@@ -216,7 +220,8 @@ afterEach(() => {
   queryState.unimported = {
     pullRequests: [],
     errors: [],
-    manualRepositoryCount: 0,
+    repositoryCount: 0,
+    mergeConflictKeys: [] as string[],
   };
   queryState.unimportedError = undefined;
   queryState.startAiMutate.mockReset();
@@ -809,10 +814,11 @@ describe("PullRequestsContent", () => {
     expect(screen.getByRole("button", { name: "Show drafts" })).toBeVisible();
   });
 
-  it("lists un-imported pull requests from manual repositories and can prepare them", async () => {
+  it("lists un-imported pull requests from connected repositories and can prepare them", async () => {
     queryState.activeSyncs = [];
     queryState.unimported = {
-      manualRepositoryCount: 1,
+      repositoryCount: 1,
+      mergeConflictKeys: [],
       errors: [],
       pullRequests: [
         {
@@ -832,6 +838,7 @@ describe("PullRequestsContent", () => {
           title: "Add usage metrics",
           webUrl: "https://example.com/pull/77",
           labels: [{ name: "size:L", color: "d93f0b" }],
+          hasMergeConflicts: true,
         },
       ],
     };
@@ -857,6 +864,12 @@ describe("PullRequestsContent", () => {
     expect(screen.getByText("Add usage metrics")).toBeVisible();
     expect(screen.getByText("size:L")).toBeVisible();
     expect(screen.getByText("Not in your queue")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Needs review, 2" }),
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText("Merge blocked: conflicts with the target branch"),
+    ).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Add for review" }));
     expect(queryState.syncMutate).toHaveBeenCalledWith({
@@ -883,10 +896,67 @@ describe("PullRequestsContent", () => {
     expect(queryState.syncMutate).toHaveBeenCalledTimes(1);
   });
 
+  it("shows confirmed conflicts on active and reviewed PRs and clears them on refresh", async () => {
+    queryState.activeSyncs = [];
+    queryState.unimported.mergeConflictKeys = [
+      "github:acme/web:42",
+      "github:acme/web:43",
+    ];
+    const rows = [
+      pullRequest({ id: "blocked", number: 42, title: "Conflicting feature" }),
+      pullRequest({
+        id: "reviewed",
+        number: 43,
+        title: "Reviewed feature",
+        signedUnits: 4,
+      }),
+      pullRequest({ id: "clean", number: 44, title: "Clean feature" }),
+    ];
+    const view = render(
+      <PullRequestsContent initialPullRequests={rows} fetchedAt={Date.now()} />,
+    );
+    const user = userEvent.setup();
+    expect(
+      screen.getAllByLabelText(
+        "Merge blocked: conflicts with the target branch",
+      ),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("link", { name: /Clean feature/ }),
+    ).not.toHaveTextContent("Blocked");
+    await user.click(screen.getByRole("button", { name: "Reviewed, 1" }));
+    expect(
+      screen.getByRole("link", { name: /Reviewed feature/ }),
+    ).toHaveTextContent("Conflicts");
+    queryState.unimported.mergeConflictKeys = [];
+    view.rerender(
+      <PullRequestsContent initialPullRequests={rows} fetchedAt={Date.now()} />,
+    );
+    expect(
+      screen.queryByLabelText(
+        "Merge blocked: conflicts with the target branch",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("refreshes the queue, discovery, and preparation status from the overview", async () => {
+    render(
+      <PullRequestsContent initialPullRequests={[]} fetchedAt={Date.now()} />,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Refresh pull requests" }));
+    expect(queryState.dashboardRefetch).toHaveBeenCalledTimes(1);
+    expect(queryState.unimportedRefetch).toHaveBeenCalledTimes(1);
+    expect(queryState.activeSyncsRefetch).toHaveBeenCalledTimes(1);
+    expect(queryState.failuresRefetch).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the drafts switch available for un-imported pull requests", async () => {
     queryState.activeSyncs = [];
     queryState.unimported = {
-      manualRepositoryCount: 1,
+      repositoryCount: 1,
+      mergeConflictKeys: [],
       errors: [],
       pullRequests: [
         {
