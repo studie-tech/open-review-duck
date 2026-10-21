@@ -115,12 +115,61 @@ describe("followPendingProviderLifecycle", () => {
             data: {
               summary,
               mergeable: null,
+              mergeBlockedReason: "Mergeability is still being computed",
               pullRequestState: "open",
             },
           },
         }),
       ).toBe(3_000);
     }
+  });
+
+  it("keeps the existing cadence for null mergeability unrelated to computation", () => {
+    for (const mergeBlockedReason of [
+      "Required approvals are missing",
+      "Pipeline is still running",
+      "Branch policies are not satisfied",
+      undefined,
+    ]) {
+      expect(
+        followPendingProviderLifecycle({
+          state: {
+            data: {
+              summary: "pending",
+              mergeable: null,
+              mergeBlockedReason,
+              pullRequestState: "open",
+            },
+          },
+        }),
+      ).toBe(8_000);
+    }
+    expect(
+      followPendingProviderLifecycle({
+        state: {
+          data: {
+            summary: "passing",
+            mergeable: null,
+            mergeBlockedReason: "Draft pull requests cannot be merged",
+            pullRequestState: "draft",
+          },
+        },
+      }),
+    ).toBe(8_000);
+  });
+
+  it("also follows an open pull request's pending rebase computation quickly", () => {
+    expect(
+      followPendingProviderLifecycle({
+        state: {
+          data: {
+            mergeable: null,
+            mergeBlockedReason: "Rebase availability is still being computed",
+            pullRequestState: "open",
+          },
+        },
+      }),
+    ).toBe(3_000);
   });
 
   it("stops polling closed and merged pull requests even if checks are pending", () => {

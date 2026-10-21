@@ -78,6 +78,7 @@ export function followPendingProviderLifecycle(query: {
     data?: {
       summary?: ProviderCheckSummary;
       mergeable?: boolean | null;
+      mergeBlockedReason?: string;
       pullRequestState?: ProviderPullRequestLifecycle["pullRequestState"];
     };
   };
@@ -92,9 +93,17 @@ export function followPendingProviderLifecycle(query: {
   }
   if (
     data.mergeable === null &&
-    (data.pullRequestState === "open" || data.pullRequestState === "draft")
+    data.pullRequestState === "open" &&
+    (data.mergeBlockedReason === "Mergeability is still being computed" ||
+      data.mergeBlockedReason === "Rebase availability is still being computed")
   ) {
     return 3_000;
+  }
+  if (
+    data.mergeable === null &&
+    (data.pullRequestState === "open" || data.pullRequestState === "draft")
+  ) {
+    return 8_000;
   }
   if (data.summary === "pending") return 8_000;
   return PROVIDER_STATUS_REFRESH_MS;
