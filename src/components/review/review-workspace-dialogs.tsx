@@ -27,6 +27,7 @@ import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import { useImportStatements } from "~/lib/tree-sitter-import-navigation";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { DiscussionImageViewer } from "./discussion-image-viewer";
 import { HighlightedTokens } from "./highlighted-tokens";
 import { ProviderCommentBody } from "./review-workspace-markdown";
 
@@ -740,6 +741,7 @@ export function PullRequestDetailsDialog({
   pullRequest: WorkspaceData["pullRequest"];
   onClose: () => void;
 }) {
+  const [image, setImage] = useState<{ src: string; alt: string }>();
   useEffect(() => {
     /** Closes the details dialog from the keyboard. */
     function closeOnEscape(event: KeyboardEvent) {
@@ -806,6 +808,9 @@ export function PullRequestDetailsDialog({
             <ProviderCommentBody
               body={description}
               className="mt-4 max-w-none"
+              imageMode="preview"
+              imageBaseUrl={pullRequest.webUrl}
+              onOpenImage={setImage}
             />
           ) : (
             <p className="text-mist mt-4 rounded-xl border border-dashed border-line p-4 text-xs leading-5">
@@ -827,6 +832,12 @@ export function PullRequestDetailsDialog({
           <span className="shrink-0">Esc closes</span>
         </footer>
       </div>
+      {image && (
+        <DiscussionImageViewer
+          image={image}
+          onClose={() => setImage(undefined)}
+        />
+      )}
     </div>
   );
 }

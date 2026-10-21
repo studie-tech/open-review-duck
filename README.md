@@ -58,6 +58,10 @@ because rendering a diagram can load external images.
 Use **View in code** to reply or manage a thread at its review line, or follow
 the provider link when its code is no longer in the current revision.
 
+**About this pull request** also shows screenshots in the description. Select
+**View & zoom** to inspect an image with the same viewer and loading controls
+as Discussions. Closing the image returns to the description.
+
 Use the hosted app at [reviewduck.ai](https://reviewduck.ai), or run the local
 appliance below.
 
