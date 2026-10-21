@@ -33,9 +33,11 @@ An expired personal authorization must be reconnected before merging.
 
 While the review tab is active, discussions refresh every 45 seconds, including
 after code review is complete. The completion page also refreshes approvals and
-merge readiness every 45 seconds, with faster checks while CI runs. Returning to
-the tab refreshes provider status too, so external updates appear without a page
-reload.
+merge readiness every 45 seconds, every eight seconds while CI runs, and every
+three seconds while mergeability is being computed. GitHub readiness also uses
+settled GraphQL mergeability for the same branch revisions when REST still
+reports an unknown state. Returning to the tab refreshes provider status too,
+so external updates appear without a page reload.
 
 Open Discussions to browse every provider review thread in a full-screen view,
 including older threads without a matching current review unit. GitHub PR

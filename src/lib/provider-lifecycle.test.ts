@@ -108,17 +108,19 @@ describe("followPendingProviderLifecycle", () => {
         state: { data: { summary: "pending", mergeable: true } },
       }),
     ).toBe(8_000);
-    expect(
-      followPendingProviderLifecycle({
-        state: {
-          data: {
-            summary: "passing",
-            mergeable: null,
-            pullRequestState: "open",
+    for (const summary of ["passing", "pending", "failing"] as const) {
+      expect(
+        followPendingProviderLifecycle({
+          state: {
+            data: {
+              summary,
+              mergeable: null,
+              pullRequestState: "open",
+            },
           },
-        },
-      }),
-    ).toBe(8_000);
+        }),
+      ).toBe(3_000);
+    }
   });
 
   it("stops polling closed and merged pull requests even if checks are pending", () => {
