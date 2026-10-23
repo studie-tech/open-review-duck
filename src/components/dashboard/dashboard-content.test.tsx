@@ -273,7 +273,7 @@ describe("PullRequestsContent", () => {
   };
 
   it("shows sync freshness independently of local record updates", () => {
-    const lastSyncedAt = new Date("2026-08-15T12:00:00Z");
+    const lastSyncedAt = new Date("2026-08-15T12:00:37.245Z");
     render(
       <PullRequestsContent
         initialPullRequests={[
@@ -290,6 +290,10 @@ describe("PullRequestsContent", () => {
     expect(screen.getByText(/^Synced /u)).toHaveAttribute(
       "datetime",
       lastSyncedAt.toISOString(),
+    );
+    expect(screen.getByText(/^Synced /u)).toHaveAttribute(
+      "title",
+      `Last synced ${lastSyncedAt.toISOString()}`,
     );
     expect(screen.getByText("feature/dashboard")).toBeVisible();
     expect(screen.getByText("main")).toBeVisible();

@@ -294,7 +294,7 @@ export function PullRequestList({
                       <time
                         className="inline-flex shrink-0 items-center gap-1.5 text-fog"
                         dateTime={pullRequest.lastSyncedAt.toISOString()}
-                        title={`Last synced ${pullRequest.lastSyncedAt.toLocaleString("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC`}
+                        title={`Last synced ${pullRequest.lastSyncedAt.toISOString()}`}
                       >
                         <Clock3 aria-hidden="true" className="size-3" />
                         Synced{" "}
