@@ -293,11 +293,12 @@ export function PullRequestList({
                       </span>
                       <time
                         className="inline-flex shrink-0 items-center gap-1.5 text-fog"
-                        dateTime={pullRequest.updatedAt.toISOString()}
-                        title={`Last updated ${pullRequest.updatedAt.toLocaleString("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC`}
+                        dateTime={pullRequest.lastSyncedAt.toISOString()}
+                        title={`Last synced ${pullRequest.lastSyncedAt.toLocaleString("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC`}
                       >
                         <Clock3 aria-hidden="true" className="size-3" />
-                        Updated {formatRelativeTime(pullRequest.updatedAt, now)}
+                        Synced{" "}
+                        {formatRelativeTime(pullRequest.lastSyncedAt, now)}
                       </time>
                     </span>
                     <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">

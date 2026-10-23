@@ -252,6 +252,7 @@ describe("PullRequestsContent", () => {
       webUrl: "https://example.com/pull/42",
       sourceBranch: "feature/dashboard",
       targetBranch: "main",
+      lastSyncedAt: new Date("2026-08-15T12:00:00Z"),
       updatedAt: new Date("2026-08-15T12:00:00Z"),
       additions: 12,
       deletions: 2,
@@ -270,6 +271,29 @@ describe("PullRequestsContent", () => {
       ...rest,
     };
   };
+
+  it("shows sync freshness independently of local record updates", () => {
+    const lastSyncedAt = new Date("2026-08-15T12:00:00Z");
+    render(
+      <PullRequestsContent
+        initialPullRequests={[
+          pullRequest({
+            id: "synced",
+            lastSyncedAt,
+            updatedAt: new Date("2026-08-16T12:00:00Z"),
+          }),
+        ]}
+        fetchedAt={Date.parse("2026-08-16T12:00:00Z")}
+      />,
+    );
+
+    expect(screen.getByText(/^Synced /u)).toHaveAttribute(
+      "datetime",
+      lastSyncedAt.toISOString(),
+    );
+    expect(screen.getByText("feature/dashboard")).toBeVisible();
+    expect(screen.getByText("main")).toBeVisible();
+  });
 
   it("shows durable sync progress and refreshes reviews when it finishes", async () => {
     const view = render(
