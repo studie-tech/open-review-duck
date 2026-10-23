@@ -5,28 +5,42 @@ import { useCallback, useRef, useState } from "react";
 /** Keeps full-file expansion and its saved unit folds together across navigation. */
 export function useReviewFileFolds() {
   const [fullFilePaths, setFullFilePaths] = useState(() => new Set<string>());
-  const fullFileFoldSnapshots = useRef(new Map<string, Map<string, boolean>>());
+  const fullFileFoldSnapshots = useRef(
+    new Map<string, Map<string, boolean | undefined>>(),
+  );
   const [unitFoldOverrides, setUnitFoldOverrides] = useState(
     () => new Map<string, boolean>(),
   );
 
-  /** Opens every unit in a file or restores its folds from before Full file. */
-  function toggleFullFile<Member extends { id: string; path: string }>(
+  /**
+   * Opens every unit in a file or restores its original fold overrides.
+   * Absent overrides stay absent so status and inspection still set defaults.
+   */
+  function toggleFullFile(
     path: string,
-    units: readonly Member[],
-    isCollapsed: (member: Member) => boolean,
+    units: readonly { id: string; path: string }[],
   ) {
     const previousFolds = fullFileFoldSnapshots.current.get(path);
     if (previousFolds) {
       fullFileFoldSnapshots.current.delete(path);
-      setUnitFoldOverrides(
-        (current) => new Map([...current, ...previousFolds]),
-      );
+      setUnitFoldOverrides((current) => {
+        const next = new Map(current);
+        for (const [id, override] of previousFolds) {
+          if (override === undefined) next.delete(id);
+          else next.set(id, override);
+        }
+        return next;
+      });
     } else {
       const fileUnits = units.filter((member) => member.path === path);
       fullFileFoldSnapshots.current.set(
         path,
-        new Map(fileUnits.map((member) => [member.id, isCollapsed(member)])),
+        new Map(
+          fileUnits.map((member) => [
+            member.id,
+            unitFoldOverrides.get(member.id),
+          ]),
+        ),
       );
       setUnitFoldOverrides((current) => {
         const next = new Map(current);

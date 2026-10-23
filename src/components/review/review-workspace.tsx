@@ -7193,11 +7193,7 @@ export function ReviewWorkspace({
                               })
                             }
                             onToggleFullFile={() =>
-                              toggleFullFile(
-                                activeUnit.path,
-                                units,
-                                unitIsCollapsed,
-                              )
+                              toggleFullFile(activeUnit.path, units)
                             }
                           />
                         ) : undefined
