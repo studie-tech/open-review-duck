@@ -201,6 +201,7 @@ export const reviewRouter = createTRPCRouter({
         webUrl: pullRequests.webUrl,
         sourceBranch: pullRequests.sourceBranch,
         targetBranch: pullRequests.targetBranch,
+        lastSyncedAt: pullRequests.lastSyncedAt,
         updatedAt: pullRequests.updatedAt,
         additions: pullRequests.additions,
         deletions: pullRequests.deletions,

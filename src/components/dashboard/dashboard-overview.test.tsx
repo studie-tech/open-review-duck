@@ -43,6 +43,7 @@ describe("DashboardOverview", () => {
         webUrl: "https://example.com/pull/42",
         sourceBranch: "feature/review-modes",
         targetBranch: "main",
+        lastSyncedAt: new Date("2026-08-21T12:00:00Z"),
         updatedAt: new Date("2026-08-21T12:00:00Z"),
         additions: 24,
         deletions: 3,
