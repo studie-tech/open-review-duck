@@ -605,6 +605,7 @@ export function ReviewWorkspace({
   const [fullFileUnitIds, setFullFileUnitIds] = useState(
     () => new Set<string>(),
   );
+  const fullFileFoldSnapshots = useRef(new Map<string, Map<string, boolean>>());
   const [unitFoldOverrides, setUnitFoldOverrides] = useState(
     () => new Map<string, boolean>(),
   );
@@ -4100,6 +4101,7 @@ export function ReviewWorkspace({
     setResolvingImport(undefined);
     setImportContextUnitIds(new Set());
     setFullFileUnitIds(new Set());
+    fullFileFoldSnapshots.current.clear();
     setUnitFoldOverrides(new Map());
     setInspectedFilePath(undefined);
     signOffUndoHistoryRef.current = [];
@@ -7183,15 +7185,46 @@ export function ReviewWorkspace({
                                 return next;
                               })
                             }
-                            onToggleFullFile={() =>
+                            onToggleFullFile={() => {
+                              if (fullFileVisible) {
+                                const previousFolds =
+                                  fullFileFoldSnapshots.current.get(
+                                    activeUnit.id,
+                                  );
+                                fullFileFoldSnapshots.current.delete(
+                                  activeUnit.id,
+                                );
+                                if (previousFolds) {
+                                  setUnitFoldOverrides(
+                                    (current) =>
+                                      new Map([...current, ...previousFolds]),
+                                  );
+                                }
+                              } else {
+                                fullFileFoldSnapshots.current.set(
+                                  activeUnit.id,
+                                  new Map(
+                                    activeFileCardMembers.map((member) => [
+                                      member.id,
+                                      unitIsCollapsed(member),
+                                    ]),
+                                  ),
+                                );
+                                setUnitFoldOverrides((current) => {
+                                  const next = new Map(current);
+                                  for (const member of activeFileCardMembers)
+                                    next.set(member.id, false);
+                                  return next;
+                                });
+                              }
                               setFullFileUnitIds((current) => {
                                 const next = new Set(current);
                                 if (next.has(activeUnit.id))
                                   next.delete(activeUnit.id);
                                 else next.add(activeUnit.id);
                                 return next;
-                              })
-                            }
+                              });
+                            }}
                           />
                         ) : undefined
                       }
