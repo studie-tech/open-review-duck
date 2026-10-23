@@ -41,6 +41,8 @@ describe("DashboardOverview", () => {
         authorAvatarUrl: null,
         state: "open",
         webUrl: "https://example.com/pull/42",
+        sourceBranch: "feature/review-modes",
+        targetBranch: "main",
         updatedAt: new Date("2026-08-21T12:00:00Z"),
         additions: 24,
         deletions: 3,

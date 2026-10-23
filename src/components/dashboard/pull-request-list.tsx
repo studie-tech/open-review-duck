@@ -2,9 +2,12 @@
 
 import {
   ArchiveX,
+  ArrowRight,
   ArrowUpRight,
   CheckCheck,
+  Clock3,
   ExternalLink,
+  GitBranch,
   GitMerge,
   GitPullRequest,
   Loader2,
@@ -33,6 +36,7 @@ import {
   priorityInboxRepositoryKey,
 } from "~/lib/priority-inbox";
 import { providerLabel } from "~/lib/provider-labels";
+import { formatRelativeTime, useRelativeClock } from "~/lib/relative-time";
 import { cn } from "~/lib/utils";
 import { api, type RouterOutputs } from "~/trpc/react";
 
@@ -69,6 +73,7 @@ function progressLabel(
 /** Renders one section of the review inbox with reversible queue actions. */
 export function PullRequestList({
   pullRequests,
+  fetchedAt,
   kind,
   pendingPullRequestId,
   onRemove,
@@ -80,6 +85,7 @@ export function PullRequestList({
   mergeConflictKeys,
 }: {
   pullRequests: PullRequests;
+  fetchedAt: number;
   kind: PullRequestListKind;
   pendingPullRequestId?: string;
   onRemove?: (pullRequest: PullRequests[number]) => void;
@@ -90,6 +96,7 @@ export function PullRequestList({
   aiReviewDisabled?: boolean;
   mergeConflictKeys?: ReadonlySet<string>;
 }) {
+  const now = useRelativeClock(fetchedAt);
   const { navigate } = usePendingNavigation();
   const [pullRequestToRemove, setPullRequestToRemove] =
     useState<PullRequests[number]>();
@@ -262,16 +269,49 @@ export function PullRequestList({
                     <span className="mt-1.5 block text-sm leading-5 font-medium sm:truncate">
                       {pullRequest.title}
                     </span>
-                    <span className="text-fog mt-1 block text-xs">
-                      by {pullRequest.authorLogin} ·{" "}
-                      <span className="text-lime">
-                        +{pullRequest.additions}
-                      </span>{" "}
-                      <span className="text-red-700 dark:text-red-300">
-                        −{pullRequest.deletions}
+                    <span className="text-mist mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-4">
+                      <span
+                        className="flex min-w-0 max-w-full items-center gap-1.5 sm:max-w-[min(28rem,55%)]"
+                        title={`${pullRequest.sourceBranch} → ${pullRequest.targetBranch}`}
+                      >
+                        <GitBranch
+                          aria-hidden="true"
+                          className="size-3 shrink-0 text-fog"
+                        />
+                        <span className="sr-only">Source branch</span>
+                        <span className="min-w-0 truncate font-mono">
+                          {pullRequest.sourceBranch}
+                        </span>
+                        <ArrowRight
+                          aria-hidden="true"
+                          className="size-3 shrink-0 text-fog"
+                        />
+                        <span className="sr-only">into target branch</span>
+                        <span className="max-w-[40%] shrink-0 truncate font-mono sm:max-w-28">
+                          {pullRequest.targetBranch}
+                        </span>
                       </span>
+                      <time
+                        className="inline-flex shrink-0 items-center gap-1.5 text-fog"
+                        dateTime={pullRequest.updatedAt.toISOString()}
+                        title={`Last updated ${pullRequest.updatedAt.toLocaleString("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC`}
+                      >
+                        <Clock3 aria-hidden="true" className="size-3" />
+                        Updated {formatRelativeTime(pullRequest.updatedAt, now)}
+                      </time>
                     </span>
-                    <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      <span className="text-fog min-w-0 truncate">
+                        by {pullRequest.authorLogin}
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-1.5 tabular-nums">
+                        <span className="text-addition">
+                          +{pullRequest.additions}
+                        </span>
+                        <span className="text-red-700 dark:text-red-300">
+                          −{pullRequest.deletions}
+                        </span>
+                      </span>
                       {(pullRequest.state === "open" ||
                         pullRequest.state === "draft") &&
                         mergeConflictKeys?.has(
