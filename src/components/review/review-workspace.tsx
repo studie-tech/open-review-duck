@@ -327,6 +327,7 @@ import {
 import { usePrivateWorkspaceSourceHydration } from "./use-private-workspace-source-hydration";
 import { useProviderConversationController } from "./use-provider-conversation-controller";
 import { useReviewDialogController } from "./use-review-dialog-controller";
+import { useReviewFileFolds } from "./use-review-file-folds";
 import { useReviewPanelController } from "./use-review-panel-controller";
 import { useReviewSynchronizationController } from "./use-review-synchronization-controller";
 import { useReviewWaitController } from "./use-review-wait-controller";
@@ -602,13 +603,14 @@ export function ReviewWorkspace({
   const [importContextUnitIds, setImportContextUnitIds] = useState(
     () => new Set<string>(),
   );
-  const [fullFileUnitIds, setFullFileUnitIds] = useState(
-    () => new Set<string>(),
-  );
-  const fullFileFoldSnapshots = useRef(new Map<string, Map<string, boolean>>());
-  const [unitFoldOverrides, setUnitFoldOverrides] = useState(
-    () => new Map<string, boolean>(),
-  );
+  const {
+    clearUnitFoldOverrides,
+    fullFilePaths,
+    resetFileFolds,
+    setUnitFoldOverrides,
+    toggleFullFile,
+    unitFoldOverrides,
+  } = useReviewFileFolds();
   const [pathSearch, setPathSearch] = useState("");
   const [queueLimit, setQueueLimit] = useState(INITIAL_PATH_ITEMS);
   const [searchLimit, setSearchLimit] = useState(INITIAL_PATH_ITEMS);
@@ -1408,7 +1410,7 @@ export function ReviewWorkspace({
     ? importContextUnitIds.has(activeUnit.id)
     : false;
   const fullFileVisible = activeUnit
-    ? fullFileUnitIds.has(activeUnit.id)
+    ? fullFilePaths.has(activeUnit.path)
     : false;
   const previousUnitStartLine =
     activeUnit?.changeType === "deleted"
@@ -1882,14 +1884,9 @@ export function ReviewWorkspace({
       setFileSourceReveal((current) =>
         current?.path === path ? undefined : current,
       );
-      setUnitFoldOverrides((current) => {
-        if (unitIds.every((id) => !current.has(id))) return current;
-        const next = new Map(current);
-        for (const id of unitIds) next.delete(id);
-        return next;
-      });
+      clearUnitFoldOverrides(path, unitIds);
     },
-    [],
+    [clearUnitFoldOverrides],
   );
   /**
    * Opens a file at its first actionable unit without expanding to the full file.
@@ -3117,7 +3114,13 @@ export function ReviewWorkspace({
       selectUnit(index);
       setFocusedProviderThreadId(thread.externalId);
     },
-    [changeMarkdownView, selectUnit, unitIndexById, units],
+    [
+      changeMarkdownView,
+      selectUnit,
+      setUnitFoldOverrides,
+      unitIndexById,
+      units,
+    ],
   );
   const commentThreadsByPath = useMemo(
     () => providerThreadsByPath(providerDiscussionThreads),
@@ -4100,9 +4103,7 @@ export function ReviewWorkspace({
     importPreviewRequestRef.current += 1;
     setResolvingImport(undefined);
     setImportContextUnitIds(new Set());
-    setFullFileUnitIds(new Set());
-    fullFileFoldSnapshots.current.clear();
-    setUnitFoldOverrides(new Map());
+    resetFileFolds();
     setInspectedFilePath(undefined);
     signOffUndoHistoryRef.current = [];
     setSignOffUndoHistory([]);
@@ -4110,7 +4111,13 @@ export function ReviewWorkspace({
     setCompletedBrowsing(false);
     setCompletionOpen(false);
     setWaitingCompletionOpen(false);
-  }, [snapshotId, setAiQuestionLine, setAiQuestionPreviewLine, setFindingLine]);
+  }, [
+    snapshotId,
+    resetFileFolds,
+    setAiQuestionLine,
+    setAiQuestionPreviewLine,
+    setFindingLine,
+  ]);
   // Resolved once per unit rather than once per rendered line: the index can
   // hold forty findings and a unit can hold hundreds of lines.
   const deepReviewFindingsByLine = useMemo(() => {
@@ -7185,46 +7192,13 @@ export function ReviewWorkspace({
                                 return next;
                               })
                             }
-                            onToggleFullFile={() => {
-                              if (fullFileVisible) {
-                                const previousFolds =
-                                  fullFileFoldSnapshots.current.get(
-                                    activeUnit.id,
-                                  );
-                                fullFileFoldSnapshots.current.delete(
-                                  activeUnit.id,
-                                );
-                                if (previousFolds) {
-                                  setUnitFoldOverrides(
-                                    (current) =>
-                                      new Map([...current, ...previousFolds]),
-                                  );
-                                }
-                              } else {
-                                fullFileFoldSnapshots.current.set(
-                                  activeUnit.id,
-                                  new Map(
-                                    activeFileCardMembers.map((member) => [
-                                      member.id,
-                                      unitIsCollapsed(member),
-                                    ]),
-                                  ),
-                                );
-                                setUnitFoldOverrides((current) => {
-                                  const next = new Map(current);
-                                  for (const member of activeFileCardMembers)
-                                    next.set(member.id, false);
-                                  return next;
-                                });
-                              }
-                              setFullFileUnitIds((current) => {
-                                const next = new Set(current);
-                                if (next.has(activeUnit.id))
-                                  next.delete(activeUnit.id);
-                                else next.add(activeUnit.id);
-                                return next;
-                              });
-                            }}
+                            onToggleFullFile={() =>
+                              toggleFullFile(
+                                activeUnit.path,
+                                units,
+                                unitIsCollapsed,
+                              )
+                            }
                           />
                         ) : undefined
                       }
