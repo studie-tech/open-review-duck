@@ -955,6 +955,7 @@ export function PullRequestsContent({
                     {visibleItems.length > 0 && (
                       <PullRequestList
                         pullRequests={visibleItems}
+                        fetchedAt={fetchedAt}
                         kind={listKind}
                         showPriorityGroups={!isHistoryView(workView)}
                         pendingPullRequestId={pendingPullRequestId}

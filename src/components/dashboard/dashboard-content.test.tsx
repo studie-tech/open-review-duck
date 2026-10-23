@@ -250,6 +250,8 @@ describe("PullRequestsContent", () => {
       authorAvatarUrl: null,
       state: "open",
       webUrl: "https://example.com/pull/42",
+      sourceBranch: "feature/dashboard",
+      targetBranch: "main",
       updatedAt: new Date("2026-08-15T12:00:00Z"),
       additions: 12,
       deletions: 2,
