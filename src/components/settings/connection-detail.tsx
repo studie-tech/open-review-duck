@@ -3,6 +3,7 @@
 import {
   Check,
   CircleAlert,
+  ExternalLink,
   GitPullRequest,
   Loader2,
   Pencil,
@@ -51,12 +52,24 @@ export function ConnectionDetail({
   onSelectRepository: (repositoryId: string) => void;
 }) {
   const [repositorySearch, setRepositorySearch] = useState("");
+  const isGitHubApp =
+    connection.provider === "github" &&
+    connection.credentialKind === "github_app";
+  const githubSettings = api.provider.githubInstallationSettings.useQuery(
+    { connectionId: connection.id },
+    {
+      enabled: isGitHubApp,
+      staleTime: 300_000,
+      retry: false,
+      refetchOnWindowFocus: false,
+    },
+  );
   const availableRepositories = api.provider.listAvailableRepositories.useQuery(
     { connectionId: connection.id },
     {
       staleTime: 60_000,
       retry: false,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: isGitHubApp ? "always" : false,
     },
   );
   const importRepository = api.provider.importRepository.useMutation({
@@ -128,7 +141,7 @@ export function ConnectionDetail({
   );
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <p className="text-fog flex flex-wrap items-center gap-2 text-xs">
@@ -231,15 +244,76 @@ export function ConnectionDetail({
                 ` ${availableRepositories.data.length} available from this connection.`}
             </p>
           </div>
-          <input
-            type="search"
-            value={repositorySearch}
-            onChange={(event) => setRepositorySearch(event.target.value)}
-            placeholder="Filter repositories"
-            aria-label="Filter repositories"
-            className="bg-surface text-cloud focus:border-lime/40 h-9 w-full rounded-lg border border-line px-3 text-xs outline-none sm:w-56"
-          />
+          <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="Refresh repositories"
+              disabled={availableRepositories.isFetching}
+              onClick={() => void availableRepositories.refetch()}
+            >
+              <RefreshCw
+                className={cn(
+                  "size-3.5",
+                  availableRepositories.isFetching && "animate-spin",
+                )}
+              />
+              Refresh
+            </Button>
+            <input
+              type="search"
+              value={repositorySearch}
+              onChange={(event) => setRepositorySearch(event.target.value)}
+              placeholder="Filter repositories"
+              aria-label="Filter repositories"
+              className="bg-surface text-cloud focus:border-lime/40 h-9 min-w-0 w-full rounded-lg border border-line px-3 text-xs outline-none sm:w-44"
+            />
+          </div>
         </div>
+        {isGitHubApp && (
+          <div className="flex flex-col gap-3 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium">Missing a repository?</p>
+              <p className="text-mist mt-1 max-w-prose text-xs leading-5">
+                Select more repositories or review permissions in GitHub. Save
+                your changes, then return here to add repositories to this
+                workspace.
+              </p>
+              {githubSettings.isError && (
+                <p role="alert" className="text-coral mt-1 text-xs">
+                  Could not load GitHub access settings. Try again.
+                </p>
+              )}
+            </div>
+            {githubSettings.data ? (
+              <Button asChild size="sm" variant="secondary">
+                <a
+                  href={githubSettings.data.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Manage GitHub access
+                  <ExternalLink className="size-3.5" />
+                  <span className="sr-only">(opens in a new tab)</span>
+                </a>
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={githubSettings.isFetching}
+                onClick={() => void githubSettings.refetch()}
+              >
+                {githubSettings.isFetching && (
+                  <Loader2 className="size-3.5 animate-spin" />
+                )}
+                {githubSettings.isError
+                  ? "Retry GitHub access settings"
+                  : "Manage GitHub access"}
+              </Button>
+            )}
+          </div>
+        )}
         <div className="p-3">
           {localMode && connection.provider === "github" && (
             <div className="border-cyan/15 bg-cyan/[.025] text-mist mb-2 flex flex-col gap-2 rounded-xl border px-3 py-2.5 text-[10px] leading-4 sm:flex-row sm:items-center sm:justify-between">
@@ -310,8 +384,8 @@ export function ConnectionDetail({
               filteredRepositories?.length === 0 && (
                 <div className="border-line bg-surface-subtle text-mist rounded-xl border px-4 py-5 text-center text-xs">
                   {normalizedRepositorySearch
-                    ? "No repository allowed by this token matches your search."
-                    : "This token does not currently expose any repositories."}
+                    ? "No accessible repositories match your search."
+                    : "This connection does not currently expose any repositories."}
                 </div>
               )}
           </div>
