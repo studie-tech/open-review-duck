@@ -68,9 +68,6 @@ interface GitHubInstallation {
   id: number;
   account: { id: number; login?: string; name?: string };
 }
-interface GitHubInstallationRepositories {
-  repositories: GitHubRepository[];
-}
 interface GitHubPull {
   id: number;
   node_id?: string;
@@ -341,17 +338,11 @@ export class GitHubProvider implements PullRequestProvider {
 
   /** Lists every repository accessible through the provider connection. */
   async listRepositories(): Promise<RepositoryIdentity[]> {
-    const repos = this.installation
-      ? (
-          await providerFetch<GitHubInstallationRepositories>(
-            this.name,
-            `${this.apiUrl}/installation/repositories?per_page=100`,
-            { headers: this.headers },
-          )
-        ).repositories
-      : await this.getAllPages<GitHubRepository>(
-          `${this.apiUrl}/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&direction=desc&per_page=100`,
-        );
+    const repos = await this.getAllPages<GitHubRepository>(
+      this.installation
+        ? `${this.apiUrl}/installation/repositories?per_page=100`
+        : `${this.apiUrl}/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&direction=desc&per_page=100`,
+    );
     return repos.map((repo) => ({
       externalId: String(repo.id),
       owner: repo.full_name.split("/", 1)[0] ?? repo.name,
@@ -1821,7 +1812,7 @@ export class GitHubProvider implements PullRequestProvider {
     return url.toString();
   }
 
-  /** Fetches every page of a paginated provider endpoint. */
+  /** Fetches every page of an array or repository-list provider endpoint. */
   private async getAllPages<T>(initialUrl: string): Promise<T[]> {
     const items: T[] = [];
     const visited = new Set<string>();
@@ -1842,10 +1833,16 @@ export class GitHubProvider implements PullRequestProvider {
         throw new Error("GitHub returned an unsafe pagination URL");
       }
       visited.add(url);
-      const response = await providerResponse<T[]>(this.name, url, {
-        headers: this.headers,
-      });
-      items.push(...response.data);
+      const response = await providerResponse<T[] | { repositories: T[] }>(
+        this.name,
+        url,
+        { headers: this.headers },
+      );
+      items.push(
+        ...(Array.isArray(response.data)
+          ? response.data
+          : response.data.repositories),
+      );
       if (items.length > MAX_PROVIDER_ITEMS) {
         throw new Error("GitHub pagination exceeded its item limit");
       }

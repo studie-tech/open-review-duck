@@ -604,20 +604,88 @@ describe("provider normalization", () => {
     );
   });
 
-  it("never forwards GitHub credentials to a pagination URL on another origin", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse([], {
-          Link: '<https://attacker.example/collect>; rel="next"',
+  it("includes newly authorized GitHub App repositories beyond the first 100", async () => {
+    const repositories = Array.from({ length: 101 }, (_, index) => ({
+      id: index + 1,
+      name: `repo-${index + 1}`,
+      full_name: `acme/repo-${index + 1}`,
+      private: true,
+      html_url: `https://github.com/acme/repo-${index + 1}`,
+      default_branch: "main",
+    }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { total_count: 101, repositories: repositories.slice(0, 100) },
+          {
+            Link: '<https://api.github.com/installation/repositories?per_page=100&page=2>; rel="next"',
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          total_count: 101,
+          repositories: repositories.slice(100),
         }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new GitHubProvider(
+      "installation-token",
+      undefined,
+      true,
+    ).listRepositories();
+
+    expect(result).toHaveLength(101);
+    expect(result[100]).toMatchObject({
+      externalId: "101",
+      owner: "acme",
+      name: "repo-101",
+      isPrivate: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.github.com/installation/repositories?per_page=100",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://api.github.com/installation/repositories?per_page=100&page=2",
+    );
+  });
+
+  it.each([false, true])(
+    "never forwards GitHub credentials to another pagination origin (installation: %s)",
+    async (installation) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          jsonResponse(installation ? { repositories: [] } : [], {
+            Link: '<https://attacker.example/collect>; rel="next"',
+          }),
+        ),
+      );
+
+      await expect(
+        new GitHubProvider("token", undefined, installation).listRepositories(),
+      ).rejects.toThrow("unsafe pagination URL");
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("rejects repeated GitHub App repository pagination URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        { repositories: [] },
+        {
+          Link: '<https://api.github.com/installation/repositories?per_page=100>; rel="next"',
+        },
       ),
     );
-
+    vi.stubGlobal("fetch", fetchMock);
     await expect(
-      new GitHubProvider("token").listRepositories(),
-    ).rejects.toThrow("unsafe pagination URL");
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      new GitHubProvider("token", undefined, true).listRepositories(),
+    ).rejects.toThrow("pagination exceeded its safety limit");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("follows Azure DevOps continuation tokens", async () => {
