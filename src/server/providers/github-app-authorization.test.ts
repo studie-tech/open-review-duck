@@ -4,10 +4,58 @@ import {
   exchangeGitHubUserAuthorization,
   exchangeGitHubUserCode,
   githubAppPrivateKey,
+  githubInstallationSettingsUrl,
   refreshGitHubUserToken,
   revokeGitHubUserToken,
   verifyGitHubInstallationOwnership,
 } from "./github-app-authorization";
+
+describe("GitHub installation settings", () => {
+  it.each([
+    "https://github.com/settings/installations/42",
+    "https://github.com/organizations/acme/settings/installations/42",
+  ])(
+    "uses GitHub's installation URL for personal and organization accounts: %s",
+    async (url) => {
+      const fetcher = vi
+        .fn()
+        .mockResolvedValue(Response.json({ html_url: url }));
+      await expect(
+        githubInstallationSettingsUrl("42", "app-jwt", fetcher),
+      ).resolves.toBe(url);
+      expect(fetcher).toHaveBeenCalledWith(
+        "https://api.github.com/app/installations/42",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer app-jwt" }),
+          redirect: "error",
+        }),
+      );
+    },
+  );
+
+  it.each([
+    undefined,
+    "https://example.com/settings/installations/42",
+    "http://github.com/settings/installations/42",
+    "https://user:secret@github.com/settings/installations/42",
+    "https://github.com/settings/installations/43",
+    "https://github.com/unrelated/42",
+  ])("rejects missing, unsafe, or unrelated destinations: %s", async (url) => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ html_url: url }));
+    await expect(
+      githubInstallationSettingsUrl("42", "app-jwt", fetcher),
+    ).rejects.toThrow("GitHub access settings response is invalid");
+  });
+
+  it("reports GitHub failures without returning a guessed destination", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    await expect(
+      githubInstallationSettingsUrl("42", "app-jwt", fetcher),
+    ).rejects.toThrow("GitHub access settings could not be loaded (404)");
+  });
+});
 
 describe("GitHub App user authorization", () => {
   it("loads the PKCS#1 private-key format downloaded for GitHub Apps", () => {

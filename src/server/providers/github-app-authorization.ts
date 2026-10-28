@@ -28,6 +28,49 @@ export async function githubAppJwt(input: {
     .sign(githubAppPrivateKey(input.privateKey));
 }
 
+/** Reads GitHub's settings URL for a personal or organization installation. */
+export async function githubInstallationSettingsUrl(
+  installationId: string,
+  appToken: string,
+  fetcher: typeof fetch = fetch,
+) {
+  const response = await fetcher(
+    `https://api.github.com/app/installations/${encodeURIComponent(installationId)}`,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${appToken}`,
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(
+      `GitHub access settings could not be loaded (${response.status})`,
+    );
+  }
+  const installation = (await response.json()) as { html_url?: unknown };
+  const url =
+    typeof installation.html_url === "string"
+      ? new URL(installation.html_url)
+      : undefined;
+  if (
+    url?.origin !== "https://github.com" ||
+    url.username ||
+    url.password ||
+    !/^\/(?:organizations\/[\w-]+\/)?settings\/installations\/\d+$/.test(
+      url.pathname,
+    ) ||
+    !url.pathname.endsWith(`/${installationId}`)
+  ) {
+    throw new Error("GitHub access settings response is invalid");
+  }
+  return `${url.origin}${url.pathname}`;
+}
+
 interface GitHubUserTokenResponse {
   access_token?: unknown;
   refresh_token?: unknown;

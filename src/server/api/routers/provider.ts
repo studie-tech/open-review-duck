@@ -32,6 +32,10 @@ import {
   revokeProviderOAuth,
 } from "~/server/providers/credentials";
 import { exportRepositoryReviewData } from "~/server/providers/export";
+import {
+  githubAppJwt,
+  githubInstallationSettingsUrl,
+} from "~/server/providers/github-app-authorization";
 import { cachedInboxDiscovery } from "~/server/providers/inbox-cache";
 import {
   reconcileRepositoryIntake,
@@ -669,6 +673,49 @@ export const providerRouter = createTRPCRouter({
       };
     }),
 
+  githubInstallationSettings: protectedProcedure
+    .input(connectionIdSchema)
+    .query(async ({ ctx, input }) => {
+      const workspace = await requirePersonalWorkspaceAdministrator(
+        ctx.db,
+        ctx.auth.userId,
+      );
+      const connection = await ctx.db.query.providerConnections.findFirst({
+        where: and(
+          eq(providerConnections.id, input.connectionId),
+          eq(providerConnections.workspaceId, workspace.id),
+        ),
+      });
+      if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
+      if (
+        connection.provider !== "github" ||
+        connection.credentialKind !== "github_app" ||
+        !connection.installationId
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This connection does not use a GitHub App installation",
+        });
+      }
+      try {
+        return {
+          url: await githubInstallationSettingsUrl(
+            connection.installationId,
+            await githubAppJwt({
+              appId: env.GITHUB_APP_ID,
+              privateKey: env.GITHUB_APP_PRIVATE_KEY,
+            }),
+          ),
+        };
+      } catch (cause) {
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: "Could not load GitHub access settings. Try again.",
+          cause,
+        });
+      }
+    }),
+
   listAvailableRepositories: protectedProcedure
     .input(importRepositorySchema.pick({ connectionId: true }))
     .query(async ({ ctx, input }) => {
@@ -685,7 +732,9 @@ export const providerRouter = createTRPCRouter({
       if (!connection) throw new TRPCError({ code: "NOT_FOUND" });
       try {
         return await (
-          await providerForConnection(ctx.db, connection)
+          await providerForConnection(ctx.db, connection, {
+            refreshInstallation: true,
+          })
         ).listRepositories();
       } catch (cause) {
         const rateLimited =
