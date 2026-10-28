@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import { NextResponse } from "next/server";
 import {
@@ -8,6 +8,7 @@ import {
   oauthCredentials,
   oauthStates,
   providerConnections,
+  workspaceMembers,
 } from "@/drizzle/schema";
 import { env } from "~/env";
 import { applicationAuth } from "~/server/auth";
@@ -292,6 +293,47 @@ async function completeProviderAuthorization(
   }
   const url = new URL(request.url);
   const stateToken = url.searchParams.get("state");
+  // Saving GitHub installation settings returns without OAuth state. This is
+  // navigation only: never exchange tokens or attach an installation here.
+  if (
+    provider === "github" &&
+    url.searchParams.get("setup_action") === "update" &&
+    !url.searchParams.has("state") &&
+    !url.searchParams.has("code") &&
+    !url.searchParams.has("error")
+  ) {
+    const installationId = githubInstallationId(
+      url.searchParams.get("installation_id"),
+    );
+    if (!installationId) {
+      return securedCallbackResponse(
+        NextResponse.json(
+          { error: "GitHub installation is missing or invalid" },
+          { status: 400 },
+        ),
+      );
+    }
+    const [connection] = await db
+      .select({ id: providerConnections.id })
+      .from(providerConnections)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, providerConnections.workspaceId),
+      )
+      .where(
+        and(
+          eq(workspaceMembers.userId, authentication.userId),
+          inArray(workspaceMembers.role, ["owner", "admin"]),
+          eq(providerConnections.provider, "github"),
+          eq(providerConnections.credentialKind, "github_app"),
+          eq(providerConnections.installationId, installationId),
+        ),
+      )
+      .limit(1);
+    const settings = new URL("/settings/providers", env.APP_URL);
+    if (connection) settings.searchParams.set("connection", connection.id);
+    return securedCallbackResponse(NextResponse.redirect(settings));
+  }
   if (!stateToken || stateToken.length > 8_192) {
     return securedCallbackResponse(
       NextResponse.json({ error: "OAuth state is missing" }, { status: 400 }),
