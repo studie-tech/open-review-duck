@@ -903,7 +903,15 @@ export async function persistUnreviews(
                 ) ?? [unit.id],
               ),
               eq(signOffs.semanticHash, signOff.semanticHash),
-              eq(signOffs.signedOffAt, signOff.signedOffAt),
+              // Compare the event timestamps inside PostgreSQL: reading one
+              // through a JavaScript Date discards its microsecond precision.
+              eq(
+                signOffs.signedOffAt,
+                tx
+                  .select({ signedOffAt: signOffs.signedOffAt })
+                  .from(signOffs)
+                  .where(eq(signOffs.id, signOff.id)),
+              ),
             ),
           ),
         ),

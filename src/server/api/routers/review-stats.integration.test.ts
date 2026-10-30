@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   providerConnections,
@@ -240,6 +240,51 @@ afterAll(async () => {
 });
 
 describe("review achievement recomputation", () => {
+  it("persists batch undo when PostgreSQL sign-offs have microsecond timestamps", async () => {
+    const userId = `integration-${randomUUID()}`;
+    await db.insert(users).values({ id: userId });
+    try {
+      await db.insert(workspaceMembers).values({
+        workspaceId: fixture.workspaceId,
+        userId,
+        role: "member",
+      });
+      const caller = createCaller({
+        db,
+        auth: { userId, has: () => true },
+        headers: new Headers(),
+      });
+      const unitIds = [signedUnits.latest.id, signedUnits.previous.id];
+      await caller.signOffBatch({
+        signOffs: unitIds.map((unitId) => ({ unitId, durationSeconds: 0 })),
+      });
+      // Database defaults retain microseconds; JavaScript Dates retain only
+      // milliseconds. Use a fixed sub-millisecond value to expose the mismatch.
+      await db
+        .update(signOffs)
+        .set({
+          signedOffAt: sql`date_trunc('second', now()) + interval '123456 microseconds'`,
+        })
+        .where(eq(signOffs.userId, userId));
+      expect(
+        await caller.unreviewBatch({
+          undos: unitIds.map((unitId) => ({ unitId })),
+        }),
+      ).toEqual(
+        unitIds.map((unitId) => ({ ok: true, unitId, unreviewed: true })),
+      );
+      const rows = await db
+        .select({ invalidatedAt: signOffs.invalidatedAt })
+        .from(signOffs)
+        .where(eq(signOffs.userId, userId));
+      expect(rows).toHaveLength(2);
+      expect(rows.every((row) => row.invalidatedAt !== null)).toBe(true);
+      expect(await statsOf(userId)).toMatchObject({ experiencePoints: 0 });
+    } finally {
+      await db.delete(users).where(eq(users.id, userId));
+    }
+  });
+
   it("totals the reviewer's distinct active sign-offs", async () => {
     await createCaller({
       db,
