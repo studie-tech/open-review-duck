@@ -224,6 +224,23 @@ export function outstandingReviewFileUnits<Unit extends FileReviewUnit>(
   );
 }
 
+/** A folder signs off outstanding units, or returns a fully reviewed subtree. */
+export function reviewFolderAction(files: readonly ReviewFileEntry[]) {
+  const units = files.flatMap((file) => file.units);
+  const reviewed =
+    units.length > 0 && units.every((unit) => unit.status === "signed_off");
+  return {
+    reviewed,
+    unitIds: units
+      .filter((unit) =>
+        reviewed
+          ? unit.status === "signed_off"
+          : unit.status !== "signed_off" && unit.status !== "waiting",
+      )
+      .map((unit) => unit.id),
+  };
+}
+
 /** Selects the units a file-level resume can return to the review path. */
 export function waitingReviewFileUnits<Unit extends FileReviewUnit>(
   file: Pick<ReviewFileEntry<Unit>, "units">,

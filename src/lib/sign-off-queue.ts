@@ -12,6 +12,7 @@ export type ReviewFooterSaveState =
 
 export type SignOffQueueAction =
   | { type: "enqueue"; unitId: string }
+  | { type: "enqueue_many"; unitIds: string[] }
   | { type: "settle"; unitId: string }
   | { type: "synchronize"; unitIds: string[] };
 
@@ -51,12 +52,17 @@ export function signOffQueueReducer(
     };
   }
 
-  if (action.type === "enqueue") {
-    if (state.ids.has(action.unitId)) return state;
-    const ids = new Set(state.ids).add(action.unitId);
+  if (action.type === "enqueue" || action.type === "enqueue_many") {
+    const added = new Set(
+      (action.type === "enqueue" ? [action.unitId] : action.unitIds).filter(
+        (unitId) => !state.ids.has(unitId),
+      ),
+    );
+    if (added.size === 0) return state;
+    const ids = new Set([...state.ids, ...added]);
     return state.ids.size === 0
-      ? { completed: 0, ids, total: 1 }
-      : { ...state, ids, total: state.total + 1 };
+      ? { completed: 0, ids, total: added.size }
+      : { ...state, ids, total: state.total + added.size };
   }
 
   if (!state.ids.has(action.unitId)) return state;

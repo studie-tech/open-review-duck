@@ -17,6 +17,7 @@ import {
   reviewFileEntries,
   reviewFileTreeDirectoryPaths,
   reviewFileTreeMovesPath,
+  reviewFolderAction,
   sortByReviewFileTreeOrder,
   storedMarkdownReviewView,
   storedReviewMode,
@@ -24,6 +25,60 @@ import {
   waitingReviewFileUnits,
   windowReviewFileCards,
 } from "./review-files";
+
+describe("reviewFolderAction", () => {
+  it("signs off only outstanding descendants and leaves waiting units alone", () => {
+    const entries = reviewFileEntries(files, [
+      {
+        id: "signed",
+        path: "src/review/one.ts",
+        status: "signed_off",
+        revisionState: "unchanged",
+      },
+      {
+        id: "waiting",
+        path: "src/review/one.ts",
+        status: "waiting",
+        revisionState: "unchanged",
+      },
+      {
+        id: "changed",
+        path: "src/two.ts",
+        status: "changed",
+        revisionState: "updated",
+      },
+    ]);
+    expect(reviewFolderAction(entries)).toEqual({
+      reviewed: false,
+      unitIds: ["changed"],
+    });
+    expect(
+      reviewFolderAction(
+        entries.filter((file) => file.path === "src/review/one.ts"),
+      ),
+    ).toEqual({ reviewed: false, unitIds: [] });
+  });
+
+  it("returns every signed unit in a completed folder even with empty files", () => {
+    const entries = reviewFileEntries(files, [
+      {
+        id: "signed",
+        path: "src/review/one.ts",
+        status: "signed_off",
+        revisionState: "unchanged",
+      },
+    ]);
+    expect(reviewFolderAction(entries)).toEqual({
+      reviewed: true,
+      unitIds: ["signed"],
+    });
+    expect(reviewFolderAction([])).toEqual({ reviewed: false, unitIds: [] });
+    expect(reviewFolderAction(reviewFileEntries(files, []))).toEqual({
+      reviewed: false,
+      unitIds: [],
+    });
+  });
+});
 
 describe("firstReviewFileUnitIndex", () => {
   it("starts at the first explorer file rather than the first guided unit", () => {

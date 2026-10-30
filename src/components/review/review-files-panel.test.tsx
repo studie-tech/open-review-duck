@@ -5,7 +5,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reviewFileEntries } from "~/lib/review-files";
+import { reviewFileEntries, reviewFolderAction } from "~/lib/review-files";
 import { ReviewFilesPanel } from "./review-files-panel";
 
 afterEach(() => {
@@ -54,6 +54,175 @@ const files = reviewFileEntries(
 
 /** Stable no-op handler so a re-render hands the panel the same props. */
 function noop() {}
+
+/** A folder with nested work, an empty file, and an unrelated sibling. */
+function folderFiles(status = "pending") {
+  const paths = [
+    "src/review/one.ts",
+    "src/review/nested/two.ts",
+    "src/review/empty.png",
+    "docs/readme.md",
+  ];
+  return reviewFileEntries(
+    paths.map((path) => ({
+      previousPath: null,
+      changeType: "modified",
+      additions: 1,
+      deletions: 0,
+      skipReason: null,
+      id: path,
+      path,
+      isBinary: path.endsWith(".png"),
+    })),
+    paths
+      .filter((path) => !path.endsWith(".png"))
+      .map((path) => ({
+        id: path,
+        path,
+        status,
+        revisionState: "unchanged" as const,
+      })),
+  );
+}
+
+describe("folder review checkboxes", () => {
+  it("checks nested files in one action without expanding a closed folder or opening a file", async () => {
+    const onToggleFolder = vi.fn();
+    const onSelect = vi.fn();
+    const onToggle = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={folderFiles()}
+        search=""
+        onSelect={onSelect}
+        onToggle={onToggle}
+        onToggleFolder={onToggleFolder}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Collapse review" }));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Sign off 2 review units in folder src/review.",
+      }),
+    );
+    const [path, descendants] = onToggleFolder.mock.calls[0] ?? [];
+    expect(path).toBe("src/review");
+    expect(reviewFolderAction(descendants).unitIds).toEqual([
+      "src/review/nested/two.ts",
+      "src/review/one.ts",
+    ]);
+    expect(
+      screen.getByRole("button", { name: "Expand review" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("shows partial progress and preserves waiting units", () => {
+    const entries = folderFiles();
+    const partial = reviewFileEntries(
+      entries,
+      entries
+        .flatMap((file) => file.units)
+        .map((unit) => ({
+          ...unit,
+          status: unit.path.includes("nested") ? "waiting" : unit.status,
+        })),
+    );
+    render(
+      <ReviewFilesPanel
+        files={partial}
+        search=""
+        onSelect={noop}
+        onToggle={noop}
+        onToggleFolder={noop}
+      />,
+    );
+    const folder = screen.getByRole("checkbox", {
+      name: "Sign off 1 review unit in folder src/review. 1 unit stays waiting for a response.",
+    });
+    expect(folder).toBePartiallyChecked();
+    expect(folder).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", { name: /in folder src\/review\/nested\./ }),
+    ).toBeDisabled();
+  });
+
+  it("returns a completed folder with Space and keeps its outline folded", async () => {
+    const onToggleFolder = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={folderFiles("signed_off")}
+        search=""
+        onSelect={noop}
+        onToggle={noop}
+        onToggleFolder={onToggleFolder}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Collapse review" }));
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Return 2 review units in folder src/review.",
+    });
+    expect(checkbox).toBeChecked();
+    checkbox.focus();
+    await user.keyboard(" ");
+    expect(reviewFolderAction(onToggleFolder.mock.calls[0]?.[1])).toEqual({
+      reviewed: true,
+      unitIds: ["src/review/nested/two.ts", "src/review/one.ts"],
+    });
+    expect(
+      screen.getByRole("button", { name: "Expand review" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("disables ancestors of saving files while keeping other folders available", () => {
+    render(
+      <ReviewFilesPanel
+        files={folderFiles()}
+        search=""
+        pendingFileIds={new Set(["src/review/nested/two.ts"])}
+        onSelect={noop}
+        onToggle={noop}
+        onToggleFolder={noop}
+      />,
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /in folder src\./ }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: /in folder src\/review\./ }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: /in folder docs\./ }),
+    ).toBeEnabled();
+  });
+
+  it("limits a folder decision to files matching the current search", async () => {
+    const onToggleFolder = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReviewFilesPanel
+        files={folderFiles()}
+        search="one.ts"
+        onSelect={noop}
+        onToggle={noop}
+        onToggleFolder={onToggleFolder}
+      />,
+    );
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Sign off 1 review unit in folder src/review.",
+      }),
+    );
+    expect(
+      onToggleFolder.mock.calls[0]?.[1].map(
+        (file: { path: string }) => file.path,
+      ),
+    ).toEqual(["src/review/one.ts"]);
+  });
+});
 
 describe("ReviewFilesPanel", () => {
   it("keeps New selected and does not scroll back to the selection during background updates", async () => {

@@ -6,6 +6,29 @@ import {
 } from "./sign-off-queue";
 
 describe("sign-off save queue", () => {
+  it("adds a whole folder once while preserving progress and deduplicating units", () => {
+    let state = signOffQueueReducer(createSignOffQueue(), {
+      type: "enqueue_many",
+      unitIds: ["one", "two"],
+    });
+    state = signOffQueueReducer(state, { type: "settle", unitId: "one" });
+    state = signOffQueueReducer(state, {
+      type: "enqueue_many",
+      unitIds: ["two", "three", "three"],
+    });
+    expect(state).toEqual({
+      completed: 1,
+      total: 3,
+      ids: new Set(["two", "three"]),
+    });
+    expect(
+      signOffQueueReducer(state, {
+        type: "enqueue_many",
+        unitIds: ["two", "three"],
+      }),
+    ).toBe(state);
+  });
+
   it("reports completed work against an expanding batch total", () => {
     let state = createSignOffQueue();
     state = signOffQueueReducer(state, { type: "enqueue", unitId: "one" });

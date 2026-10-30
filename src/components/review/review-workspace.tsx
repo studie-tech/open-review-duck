@@ -98,6 +98,7 @@ import {
   rememberReviewMode,
   reviewFileCardsInTreeOrder,
   reviewFileEntries,
+  reviewFolderAction,
   storedMarkdownReviewView,
   storedReviewMode,
   waitingReviewFileUnits,
@@ -789,6 +790,32 @@ export function ReviewWorkspace({
   const reviewFiles = useMemo(
     () => reviewFileEntries(initialData.files, units),
     [initialData.files, units],
+  );
+  const pendingReviewFileIds = useMemo(
+    () =>
+      new Set([
+        ...pendingFiles,
+        ...reviewFiles
+          .filter((file) =>
+            file.units.some(
+              (unit) =>
+                signOffQueue.ids.has(unit.id) ||
+                pendingUndoUnitIds.has(unit.id) ||
+                pendingConceptSignOffIds.has(
+                  conceptByMemberId.get(unit.id)?.id ?? "",
+                ),
+            ),
+          )
+          .map((file) => file.id),
+      ]),
+    [
+      conceptByMemberId,
+      pendingConceptSignOffIds,
+      pendingFiles,
+      pendingUndoUnitIds,
+      reviewFiles,
+      signOffQueue.ids,
+    ],
   );
   const conceptFileCards = useMemo(() => {
     const cards = conceptFileCardsInReadingOrder(activeConceptMembers);
@@ -1997,6 +2024,48 @@ export function ReviewWorkspace({
   const toggleReviewFile = useCallback((file: ReviewFileEntry) => {
     applyReviewFileToggleRef.current(file);
   }, []);
+
+  /** Records one recursive folder decision without moving or folding the tree. */
+  function applyReviewFolderToggle(path: string, files: ReviewFileEntry[]) {
+    if (files.some((file) => pendingReviewFileIds.has(file.id))) return;
+    const { reviewed, unitIds } = reviewFolderAction(files);
+    if (unitIds.length === 0) return;
+    setCompletedBrowsing(false);
+    if (reviewed) {
+      const undone = optimisticallyUndoSignOffs(unitIds);
+      if (undone) {
+        queueSignOffUndo(
+          {
+            kind: "unit",
+            label: `${path}/`,
+            unitIds,
+            view: reviewViewSnapshot({ unitIndex: activeIndex }),
+          },
+          undone,
+        );
+      }
+      return;
+    }
+    const activeDuration = Math.round((Date.now() - startedAt) / 1000);
+    optimisticallyQueueSignOffs(
+      unitIds.map((unitId) => ({
+        unitId,
+        sessionId,
+        durationSeconds: unitId === activeUnit?.id ? activeDuration : 0,
+      })),
+      undefined,
+      { advance: false, label: `${path}/` },
+    );
+  }
+  const applyReviewFolderToggleRef = useRef(applyReviewFolderToggle);
+  applyReviewFolderToggleRef.current = applyReviewFolderToggle;
+  /** Keeps folder decisions stable across unrelated workspace renders. */
+  const toggleReviewFolder = useCallback(
+    (path: string, files: ReviewFileEntry[]) => {
+      applyReviewFolderToggleRef.current(path, files);
+    },
+    [],
+  );
   /**
    * Opens the composer on a line a reviewer picked in another member's card.
    *
@@ -2297,7 +2366,7 @@ export function ReviewWorkspace({
   function optimisticallyQueueSignOffs(
     inputs: SignOffInput[],
     preferredNextUnit?: (unit: ReviewUnit, index: number) => boolean,
-    options?: { advance?: boolean },
+    options?: { advance?: boolean; label?: string },
   ) {
     const inputByUnitId = new Map(inputs.map((input) => [input.unitId, input]));
     const alreadyQueued = new Set(
@@ -2342,20 +2411,19 @@ export function ReviewWorkspace({
         rememberSignOff(history, {
           kind: "unit",
           label:
-            queued.length === 1
+            options?.label ??
+            (queued.length === 1
               ? first.rollback.unit.name
-              : `${queued.length} units`,
+              : `${queued.length} units`),
           unitIds: queued.map(({ input }) => input.unitId),
           view: reviewViewSnapshot(first.rollback),
         }),
       );
     }
-    for (const entry of queued) {
-      dispatchSignOffQueue({
-        type: "enqueue",
-        unitId: entry.input.unitId,
-      });
-    }
+    dispatchSignOffQueue({
+      type: "enqueue_many",
+      unitIds: queued.map(({ input }) => input.unitId),
+    });
     queuedSignOffs.current.push(...queued);
     unitsRef.current = updated;
     setUnits(updated);
@@ -6514,9 +6582,10 @@ export function ReviewWorkspace({
               files={reviewFiles}
               search={pathSearch}
               selectedPath={completedBrowsing ? undefined : activeUnit.path}
-              pendingFileIds={pendingFiles}
+              pendingFileIds={pendingReviewFileIds}
               onSelect={(file) => selectReviewFile(file, { inspect: true })}
               onToggle={toggleReviewFile}
+              onToggleFolder={toggleReviewFolder}
               onResumeWaiting={resumeReviewFile}
             />
           )}

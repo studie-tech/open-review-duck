@@ -29,6 +29,7 @@ import {
 import {
   buildReviewFileTree,
   filterReviewFiles,
+  flattenReviewFileTree,
   initialReviewFileTreeDirectoryPaths,
   outstandingReviewFileUnits,
   type ReviewFileEntry,
@@ -36,6 +37,7 @@ import {
   type ReviewFileTreeMoves,
   type ReviewFileTreeNode,
   reviewFileTreeDirectoryPaths,
+  reviewFolderAction,
   visibleReviewFileTreeItems,
 } from "~/lib/review-files";
 import { isPreviewableReviewImage } from "~/lib/review-images";
@@ -57,6 +59,74 @@ const filters = [
   { id: "all" as const, icon: List, label: "All" },
   { id: "needs_review" as const, icon: CircleDot, label: "New" },
 ];
+
+/** Renders a folder decision separately from its expand/collapse button. */
+function FolderReviewCheckbox({
+  path,
+  files,
+  pendingFileIds,
+  onToggle,
+}: {
+  path: string;
+  files: ReviewFileEntry[];
+  pendingFileIds?: ReadonlySet<string>;
+  onToggle: (path: string, files: ReviewFileEntry[]) => void;
+}) {
+  const { reviewed, unitIds } = reviewFolderAction(files);
+  const waiting = files.reduce((total, file) => total + file.waitingUnits, 0);
+  const mixed =
+    !reviewed &&
+    files.some((file) => file.reviewedUnits + file.waitingUnits > 0);
+  const pending = files.some((file) => pendingFileIds?.has(file.id));
+  const count = unitIds.length;
+  const action = reviewed ? "Return" : "Sign off";
+  const label = `${action} ${count} review ${count === 1 ? "unit" : "units"} in folder ${path}`;
+  const scope = "Includes nested folders and files matching this view.";
+  const waitLabel =
+    waiting > 0
+      ? ` ${waiting} ${waiting === 1 ? "unit stays" : "units stay"} waiting for a response.`
+      : "";
+  const checkboxRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (checkboxRef.current) checkboxRef.current.indeterminate = mixed;
+  }, [mixed]);
+  return (
+    <label
+      title={
+        pending
+          ? `Saving folder progress. ${scope}`
+          : count === 0
+            ? `No outstanding review units in this folder.${waitLabel}`
+            : `${label}. ${scope}${waitLabel}`
+      }
+      className={cn(
+        "relative grid size-5 shrink-0 place-items-center overflow-hidden rounded-md border transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-cyan has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-panel",
+        reviewed
+          ? "border-lime bg-lime text-accent-foreground"
+          : mixed
+            ? "border-cyan/45 bg-cyan/10 text-cyan"
+            : "border-line-strong bg-panel hover:border-cyan/45",
+        (pending || count === 0) && "cursor-not-allowed opacity-55",
+      )}
+    >
+      <input
+        ref={checkboxRef}
+        type="checkbox"
+        checked={reviewed}
+        aria-label={`${label}.${waitLabel}`}
+        disabled={pending || count === 0}
+        onMouseDown={(event) => event.preventDefault()}
+        onChange={() => onToggle(path, files)}
+        className="sr-only"
+      />
+      {reviewed ? (
+        <Check className="size-3" strokeWidth={3} />
+      ) : mixed ? (
+        <span className="h-0.5 w-2 rounded-full bg-current" />
+      ) : null}
+    </label>
+  );
+}
 
 /** Renders the semantic checkbox for one changed file. */
 function FileReviewCheckbox({
@@ -353,6 +423,7 @@ function ReviewFileTreeRows({
   onExpandedChange,
   onSelect,
   onToggle,
+  onToggleFolder,
   onResumeWaiting,
 }: {
   nodes: ReviewFileTreeNode[];
@@ -363,6 +434,7 @@ function ReviewFileTreeRows({
   onExpandedChange: (path: string) => void;
   onSelect: (file: ReviewFileEntry) => void;
   onToggle: (file: ReviewFileEntry) => void;
+  onToggleFolder?: (path: string, files: ReviewFileEntry[]) => void;
   onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   return nodes.map((node) => {
@@ -394,37 +466,51 @@ function ReviewFileTreeRows({
     const open = expanded.has(node.path);
     return (
       <li key={node.path} data-review-file-path={node.path}>
-        <button
-          type="button"
-          id={reviewFileTreeControlId(node.path)}
-          aria-expanded={open}
-          aria-label={`${open ? "Collapse" : "Expand"} ${node.name}`}
-          onClick={() => onExpandedChange(node.path)}
-          className="text-mist hover:bg-surface-subtle flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 text-left transition"
+        <div
+          className="group flex min-w-0 items-center gap-2 rounded-lg py-1.5 pr-2 transition hover:bg-surface-subtle"
           style={{ paddingLeft: `${8 + Math.min(level, 7) * 12}px` }}
         >
-          {open ? (
-            <ChevronDown className="size-3 shrink-0" />
-          ) : (
-            <ChevronRight className="size-3 shrink-0" />
+          {onToggleFolder && (
+            <FolderReviewCheckbox
+              path={node.path}
+              files={flattenReviewFileTree(node.children)}
+              pendingFileIds={pendingFileIds}
+              onToggle={onToggleFolder}
+            />
           )}
-          {open ? (
-            <FolderOpen className="text-cyan size-3.5 shrink-0" />
-          ) : (
-            <Folder className="text-fog size-3.5 shrink-0" />
-          )}
-          <span className="min-w-0 flex-1 truncate font-mono text-[10px]">
-            {node.name}
-          </span>
-          {node.attentionUnits > 0 && (
-            <span className="text-cyan text-[8px]">{node.attentionUnits}</span>
-          )}
-          {node.totalUnits > 0 && (
-            <span className="text-fog text-[8px]">
-              {node.reviewedUnits}/{node.totalUnits}
+          <button
+            type="button"
+            id={reviewFileTreeControlId(node.path)}
+            aria-expanded={open}
+            aria-label={`${open ? "Collapse" : "Expand"} ${node.name}`}
+            onClick={() => onExpandedChange(node.path)}
+            className="text-mist flex min-w-0 flex-1 items-center gap-1.5 rounded text-left focus-visible:outline-2 focus-visible:outline-cyan"
+          >
+            {open ? (
+              <ChevronDown className="size-3 shrink-0" />
+            ) : (
+              <ChevronRight className="size-3 shrink-0" />
+            )}
+            {open ? (
+              <FolderOpen className="text-cyan size-3.5 shrink-0" />
+            ) : (
+              <Folder className="text-fog size-3.5 shrink-0" />
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono text-[10px]">
+              {node.name}
             </span>
-          )}
-        </button>
+            {node.attentionUnits > 0 && (
+              <span className="text-cyan text-[8px]">
+                {node.attentionUnits}
+              </span>
+            )}
+            {node.totalUnits > 0 && (
+              <span className="text-fog text-[8px]">
+                {node.reviewedUnits}/{node.totalUnits}
+              </span>
+            )}
+          </button>
+        </div>
         {open && (
           <ul className="m-0 list-none p-0">
             <ReviewFileTreeRows
@@ -436,6 +522,7 @@ function ReviewFileTreeRows({
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}
               onToggle={onToggle}
+              onToggleFolder={onToggleFolder}
               onResumeWaiting={onResumeWaiting}
             />
           </ul>
@@ -462,6 +549,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   emptyLabel = "No changed files match this view.",
   onSelect,
   onToggle,
+  onToggleFolder,
   onResumeWaiting,
 }: {
   files: ReviewFileEntry[];
@@ -472,6 +560,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
   emptyLabel?: string;
   onSelect: (file: ReviewFileEntry) => void;
   onToggle: (file: ReviewFileEntry) => void;
+  onToggleFolder?: (path: string, files: ReviewFileEntry[]) => void;
   onResumeWaiting?: (file: ReviewFileEntry) => void;
 }) {
   const pendingSelectionReveal = useRef(selectedPath);
@@ -722,6 +811,7 @@ export const ReviewFilesPanel = memo(function ReviewFilesPanel({
               onExpandedChange={onExpandedChange}
               onSelect={onSelect}
               onToggle={onToggle}
+              onToggleFolder={onToggleFolder}
               onResumeWaiting={onResumeWaiting}
             />
           </ul>
