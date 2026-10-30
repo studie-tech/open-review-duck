@@ -87,9 +87,11 @@ function FolderReviewCheckbox({
       ? ` ${waiting} ${waiting === 1 ? "unit stays" : "units stay"} waiting for a response.`
       : "";
   const checkboxRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
+  // Native activation clears indeterminate even when waiting units keep the
+  // folder mixed. Restore it on every render before assistive UI can observe it.
+  useLayoutEffect(() => {
     if (checkboxRef.current) checkboxRef.current.indeterminate = mixed;
-  }, [mixed]);
+  });
   return (
     <label
       title={

@@ -31,7 +31,7 @@ the selected file as you navigate and is ignored while typing in an input.
 
 ## Verification
 
-`pnpm check` passes, including 3,240 unit tests. The PostgreSQL review-stats
+`pnpm check` passes, including 3,242 unit tests. The PostgreSQL review-stats
 integration suite passes all five tests, including a regression that failed
 before the timestamp fix.
 
@@ -45,6 +45,12 @@ desktop layouts, and the mobile drawer were verified.
 Additional Chrome checks verified V in both review modes, keyboard navigation
 to the next file, typing V into the file search without folding the file, and
 running the visibility action from the command menu.
+
+Independent review also identified a native mixed-state checkbox regression.
+Mouse and Space activation now both preserve the partial state when a folder's
+outstanding units are signed off while other units remain waiting. Both cases
+have stateful regression coverage. The full PostgreSQL integration suite passes
+all 105 tests.
 
 ## Screenshots
 

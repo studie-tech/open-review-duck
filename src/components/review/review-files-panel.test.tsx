@@ -149,6 +149,57 @@ describe("folder review checkboxes", () => {
     ).toBeDisabled();
   });
 
+  it.each(["click", "Space"])(
+    "keeps the native mixed state after %s signs off a folder with waiting units",
+    async (activation) => {
+      const entries = folderFiles();
+      const user = userEvent.setup();
+      /** Applies the folder sign-off while preserving its waiting descendant. */
+      function WaitingFolderHarness() {
+        const [signedIds, setSignedIds] = useState(new Set<string>());
+        const current = reviewFileEntries(
+          entries,
+          entries.flatMap((file) =>
+            file.units.map((unit) => ({
+              ...unit,
+              status: unit.path.includes("nested")
+                ? "waiting"
+                : signedIds.has(unit.id)
+                  ? "signed_off"
+                  : "pending",
+            })),
+          ),
+        );
+        return (
+          <ReviewFilesPanel
+            files={current}
+            search=""
+            onSelect={noop}
+            onToggle={noop}
+            onToggleFolder={(_path, descendants) =>
+              setSignedIds(new Set(reviewFolderAction(descendants).unitIds))
+            }
+          />
+        );
+      }
+      render(<WaitingFolderHarness />);
+      const folder = screen.getByRole("checkbox", {
+        name: "Sign off 1 review unit in folder src/review. 1 unit stays waiting for a response.",
+      });
+      expect(folder).toBePartiallyChecked();
+      if (activation === "click") await user.click(folder);
+      else {
+        folder.focus();
+        await user.keyboard(" ");
+      }
+      expect(folder).toHaveAccessibleName(
+        "Sign off 0 review units in folder src/review. 1 unit stays waiting for a response.",
+      );
+      expect(folder).toBeDisabled();
+      expect(folder).toBePartiallyChecked();
+    },
+  );
+
   it("returns a completed folder with Space and keeps its outline folded", async () => {
     const onToggleFolder = vi.fn();
     const user = userEvent.setup();
