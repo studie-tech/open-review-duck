@@ -215,6 +215,7 @@ export function ReviewFileCardSourcePlaceholder({
   path,
   reviewed,
   sourceBytes,
+  shortcut,
 }: {
   deleted?: boolean;
   framed?: boolean;
@@ -225,6 +226,7 @@ export function ReviewFileCardSourcePlaceholder({
   path?: string;
   reviewed: boolean;
   sourceBytes?: number;
+  shortcut?: KeyboardShortcut;
 }) {
   const kind = reviewSourceKindLabel({ language, path });
   return (
@@ -255,6 +257,7 @@ export function ReviewFileCardSourcePlaceholder({
         className="text-cyan hover:border-cyan/25 hover:bg-cyan/[.05] flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[9px] transition"
       >
         Show {itemLabel}
+        {shortcut && <ShortcutHint shortcut={shortcut} />}
       </button>
     </div>
   );

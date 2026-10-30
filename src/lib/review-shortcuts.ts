@@ -35,6 +35,7 @@ export const reviewShortcuts = {
   openProvider: [{ key: "o", mod: true, shift: true }],
   toggleTheme: [{ key: "l", mod: true, shift: true }],
   context: [{ key: "c" }],
+  toggleFile: [{ key: "v" }],
   signOff: [{ key: "s" }],
   // Shift already carries the wider variant of an action here — concept
   // sign-off, deletions, reset, the next review.

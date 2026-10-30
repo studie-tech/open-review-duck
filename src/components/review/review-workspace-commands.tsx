@@ -78,6 +78,7 @@ export interface ReviewCommandState {
   reviewComplete: boolean;
   reviewMode: ReviewMode;
   reviewRunning: boolean;
+  selectedFileSourceExpanded: boolean;
   sideBySideVisible: boolean;
   signOffQueue: { ids: ReadonlySet<string> };
   undoSignOff: CommandMutationState;
@@ -113,6 +114,7 @@ export interface ReviewCommandActions {
   stopWaitingOnActive: () => void;
   syncExternalData: (options?: { silent?: boolean }) => Promise<boolean>;
   toggleContext: () => void;
+  toggleSelectedFileSource: () => void;
   toggleInsightsPanel: () => void;
   togglePathPanel: () => void;
   undoLastSignOff: () => Promise<void>;
@@ -266,6 +268,7 @@ export function buildReviewWorkspaceCommands(
     reviewComplete,
     reviewMode,
     reviewRunning,
+    selectedFileSourceExpanded,
     sideBySideVisible,
     signOffQueue,
     undoSignOff,
@@ -300,6 +303,7 @@ export function buildReviewWorkspaceCommands(
     stopWaitingOnActive,
     syncExternalData,
     toggleContext,
+    toggleSelectedFileSource,
     toggleInsightsPanel,
     togglePathPanel,
     undoLastSignOff,
@@ -321,6 +325,18 @@ export function buildReviewWorkspaceCommands(
     onSelect: () => setAiReviewDialogOpen(true),
   };
   const reviewCommands: CommandCenterItem[] = [
+    {
+      id: "toggle-file-source",
+      label: selectedFileSourceExpanded
+        ? "Collapse current file"
+        : "Expand current file",
+      description: "Show or hide the selected file's contents",
+      group: "Review navigation",
+      icon: <FileCode2 className="size-4" />,
+      shortcut: reviewShortcuts.toggleFile,
+      disabled: !activeUnit || loadingChanges,
+      onSelect: toggleSelectedFileSource,
+    },
     {
       id: "toggle-review-path",
       label: "Toggle review path",
