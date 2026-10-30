@@ -1505,6 +1505,15 @@ export function ReviewWorkspace({
     reviewed: activeFileCardReviewed,
     reveal: fileSourceReveal,
   });
+  /** Toggles the selected file for its chevron, Show file button, and shortcut. */
+  function toggleSelectedFileSource() {
+    if (!activeUnit) return;
+    setFileSourceReveal({
+      path: activeUnit.path,
+      reviewed: activeFileCardReviewed,
+      expanded: !selectedFileSourceExpanded,
+    });
+  }
   const firstCurrentReviewLine =
     currentRelatedRanges?.at(0)?.startLine ?? activeUnit?.startLine ?? 1;
   const primaryReviewRanges =
@@ -5725,6 +5734,7 @@ export function ReviewWorkspace({
       reviewComplete,
       reviewMode,
       reviewRunning,
+      selectedFileSourceExpanded,
       sideBySideVisible,
       signOffQueue,
       undoSignOff,
@@ -5759,6 +5769,7 @@ export function ReviewWorkspace({
       stopWaitingOnActive,
       syncExternalData,
       toggleContext,
+      toggleSelectedFileSource,
       toggleInsightsPanel,
       togglePathPanel,
       undoLastSignOff,
@@ -7236,13 +7247,8 @@ export function ReviewWorkspace({
                           : undefined
                       }
                       expanded={selectedFileSourceExpanded}
-                      onToggleExpanded={() => {
-                        setFileSourceReveal({
-                          path: activeUnit.path,
-                          reviewed: activeFileCardReviewed,
-                          expanded: !selectedFileSourceExpanded,
-                        });
-                      }}
+                      onToggleExpanded={toggleSelectedFileSource}
+                      toggleExpandedShortcut={reviewShortcuts.toggleFile}
                       actions={
                         selectedFileSourceExpanded &&
                         activeUnit.kind !== "binary" &&
@@ -7301,13 +7307,8 @@ export function ReviewWorkspace({
                       itemLabel={reviewMode === "files" ? "file" : "card"}
                       language={activeUnit.language}
                       lineCount={activeFileCardLineCount}
-                      onShow={() =>
-                        setFileSourceReveal({
-                          path: activeUnit.path,
-                          reviewed: activeFileCardReviewed,
-                          expanded: true,
-                        })
-                      }
+                      onShow={toggleSelectedFileSource}
+                      shortcut={reviewShortcuts.toggleFile}
                       path={activeUnit.path}
                       reviewed={activeFileCardReviewed}
                       sourceBytes={reviewSourceByteLength(activeModule)}

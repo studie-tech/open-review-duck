@@ -12,6 +12,10 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "~/components/ui/badge";
+import {
+  formatShortcut,
+  type KeyboardShortcut,
+} from "~/lib/keyboard-shortcuts";
 import { formatReviewSourceBytes } from "~/lib/review-source-display";
 import {
   sourceByteOffsetLine,
@@ -343,6 +347,7 @@ export function ReviewFileCardHeader({
   itemLabel = "Card",
   expanded,
   onToggleExpanded,
+  toggleExpandedShortcut,
   sourceBytes,
   fileContents,
   onResumeWaiting,
@@ -356,6 +361,7 @@ export function ReviewFileCardHeader({
   itemLabel?: "Card" | "File";
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  toggleExpandedShortcut?: KeyboardShortcut;
   sourceBytes?: number;
   fileContents?: string | null;
   onResumeWaiting?: () => void;
@@ -395,6 +401,11 @@ export function ReviewFileCardHeader({
             type="button"
             aria-expanded={expanded}
             aria-label={`${expanded ? "Collapse" : "Expand"} ${fileName}`}
+            title={
+              toggleExpandedShortcut
+                ? `${expanded ? "Collapse" : "Expand"} file (${formatShortcut(toggleExpandedShortcut).join(" then ")})`
+                : undefined
+            }
             onClick={onToggleExpanded}
             className="hover:bg-surface-subtle text-fog flex shrink-0 items-center px-2 transition"
           >

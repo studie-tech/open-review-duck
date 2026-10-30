@@ -21,6 +21,14 @@ PostgreSQL's microsecond sign-off timestamps before comparing them. Undo now
 compares the original timestamps inside PostgreSQL, retaining the existing
 lineage and event checks.
 
+## File visibility shortcut
+
+Press **V** to expand or collapse the selected file in Files or Guided view.
+It uses the same action as the file chevron and the **Show file** button, which
+now displays the shortcut. The command menu and shortcut help list the current
+**Expand current file** or **Collapse current file** action. The shortcut follows
+the selected file as you navigate and is ignored while typing in an input.
+
 ## Verification
 
 `pnpm check` passes, including 3,240 unit tests. The PostgreSQL review-stats
@@ -33,6 +41,10 @@ fixture. A folder with ten files and 38 units began with two units reviewed.
 One click signed off the remaining 36 in two batch requests; siblings were
 unchanged. Checking, returning, Undo, reload persistence, keyboard controls,
 desktop layouts, and the mobile drawer were verified.
+
+Additional Chrome checks verified V in both review modes, keyboard navigation
+to the next file, typing V into the file search without folding the file, and
+running the visibility action from the command menu.
 
 ## Screenshots
 
@@ -51,3 +63,7 @@ The same controls in the dark theme:
 The folder action in the mobile drawer:
 
 ![Folder review on mobile](screenshots/04-mobile.jpg)
+
+The file visibility shortcut on the folded file's control:
+
+![Show file with the V shortcut](screenshots/05-file-shortcut.jpg)
