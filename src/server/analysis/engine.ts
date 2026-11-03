@@ -34,8 +34,8 @@ import type {
   SupportedLanguage,
 } from "./types";
 
-// A line comment introduces the declaration under it, so stored units rebuild.
-export const CURRENT_ANALYSIS_VERSION = 47;
+// Rebuild snapshots that omitted files under the previous 20 MB source budget.
+export const CURRENT_ANALYSIS_VERSION = 48;
 
 type CountedUnit = Omit<AnalyzedUnit, "depth" | "reviewOrder">;
 

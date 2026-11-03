@@ -42,7 +42,7 @@ import {
 
 type Database = typeof database;
 
-const PULL_REQUEST_SOURCE_BUDGET_BYTES = 20_000_000;
+const PULL_REQUEST_SOURCE_BUDGET_BYTES = 50_000_000;
 
 /** Synchronizes provider data and review state for one pull request. */
 export async function syncPullRequest(
