@@ -25,6 +25,9 @@ Consumers should pin a digest for production use and verify the signature.
 - Adds reviewer evaluation datasets and prompt experiments, GitHub App repository
   access management, and production dependency and appliance runtime updates.
   Pins patched transitive Glob, minimatch, and KaTeX dependencies.
+- Repairs the Workflow 4 migration checkpoint during appliance upgrades so
+  Workflow 5 applies its previously skipped schema additions without resetting
+  workflow history or user data.
 
 Existing named volumes remain compatible. Startup creates a verified database
 backup before applying migrations 0014 through 0019, which add PR metadata,

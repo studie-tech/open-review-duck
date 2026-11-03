@@ -62,6 +62,7 @@ COPY --from=build --chown=reviewduck:reviewduck /app/drizzle ./drizzle
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/migrate.mjs ./scripts/migrate.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/latest-migration-hash.mjs ./scripts/latest-migration-hash.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/setup-workflow.mjs ./scripts/setup-workflow.mjs
+COPY --from=build --chown=reviewduck:reviewduck /app/scripts/workflow-migrations.mjs ./scripts/workflow-migrations.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-bootstrap.mjs ./scripts/local-bootstrap.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-bootstrap-output.mjs ./scripts/local-bootstrap-output.mjs
 COPY --from=build --chown=reviewduck:reviewduck /app/scripts/local-admin.mjs ./scripts/local-admin.mjs
