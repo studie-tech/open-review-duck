@@ -23,7 +23,6 @@ async function setupWorkflow() {
       process.env.DATABASE_URL ||
       "postgres://world:world@localhost:5432/world",
     connectionTimeoutMillis: 15_000,
-    query_timeout: 60_000,
   });
   await client.connect();
   try {
