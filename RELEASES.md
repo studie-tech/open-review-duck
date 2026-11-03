@@ -5,6 +5,37 @@ container workflow publishes the tag and digest, attaches build provenance and
 an SBOM, scans the image, and signs the digest with Sigstore keyless signing.
 Consumers should pin a digest for production use and verify the signature.
 
+## v0.5.0
+
+- Adds rendered Markdown diffs, opt-in Mermaid diagrams, Jupyter notebook
+  previews, line comments in rendered Markdown, and commit history for selected
+  code. Whitespace and moved-code controls help focus on meaningful changes.
+- Adds a full-screen Discussions workspace with GitHub PR comments and review
+  summaries, searchable conversations, pasted comment images, and attachment
+  zoom controls shared with the PR description.
+- Adds batched folder review checkboxes with reliable undo, a `V` shortcut to
+  expand or collapse the current file, clearer review progress, and more stable
+  folds, navigation, and scroll positions while reviews update.
+- Keeps PR revisions, discussions, AI review progress, approvals, and merge
+  readiness current. Adds inbox involvement filters, branch and sync details,
+  conflict badges, direct PR-link imports, and recoverable source synchronization.
+- Adds personal provider identities for publishing review comments and GitHub
+  merges, explicit provider-verified merge requirement bypass, optional AI finding
+  publication, and copyable AI fix prompts.
+- Adds reviewer evaluation datasets and prompt experiments, GitHub App repository
+  access management, and production dependency and appliance runtime updates.
+  Pins patched transitive Glob, minimatch, and KaTeX dependencies.
+
+Existing named volumes remain compatible. Startup creates a verified database
+backup before applying migrations 0014 through 0019, which add PR metadata,
+personal publication identities, evaluation storage, and synchronization cache
+metadata. Reuse the same volume to preserve owner sessions, repositories,
+reviews, provider credentials, model settings, and stored source data. Never
+delete `open-review-duck-data` when updating.
+
+The appliance version comes from the Docker `REVIEWDUCK_VERSION` build argument
+and release tag; the private application package version remains unchanged.
+
 ## v0.4.0
 
 - Makes review navigation faster and more predictable with file-granular
