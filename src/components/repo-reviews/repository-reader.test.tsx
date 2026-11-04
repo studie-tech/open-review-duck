@@ -238,6 +238,26 @@ describe("RepositoryReader", () => {
     ).toBeVisible();
   });
 
+  it.each(["deleted", "modified"])(
+    "uses the file's %s status when all its reviewed units are deletions",
+    (changeType) => {
+      const data = makeData([makeUnit({ changeType: "deleted" })]);
+      data.files = data.files.map((file) => ({ ...file, changeType }));
+      render(
+        <ShellHarness>
+          <RepositoryReader initialData={data} monitor={monitor as never} />
+        </ShellHarness>,
+      );
+
+      const notice = screen.queryByText("This file is deleted");
+      if (changeType === "deleted") {
+        expect(notice).toBeVisible();
+      } else {
+        expect(notice).not.toBeInTheDocument();
+      }
+    },
+  );
+
   it("labels the branch with the head sha of the loaded snapshot", () => {
     const data = makeData([makeUnit()]);
     render(

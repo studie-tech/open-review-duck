@@ -1023,6 +1023,7 @@ export function RepositoryReader({
                   <>
                     <ReviewFileCardHeader
                       members={activeFileUnits}
+                      deleted={activeFile?.changeType === "deleted"}
                       index={0}
                       count={1}
                       selected
