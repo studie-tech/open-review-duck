@@ -74,6 +74,7 @@ describe("Dim moved code", () => {
   it("dims a deleted neighbor card on the base side without repeating its stored source on the head", () => {
     render(
       <ReviewConceptFileCardPreview
+        deleted
         members={
           [
             {

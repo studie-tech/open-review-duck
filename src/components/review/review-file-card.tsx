@@ -77,16 +77,6 @@ export function reviewedFileCard(members: readonly ReviewCardMemberState[]) {
   return members.length > 0 && !members.some(outstandingReviewCardMember);
 }
 
-/** Reports whether a file card is a whole-file deletion. */
-export function reviewFileCardIsDeleted(
-  members: readonly { changeType: string }[],
-) {
-  return (
-    members.length > 0 &&
-    members.every((member) => member.changeType === "deleted")
-  );
-}
-
 /**
  * Explains that the source below is the last revision, not surviving code.
  *
@@ -339,6 +329,7 @@ export function ReviewCardPathTitle({
 /** Renders one file-card identity while preserving the atomic ledger beneath it. */
 export function ReviewFileCardHeader({
   members,
+  deleted = false,
   index,
   count,
   selected,
@@ -353,6 +344,8 @@ export function ReviewFileCardHeader({
   onResumeWaiting,
 }: {
   members: readonly ReviewUnit[];
+  /** Whole-file status from the file manifest, independent of member deletions. */
+  deleted?: boolean;
   index: number;
   count: number;
   selected: boolean;
@@ -379,7 +372,6 @@ export function ReviewFileCardHeader({
   );
   const itemName = itemLabel.toLowerCase();
   const fileName = first.path.split("/").at(-1) ?? first.path;
-  const deleted = reviewFileCardIsDeleted(members);
   return (
     <div>
       <div

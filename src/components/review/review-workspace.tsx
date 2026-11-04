@@ -3247,6 +3247,7 @@ export function ReviewWorkspace({
           <ReviewConceptFileCardPreview
             key={card.path}
             members={card.members}
+            deleted={deletedFilePaths.has(card.path)}
             index={cardIndex}
             count={activeConceptFileCards.length}
             fileSource={fileContext?.source ?? ""}
@@ -3273,6 +3274,7 @@ export function ReviewWorkspace({
       initialData.pullRequest.id,
       commentOnMemberLine,
       commentThreadsByPath,
+      deletedFilePaths,
       fileContexts,
       inspectReviewFile,
       markdownView,
@@ -6863,9 +6865,13 @@ export function ReviewWorkspace({
                           : "Moved"}
                       </Badge>
                     ) : (
-                      activeUnit.changeType !== "modified" && (
+                      (reviewMode === "files"
+                        ? (activeReviewFile?.changeType ?? "modified")
+                        : activeUnit.changeType) !== "modified" && (
                         <Badge className="capitalize">
-                          {activeUnit.changeType}
+                          {reviewMode === "files"
+                            ? (activeReviewFile?.changeType ?? "modified")
+                            : activeUnit.changeType}
                         </Badge>
                       )
                     )}
@@ -7230,6 +7236,7 @@ export function ReviewWorkspace({
                   >
                     <ReviewFileCardHeader
                       members={activeFileCardMembers}
+                      deleted={activeFileIsDeleted}
                       index={activeConceptCardIndex}
                       count={activeConceptFileCards.length}
                       itemLabel={reviewMode === "files" ? "File" : "Card"}
