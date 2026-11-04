@@ -238,7 +238,7 @@ describe("RepositoryReader", () => {
     ).toBeVisible();
   });
 
-  it.each(["deleted", "modified"])(
+  it.each(["deleted", "modified"] as const)(
     "uses the file's %s status when all its reviewed units are deletions",
     (changeType) => {
       const data = makeData([makeUnit({ changeType: "deleted" })]);
