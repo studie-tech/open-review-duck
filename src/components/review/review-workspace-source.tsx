@@ -715,7 +715,10 @@ export function ReviewConceptFileCardPreview({
               deleted
                 ? ""
                 : fileSource ||
-                  members.map((member) => member.source).join("\n\n")
+                  members
+                    .filter((member) => member.changeType !== "deleted")
+                    .map((member) => member.source)
+                    .join("\n\n")
             }
             previousSource={
               previousFileSource ||

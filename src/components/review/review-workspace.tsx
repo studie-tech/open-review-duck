@@ -7366,9 +7366,7 @@ export function ReviewWorkspace({
                           renderLineDetails: renderReviewLineDetails,
                         }}
                         currentSource={
-                          activeUnit.changeType === "deleted"
-                            ? ""
-                            : diffCurrentSource
+                          activeFileIsDeleted ? "" : diffCurrentSource
                         }
                         previousSource={
                           activeModule?.previousSource ??
