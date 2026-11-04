@@ -1187,6 +1187,59 @@ describe("same-file concept cards", () => {
     ).toBeVisible();
   });
 
+  it.each(["# Surviving content", ""])(
+    "keeps the current Markdown revision %j when its only reviewed unit was deleted",
+    async (fileSource) => {
+      render(
+        <ReviewConceptFileCardPreview
+          members={
+            [
+              {
+                ...units[0],
+                path: "README.md",
+                language: "markdown",
+                changeType: "deleted",
+                source: "# Removed content",
+                previousSource: "# Removed content",
+                startLine: 1,
+                endLine: 1,
+              },
+            ] as never
+          }
+          index={0}
+          count={1}
+          fileSource={fileSource}
+          previousFileSource="# Removed content"
+          onSelect={vi.fn()}
+        />,
+      );
+
+      await waitFor(
+        () => {
+          if (fileSource) {
+            expect(
+              screen.getByRole("button", { name: "Compare Markdown" }),
+            ).toHaveAttribute("aria-pressed", "true");
+            expect(
+              screen.getByRole("heading", { name: "Surviving content" }),
+            ).toBeVisible();
+          } else {
+            expect(
+              screen.getByRole("button", { name: "Previous Markdown" }),
+            ).toHaveAttribute("aria-pressed", "true");
+            expect(
+              screen.queryByRole("button", { name: "Current Markdown" }),
+            ).not.toBeInTheDocument();
+          }
+        },
+        { timeout: 5_000 },
+      );
+      expect(
+        screen.queryByText("This file is deleted"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("renders Markdown neighbor cards as a document until Raw is chosen", async () => {
     const highlight = vi.mocked(useHighlightedSource);
     highlight.mockClear();
