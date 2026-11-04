@@ -20,6 +20,7 @@ import { reviewShortcuts } from "~/lib/review-shortcuts";
 import { HEAVY_DATA_SOURCE_BYTES } from "~/lib/review-source-display";
 import { useHighlightedSource } from "~/lib/syntax-highlighting";
 import type { RouterOutputs } from "~/trpc/react";
+import { ReviewFileUnitMarker } from "./review-file-card";
 import { ReviewWhitespaceToggle } from "./review-whitespace-toggle";
 import {
   AI_QUICK_QUESTIONS,
@@ -36,7 +37,6 @@ import {
   ConceptMoveDialog,
   PullRequestDetailsDialog,
 } from "./review-workspace-dialogs";
-import { ReviewFileUnitMarker } from "./review-file-card";
 import {
   SideBySideUnitDiff,
   type SideBySideUnitDiffHandle,
@@ -299,6 +299,44 @@ describe("same-file concept cards", () => {
       status: "pending",
     },
   ] as const;
+
+  it.each([false, true])(
+    "uses whole-file deletion status (%s) even when every review unit is deleted",
+    (deleted) => {
+      render(
+        <ReviewConceptFileCardPreview
+          members={
+            [
+              {
+                ...units[0],
+                changeType: "deleted",
+                source: "const removed = true;",
+                startLine: 1,
+                endLine: 1,
+              },
+            ] as never
+          }
+          deleted={deleted}
+          index={0}
+          count={1}
+          fileSource={deleted ? "" : "const surviving = true;"}
+          previousFileSource={"const removed = true;\nconst surviving = true;"}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(Boolean(screen.queryByText("This file is deleted"))).toBe(deleted);
+      if (!deleted) {
+        // Keeping the current revision makes the surviving line context,
+        // rather than incorrectly showing it as another removed line.
+        expect(screen.queryByText("Deleted")).not.toBeInTheDocument();
+        fireEvent.click(
+          screen.getByRole("button", { name: /Show 1 lines below/ }),
+        );
+        expect(screen.getAllByText("const surviving = true;")).toHaveLength(2);
+      }
+    },
+  );
 
   it("preserves an expanded preview when background review status changes", () => {
     const props = {

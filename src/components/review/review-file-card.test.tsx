@@ -17,7 +17,6 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
-  reviewFileCardIsDeleted,
   reviewUnitIsCollapsed,
   reviewUnitStartsCollapsed,
 } from "./review-file-card";
@@ -149,23 +148,11 @@ describe("reviewCardRanges", () => {
   });
 });
 
-describe("reviewFileCardIsDeleted", () => {
-  it("is true only when every member is a deletion", () => {
-    expect(reviewFileCardIsDeleted([{ changeType: "deleted" }])).toBe(true);
-    expect(
-      reviewFileCardIsDeleted([
-        { changeType: "deleted" },
-        { changeType: "modified" },
-      ]),
-    ).toBe(false);
-    expect(reviewFileCardIsDeleted([])).toBe(false);
-  });
-});
-
 describe("ReviewFileCardHeader", () => {
   it("makes a deleted file card unmistakable", () => {
     render(
       <ReviewFileCardHeader
+        deleted
         members={
           [
             {
@@ -198,6 +185,24 @@ describe("ReviewFileCardHeader", () => {
     expect(screen.getByText("app/src/app/welcome/page.tsx")).toHaveClass(
       "line-through",
     );
+  });
+
+  it("does not label a surviving file deleted when every changed unit was removed", () => {
+    render(
+      <ReviewFileCardHeader
+        members={
+          units.map((unit) => ({ ...unit, changeType: "deleted" })) as never
+        }
+        index={0}
+        count={1}
+        selected
+        itemLabel="File"
+      />,
+    );
+
+    expect(screen.queryByText("This file is deleted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Deleted")).not.toBeInTheDocument();
+    expect(screen.getByText("src/preview.ts")).not.toHaveClass("line-through");
   });
 
   it("does not call a waiting-only card reviewed", () => {

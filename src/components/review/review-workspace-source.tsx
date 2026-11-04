@@ -39,7 +39,6 @@ import {
   ReviewFileUnitMarker,
   reviewCardRanges,
   reviewedFileCard,
-  reviewFileCardIsDeleted,
 } from "./review-file-card";
 import { ReviewBinaryPreview } from "./review-image-preview";
 import {
@@ -334,12 +333,14 @@ function ReviewConceptFileCardFallbackMember({
  * highlighter hook — the same reason concept member bodies are split out.
  */
 function ReviewConceptFileCardSource({
+  deleted,
   fileSource,
   members,
   onCommentLine,
   onOpenLineComment,
   rightLineCommentMarkers,
 }: {
+  deleted: boolean;
   fileSource: string;
   members: readonly ReviewUnit[];
   onCommentLine?: (unitId: string, line: number) => void;
@@ -349,7 +350,6 @@ function ReviewConceptFileCardSource({
     readonly ReviewLineCommentMarker[]
   >;
 }) {
-  const deleted = reviewFileCardIsDeleted(members);
   const ranges = useMemo(() => reviewCardRanges(members), [members]);
   const startLine = ranges.at(0)?.startLine ?? 1;
   const endLine = ranges.at(-1)?.endLine ?? startLine;
@@ -497,6 +497,7 @@ function ReviewConceptFileDiff({
 /** Neighbor file card that uses the same source body as the selected card. */
 export function ReviewConceptFileCardPreview({
   members,
+  deleted = false,
   index,
   count,
   fileSource,
@@ -517,6 +518,8 @@ export function ReviewConceptFileCardPreview({
   pullRequestId,
 }: {
   members: readonly ReviewUnit[];
+  /** Whole-file status from the file manifest, independent of member deletions. */
+  deleted?: boolean;
   index: number;
   count: number;
   fileSource: string;
@@ -592,7 +595,6 @@ export function ReviewConceptFileCardPreview({
     0,
   );
   const reviewed = reviewedFileCard(members);
-  const deleted = reviewFileCardIsDeleted(members);
   const heavy = isHeavyReviewSource({
     changedLineCount,
     language: first?.language,
@@ -636,6 +638,7 @@ export function ReviewConceptFileCardPreview({
     >
       <ReviewFileCardHeader
         members={members}
+        deleted={deleted}
         index={index}
         count={count}
         selected={false}
@@ -773,6 +776,7 @@ export function ReviewConceptFileCardPreview({
             />
           ) : (
             <ReviewConceptFileCardSource
+              deleted={deleted}
               fileSource={fileSource}
               members={members}
               onCommentLine={onCommentLine}
