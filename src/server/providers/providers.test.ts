@@ -44,6 +44,31 @@ function requestUrl(input: string | URL | Request) {
 }
 
 describe("provider normalization", () => {
+  it("reads binary and empty file sizes from tree metadata without content requests", async () => {
+    mockJson({
+      truncated: true,
+      tree: [
+        { path: "blocks.parquet", type: "blob", size: 120_000_000 },
+        { path: "empty.txt", type: "blob", size: 0 },
+        { path: "folder", type: "tree", size: 12 },
+        { path: "submodule", type: "commit", size: 5 },
+        { path: "unknown.bin", type: "blob" },
+        { path: "invalid.bin", type: "blob", size: -1 },
+      ],
+    });
+    const provider = new GitHubProvider("token");
+    expect(await provider.getRepositoryFileSizes("42", "reviewed-sha")).toEqual(
+      new Map([
+        ["blocks.parquet", 120_000_000],
+        ["empty.txt", 0],
+      ]),
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      "https://api.github.com/repositories/42/git/trees/reviewed-sha?recursive=1",
+    );
+  });
+
   it("lists and resolves GitHub branches with slash-safe links", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);

@@ -1079,9 +1079,12 @@ describe("same-file concept cards", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        /Reviewing 1 individual unit in this file · 82 changed lines · \d+ KB/,
+        /Reviewing 1 individual unit in this file · 82 changed lines/,
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Estimated file size from review source"),
+    ).toHaveTextContent(/~\d+ KB/);
     expect(highlight).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole("button", { name: "Show file" }));

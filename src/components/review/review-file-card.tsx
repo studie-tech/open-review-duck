@@ -340,6 +340,7 @@ export function ReviewFileCardHeader({
   onToggleExpanded,
   toggleExpandedShortcut,
   sourceBytes,
+  fileSizeBytes,
   fileContents,
   onResumeWaiting,
 }: {
@@ -356,6 +357,7 @@ export function ReviewFileCardHeader({
   onToggleExpanded?: () => void;
   toggleExpandedShortcut?: KeyboardShortcut;
   sourceBytes?: number;
+  fileSizeBytes?: number | null;
   fileContents?: string | null;
   onResumeWaiting?: () => void;
 }) {
@@ -372,6 +374,7 @@ export function ReviewFileCardHeader({
   );
   const itemName = itemLabel.toLowerCase();
   const fileName = first.path.split("/").at(-1) ?? first.path;
+  const estimatedBytes = first.kind === "binary" ? undefined : sourceBytes;
   return (
     <div>
       <div
@@ -422,7 +425,7 @@ export function ReviewFileCardHeader({
                 Last version before removal · {members.length}{" "}
                 {members.length === 1 ? "unit" : "units"} · {changedLines}{" "}
                 changed lines
-                {sourceBytes
+                {itemLabel !== "File" && sourceBytes
                   ? ` · ${formatReviewSourceBytes(sourceBytes)}`
                   : null}
               </>
@@ -431,7 +434,7 @@ export function ReviewFileCardHeader({
                 Reviewing {members.length} individual{" "}
                 {members.length === 1 ? "unit" : "units"} in this {itemName} ·{" "}
                 {changedLines} changed lines
-                {sourceBytes
+                {itemLabel !== "File" && sourceBytes
                   ? ` · ${formatReviewSourceBytes(sourceBytes)}`
                   : null}
               </>
@@ -440,6 +443,24 @@ export function ReviewFileCardHeader({
           meta={
             <>
               {actions}
+              {itemLabel === "File" && (
+                <span
+                  className="text-fog pointer-events-auto whitespace-nowrap tabular-nums"
+                  title={
+                    fileSizeBytes != null
+                      ? `${deleted ? "Last version before removal" : "File size"}: ${fileSizeBytes.toLocaleString("en-US")} bytes`
+                      : estimatedBytes !== undefined
+                        ? "Estimated file size from review source"
+                        : "File size is unavailable from the provider"
+                  }
+                >
+                  {fileSizeBytes != null
+                    ? formatReviewSourceBytes(fileSizeBytes)
+                    : estimatedBytes !== undefined
+                      ? `~${formatReviewSourceBytes(estimatedBytes)}`
+                      : "Size unknown"}
+                </span>
+              )}
               <span className="text-fog">
                 {itemLabel} {index + 1}/{count}
               </span>

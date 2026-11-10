@@ -579,6 +579,18 @@ export function ReviewWorkspace({
   const [showDiff, setShowDiff] = useState(true);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
   const { dimMovedCode, changeDimMovedCode } = useDimMovedCode();
+  const fileSizes = api.review.fileSizes.useQuery(
+    { pullRequestId: initialData.pullRequest.id, snapshotId: snapshotId ?? "" },
+    {
+      enabled:
+        reviewMode === "files" &&
+        Boolean(snapshotId) &&
+        initialData.pullRequest.provider === "github",
+      staleTime: Number.POSITIVE_INFINITY,
+      refetchOnWindowFocus: false,
+      retry: false,
+    },
+  );
   const movedCode = api.review.movedCode.useQuery(
     { pullRequestId: initialData.pullRequest.id, snapshotId: snapshotId ?? "" },
     {
@@ -3262,6 +3274,7 @@ export function ReviewWorkspace({
             onOpenLineComment={openLineCommentThread}
             commentThreads={commentThreadsByPath.get(card.path)}
             sourceBytes={sourceBytes}
+            fileSizeBytes={fileSizes.data?.[card.path]}
             markdownView={markdownView}
             onSourceNeeded={prepareSourcePath}
             onSourceVisible={retainSourcePath}
@@ -3276,6 +3289,7 @@ export function ReviewWorkspace({
       commentThreadsByPath,
       deletedFilePaths,
       fileContexts,
+      fileSizes.data,
       inspectReviewFile,
       markdownView,
       openLineCommentThread,
@@ -7242,6 +7256,7 @@ export function ReviewWorkspace({
                       itemLabel={reviewMode === "files" ? "File" : "Card"}
                       selected
                       sourceBytes={reviewSourceByteLength(activeModule)}
+                      fileSizeBytes={fileSizes.data?.[activeUnit.path]}
                       fileContents={
                         activeFileIsDeleted
                           ? (activeModule?.previousSource ??

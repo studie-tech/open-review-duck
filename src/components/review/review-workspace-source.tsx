@@ -512,6 +512,7 @@ export function ReviewConceptFileCardPreview({
   commentThreads,
   itemLabel = "Card",
   sourceBytes,
+  fileSizeBytes,
   markdownView = "preview",
   onSourceNeeded,
   onSourceVisible,
@@ -534,6 +535,7 @@ export function ReviewConceptFileCardPreview({
   commentThreads?: Parameters<typeof reviewLineCommentMarkersBySide>[0];
   itemLabel?: "Card" | "File";
   sourceBytes?: number;
+  fileSizeBytes?: number | null;
   markdownView?: MarkdownReviewView;
   onSourceNeeded?: (path: string, priority: "preview") => Promise<unknown>;
   onSourceVisible?: (path: string) => (() => void) | undefined;
@@ -647,6 +649,7 @@ export function ReviewConceptFileCardPreview({
         expanded={expanded}
         onToggleExpanded={() => setExpanded((open) => !open)}
         sourceBytes={fileBytes}
+        fileSizeBytes={fileSizeBytes}
         fileContents={
           sourceAvailable
             ? deleted
