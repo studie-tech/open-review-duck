@@ -911,6 +911,27 @@ export class GitHubProvider implements PullRequestProvider {
     return paths;
   }
 
+  /** Reads blob sizes, including binaries, without requesting their contents. */
+  async getRepositoryFileSizes(repositoryExternalId: string, ref: string) {
+    const tree = await providerFetch<GitHubTree>(
+      this.name,
+      `${this.apiUrl}/repositories/${repositoryExternalId}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+      { headers: this.headers },
+    );
+    // A truncated tree still has trustworthy sizes for the entries it includes.
+    // Missing entries stay unknown rather than requiring a download per file.
+    return new Map(
+      tree.tree.flatMap((entry) =>
+        entry.type === "blob" &&
+        entry.size !== undefined &&
+        Number.isSafeInteger(entry.size) &&
+        entry.size >= 0
+          ? [[entry.path, entry.size] as const]
+          : [],
+      ),
+    );
+  }
+
   /** Loads several GitHub blobs per GraphQL query to conserve REST quota. */
   async getFileContents(
     repositoryExternalId: string,

@@ -55,6 +55,75 @@ const units = [
 ] as const;
 
 describe("file card review state", () => {
+  it.each([0, 120_000_000, 2_147_483_648])(
+    "shows provider size for a binary file (%i bytes)",
+    (bytes) => {
+      render(
+        <ReviewFileCardHeader
+          members={
+            [{ ...units[0], kind: "binary", path: "blocks.parquet" }] as never
+          }
+          index={0}
+          count={1}
+          selected
+          itemLabel="File"
+          fileSizeBytes={bytes}
+        />,
+      );
+      expect(
+        screen.getByTitle(`File size: ${bytes.toLocaleString("en-US")} bytes`),
+      ).toHaveTextContent(
+        bytes === 0 ? "0 B" : bytes === 120_000_000 ? "114.4 MB" : "2.0 GB",
+      );
+    },
+  );
+
+  it("keeps unknown binary sizes distinct from empty files", () => {
+    render(
+      <ReviewFileCardHeader
+        members={[{ ...units[0], kind: "binary" }] as never}
+        index={0}
+        count={1}
+        selected={false}
+        itemLabel="File"
+        fileSizeBytes={null}
+        sourceBytes={37}
+      />,
+    );
+    expect(screen.getByText("Size unknown")).toBeInTheDocument();
+  });
+
+  it("labels source estimates and explains the size of a deleted file", () => {
+    const { rerender } = render(
+      <ReviewFileCardHeader
+        members={units as never}
+        index={0}
+        count={1}
+        selected
+        itemLabel="File"
+        sourceBytes={2048}
+      />,
+    );
+    expect(screen.getByText("~2 KB")).toHaveAttribute(
+      "title",
+      "Estimated file size from review source",
+    );
+    rerender(
+      <ReviewFileCardHeader
+        members={[{ ...units[0], changeType: "deleted" }] as never}
+        index={0}
+        count={1}
+        selected
+        itemLabel="File"
+        fileSizeBytes={4096}
+        deleted
+      />,
+    );
+    expect(
+      screen.getByTitle("Last version before removal: 4,096 bytes"),
+    ).toHaveTextContent("4 KB");
+  });
+
   it("opens the first actionable member in a partially reviewed card", () => {
     expect(
       actionableReviewCardMember([
@@ -179,9 +248,10 @@ describe("ReviewFileCardHeader", () => {
     expect(screen.getByText("Deleted")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Last version before removal · 1 unit · 1 changed lines · 247 B",
+        "Last version before removal · 1 unit · 1 changed lines",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText("~247 B")).toBeInTheDocument();
     expect(screen.getByText("app/src/app/welcome/page.tsx")).toHaveClass(
       "line-through",
     );
@@ -273,9 +343,10 @@ describe("ReviewFileCardHeader", () => {
     expect(screen.queryByText(/in this card/)).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Reviewing 1 individual unit in this file · 1 changed lines · 2 KB",
+        "Reviewing 1 individual unit in this file · 1 changed lines",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText("~2 KB")).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
         name: "Select review file for src/preview.ts",
@@ -305,15 +376,18 @@ describe("ReviewFileCardHeader", () => {
         count={4}
         selected
         itemLabel="File"
-        sourceBytes={1_200_000}
+        fileSizeBytes={1_200_000}
       />,
     );
 
     expect(
       screen.getByText(
-        "Reviewing 1 individual unit in this file · 1 changed lines · 1.1 MB",
+        "Reviewing 1 individual unit in this file · 1 changed lines",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByTitle("File size: 1,200,000 bytes")).toHaveTextContent(
+      "1.1 MB",
+    );
   });
 
   it("omits file size from the card subtitle when the size is unknown", () => {

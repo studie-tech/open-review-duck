@@ -262,6 +262,11 @@ export interface PullRequestProvider {
     repositoryExternalId: string,
     ref: string,
   ): Promise<string[]>;
+  /** Reads file byte sizes at an immutable revision without downloading content. */
+  getRepositoryFileSizes?(
+    repositoryExternalId: string,
+    ref: string,
+  ): Promise<Map<string, number>>;
   /** Fetches file content at a provider revision within the requested limit. */
   getFileContent(
     repositoryExternalId: string,

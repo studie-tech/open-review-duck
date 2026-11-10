@@ -89,6 +89,7 @@ import {
   recomputeReviewStats,
   reviewExperience,
 } from "~/server/review/experience";
+import { reviewFileSizes } from "~/server/review/file-sizes";
 import { snapshotMovedCode } from "~/server/review/moved-code";
 import { projectImportMaps } from "~/server/review/project-import-maps";
 import {
@@ -1973,6 +1974,45 @@ export const reviewRouter = createTRPCRouter({
         return { kind: "unresolved" as const, reason: "self" as const };
       }
       return found;
+    }),
+
+  fileSizes: protectedProcedure
+    .input(reviewWorkspaceSchema.extend({ snapshotId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const scope = await providerScopeForPullRequest(
+        ctx.db,
+        ctx.auth.userId,
+        input.pullRequestId,
+      );
+      const snapshot = await ctx.db.query.reviewSnapshots.findFirst({
+        where: and(
+          eq(reviewSnapshots.id, input.snapshotId),
+          eq(reviewSnapshots.pullRequestId, input.pullRequestId),
+        ),
+      });
+      if (!snapshot) throw new TRPCError({ code: "NOT_FOUND" });
+      await enforceRateLimit(
+        ctx.db,
+        `review-file-sizes:${ctx.auth.userId}:${input.pullRequestId}`,
+        20,
+        60_000,
+      );
+      const files = await ctx.db.query.snapshotFiles.findMany({
+        where: eq(snapshotFiles.snapshotId, snapshot.id),
+        columns: { path: true, changeType: true },
+      });
+      const provider = await providerForReviewerRead(
+        ctx.db,
+        scope.connection,
+        ctx.auth.userId,
+      );
+      return reviewFileSizes({
+        provider,
+        repositoryExternalId: scope.repositoryExternalId,
+        headSha: snapshot.headSha,
+        baseSha: snapshot.baseSha,
+        files,
+      });
     }),
 
   fileLineHistory: protectedProcedure
