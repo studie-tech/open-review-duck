@@ -583,6 +583,7 @@ export function ReviewWorkspace({
     { pullRequestId: initialData.pullRequest.id, snapshotId: snapshotId ?? "" },
     {
       enabled:
+        sourceIntentReady &&
         reviewMode === "files" &&
         Boolean(snapshotId) &&
         initialData.pullRequest.provider === "github",
