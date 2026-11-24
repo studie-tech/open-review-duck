@@ -2109,6 +2109,11 @@ export function ReviewWorkspace({
     [selectUnit, unitIndexById],
   );
   /** Opens a line through the atomic owner represented inside the file card. */
+  const previousCommentMembers = useMemo(
+    () =>
+      activeFileCardMembers.filter((member) => member.changeType === "deleted"),
+    [activeFileCardMembers],
+  );
   const commentOnCardLine = useCallback(
     (
       line: number,
@@ -2116,7 +2121,11 @@ export function ReviewWorkspace({
         ? "previous"
         : "current",
     ) => {
-      const owner = reviewCardMemberForLine(activeFileCardMembers, line, side);
+      const owner = reviewCardMemberForLine(
+        side === "previous" ? previousCommentMembers : activeFileCardMembers,
+        line,
+        side,
+      );
       if (!owner) return;
       // Modified units publish against the head. Their removed lines stay
       // read-only until comment identity and validation store a separate side.
@@ -2129,6 +2138,7 @@ export function ReviewWorkspace({
     },
     [
       activeFileCardMembers,
+      previousCommentMembers,
       activeUnitId,
       activeUnit?.changeType,
       commentOnMemberLine,
@@ -7454,10 +7464,10 @@ export function ReviewWorkspace({
                         }
                         canSelectPreviousLine={(line) =>
                           reviewCardMemberForLine(
-                            activeFileCardMembers,
+                            previousCommentMembers,
                             line,
                             "previous",
-                          )?.changeType === "deleted"
+                          ) !== undefined
                         }
                         leftLineCommentMarkers={visibleLineCommentMarkers.left}
                         rightLineCommentMarkers={

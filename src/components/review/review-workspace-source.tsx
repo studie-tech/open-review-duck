@@ -543,6 +543,10 @@ export function ReviewConceptFileCardPreview({
 }) {
   const first = members[0];
   const articleRef = useRef<HTMLElement>(null);
+  const previousCommentMembers = useMemo(
+    () => members.filter((member) => member.changeType === "deleted"),
+    [members],
+  );
   const bodyRef = useRef<HTMLDivElement>(null);
   const placeholderHeight = useRef<number | undefined>(undefined);
   const [nearViewport, setNearViewport] = useState(!onSourceNeeded);
@@ -764,7 +768,11 @@ export function ReviewConceptFileCardPreview({
                 allDeleted ? null : currentRanges.at(-1)?.endLine
               }
               onSelectReviewLine={(line, side) => {
-                const owner = reviewCardMemberForLine(members, line, side);
+                const owner = reviewCardMemberForLine(
+                  side === "previous" ? previousCommentMembers : members,
+                  line,
+                  side,
+                );
                 if (
                   owner &&
                   (side !== "previous" || owner.changeType === "deleted")
@@ -773,8 +781,11 @@ export function ReviewConceptFileCardPreview({
                 }
               }}
               canSelectPreviousLine={(line) =>
-                reviewCardMemberForLine(members, line, "previous")
-                  ?.changeType === "deleted"
+                reviewCardMemberForLine(
+                  previousCommentMembers,
+                  line,
+                  "previous",
+                ) !== undefined
               }
               leftLineCommentMarkers={lineCommentMarkers.left}
               rightLineCommentMarkers={lineCommentMarkers.right}
