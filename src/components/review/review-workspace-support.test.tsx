@@ -357,6 +357,56 @@ describe("same-file concept cards", () => {
     expect(screen.getByText("const configuration = true;")).toBeInTheDocument();
   });
 
+  it("folds a SQL preview when its size arrives after the first paint", () => {
+    const props = {
+      members: [
+        {
+          ...units[0],
+          path: "app/data/assets.sql",
+          language: "sql",
+          source: "",
+        },
+      ] as never,
+      index: 0,
+      count: 1,
+      fileSource: "",
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ReviewConceptFileCardPreview {...props} />);
+    expect(screen.queryByRole("button", { name: "Show card" })).toBeNull();
+    rerender(
+      <ReviewConceptFileCardPreview {...props} fileSizeBytes={633 * 1024} />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Show card" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps an explicitly opened SQL preview open as metadata changes", async () => {
+    const props = {
+      members: [
+        {
+          ...units[0],
+          path: "app/data/assets.sql",
+          language: "sql",
+          source: "",
+        },
+      ] as never,
+      index: 0,
+      count: 1,
+      fileSource: "",
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(
+      <ReviewConceptFileCardPreview {...props} fileSizeBytes={633 * 1024} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Show card" }));
+    rerender(
+      <ReviewConceptFileCardPreview {...props} fileSizeBytes={634 * 1024} />,
+    );
+    expect(screen.queryByRole("button", { name: "Show card" })).toBeNull();
+  });
+
   it("keeps one card per file without disturbing first-seen reading order", () => {
     const cards = conceptFileCardsInReadingOrder(units);
 
