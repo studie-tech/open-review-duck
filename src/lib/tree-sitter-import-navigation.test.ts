@@ -87,4 +87,12 @@ describe("client import parsing", () => {
     await waitFor(() => expect(plain.result.current).toEqual([]));
     expect(parsed).toHaveLength(3);
   });
+
+  it("does not launch a second large parse for import navigation", async () => {
+    const source = 'import { alpha } from "./helpers";\n'.repeat(4_000);
+    const before = parsed.length;
+    const imports = renderHook(() => useImportStatements(source, "typescript"));
+    await waitFor(() => expect(imports.result.current).toEqual([]));
+    expect(parsed).toHaveLength(before);
+  });
 });

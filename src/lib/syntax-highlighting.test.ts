@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Parser } from "web-tree-sitter";
 import { treeSitterLanguageFixtures } from "~/test/tree-sitter-language-fixtures";
 import { isPeekableToken } from "./symbol-peek";
 import {
@@ -39,6 +40,20 @@ describe("interpolation context", () => {
 });
 
 describe("highlightSource", () => {
+  it("preserves a large SQL dump without invoking its grammar", async () => {
+    const parse = vi.spyOn(Parser.prototype, "parse");
+    try {
+      const source = "INSERT INTO assets VALUES (1, 'asset');\n".repeat(17_000);
+      const lines = await highlightSource(source, "sql");
+      expect(lines.map((line) => line.text).join("\n")).toBe(source);
+      expect(lines.flatMap((line) => line.tokens)).toHaveLength(17_000);
+      expect(lines[1]?.tokens[0]?.from).toBe(source.indexOf("\n") + 1);
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("preserves source text and line boundaries exactly", async () => {
     const source =
       'const answer: number = 42;\nconsole.log("answer", answer);\n';

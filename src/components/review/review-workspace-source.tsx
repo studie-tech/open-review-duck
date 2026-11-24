@@ -602,6 +602,7 @@ export function ReviewConceptFileCardPreview({
     language: first?.language,
     path: first?.path,
     source: fileSource,
+    sourceBytes: fileSizeBytes ?? sourceBytes,
   });
   const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
   const [expanded, setExpanded] = useState(defaultExpanded);

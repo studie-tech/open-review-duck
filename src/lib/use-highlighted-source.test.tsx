@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { lexicalLines } from "./lexical-highlighting";
+import { MAX_CLIENT_TOKENIZE_LENGTH } from "./source-processing-budget";
 import { useHighlightedSource } from "./syntax-highlighting";
 
 vi.mock("./lexical-highlighting", async (importOriginal) => {
@@ -24,6 +25,14 @@ function HighlightHarness({ source }: { source: string }) {
 }
 
 describe("useHighlightedSource", () => {
+  it("does not tokenize a large SQL dump during render or the effect", () => {
+    const source = "INSERT INTO assets VALUES (1, 'asset');\n".repeat(17_000);
+    expect(source.length).toBeGreaterThan(MAX_CLIENT_TOKENIZE_LENGTH);
+    render(<HighlightHarness source={source} />);
+    expect(screen.getByRole("status")).toHaveTextContent("17001");
+    expect(vi.mocked(lexicalLines)).not.toHaveBeenCalled();
+  });
+
   it("scans a source lexically once across the render and the effect", () => {
     render(
       <HighlightHarness source={"const first = 1;\nconst second = 2;\n"} />,

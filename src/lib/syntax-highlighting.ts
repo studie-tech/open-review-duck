@@ -14,6 +14,10 @@ import {
   type TokenSpan,
 } from "./highlight-tokens";
 import { lexicalLines } from "./lexical-highlighting";
+import {
+  canParseClientSource,
+  canTokenizeClientSource,
+} from "./source-processing-budget";
 
 export type { HighlightedLine };
 
@@ -28,9 +32,31 @@ const languagePromises = new Map<string, Promise<Language>>();
 // the bound has to exceed the largest concept or on-screen sources evict each
 // other and are reparsed on every revisit.
 const HIGHLIGHT_CACHE_LIMIT = 200;
+// A count alone allows 200 large documents and all their tokens to accumulate.
+const HIGHLIGHT_CACHE_SOURCE_LENGTH = 1024 * 1024;
 const highlightPromises = new Map<string, Promise<HighlightedLine[]>>();
 const highlightLines = new Map<string, HighlightedLine[]>();
 const lexicalHighlightLines = new Map<string, HighlightedLine[]>();
+
+/** Bounds retained source as well as entry count, including in-flight parses. */
+function trimSourceCache<T>(
+  cache: Map<string, T>,
+  onEvict?: (key: string) => void,
+) {
+  let retainedLength = 0;
+  for (const key of cache.keys()) retainedLength += key.length;
+  for (const key of cache.keys()) {
+    if (
+      cache.size <= HIGHLIGHT_CACHE_LIMIT &&
+      retainedLength <= HIGHLIGHT_CACHE_SOURCE_LENGTH
+    ) {
+      break;
+    }
+    retainedLength -= key.length;
+    cache.delete(key);
+    onEvict?.(key);
+  }
+}
 type ClientTreeSitterRuntime = {
   Language: typeof Language;
   Parser: typeof Parser;
@@ -164,14 +190,24 @@ export async function withClientSyntaxTree<T>(
   language: string,
   callback: (root: SyntaxNode) => T,
 ) {
+  if (!canParseClientSource(source)) {
+    throw new Error("Source exceeds the browser syntax parsing budget");
+  }
   const [runtime, grammar] = await Promise.all([
     initializeRuntime(),
     grammarFor(language),
   ]);
   const parser = new runtime.Parser();
-  parser.setLanguage(grammar);
-  const tree = parser.parse(source);
-  parser.delete();
+  let tree: ReturnType<Parser["parse"]>;
+  try {
+    parser.setLanguage(grammar);
+    const deadline = performance.now() + 25;
+    tree = parser.parse(source, null, {
+      progressCallback: () => performance.now() > deadline,
+    });
+  } finally {
+    parser.delete();
+  }
   if (!tree) throw new Error(`Tree-sitter could not parse ${language}`);
   try {
     return callback(tree.rootNode);
@@ -339,9 +375,16 @@ function highlightedLines(source: string, root: SyntaxNode) {
 /** Parses and syntax-highlights source using its tree-sitter grammar. */
 export async function highlightSource(source: string, language: string) {
   if (language === "text") return plainLines(source);
-  return withClientSyntaxTree(source, language, (root) =>
-    highlightedLines(source, root),
-  );
+  if (!canParseClientSource(source))
+    return cachedLexicalLines(source, language);
+  try {
+    return await withClientSyntaxTree(source, language, (root) =>
+      highlightedLines(source, root),
+    );
+  } catch {
+    // Grammar failures and the parse deadline must never hide review content.
+    return cachedLexicalLines(source, language);
+  }
 }
 
 /** Identifies one highlighting result by its source and grammar. */
@@ -360,12 +403,11 @@ function cachedLexicalLines(source: string, language: string) {
   const key = highlightKey(source, language);
   let lines = lexicalHighlightLines.get(key);
   if (!lines) {
-    lines = lexicalLines(source, language);
+    lines = canTokenizeClientSource(source)
+      ? lexicalLines(source, language)
+      : plainLines(source);
     lexicalHighlightLines.set(key, lines);
-    if (lexicalHighlightLines.size > HIGHLIGHT_CACHE_LIMIT) {
-      const oldest = lexicalHighlightLines.keys().next().value;
-      if (oldest) lexicalHighlightLines.delete(oldest);
-    }
+    trimSourceCache(lexicalHighlightLines);
   }
   return lines;
 }
@@ -380,13 +422,9 @@ function highlightedSourcePromise(source: string, language: string) {
       return highlighted;
     });
     highlightPromises.set(key, promise);
-    if (highlightPromises.size > HIGHLIGHT_CACHE_LIMIT) {
-      const oldest = highlightPromises.keys().next().value;
-      if (oldest) {
-        highlightPromises.delete(oldest);
-        highlightLines.delete(oldest);
-      }
-    }
+    trimSourceCache(highlightPromises, (oldest) =>
+      highlightLines.delete(oldest),
+    );
   }
   return promise;
 }
@@ -411,6 +449,7 @@ export function useHighlightedSource(source: string, language: string) {
     }
     let current = true;
     setLines(cachedLexicalLines(source, language));
+    if (!source || language === "text" || !canParseClientSource(source)) return;
     void highlightedSourcePromise(source, language)
       .then((highlighted) => {
         if (current) setLines(highlighted);
