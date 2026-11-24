@@ -28,7 +28,12 @@ async function parseTreeSitterImportStatements(
   if (!statements) {
     statements = withClientSyntaxTree(source, language, (root) =>
       importStatementsFromTree(source, language, root),
-    );
+    ).catch((error: unknown) => {
+      if (importStatementPromises.get(key) === statements) {
+        importStatementPromises.delete(key);
+      }
+      throw error;
+    });
     importStatementPromises.set(key, statements);
     if (importStatementPromises.size > IMPORT_PARSE_CACHE_LIMIT) {
       const oldest = importStatementPromises.keys().next().value;

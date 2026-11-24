@@ -113,6 +113,13 @@ describe("review source display", () => {
     ).toBe(false);
   });
 
+  it("counts UTF-8 source bytes when stored size is unavailable", () => {
+    const source = `-- ${"é".repeat(32_768)}`;
+    expect(reviewSourceByteLength({ source })).toBe(65_539);
+    expect(isHeavyReviewSource({ path: "data/assets.sql", source })).toBe(true);
+    expect(reviewSourceByteLength({ source: "🦆" })).toBe(4);
+  });
+
   it("folds reviewed cards and heavy data, and leaves the rest open", () => {
     expect(reviewFileCardStartsExpanded({ reviewed: true, heavy: false })).toBe(
       false,

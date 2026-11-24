@@ -176,7 +176,7 @@ describe("Dim moved code", () => {
         }),
       ).not.toHaveClass("grayscale");
       fireEvent.click(moved);
-      expect(onSelect).toHaveBeenCalledWith(36);
+      expect(onSelect).toHaveBeenCalledWith(36, "previous");
     },
   );
 

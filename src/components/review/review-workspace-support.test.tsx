@@ -3389,6 +3389,67 @@ describe("ProviderConversation", () => {
 });
 
 describe("SideBySideUnitDiff", () => {
+  it("routes deleted-line actions to the previous-side review owner", () => {
+    const member = {
+      id: "deleted-module",
+      name: "removed",
+      path: "removed.ts",
+      changeType: "deleted",
+      startLine: 1,
+      endLine: 1,
+      source: "const removed = true;",
+    };
+    const openComposer = vi.fn();
+    render(
+      <SideBySideUnitDiff
+        previousSource="const removed = true;"
+        currentSource=""
+        language="typescript"
+        previousStartLine={1}
+        currentStartLine={1}
+        previousFocusStartLine={1}
+        previousFocusEndLine={1}
+        currentFocusStartLine={null}
+        currentFocusEndLine={null}
+        onSelectReviewLine={(line, side) => {
+          const owner = reviewCardMemberForLine([member] as never, line, side);
+          if (owner) openComposer(owner.id, line);
+        }}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open actions for deleted line 1" }),
+    );
+    expect(openComposer).toHaveBeenCalledWith("deleted-module", 1);
+  });
+
+  it("renders a shifted previous-side conversation through only one detail owner", () => {
+    const previous = Array.from(
+      { length: 20 },
+      (_, index) => `line ${index + 1}`,
+    );
+    render(
+      <SideBySideUnitDiff
+        previousSource={previous.join("\n")}
+        currentSource={["inserted", ...previous].join("\n")}
+        language="text"
+        previousStartLine={1}
+        currentStartLine={1}
+        expanded
+        onSelectReviewLine={vi.fn()}
+        renderLineDetails={(line) =>
+          line === 10 ? <div>Previous line 10 conversation</div> : null
+        }
+        renderPreviousLineDetails={(line) =>
+          line === 10 ? <div>Previous line 10 conversation</div> : null
+        }
+      />,
+    );
+    expect(screen.getAllByText("Previous line 10 conversation")).toHaveLength(
+      1,
+    );
+  });
+
   it("filters whitespace changes without changing source text or comment line numbers", async () => {
     const onChange = vi.fn();
     const selectLine = vi.fn();
@@ -4042,7 +4103,7 @@ describe("SideBySideUnitDiff", () => {
     if (!deletedLine) throw new Error("Expected a deleted-line action");
     expect(deletedLine).toHaveTextContent("const removed = true;");
     await user.click(deletedLine);
-    expect(selectLine).toHaveBeenCalledWith(8);
+    expect(selectLine).toHaveBeenCalledWith(8, "previous");
   });
 
   it("shows pull-request commits for a shift-clicked line range", async () => {
@@ -4101,7 +4162,7 @@ describe("SideBySideUnitDiff", () => {
     expect(screen.getByText("Removed lines 1")).toBeInTheDocument();
 
     fireEvent.click(deletedLine);
-    expect(selectLine).toHaveBeenCalledWith(1);
+    expect(selectLine).toHaveBeenCalledWith(1, "previous");
   });
 
   it.each(["", "const before = true;\nconst other = true;"])(
@@ -4535,7 +4596,7 @@ describe("SideBySideUnitDiff", () => {
     })[0];
     if (!deletedLine) throw new Error("Expected a deleted-line action");
     await user.click(deletedLine);
-    expect(selectLine).toHaveBeenCalledWith(31);
+    expect(selectLine).toHaveBeenCalledWith(31, "previous");
   });
 });
 

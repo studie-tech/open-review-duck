@@ -130,7 +130,7 @@ const REVIEW_SOURCE_PLACEHOLDERS = new Set([
  * Returns known source bytes for a file or unit range.
  *
  * Prefers the stored UTF-8 range (`endByte - startByte`), which is available
- * before private source hydrates. Falls back to a real source string's length.
+ * before private source hydrates. Falls back to the source's UTF-8 byte length.
  * Empty ranges, missing source, and analysis placeholders are unknown.
  */
 export function reviewSourceByteLength(input?: {
@@ -144,7 +144,7 @@ export function reviewSourceByteLength(input?: {
   if (end > start) return end - start;
   const source = input.source ?? "";
   if (!source || REVIEW_SOURCE_PLACEHOLDERS.has(source)) return undefined;
-  return source.length;
+  return new TextEncoder().encode(source).byteLength;
 }
 
 /**
@@ -160,24 +160,25 @@ export function isHeavyReviewSource(input: {
   source?: string;
   sourceBytes?: number;
 }) {
-  const bytes = Math.max(input.sourceBytes ?? 0, input.source?.length ?? 0);
+  const sql =
+    reviewPathExtension(input.path ?? "") === "sql" ||
+    input.language?.trim().toLowerCase() === "sql";
+  const data =
+    isDataOrGeneratedReviewPath(input.path ?? "") ||
+    isDataReviewLanguage(input.language);
+  if (!sql && !data) return false;
+  const threshold = sql ? HEAVY_SQL_SOURCE_BYTES : HEAVY_DATA_SOURCE_BYTES;
+  // UTF-8 is at least as long as its UTF-16 input. Avoid encoding documents
+  // already known to exceed the threshold, especially full SQL dumps.
   if (
-    (reviewPathExtension(input.path ?? "") === "sql" ||
-      input.language?.trim().toLowerCase() === "sql") &&
-    bytes >= HEAVY_SQL_SOURCE_BYTES
+    Math.max(input.sourceBytes ?? 0, input.source?.length ?? 0) >= threshold
   ) {
     return true;
   }
-  if (
-    !isDataOrGeneratedReviewPath(input.path ?? "") &&
-    !isDataReviewLanguage(input.language)
-  ) {
-    return false;
-  }
   const changedLineCount =
     input.changedLineCount ?? reviewSourceLineCount(input.source ?? "");
-  if (changedLineCount >= HEAVY_DATA_CHANGE_LINES) return true;
-  return bytes >= HEAVY_DATA_SOURCE_BYTES;
+  if (data && changedLineCount >= HEAVY_DATA_CHANGE_LINES) return true;
+  return (reviewSourceByteLength({ source: input.source }) ?? 0) >= threshold;
 }
 
 /**
