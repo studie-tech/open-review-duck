@@ -357,6 +357,40 @@ describe("same-file concept cards", () => {
     expect(screen.getByText("const configuration = true;")).toBeInTheDocument();
   });
 
+  it("keeps removed lines in a modified preview read-only instead of publishing to the head", () => {
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              ...units[0],
+              changeType: "modified",
+              startLine: 1,
+              endLine: 1,
+              source: "const kept = true;",
+              previousSource: "const removed = true;\nconst kept = true;",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={"const removed = true;\nconst kept = true;"}
+        fileSource="const kept = true;"
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+    expect(screen.getByText("const removed = true;")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open actions for deleted line 1" }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open actions for current line 1" }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith("configuration", 1);
+  });
+
   it("folds a SQL preview when its size arrives after the first paint", () => {
     const props = {
       members: [

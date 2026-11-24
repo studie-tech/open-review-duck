@@ -2118,6 +2118,9 @@ export function ReviewWorkspace({
     ) => {
       const owner = reviewCardMemberForLine(activeFileCardMembers, line, side);
       if (!owner) return;
+      // Modified units publish against the head. Their removed lines stay
+      // read-only until comment identity and validation store a separate side.
+      if (side === "previous" && owner.changeType !== "deleted") return;
       if (owner.id === activeUnitId) {
         openInlineComment(line);
       } else {
@@ -7448,6 +7451,13 @@ export function ReviewWorkspace({
                         isReviewLineCollapsed={isFileUnitLineCollapsed}
                         onSelectReviewLine={(line, side) =>
                           commentOnCardLine(line, side ?? "current")
+                        }
+                        canSelectPreviousLine={(line) =>
+                          reviewCardMemberForLine(
+                            activeFileCardMembers,
+                            line,
+                            "previous",
+                          )?.changeType === "deleted"
                         }
                         leftLineCommentMarkers={visibleLineCommentMarkers.left}
                         rightLineCommentMarkers={
