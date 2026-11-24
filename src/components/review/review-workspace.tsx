@@ -2110,8 +2110,13 @@ export function ReviewWorkspace({
   );
   /** Opens a line through the atomic owner represented inside the file card. */
   const commentOnCardLine = useCallback(
-    (line: number) => {
-      const owner = reviewCardMemberForLine(activeFileCardMembers, line);
+    (
+      line: number,
+      side: "current" | "previous" = activeUnit?.changeType === "deleted"
+        ? "previous"
+        : "current",
+    ) => {
+      const owner = reviewCardMemberForLine(activeFileCardMembers, line, side);
       if (!owner) return;
       if (owner.id === activeUnitId) {
         openInlineComment(line);
@@ -2122,6 +2127,7 @@ export function ReviewWorkspace({
     [
       activeFileCardMembers,
       activeUnitId,
+      activeUnit?.changeType,
       commentOnMemberLine,
       openInlineComment,
     ],
@@ -7440,7 +7446,9 @@ export function ReviewWorkspace({
                         pinnedLines={pinnedReviewLines}
                         expanded={fullFileVisible}
                         isReviewLineCollapsed={isFileUnitLineCollapsed}
-                        onSelectReviewLine={commentOnCardLine}
+                        onSelectReviewLine={(line, side) =>
+                          commentOnCardLine(line, side ?? "current")
+                        }
                         leftLineCommentMarkers={visibleLineCommentMarkers.left}
                         rightLineCommentMarkers={
                           visibleLineCommentMarkers.right

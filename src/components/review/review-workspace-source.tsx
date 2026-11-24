@@ -763,8 +763,8 @@ export function ReviewConceptFileCardPreview({
               currentFocusEndLine={
                 allDeleted ? null : currentRanges.at(-1)?.endLine
               }
-              onSelectReviewLine={(line) => {
-                const owner = reviewCardMemberForLine(members, line);
+              onSelectReviewLine={(line, side) => {
+                const owner = reviewCardMemberForLine(members, line, side);
                 if (owner) onCommentLine?.(owner.id, line);
               }}
               leftLineCommentMarkers={lineCommentMarkers.left}

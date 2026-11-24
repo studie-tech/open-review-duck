@@ -9,6 +9,7 @@ import {
 } from "./tree-sitter-import-navigation";
 
 const parsed: { source: string; language: string }[] = [];
+const failOnce = new Set<string>();
 
 vi.mock("./syntax-highlighting", () => ({
   withClientSyntaxTree: <T>(
@@ -17,6 +18,8 @@ vi.mock("./syntax-highlighting", () => ({
     callback: (root: SyntaxNode) => T,
   ) => {
     parsed.push({ source, language });
+    if (failOnce.delete(source))
+      return Promise.reject(new Error("Parse timed out"));
     return Promise.resolve(callback({} as SyntaxNode));
   },
 }));
@@ -94,5 +97,16 @@ describe("client import parsing", () => {
     const imports = renderHook(() => useImportStatements(source, "typescript"));
     await waitFor(() => expect(imports.result.current).toEqual([]));
     expect(parsed).toHaveLength(before);
+  });
+
+  it("retries a timed-out import parse when the source is revisited", async () => {
+    const source = 'import { retry } from "./helpers";';
+    failOnce.add(source);
+    const first = renderHook(() => useImportStatements(source, "typescript"));
+    await waitFor(() => expect(failOnce.has(source)).toBe(false));
+    first.unmount();
+    const revisit = renderHook(() => useImportStatements(source, "typescript"));
+    await waitFor(() => expect(revisit.result.current).toHaveLength(1));
+    expect(parsed.filter((entry) => entry.source === source)).toHaveLength(2);
   });
 });

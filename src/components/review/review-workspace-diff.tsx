@@ -267,7 +267,7 @@ export interface SideBySideUnitDiffProps {
   findingLine?: number;
   pinnedLines?: readonly number[];
   expanded?: boolean;
-  onSelectReviewLine: (line: number) => void;
+  onSelectReviewLine: (line: number, side?: "current" | "previous") => void;
   isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
   unitMarkerLines?: ReadonlySet<number>;
@@ -359,6 +359,7 @@ interface DiffRowActionProps {
     event: ReactMouseEvent<HTMLElement>,
     line: number,
     rowIndex: number,
+    side?: "current" | "previous",
   ) => void;
 }
 
@@ -577,7 +578,7 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
             type="button"
             aria-label={`Open actions for deleted line ${previousReviewLine}`}
             onClick={(event) =>
-              onSelect(event, previousReviewLine, historyRow ?? -1)
+              onSelect(event, previousReviewLine, historyRow ?? -1, "previous")
             }
             className={cn(
               "group col-span-2 grid min-w-0 cursor-pointer grid-cols-[56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
@@ -773,7 +774,12 @@ const SplitUnitDiffRow = memo(function SplitUnitDiffRow({
                   type="button"
                   aria-label={`Open actions for deleted line ${previousReviewLine}`}
                   onClick={(event) =>
-                    onSelect(event, previousReviewLine, historyRow ?? -1)
+                    onSelect(
+                      event,
+                      previousReviewLine,
+                      historyRow ?? -1,
+                      "previous",
+                    )
                   }
                   className={cn(
                     "group grid w-full cursor-pointer grid-cols-[56px_56px_minmax(0,1fr)] bg-red-400/15 text-left transition select-text hover:bg-red-400/22 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan",
@@ -1301,7 +1307,12 @@ export const SideBySideUnitDiff = forwardRef<
   }, [historyRange, lineHistory]);
   /** Opens the line actions unless the click selects commit history. */
   const selectReviewLine = useCallback(
-    (event: ReactMouseEvent<HTMLElement>, line: number, rowIndex: number) => {
+    (
+      event: ReactMouseEvent<HTMLElement>,
+      line: number,
+      rowIndex: number,
+      side?: "current" | "previous",
+    ) => {
       if (suppressHistoryClick.current) {
         suppressHistoryClick.current = false;
         return;
@@ -1320,7 +1331,8 @@ export const SideBySideUnitDiff = forwardRef<
       ) {
         return;
       }
-      lineHandlerRef.current(line);
+      if (side === "previous") lineHandlerRef.current(line, side);
+      else lineHandlerRef.current(line);
     },
     [lineHistory],
   );
@@ -1888,7 +1900,9 @@ export const SideBySideUnitDiff = forwardRef<
                     {...historyForRow(absoluteRowIndex)}
                   />
                   {previousLineNumber !== undefined &&
-                    previousLineNumber !== reviewLine &&
+                    (!renderLineDetails ||
+                      !firstRowForReviewLine.has(previousLineNumber) ||
+                      isReviewLineCollapsed?.(previousLineNumber)) &&
                     renderPreviousLineDetails?.(previousLineNumber)}
                   {rendersLineDetails && renderLineDetails?.(reviewLine)}
                 </>
