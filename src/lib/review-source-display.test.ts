@@ -3,6 +3,7 @@ import {
   formatReviewSourceBytes,
   HEAVY_DATA_CHANGE_LINES,
   HEAVY_DATA_SOURCE_BYTES,
+  HEAVY_SQL_SOURCE_BYTES,
   isDataOrGeneratedReviewPath,
   isHeavyReviewSource,
   isReviewMarkdownFile,
@@ -85,6 +86,29 @@ describe("review source display", () => {
         path: "src/review-workspace.tsx",
         language: "typescript",
         changedLineCount: 8_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("folds SQL dumps before hydration while leaving migrations open", () => {
+    expect(
+      isHeavyReviewSource({
+        path: "app/data/assets.sql",
+        changedLineCount: 19,
+        sourceBytes: 633 * 1024,
+      }),
+    ).toBe(true);
+    expect(
+      isHeavyReviewSource({
+        language: "sql",
+        source: "x".repeat(HEAVY_SQL_SOURCE_BYTES),
+      }),
+    ).toBe(true);
+    expect(
+      isHeavyReviewSource({
+        path: "migrations/0001.sql",
+        changedLineCount: 300,
+        sourceBytes: HEAVY_SQL_SOURCE_BYTES - 1,
       }),
     ).toBe(false);
   });

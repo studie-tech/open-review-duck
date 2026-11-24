@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ImportReference, ImportStatement } from "./import-navigation";
+import { canParseClientSource } from "./source-processing-budget";
 import { withClientSyntaxTree } from "./syntax-highlighting";
 import { findDeclarationLineFromTree } from "./tree-sitter-declarations";
 import { importStatementsFromTree } from "./tree-sitter-imports";
@@ -20,7 +21,8 @@ async function parseTreeSitterImportStatements(
   source: string,
   language: string,
 ) {
-  if (language === "text") return [];
+  if (!source || language === "text" || !canParseClientSource(source))
+    return [];
   const key = importParseKey(source, language);
   let statements = importStatementPromises.get(key);
   if (!statements) {

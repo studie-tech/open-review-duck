@@ -29,6 +29,8 @@ const MARKDOWN_REVIEW_LANGUAGES = new Set(["markdown", "mdx"]);
 
 /** Extensions that should open the Markdown preview instead of raw source. */
 const MARKDOWN_REVIEW_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
+/** SQL dumps start folded by size; ordinary SQL migrations stay readable. */
+export const HEAVY_SQL_SOURCE_BYTES = 64 * 1024;
 
 /** Returns the lowercase file extension of a repository path. */
 export function reviewPathExtension(path: string) {
@@ -146,17 +148,26 @@ export function reviewSourceByteLength(input?: {
 }
 
 /**
- * Reports source that would stall the review UI if every line were mounted.
+ * Reports data documents and SQL dumps that should start folded.
  *
- * Only data documents auto-hide: a large TypeScript file is still the work
- * the reviewer came to read. JSON dumps are not.
+ * Small configs and SQL migrations stay open. Stored byte sizes let large
+ * documents fold before their private source has hydrated.
  */
 export function isHeavyReviewSource(input: {
   changedLineCount?: number;
   language?: string;
   path?: string;
   source?: string;
+  sourceBytes?: number;
 }) {
+  const bytes = Math.max(input.sourceBytes ?? 0, input.source?.length ?? 0);
+  if (
+    (reviewPathExtension(input.path ?? "") === "sql" ||
+      input.language?.trim().toLowerCase() === "sql") &&
+    bytes >= HEAVY_SQL_SOURCE_BYTES
+  ) {
+    return true;
+  }
   if (
     !isDataOrGeneratedReviewPath(input.path ?? "") &&
     !isDataReviewLanguage(input.language)
@@ -166,7 +177,6 @@ export function isHeavyReviewSource(input: {
   const changedLineCount =
     input.changedLineCount ?? reviewSourceLineCount(input.source ?? "");
   if (changedLineCount >= HEAVY_DATA_CHANGE_LINES) return true;
-  const bytes = input.source?.length ?? 0;
   return bytes >= HEAVY_DATA_SOURCE_BYTES;
 }
 

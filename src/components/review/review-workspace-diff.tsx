@@ -49,6 +49,10 @@ import {
   type LineHistoryView,
 } from "./review-line-history-panel";
 import { CONTEXT_PAGE_LINES } from "./review-workspace-constants";
+import {
+  SourceLineWindow,
+  WORKSPACE_SOURCE_ROW_HEIGHT_PX,
+} from "./source-line-window";
 
 type WorkspaceData = RouterOutputs["review"]["workspace"];
 type ReviewUnit = WorkspaceData["units"][number];
@@ -261,6 +265,7 @@ export interface SideBySideUnitDiffProps {
   selectedLine?: number;
   keyboardLine?: number;
   findingLine?: number;
+  pinnedLines?: readonly number[];
   expanded?: boolean;
   onSelectReviewLine: (line: number) => void;
   isReviewLineCollapsed?: (line: number) => boolean;
@@ -902,6 +907,7 @@ export const SideBySideUnitDiff = forwardRef<
     selectedLine,
     keyboardLine,
     findingLine,
+    pinnedLines = [],
     ignoreWhitespace = false,
     movedLines,
     expanded = false,
@@ -1527,13 +1533,59 @@ export const SideBySideUnitDiff = forwardRef<
         onPointerCancel: endHistoryDrag,
       }
     : {};
-  const renderedDetailLines = new Set<number>();
-  const renderedBeforeLines = new Set<number>();
+  // Observer blocks render independently: assign labels and details before
+  // rendering so scrolling a block out and back never loses its review chrome.
+  const firstRowForReviewLine = new Map<number, number>();
+  const firstRowForMarkerLine = new Map<number, number>();
+  const pinnedSourceLines = new Set([
+    ...pinnedLines,
+    selectedLine,
+    keyboardLine,
+    findingLine,
+  ]);
+  const pinnedItemNumbers: number[] = [];
+  for (const [index, item] of displayItems.entries()) {
+    if (item.kind !== "row") continue;
+    const line = reviewLineForRow(item.row);
+    if (line !== undefined && !firstRowForReviewLine.has(line)) {
+      firstRowForReviewLine.set(line, item.rowIndex);
+    }
+    const currentLine =
+      item.row.currentIndex === undefined
+        ? undefined
+        : currentStartLine + item.row.currentIndex;
+    const previousLine =
+      item.row.previousIndex === undefined
+        ? undefined
+        : previousStartLine + item.row.previousIndex;
+    for (const markerLine of unitMarkerLines
+      ? [previousLine, currentLine]
+      : [line]) {
+      if (
+        markerLine !== undefined &&
+        (!unitMarkerLines || unitMarkerLines.has(markerLine)) &&
+        !firstRowForMarkerLine.has(markerLine)
+      ) {
+        firstRowForMarkerLine.set(markerLine, item.rowIndex);
+      }
+    }
+    const absoluteRow = visibleRowStart + item.rowIndex;
+    if (
+      (currentLine !== undefined && pinnedSourceLines.has(currentLine)) ||
+      (previousLine !== undefined && pinnedSourceLines.has(previousLine)) ||
+      (historyRange &&
+        (absoluteRow === historyRange.start ||
+          absoluteRow === historyRange.end))
+    ) {
+      pinnedItemNumbers.push(index + 1);
+    }
+  }
 
   /** Keeps labels from both diff sides when their line numbers diverge. */
   function renderRowUnitMarkers(
     row: (typeof rows)[number],
     reviewLine: number | undefined,
+    rowIndex: number,
   ) {
     const markerLines = unitMarkerLines
       ? [
@@ -1550,11 +1602,11 @@ export const SideBySideUnitDiff = forwardRef<
       : reviewLine !== undefined
         ? [reviewLine]
         : [];
-    return markerLines.map((line) => {
-      if (renderedBeforeLines.has(line)) return null;
-      renderedBeforeLines.add(line);
-      return <Fragment key={line}>{renderBeforeLine?.(line)}</Fragment>;
-    });
+    return [...new Set(markerLines)].map((line) =>
+      firstRowForMarkerLine.get(line) === rowIndex ? (
+        <Fragment key={line}>{renderBeforeLine?.(line)}</Fragment>
+      ) : null,
+    );
   }
 
   if (additionOnly) {
@@ -1577,92 +1629,98 @@ export const SideBySideUnitDiff = forwardRef<
             }}
           />
         ) : null}
-        {displayItems.map((item) => {
-          if (item.kind === "collapsed") {
-            const absoluteStart = visibleRowStart + item.rowStart;
-            const absoluteEnd = visibleRowStart + item.rowEnd;
-            const key = `${absoluteStart}-${absoluteEnd}`;
-            const revealed = revealedGapLines.get(key) ?? {
-              fromEnd: 0,
-              fromStart: 0,
-            };
+        <SourceLineWindow
+          items={displayItems}
+          pinnedLines={pinnedItemNumbers}
+          rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX}
+          startLine={1}
+          renderLine={(item) => {
+            if (item.kind === "collapsed") {
+              const absoluteStart = visibleRowStart + item.rowStart;
+              const absoluteEnd = visibleRowStart + item.rowEnd;
+              const key = `${absoluteStart}-${absoluteEnd}`;
+              const revealed = revealedGapLines.get(key) ?? {
+                fromEnd: 0,
+                fromStart: 0,
+              };
+              return (
+                <DiffCollapsedContextButton
+                  key={`gap-${key}`}
+                  count={item.count}
+                  revealedFromEnd={revealed.fromEnd}
+                  revealedFromStart={revealed.fromStart}
+                  onReveal={(direction) =>
+                    revealCollapsedGap(key, item.count, direction)
+                  }
+                />
+              );
+            }
+            const { row } = item;
+            const lineNumber =
+              row.currentIndex === undefined
+                ? undefined
+                : currentStartLine + row.currentIndex;
+            const line =
+              row.currentIndex === undefined
+                ? undefined
+                : currentLines[row.currentIndex];
+            const reviewLine = reviewLineForRow(row);
+            const rendersLineDetails =
+              reviewLine !== undefined &&
+              firstRowForReviewLine.get(reviewLine) === item.rowIndex;
+            const lineCollapsed =
+              reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
+            const absoluteRowIndex = visibleRowStart + item.rowIndex;
+            const startsScope =
+              showsContextBefore &&
+              absoluteRowIndex === focusRange.start &&
+              scopeStartLine !== undefined;
+            const endsScope =
+              showsContextAfter &&
+              absoluteRowIndex === focusRange.end - 1 &&
+              scopeEndLine !== undefined;
             return (
-              <DiffCollapsedContextButton
-                key={`gap-${key}`}
-                count={item.count}
-                revealedFromEnd={revealed.fromEnd}
-                revealedFromStart={revealed.fromStart}
-                onReveal={(direction) =>
-                  revealCollapsedGap(key, item.count, direction)
-                }
-              />
+              <Fragment
+                key={`${item.rowIndex}-${row.currentIndex ?? "x"}-${row.previousIndex ?? "x"}`}
+              >
+                {startsScope && (
+                  <ReviewScopeMarker edge="start" line={scopeStartLine} />
+                )}
+                {renderRowUnitMarkers(row, reviewLine, item.rowIndex)}
+                {!lineCollapsed && (
+                  <>
+                    <AddedUnitDiffRow
+                      added={row.kind === "added"}
+                      moved={isMovedCodeLine(movedLines?.current, lineNumber)}
+                      anchored={emitReviewLineAnchors && rendersLineDetails}
+                      isFinding={highlightsReviewLine(findingLine, reviewLine)}
+                      keyboardFocused={highlightsReviewLine(
+                        keyboardLine,
+                        reviewLine,
+                      )}
+                      line={line}
+                      lineNumber={lineNumber}
+                      markers={
+                        lineNumber === undefined
+                          ? undefined
+                          : rightLineCommentMarkers?.get(lineNumber)
+                      }
+                      onOpenLineComment={openLineComment}
+                      onSelect={selectReviewLine}
+                      reviewLine={reviewLine}
+                      selected={highlightsReviewLine(selectedLine, reviewLine)}
+                      {...historyForRow(absoluteRowIndex)}
+                    />
+                    {rendersLineDetails && renderLineDetails?.(reviewLine)}
+                  </>
+                )}
+                {endsScope && (
+                  <ReviewScopeMarker edge="end" line={scopeEndLine} />
+                )}
+              </Fragment>
             );
-          }
-          const { row } = item;
-          const lineNumber =
-            row.currentIndex === undefined
-              ? undefined
-              : currentStartLine + row.currentIndex;
-          const line =
-            row.currentIndex === undefined
-              ? undefined
-              : currentLines[row.currentIndex];
-          const reviewLine = reviewLineForRow(row);
-          const rendersLineDetails =
-            reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
-          if (rendersLineDetails) renderedDetailLines.add(reviewLine);
-          const lineCollapsed =
-            reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
-          const absoluteRowIndex = visibleRowStart + item.rowIndex;
-          const startsScope =
-            showsContextBefore &&
-            absoluteRowIndex === focusRange.start &&
-            scopeStartLine !== undefined;
-          const endsScope =
-            showsContextAfter &&
-            absoluteRowIndex === focusRange.end - 1 &&
-            scopeEndLine !== undefined;
-          return (
-            <Fragment
-              key={`${item.rowIndex}-${row.currentIndex ?? "x"}-${row.previousIndex ?? "x"}`}
-            >
-              {startsScope && (
-                <ReviewScopeMarker edge="start" line={scopeStartLine} />
-              )}
-              {renderRowUnitMarkers(row, reviewLine)}
-              {!lineCollapsed && (
-                <>
-                  <AddedUnitDiffRow
-                    added={row.kind === "added"}
-                    moved={isMovedCodeLine(movedLines?.current, lineNumber)}
-                    anchored={emitReviewLineAnchors && rendersLineDetails}
-                    isFinding={highlightsReviewLine(findingLine, reviewLine)}
-                    keyboardFocused={highlightsReviewLine(
-                      keyboardLine,
-                      reviewLine,
-                    )}
-                    line={line}
-                    lineNumber={lineNumber}
-                    markers={
-                      lineNumber === undefined
-                        ? undefined
-                        : rightLineCommentMarkers?.get(lineNumber)
-                    }
-                    onOpenLineComment={openLineComment}
-                    onSelect={selectReviewLine}
-                    reviewLine={reviewLine}
-                    selected={highlightsReviewLine(selectedLine, reviewLine)}
-                    {...historyForRow(absoluteRowIndex)}
-                  />
-                  {rendersLineDetails && renderLineDetails?.(reviewLine)}
-                </>
-              )}
-              {endsScope && (
-                <ReviewScopeMarker edge="end" line={scopeEndLine} />
-              )}
-            </Fragment>
-          );
-        })}
+          }}
+        />
         {visibleRowEnd < rows.length || trailingCollapsedRemaining > 0 ? (
           <DiffEdgeRevealButton
             direction={1}
@@ -1703,137 +1761,145 @@ export const SideBySideUnitDiff = forwardRef<
           }}
         />
       ) : null}
-      {displayItems.map((item) => {
-        if (item.kind === "collapsed") {
-          const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
-          const revealed = revealedGapLines.get(key) ?? {
-            fromEnd: 0,
-            fromStart: 0,
-          };
+      <SourceLineWindow
+        items={displayItems}
+        pinnedLines={pinnedItemNumbers}
+        rowHeight={WORKSPACE_SOURCE_ROW_HEIGHT_PX * (sideBySide ? 1 : 2)}
+        startLine={1}
+        renderLine={(item) => {
+          if (item.kind === "collapsed") {
+            const key = `${visibleRowStart + item.rowStart}-${visibleRowStart + item.rowEnd}`;
+            const revealed = revealedGapLines.get(key) ?? {
+              fromEnd: 0,
+              fromStart: 0,
+            };
+            return (
+              <DiffCollapsedContextButton
+                key={`gap-${key}`}
+                count={item.count}
+                revealedFromEnd={revealed.fromEnd}
+                revealedFromStart={revealed.fromStart}
+                onReveal={(direction) =>
+                  revealCollapsedGap(key, item.count, direction)
+                }
+              />
+            );
+          }
+          const { row, rowIndex } = item;
+          const previousLineNumber =
+            row.previousIndex === undefined
+              ? undefined
+              : previousStartLine + row.previousIndex;
+          const currentLineNumber =
+            row.currentIndex === undefined
+              ? undefined
+              : currentStartLine + row.currentIndex;
+          const previousLine =
+            row.previousIndex === undefined
+              ? undefined
+              : previousLines[row.previousIndex];
+          const currentLine =
+            row.currentIndex === undefined
+              ? undefined
+              : currentLines[row.currentIndex];
+          const reviewLine = reviewLineForRow(row);
+          const rendersLineDetails =
+            reviewLine !== undefined &&
+            firstRowForReviewLine.get(reviewLine) === item.rowIndex;
+          const lineCollapsed =
+            reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
+          const currentIsReviewLine =
+            reviewLine !== undefined &&
+            currentLineNumber !== undefined &&
+            reviewLine === currentLineNumber &&
+            focusRange.currentRanges.some(
+              ({ startLine, endLine }) =>
+                currentLineNumber >= startLine && currentLineNumber <= endLine,
+            );
+          const previousIsReviewLine =
+            reviewLine !== undefined &&
+            previousLineNumber !== undefined &&
+            reviewLine === previousLineNumber &&
+            !currentIsReviewLine;
+          const absoluteRowIndex = visibleRowStart + rowIndex;
+          const startsScope =
+            showsContextBefore &&
+            absoluteRowIndex === focusRange.start &&
+            scopeStartLine !== undefined;
+          const endsScope =
+            showsContextAfter &&
+            absoluteRowIndex === focusRange.end - 1 &&
+            scopeEndLine !== undefined;
+          const key = `${rowIndex}-${row.previousIndex ?? "x"}-${row.currentIndex ?? "x"}`;
           return (
-            <DiffCollapsedContextButton
-              key={`gap-${key}`}
-              count={item.count}
-              revealedFromEnd={revealed.fromEnd}
-              revealedFromStart={revealed.fromStart}
-              onReveal={(direction) =>
-                revealCollapsedGap(key, item.count, direction)
-              }
-            />
-          );
-        }
-        const { row, rowIndex } = item;
-        const previousLineNumber =
-          row.previousIndex === undefined
-            ? undefined
-            : previousStartLine + row.previousIndex;
-        const currentLineNumber =
-          row.currentIndex === undefined
-            ? undefined
-            : currentStartLine + row.currentIndex;
-        const previousLine =
-          row.previousIndex === undefined
-            ? undefined
-            : previousLines[row.previousIndex];
-        const currentLine =
-          row.currentIndex === undefined
-            ? undefined
-            : currentLines[row.currentIndex];
-        const reviewLine = reviewLineForRow(row);
-        const rendersLineDetails =
-          reviewLine !== undefined && !renderedDetailLines.has(reviewLine);
-        if (rendersLineDetails) renderedDetailLines.add(reviewLine);
-        const lineCollapsed =
-          reviewLine !== undefined && isReviewLineCollapsed?.(reviewLine);
-        const currentIsReviewLine =
-          reviewLine !== undefined &&
-          currentLineNumber !== undefined &&
-          reviewLine === currentLineNumber &&
-          focusRange.currentRanges.some(
-            ({ startLine, endLine }) =>
-              currentLineNumber >= startLine && currentLineNumber <= endLine,
-          );
-        const previousIsReviewLine =
-          reviewLine !== undefined &&
-          previousLineNumber !== undefined &&
-          reviewLine === previousLineNumber &&
-          !currentIsReviewLine;
-        const absoluteRowIndex = visibleRowStart + rowIndex;
-        const startsScope =
-          showsContextBefore &&
-          absoluteRowIndex === focusRange.start &&
-          scopeStartLine !== undefined;
-        const endsScope =
-          showsContextAfter &&
-          absoluteRowIndex === focusRange.end - 1 &&
-          scopeEndLine !== undefined;
-        const key = `${rowIndex}-${row.previousIndex ?? "x"}-${row.currentIndex ?? "x"}`;
-        return (
-          <Fragment key={key}>
-            {startsScope && (
-              <ReviewScopeMarker edge="start" line={scopeStartLine} />
-            )}
-            {renderRowUnitMarkers(row, reviewLine)}
-            {!lineCollapsed && (
-              <>
-                {rendersLineDetails && emitReviewLineAnchors && (
-                  <span
-                    id={`review-line-${reviewLine}`}
-                    className="block h-0"
-                    aria-hidden="true"
+            <Fragment key={key}>
+              {startsScope && (
+                <ReviewScopeMarker edge="start" line={scopeStartLine} />
+              )}
+              {renderRowUnitMarkers(row, reviewLine, item.rowIndex)}
+              {!lineCollapsed && (
+                <>
+                  {rendersLineDetails && emitReviewLineAnchors && (
+                    <span
+                      id={`review-line-${reviewLine}`}
+                      className="block h-0"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <SplitUnitDiffRow
+                    currentLine={currentLine}
+                    currentMoved={isMovedCodeLine(
+                      movedLines?.current,
+                      currentLineNumber,
+                    )}
+                    currentLineNumber={currentLineNumber}
+                    currentMarkers={
+                      currentLineNumber === undefined
+                        ? undefined
+                        : rightLineCommentMarkers?.get(currentLineNumber)
+                    }
+                    currentReviewLine={
+                      currentIsReviewLine ? reviewLine : undefined
+                    }
+                    isFinding={highlightsReviewLine(findingLine, reviewLine)}
+                    keyboardFocused={highlightsReviewLine(
+                      keyboardLine,
+                      reviewLine,
+                    )}
+                    kind={row.kind}
+                    onOpenLineComment={openLineComment}
+                    onSelect={selectReviewLine}
+                    previousLine={previousLine}
+                    previousMoved={isMovedCodeLine(
+                      movedLines?.previous,
+                      previousLineNumber,
+                    )}
+                    previousLineNumber={previousLineNumber}
+                    previousMarkers={
+                      previousLineNumber === undefined
+                        ? undefined
+                        : leftLineCommentMarkers?.get(previousLineNumber)
+                    }
+                    previousReviewLine={
+                      previousIsReviewLine ? reviewLine : undefined
+                    }
+                    selected={highlightsReviewLine(selectedLine, reviewLine)}
+                    sideBySide={sideBySide}
+                    {...historyForRow(absoluteRowIndex)}
                   />
-                )}
-                <SplitUnitDiffRow
-                  currentLine={currentLine}
-                  currentMoved={isMovedCodeLine(
-                    movedLines?.current,
-                    currentLineNumber,
-                  )}
-                  currentLineNumber={currentLineNumber}
-                  currentMarkers={
-                    currentLineNumber === undefined
-                      ? undefined
-                      : rightLineCommentMarkers?.get(currentLineNumber)
-                  }
-                  currentReviewLine={
-                    currentIsReviewLine ? reviewLine : undefined
-                  }
-                  isFinding={highlightsReviewLine(findingLine, reviewLine)}
-                  keyboardFocused={highlightsReviewLine(
-                    keyboardLine,
-                    reviewLine,
-                  )}
-                  kind={row.kind}
-                  onOpenLineComment={openLineComment}
-                  onSelect={selectReviewLine}
-                  previousLine={previousLine}
-                  previousMoved={isMovedCodeLine(
-                    movedLines?.previous,
-                    previousLineNumber,
-                  )}
-                  previousLineNumber={previousLineNumber}
-                  previousMarkers={
-                    previousLineNumber === undefined
-                      ? undefined
-                      : leftLineCommentMarkers?.get(previousLineNumber)
-                  }
-                  previousReviewLine={
-                    previousIsReviewLine ? reviewLine : undefined
-                  }
-                  selected={highlightsReviewLine(selectedLine, reviewLine)}
-                  sideBySide={sideBySide}
-                  {...historyForRow(absoluteRowIndex)}
-                />
-                {previousLineNumber !== undefined &&
-                  previousLineNumber !== reviewLine &&
-                  renderPreviousLineDetails?.(previousLineNumber)}
-                {rendersLineDetails && renderLineDetails?.(reviewLine)}
-              </>
-            )}
-            {endsScope && <ReviewScopeMarker edge="end" line={scopeEndLine} />}
-          </Fragment>
-        );
-      })}
+                  {previousLineNumber !== undefined &&
+                    previousLineNumber !== reviewLine &&
+                    renderPreviousLineDetails?.(previousLineNumber)}
+                  {rendersLineDetails && renderLineDetails?.(reviewLine)}
+                </>
+              )}
+              {endsScope && (
+                <ReviewScopeMarker edge="end" line={scopeEndLine} />
+              )}
+            </Fragment>
+          );
+        }}
+      />
       {visibleRowEnd < rows.length || trailingCollapsedRemaining > 0 ? (
         <DiffEdgeRevealButton
           direction={1}

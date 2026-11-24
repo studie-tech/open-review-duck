@@ -1507,6 +1507,9 @@ export function ReviewWorkspace({
     language: activeUnit?.language,
     path: activeUnit?.path,
     source: activeModule?.source,
+    sourceBytes:
+      (activeUnit ? fileSizes.data?.[activeUnit.path] : undefined) ??
+      reviewSourceByteLength(activeModule ?? activeUnit),
   });
   const selectedFileSourceExpanded = selectedReviewFileCardExpanded({
     defaultExpanded: reviewFileCardStartsExpanded({
@@ -7434,6 +7437,7 @@ export function ReviewWorkspace({
                         selectedLine={selectedLine}
                         keyboardLine={keyboardLine ?? aiQuestionPreviewLine}
                         findingLine={findingLine}
+                        pinnedLines={pinnedReviewLines}
                         expanded={fullFileVisible}
                         isReviewLineCollapsed={isFileUnitLineCollapsed}
                         onSelectReviewLine={commentOnCardLine}
