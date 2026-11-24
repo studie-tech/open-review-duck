@@ -268,6 +268,8 @@ export interface SideBySideUnitDiffProps {
   pinnedLines?: readonly number[];
   expanded?: boolean;
   onSelectReviewLine: (line: number, side?: "current" | "previous") => void;
+  /** Restricts base-line actions to owners supported by comment publication. */
+  canSelectPreviousLine?: (line: number) => boolean;
   isReviewLineCollapsed?: (line: number) => boolean;
   renderBeforeLine?: (line: number) => ReactNode;
   unitMarkerLines?: ReadonlySet<number>;
@@ -918,6 +920,7 @@ export const SideBySideUnitDiff = forwardRef<
     movedLines,
     expanded = false,
     onSelectReviewLine,
+    canSelectPreviousLine,
     isReviewLineCollapsed,
     renderBeforeLine,
     unitMarkerLines,
@@ -1273,6 +1276,7 @@ export const SideBySideUnitDiff = forwardRef<
         ? undefined
         : previousStartLine + row.previousIndex;
     return previousLine !== undefined &&
+      (canSelectPreviousLine?.(previousLine) ?? true) &&
       focusRange.previousRanges.some(
         ({ startLine, endLine }) =>
           previousLine >= startLine && previousLine <= endLine,

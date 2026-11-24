@@ -765,8 +765,17 @@ export function ReviewConceptFileCardPreview({
               }
               onSelectReviewLine={(line, side) => {
                 const owner = reviewCardMemberForLine(members, line, side);
-                if (owner) onCommentLine?.(owner.id, line);
+                if (
+                  owner &&
+                  (side !== "previous" || owner.changeType === "deleted")
+                ) {
+                  onCommentLine?.(owner.id, line);
+                }
               }}
+              canSelectPreviousLine={(line) =>
+                reviewCardMemberForLine(members, line, "previous")
+                  ?.changeType === "deleted"
+              }
               leftLineCommentMarkers={lineCommentMarkers.left}
               rightLineCommentMarkers={lineCommentMarkers.right}
               onOpenLineComment={onOpenLineComment}
