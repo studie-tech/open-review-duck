@@ -391,6 +391,56 @@ describe("same-file concept cards", () => {
     expect(onCommentLine).toHaveBeenCalledWith("configuration", 1);
   });
 
+  it("keeps a deleted member actionable when a modified member has the same fallback line", () => {
+    const context = Array.from(
+      { length: 19 },
+      (_, index) => `// context ${index}`,
+    );
+    const onCommentLine = vi.fn();
+    render(
+      <ReviewConceptFileCardPreview
+        members={
+          [
+            {
+              ...units[0],
+              id: "modified",
+              stableKey: "a",
+              changeType: "modified",
+              startLine: 20,
+              endLine: 20,
+              source: "const kept = true;",
+              previousSource: "const kept = true;",
+            },
+            {
+              ...units[0],
+              id: "removed",
+              stableKey: "z",
+              changeType: "deleted",
+              startLine: 20,
+              endLine: 20,
+              source: "const removed = true;",
+              previousSource: "const removed = true;",
+            },
+          ] as never
+        }
+        index={0}
+        count={1}
+        previousFileSource={[
+          ...context,
+          "const removed = true;",
+          "const kept = true;",
+        ].join("\n")}
+        fileSource={[...context, "const kept = true;"].join("\n")}
+        onSelect={vi.fn()}
+        onCommentLine={onCommentLine}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open actions for deleted line 20" }),
+    );
+    expect(onCommentLine).toHaveBeenCalledWith("removed", 20);
+  });
+
   it("folds a SQL preview when its size arrives after the first paint", () => {
     const props = {
       members: [
