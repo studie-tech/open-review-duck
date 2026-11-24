@@ -605,7 +605,11 @@ export function ReviewConceptFileCardPreview({
     sourceBytes: fileSizeBytes ?? sourceBytes,
   });
   const defaultExpanded = reviewFileCardStartsExpanded({ reviewed, heavy });
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [initiallyExpanded] = useState(defaultExpanded);
+  const [expandedOverride, setExpandedOverride] = useState<boolean>();
+  // Late size metadata may fold the automatic preview. Explicit choices and
+  // background review updates must not close a file the reviewer opened.
+  const expanded = expandedOverride ?? (initiallyExpanded && !heavy);
   useEffect(() => {
     if (!nearViewport || !expanded || !first?.path) return;
     const release = onSourceVisible?.(first.path);
@@ -648,7 +652,7 @@ export function ReviewConceptFileCardPreview({
         onSelect={onSelect}
         itemLabel={itemLabel}
         expanded={expanded}
-        onToggleExpanded={() => setExpanded((open) => !open)}
+        onToggleExpanded={() => setExpandedOverride(!expanded)}
         sourceBytes={fileBytes}
         fileSizeBytes={fileSizeBytes}
         fileContents={
@@ -797,7 +801,7 @@ export function ReviewConceptFileCardPreview({
             itemLabel={itemLabel === "File" ? "file" : "card"}
             language={first?.language}
             lineCount={lineCount}
-            onShow={() => setExpanded(true)}
+            onShow={() => setExpandedOverride(true)}
             path={first?.path}
             reviewed={reviewed}
             sourceBytes={fileBytes}

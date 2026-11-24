@@ -88,10 +88,22 @@ export async function findImportedDeclarationLine(
   language: string,
   startLine = 1,
 ) {
-  if (imported === "*" || language === "text") return undefined;
-  return withClientSyntaxTree(source, language, (root) =>
-    findDeclarationLineFromTree(source, root, imported, startLine),
-  );
+  if (
+    imported === "*" ||
+    language === "text" ||
+    !canParseClientSource(source)
+  ) {
+    return undefined;
+  }
+  try {
+    return await withClientSyntaxTree(source, language, (root) =>
+      findDeclarationLineFromTree(source, root, imported, startLine),
+    );
+  } catch {
+    // A focus line is optional; the import's source preview must still open
+    // when its grammar is unavailable or the browser parse deadline expires.
+    return undefined;
+  }
 }
 
 /** Returns parsed import references for the current editor source. */
